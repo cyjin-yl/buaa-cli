@@ -48,6 +48,8 @@ printf '%s\n' '{"url":"https://college.example/notice/42.html","limit":100}' | .
 
 Use `--online` only for authorized archive reads on cache misses, or `--refresh` for conditional revalidation. Robots rules, the shared governor, fixed HTTPS routes and immutable-original conflict checks apply. Rejected provenance never becomes an immutable cache entry. See [archive contracts and examples](docs/ARCHIVE.md); live service availability remains unverified.
 
+The [upstream contract and license assessment](docs/REFERENCES.md) records inspected source revisions, incompatible safety defaults that are not adopted, licensing boundaries and remaining integration gaps. Reference code is not permission or evidence of a working live campus adapter.
+
 ## Account safety
 
 `src/net.rs` implements archive-only GETs through `src/governor.rs`; no original campus host is contacted. All future adapters/provider processes must retain the same request lease through response validation and persistence, share one private state domain, and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
