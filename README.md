@@ -100,7 +100,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | skills-fs | skills-fs HTTP provider | blocked |
 | contribution | Governed autonomous contribution | pending |
 | drift | Read-only API/schema drift detection | pending |
-| publication | GitHub repository and Pages | repository created; publication in progress |
+| publication | GitHub repository and Pages | published; receipt verified |
 | ci | Exact-SHA private CI bridge | blocked |
 | vpn | VPN implementation | deferred |
 | devcontainer | Pinned credential-free public devcontainer | implemented-definition; image build unverified |
@@ -115,6 +115,6 @@ cargo clippy --locked --offline --all-targets -- -D warnings
 cargo test --locked --offline
 ```
 
-Cross-process safety tests use synthetic local work and real conservative intervals, never campus traffic. The public [cyjin-yl/buaa-cli repository](https://github.com/cyjin-yl/buaa-cli) has been created with verified owner permissions; initial source and Pages publication are in progress. Private CI integration remains inactive. No credentials or personal media are needed to build or test this source.
+Cross-process safety tests use synthetic local work and real conservative intervals, never campus traffic. Initial public source [26babf3](https://github.com/cyjin-yl/buaa-cli/commit/26babf37a3e4f898af8988ad945e2af6aadfa9c4) passed independent exact-head review and offline verification before publication. [GitHub Pages documentation](https://cyjin-yl.github.io/buaa-cli/) built from that same head and was verified in Chromium. Private CI integration remains inactive; live campus/archive compatibility and a full devcontainer image build are not claimed. No credentials or personal media are needed to build or test this source.
 
 License: [MIT](LICENSE). Reference licenses and non-adopted unsafe behaviors are recorded in the status document.

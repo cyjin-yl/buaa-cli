@@ -450,15 +450,26 @@
     {
       "id": "publication",
       "title": "GitHub repository and Pages",
-      "status": "in-progress",
+      "status": "published",
       "acceptance": "Permission-checked public repository, secret scan and useful neutral documentation with truthful status.",
       "sources": [],
       "evidence": {
         "repository": "https://github.com/cyjin-yl/buaa-cli",
         "visibility": "public",
         "permission_check": "Authenticated owner cyjin-yl; live admin/push permission verified. Repository created after meaningful offline source verification and bounded secret scan.",
-        "stage": "Source publication and Pages pending exact-head review.",
-        "landing": "docs/index.html: neutral docs-first page, real Chromium desktop/mobile inspection, working anchor navigation, no external page resources."
+        "landing": "docs/index.html: neutral docs-first page, real Chromium desktop/mobile inspection, working anchor navigation, no external page resources.",
+        "initial_published_head": "26babf37a3e4f898af8988ad945e2af6aadfa9c4",
+        "pages_url": "https://cyjin-yl.github.io/buaa-cli/",
+        "pages_verified_build": {
+          "status": "built",
+          "commit": "26babf37a3e4f898af8988ad945e2af6aadfa9c4",
+          "source": "main:/docs",
+          "https_enforced": true
+        },
+        "review": "Two independent exact-head source reviews reported no initial-publication blockers; not a GitHub merge approval.",
+        "verification": "50 offline tests, strict clippy and formatter check passed on initial head; deployed HTTPS page visually checked in Chromium.",
+        "receipt_issue": "https://github.com/cyjin-yl/buaa-cli/issues/1",
+        "limits": "No claim of live campus/archive observations, full devcontainer image build, or an enabled private CI bridge."
       }
     },
     {
