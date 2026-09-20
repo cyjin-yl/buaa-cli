@@ -1,0 +1,6 @@
+# The image only needs this public recipe; workspace is mounted at runtime.
+# No source tree, host HOME, models.yml, gh hosts, SSH keys or Life data enters
+# the Docker build context, even if accidentally placed alongside this file.
+**
+!Dockerfile
+!.dockerignore

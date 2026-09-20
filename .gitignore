@@ -1,0 +1,10 @@
+/target/
+/.worktrees/
+.env
+.env.*
+*.pem
+*.key
+*.cookie
+cookies.json
+credentials.json
+/private/

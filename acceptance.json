@@ -1,0 +1,1387 @@
+{
+  "schema_version": 1,
+  "catalog_source": "https://github.com/buaahub/awesome-buaa",
+  "catalog_reviewed_on": "2026-09-20",
+  "scope_note": "Every catalog entry was read; linked implementations are historical/unverified unless specifically recorded. No campus endpoint contacted. Pending is not implemented; catalog links are not APIs.",
+  "capabilities": [
+    {
+      "id": "governor",
+      "title": "Shared cross-process request safety",
+      "status": "implemented-offline",
+      "acceptance": "Single private identity across CLI/provider/worktrees, one in-flight, >=5-second separation, >=15-minute background interval, durable cooldown and one-shot auth latch; offline multi-process proof.",
+      "sources": [],
+      "evidence": {
+        "implementation": "Linux shared UID governor library, not HTTP transport",
+        "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; 26 total project tests passed.",
+        "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
+        "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed and require offline operator review; no automatic reset."
+      }
+    },
+    {
+      "id": "gateway",
+      "title": "Gateway login/logout/usage",
+      "status": "pending",
+      "acceptance": "Observed read-only usage; explicit login once and logout plan/commit.",
+      "sources": [
+        "https://github.com/ywz978020607/pySrun4k_BeihangLogin",
+        "https://github.com/buaahub/BeihangLogin",
+        "https://github.com/SincereXIA/buaa-login",
+        "https://blog.csdn.net/qq_41797946/article/details/89417722",
+        "https://github.com/HawkQ/buaa-gw",
+        "https://github.com/FuryMartin/BUAA_WIFI",
+        "https://github.com/Dr-Bluemond/srun",
+        "https://github.com/lynzrand/beihang-login",
+        "https://github.com/soyons/BUAALogin",
+        "https://github.com/Izumiko/buaalogin",
+        "https://github.com/BUAASubnet/srun",
+        "https://github.com/ChiamZhang/SRun-Network-Auto-Login"
+      ]
+    },
+    {
+      "id": "spoc",
+      "title": "SPOC materials/video/PPT/subtitles",
+      "status": "pending",
+      "acceptance": "Authorized course inventory and byte-verified downloads with provenance; no completion automation.",
+      "sources": [
+        "https://github.com/peter-erer/buaa-spoc-helper",
+        "https://github.com/aleafofwutong/BBUAA",
+        "https://github.com/Tukist/buaa-audio-sync",
+        "https://github.com/Micraow/BUAA-SPOC-AutoNotPlay"
+      ]
+    },
+    {
+      "id": "live",
+      "title": "Classroom live replay/audio repair",
+      "status": "pending",
+      "acceptance": "Authorized original replay download; separately hashed audio-repaired derivation.",
+      "sources": [
+        "https://github.com/peter-erer/buaa-spoc-helper",
+        "https://github.com/aleafofwutong/BBUAA",
+        "https://github.com/Tukist/buaa-audio-sync",
+        "https://github.com/Micraow/BUAA-SPOC-AutoNotPlay"
+      ]
+    },
+    {
+      "id": "smart",
+      "title": "Smart BUAA services",
+      "status": "pending",
+      "acceptance": "Typed discovery and supported service reads; exams, rooms, library seats, study rooms and sunlight check-in individually gated; no bogus attendance.",
+      "sources": [
+        "https://github.com/BUAASubnet/UBAA",
+        "https://github.com/roife/BUAAIcsGen",
+        "https://github.com/roife/BUAACalendarHelper",
+        "https://github.com/Bhipee/BeiHangPostgraduateTimetable",
+        "https://github.com/yinwoods/Fuck-BUAA-JiaoWu-Anyway",
+        "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
+      ]
+    },
+    {
+      "id": "enrol",
+      "title": "Undergraduate/postgraduate course selection/drop",
+      "status": "pending",
+      "acceptance": "Preview typed intent, idempotent commit and postcondition; no autonomous grabs.",
+      "sources": [
+        "https://github.com/Colorfulshadow/buaa_course_enrollment",
+        "https://github.com/Errno1024/BUAA-Course-Grab"
+      ]
+    },
+    {
+      "id": "evaluation",
+      "title": "Teaching evaluations",
+      "status": "pending",
+      "acceptance": "Owner-authored answers with preview, typed confirmation and idempotency.",
+      "sources": [
+        "https://github.com/bearbattle/buaa-teacher-evaluation",
+        "https://github.com/APassbyDreg/BUAA_JW_Utils",
+        "https://github.com/el-ev/BUAA-Teacher-Evaluation",
+        "https://github.com/ZenAlexa/BUAA_TeachingEvaluation_2024Winter"
+      ]
+    },
+    {
+      "id": "marks",
+      "title": "Marks/GPA/change monitoring",
+      "status": "pending",
+      "acceptance": "Published policy GPA and deltas with cached baseline; polling at least 15 minutes.",
+      "sources": [
+        "https://github.com/wzk1015/BUAA-getscore",
+        "https://github.com/hjc-owo/BUAA_Get_Score",
+        "https://github.com/PhantomPower82/buaa-get-score"
+      ]
+    },
+    {
+      "id": "timetable-ug",
+      "title": "Undergraduate timetable/ICS",
+      "status": "pending",
+      "acceptance": "Verified semester/week/date/time mapping and standards-compliant ICS.",
+      "sources": [
+        "https://github.com/roife/BUAAIcsGen",
+        "https://github.com/roife/BUAACalendarHelper",
+        "https://github.com/Bhipee/BeiHangPostgraduateTimetable",
+        "https://github.com/yinwoods/Fuck-BUAA-JiaoWu-Anyway",
+        "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
+      ]
+    },
+    {
+      "id": "timetable-pg",
+      "title": "Postgraduate timetable/ICS",
+      "status": "pending",
+      "acceptance": "Verified postgraduate contract and standards-compliant ICS.",
+      "sources": [
+        "https://github.com/roife/BUAAIcsGen",
+        "https://github.com/roife/BUAACalendarHelper",
+        "https://github.com/Bhipee/BeiHangPostgraduateTimetable",
+        "https://github.com/yinwoods/Fuck-BUAA-JiaoWu-Anyway",
+        "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
+      ]
+    },
+    {
+      "id": "checkin",
+      "title": "Classroom QR/direct check-in",
+      "status": "pending",
+      "acceptance": "Owner-present, authorized current session only, preview and confirmed idempotent commit.",
+      "sources": [
+        "https://github.com/Fucov/BUAASignTool",
+        "https://github.com/singledog957/duaa",
+        "https://github.com/zeroduhyy/iclass_buaa",
+        "https://github.com/Yiki21/iclass_buaa_tui"
+      ]
+    },
+    {
+      "id": "boya",
+      "title": "Boya browse/enrol/drop/check/status",
+      "status": "pending",
+      "acceptance": "Paginated reads; confirmed owner-present mutations and status reconciliation.",
+      "sources": [
+        "https://github.com/Colorfulshadow/buaa_course_enrollment",
+        "https://github.com/Errno1024/BUAA-Course-Grab",
+        "https://github.com/Fucov/BUAASignTool",
+        "https://github.com/singledog957/duaa",
+        "https://github.com/zeroduhyy/iclass_buaa",
+        "https://github.com/Yiki21/iclass_buaa_tui",
+        "https://github.com/Dr-Bluemond/BykcTelegramBot",
+        "https://github.com/Eadral/buaa-bykc",
+        "https://github.com/wendingp/boya-hunter"
+      ]
+    },
+    {
+      "id": "ihome",
+      "title": "ihome announcements",
+      "status": "pending",
+      "acceptance": "Incremental dated full text, exact source and attachments.",
+      "sources": [
+        "https://github.com/buaahub/ihome-crawler",
+        "https://github.com/shiyake/php-ihome"
+      ]
+    },
+    {
+      "id": "electricity",
+      "title": "Electricity query/alerts",
+      "status": "pending",
+      "acceptance": "Authorized meter balance and cached threshold transitions; polling at least 15 minutes.",
+      "sources": [
+        "https://github.com/Apodead/BuaaAmmeterBot",
+        "https://github.com/LaciliaExe/BUAA-ECC",
+        "https://github.com/Colorfulshadow/buaa-power-monitor"
+      ]
+    },
+    {
+      "id": "physics-select",
+      "title": "Physics experiment selection",
+      "status": "pending",
+      "acceptance": "Availability read plus explicit idempotent select/drop, never rapid polling.",
+      "sources": [
+        "https://www.wzk.plus/project/phyexp/",
+        "https://gitee.com/PhisicsExperiment/PhysicsExperiment",
+        "https://github.com/violencemofrog/BUAA_Physical_Experiment",
+        "https://github.com/Horatio2001/BUAA-PhysicsExp",
+        "https://github.com/wtdcode/BUAAPhyhelper",
+        "https://github.com/wwlyeye/PhysicalExperimentSelector",
+        "https://github.com/qgjyf2001/queryJiwu"
+      ]
+    },
+    {
+      "id": "physics-data",
+      "title": "Physics experiment data processing",
+      "status": "pending",
+      "acceptance": "Documented experiment-specific calculations, units and uncertainty against independent fixtures.",
+      "sources": [
+        "https://www.wzk.plus/project/phyexp/",
+        "https://gitee.com/PhisicsExperiment/PhysicsExperiment",
+        "https://github.com/violencemofrog/BUAA_Physical_Experiment",
+        "https://github.com/Horatio2001/BUAA-PhysicsExp",
+        "https://github.com/wtdcode/BUAAPhyhelper",
+        "https://github.com/wwlyeye/PhysicalExperimentSelector",
+        "https://github.com/qgjyf2001/queryJiwu"
+      ]
+    },
+    {
+      "id": "physics-reference",
+      "title": "Physics reference access",
+      "status": "pending",
+      "acceptance": "Rights-reviewed material inventory and actual retrieval, not only links.",
+      "sources": [
+        "https://www.wzk.plus/project/phyexp/",
+        "https://gitee.com/PhisicsExperiment/PhysicsExperiment",
+        "https://github.com/violencemofrog/BUAA_Physical_Experiment",
+        "https://github.com/Horatio2001/BUAA-PhysicsExp",
+        "https://github.com/wtdcode/BUAAPhyhelper",
+        "https://github.com/wwlyeye/PhysicalExperimentSelector",
+        "https://github.com/qgjyf2001/queryJiwu"
+      ]
+    },
+    {
+      "id": "aerospace",
+      "title": "Aerospace study/questions",
+      "status": "pending",
+      "acceptance": "Authorized material retrieval and local study practice, no assessment impersonation.",
+      "sources": [
+        "https://github.com/Caniformia/HangGai"
+      ]
+    },
+    {
+      "id": "drive",
+      "title": "AnyShare campus drive",
+      "status": "pending",
+      "acceptance": "List/tree/upload/download/move/copy/delete; byte integrity and paginated cursors; destructive writes plan/commit.",
+      "sources": [
+        "https://github.com/xdedss/dist_bhpan",
+        "https://github.com/Fucov/PanCLI"
+      ]
+    },
+    {
+      "id": "departments",
+      "title": "Department material catalogs",
+      "status": "pending",
+      "acceptance": "School 3/6/8/21 material inventories and rights-reviewed retrieval.",
+      "sources": [
+        "https://github.com/AccSrd/BUAA_Course_Automation",
+        "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
+        "https://github.com/karin0/jumpserver-proxy",
+        "https://github.com/dhy2000/CG-Submit",
+        "https://github.com/dhy2000/TimeInput",
+        "https://github.com/TrickEye/can_I_Graduate",
+        "https://trickeye.github.io/can_I_Graduate/",
+        "https://github.com/HoBeedzc/CreditCount",
+        "https://cc.hobeedzc.cn",
+        "https://github.com/grandchicken/1708SEM_ISIM",
+        "https://github.com/Soft-Where-21/21CoreDocs"
+      ]
+    },
+    {
+      "id": "os-lab",
+      "title": "Authorized OS-lab jumpserver",
+      "status": "pending",
+      "acceptance": "Known authenticated jump contract with explicit authorized SSH/git workflow.",
+      "sources": [
+        "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
+        "https://github.com/karin0/jumpserver-proxy",
+        "https://github.com/dhy2000/CG-Submit",
+        "https://github.com/dhy2000/TimeInput",
+        "https://github.com/TrickEye/can_I_Graduate",
+        "https://trickeye.github.io/can_I_Graduate/"
+      ]
+    },
+    {
+      "id": "coursegrading",
+      "title": "CourseGrading submissions",
+      "status": "pending",
+      "acceptance": "Preview exact file hashes and assignment then confirmed idempotent submission.",
+      "sources": [
+        "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
+        "https://github.com/karin0/jumpserver-proxy",
+        "https://github.com/dhy2000/CG-Submit",
+        "https://github.com/dhy2000/TimeInput",
+        "https://github.com/TrickEye/can_I_Graduate",
+        "https://trickeye.github.io/can_I_Graduate/"
+      ]
+    },
+    {
+      "id": "timed-input",
+      "title": "Timed-input utility",
+      "status": "implemented-offline",
+      "acceptance": "Replay [seconds]text at monotonic offsets to NDJSON or explicit raw pipe; validate entire schedule before output.",
+      "sources": [
+        "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
+        "https://github.com/karin0/jumpserver-proxy",
+        "https://github.com/dhy2000/CG-Submit",
+        "https://github.com/dhy2000/TimeInput",
+        "https://github.com/TrickEye/can_I_Graduate",
+        "https://trickeye.github.io/can_I_Graduate/"
+      ],
+      "evidence": {
+        "command": "buaa timed-input [--raw|--dry-run]",
+        "tests": "cargo test --locked --offline: 26 passed, 1 ignored subprocess entry (whole project)",
+        "smoke": "Real CLI replay 0.1s/0.35s observed at 0.1010s/0.3536s; raw bytes/EOF and 24h dry-run verified.",
+        "review": "Independent CliReview: stdin error finding resolved; no open CLI findings."
+      }
+    },
+    {
+      "id": "credits",
+      "title": "School-specific graduation credits",
+      "status": "pending",
+      "acceptance": "School 6 cohort 2020 and school 8 policy-specific calculations, overlap/retake rules and explainable deficits.",
+      "sources": [
+        "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
+        "https://github.com/karin0/jumpserver-proxy",
+        "https://github.com/dhy2000/CG-Submit",
+        "https://github.com/dhy2000/TimeInput",
+        "https://github.com/TrickEye/can_I_Graduate",
+        "https://trickeye.github.io/can_I_Graduate/",
+        "https://github.com/HoBeedzc/CreditCount",
+        "https://cc.hobeedzc.cn",
+        "https://github.com/grandchicken/1708SEM_ISIM"
+      ]
+    },
+    {
+      "id": "shuttle",
+      "title": "Shuttle tickets",
+      "status": "pending",
+      "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
+      "sources": [
+        "https://github.com/zeroduhyy/school_buss_ticket"
+      ]
+    },
+    {
+      "id": "welearn",
+      "title": "WE Learn materials/practice",
+      "status": "pending",
+      "acceptance": "Rights-reviewed learning materials and local practice, no fabricated completion or graded auto-answers.",
+      "sources": [
+        "https://github.com/Micraow/WE-Learn-Answers"
+      ]
+    },
+    {
+      "id": "fengrubei",
+      "title": "Fengrubei template access",
+      "status": "pending",
+      "acceptance": "Pinned template retrieval, license, integrity and formatting caveats.",
+      "sources": [
+        "https://github.com/GFCYqw/Fengrubei_LaTeX_Template"
+      ]
+    },
+    {
+      "id": "crater",
+      "title": "Crater allocation/API/SSH",
+      "status": "blocked",
+      "acceptance": "Real verified service contract and owner-authorized allocated-node convenience.",
+      "sources": [],
+      "blocker": "Real service allocation/API/SSH contract unavailable."
+    },
+    {
+      "id": "organizations",
+      "title": "Authoritative college/institute directory",
+      "status": "pending",
+      "acceptance": "All directory-listed colleges/institutes, exact URLs and provenance, no guessed completeness.",
+      "sources": []
+    },
+    {
+      "id": "announcements",
+      "title": "College current/historical announcements",
+      "status": "pending",
+      "acceptance": "Faculty/college/date filters, full text and attachments, conditional incremental reads.",
+      "sources": []
+    },
+    {
+      "id": "archive",
+      "title": "CDX/Memento historical lookup",
+      "status": "implemented-offline-tested",
+      "acceptance": "Original URL, capture timestamp, publication-date confidence, hashes, HTTP facts and archived/current distinction; gaps stay missing.",
+      "sources": [
+        "https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md",
+        "https://www.rfc-editor.org/rfc/rfc7089"
+      ],
+      "evidence": {
+        "commands": [
+          "buaa archive lookup [--online|--refresh]",
+          "buaa archive capture [--online|--refresh]"
+        ],
+        "implementation": [
+          "src/archive.rs",
+          "src/net.rs",
+          "src/governor.rs"
+        ],
+        "contract": "Exact-URL CDX lookup, opaque continuation, exact Memento original/date validation, immutable replay bytes/SHA256, HTTP/retrieval facts, unknown publication date, query-scoped missing history. Default cache-only; fixed HTTPS archive endpoint on explicit opt-in.",
+        "proof": "50 offline tests passed, 1 ignored subprocess worker; strict all-target clippy passed. Real-loopback tests preserve actual 5s governor intervals; actual CLI schema/offline-miss/invalid-date paths exercised.",
+        "regressions": "Combined Retry-After/body-failure and rejected replay cache poisoning reproduced failing before fixes and passing afterward.",
+        "review": "Independent protocol review ARCH-001 resolved; independent safety re-review reported no further concrete finding.",
+        "limits": "No live Internet Archive or campus observations. General Memento TimeGate/TimeMap crawling, organization discovery, announcement extraction and Life/transcript integration are not implemented by this adapter."
+      }
+    },
+    {
+      "id": "recordings",
+      "title": "Historical recordings/transcript segments",
+      "status": "pending",
+      "acceptance": "Authorized video/subtitle/PPT originals and derived segment lookup with capture/provenance/linking hashes.",
+      "sources": []
+    },
+    {
+      "id": "life",
+      "title": "Life external object storage/catalog",
+      "status": "pending",
+      "acceptance": "Reviewed non-sensitive contract from owner cyjin-yl/life; immutable originals separate from derived objects.",
+      "sources": [],
+      "evidence": {
+        "access": "Authorized repository read access confirmed; no private source or credential contents copied into public project.",
+        "remaining": "Review non-sensitive object storage/catalog contracts before implementation."
+      }
+    },
+    {
+      "id": "skills-fs",
+      "title": "skills-fs HTTP provider",
+      "status": "blocked",
+      "acceptance": "Real manifest/discovery/read/write/stream integration; default read-only and same cross-process governor.",
+      "sources": [],
+      "blocker": "Authoritative source mount absent; both unauthenticated and authenticated repository API requests returned404. Current Go contract remains inaccessible here."
+    },
+    {
+      "id": "contribution",
+      "title": "Governed autonomous contribution",
+      "status": "pending",
+      "acceptance": "Bounded unclaimed issue selection, linked PR, independent review, real permissions and maintainer merge gates.",
+      "sources": []
+    },
+    {
+      "id": "drift",
+      "title": "Read-only API/schema drift detection",
+      "status": "pending",
+      "acceptance": "Low-rate authorized observation, sanitized evidence and proposed changes; no auto-merged contract guesses.",
+      "sources": []
+    },
+    {
+      "id": "publication",
+      "title": "GitHub repository and Pages",
+      "status": "in-progress",
+      "acceptance": "Permission-checked public repository, secret scan and useful neutral documentation with truthful status.",
+      "sources": [],
+      "evidence": {
+        "repository": "https://github.com/cyjin-yl/buaa-cli",
+        "visibility": "public",
+        "permission_check": "Authenticated owner cyjin-yl; live admin/push permission verified. Repository created after meaningful offline source verification and bounded secret scan.",
+        "stage": "Source publication and Pages pending exact-head review.",
+        "landing": "docs/index.html: neutral docs-first page, real Chromium desktop/mobile inspection, working anchor navigation, no external page resources."
+      }
+    },
+    {
+      "id": "ci",
+      "title": "Exact-SHA private CI bridge",
+      "status": "blocked",
+      "acceptance": "Maintainer-approved trusted workflow, no untrusted privileged checkout, minimal attested exact-SHA status.",
+      "sources": [],
+      "blocker": "Maintainer-approved exact-SHA bridge and signing contract unavailable."
+    },
+    {
+      "id": "vpn",
+      "title": "VPN implementation",
+      "status": "deferred",
+      "acceptance": "Explicitly deferred by owner; historical references only.",
+      "sources": [
+        "https://github.com/lyc8503/NJUConnect",
+        "https://github.com/docker-easyconnect/docker-easyconnect",
+        "https://github.com/Mythologyli/zju-connect",
+        "https://github.com/ESWZY/webvpn-dlut",
+        "https://github.com/lcandy2/webvpn-converter",
+        "https://github.com/spencerwooo/bit-webvpn-converter",
+        "https://github.com/EasyTier/EasyTier",
+        "https://github.com/lihaotong0712/docker-motionpro-cufe"
+      ]
+    },
+    {
+      "id": "devcontainer",
+      "title": "Pinned credential-free public devcontainer",
+      "status": "implemented-definition",
+      "acceptance": "Public .devcontainer definition built only from pinned official Rust/Node22 image indexes and checksum-verified OMP18.2.6; no private HOME/model/GitHub/SSH/Life build inputs.",
+      "sources": [
+        "https://hub.docker.com/_/rust",
+        "https://hub.docker.com/_/node",
+        "https://github.com/can1357/oh-my-pi/releases/tag/v18.2.6"
+      ],
+      "evidence": {
+        "files": [
+          ".devcontainer/Dockerfile",
+          ".devcontainer/devcontainer.json",
+          ".devcontainer/.dockerignore",
+          ".devcontainer/README.md"
+        ],
+        "pins": "Registry index bytes match pinned Docker-Content-Digest for Rust1.98.1 and Node22.23.2; OMP amd64 binary matches release SHA256.",
+        "smoke": "Configuration parses; three RUN commands pass shell syntax checks; installed Node/OMP version commands work with a fresh credential-free HOME.",
+        "review": "Fresh-context independent static review: no concrete findings.",
+        "blocker": "Full image build and Dev Containers UID/volume integration unverified: no Docker/Podman/BuildKit/buildah/nerdctl or builder socket inside this devcontainer. Do not build on PVE host."
+      }
+    }
+  ],
+  "catalog_entries": [
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/ywz978020607/pySrun4k_BeihangLogin"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/buaahub/BeihangLogin"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/SincereXIA/buaa-login"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://blog.csdn.net/qq_41797946/article/details/89417722"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/buaalzm/buaaGatewayAutoLogin"
+      ],
+      "historical": true,
+      "policy": "excluded-credential-stealing-do-not-fetch",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/HawkQ/buaa-gw"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/FuryMartin/BUAA_WIFI"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/Dr-Bluemond/srun"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/lynzrand/beihang-login"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/soyons/BUAALogin"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/Izumiko/buaalogin"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/BUAASubnet/srun"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "网关登录",
+      "references": [
+        "https://github.com/ChiamZhang/SRun-Network-Auto-Login"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "gateway"
+      ]
+    },
+    {
+      "section": "SPOC课程中心",
+      "references": [
+        "https://github.com/peter-erer/buaa-spoc-helper"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "spoc",
+        "live"
+      ]
+    },
+    {
+      "section": "SPOC课程中心",
+      "references": [
+        "https://github.com/aleafofwutong/BBUAA"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "spoc",
+        "live"
+      ]
+    },
+    {
+      "section": "SPOC课程中心",
+      "references": [
+        "https://github.com/Tukist/buaa-audio-sync"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "spoc",
+        "live"
+      ]
+    },
+    {
+      "section": "SPOC课程中心",
+      "references": [
+        "https://github.com/Micraow/BUAA-SPOC-AutoNotPlay"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "spoc",
+        "live"
+      ]
+    },
+    {
+      "section": "智慧北航",
+      "references": [
+        "https://github.com/BUAASubnet/UBAA"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "smart"
+      ]
+    },
+    {
+      "section": "选课脚本",
+      "references": [
+        "https://github.com/Colorfulshadow/buaa_course_enrollment"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "enrol",
+        "boya"
+      ]
+    },
+    {
+      "section": "选课脚本",
+      "references": [
+        "https://github.com/Errno1024/BUAA-Course-Grab"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "enrol",
+        "boya"
+      ]
+    },
+    {
+      "section": "一键评教",
+      "references": [
+        "https://github.com/bearbattle/buaa-teacher-evaluation"
+      ],
+      "historical": true,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "evaluation"
+      ]
+    },
+    {
+      "section": "一键评教",
+      "references": [
+        "https://github.com/APassbyDreg/BUAA_JW_Utils"
+      ],
+      "historical": true,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "evaluation"
+      ]
+    },
+    {
+      "section": "一键评教",
+      "references": [
+        "https://github.com/el-ev/BUAA-Teacher-Evaluation"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "evaluation"
+      ]
+    },
+    {
+      "section": "一键评教",
+      "references": [
+        "https://github.com/ZenAlexa/BUAA_TeachingEvaluation_2024Winter"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "evaluation"
+      ]
+    },
+    {
+      "section": "查询成绩",
+      "references": [
+        "https://github.com/wzk1015/BUAA-getscore"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "marks"
+      ]
+    },
+    {
+      "section": "查询成绩",
+      "references": [
+        "https://github.com/hjc-owo/BUAA_Get_Score"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "marks"
+      ]
+    },
+    {
+      "section": "查询成绩",
+      "references": [
+        "https://github.com/PhantomPower82/buaa-get-score"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "marks"
+      ]
+    },
+    {
+      "section": "其他工具",
+      "references": [
+        "https://github.com/roife/BUAAIcsGen"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "timetable-ug",
+        "timetable-pg",
+        "smart"
+      ]
+    },
+    {
+      "section": "其他工具",
+      "references": [
+        "https://github.com/roife/BUAACalendarHelper"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "timetable-ug",
+        "timetable-pg",
+        "smart"
+      ]
+    },
+    {
+      "section": "其他工具",
+      "references": [
+        "https://github.com/Bhipee/BeiHangPostgraduateTimetable"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "timetable-ug",
+        "timetable-pg",
+        "smart"
+      ]
+    },
+    {
+      "section": "其他工具",
+      "references": [
+        "https://github.com/yinwoods/Fuck-BUAA-JiaoWu-Anyway"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "timetable-ug",
+        "timetable-pg",
+        "smart"
+      ]
+    },
+    {
+      "section": "其他工具",
+      "references": [
+        "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "timetable-ug",
+        "timetable-pg",
+        "smart"
+      ]
+    },
+    {
+      "section": "课程打卡",
+      "references": [
+        "https://github.com/Fucov/BUAASignTool"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "checkin",
+        "boya"
+      ]
+    },
+    {
+      "section": "课程打卡",
+      "references": [
+        "https://github.com/singledog957/duaa"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "checkin",
+        "boya"
+      ]
+    },
+    {
+      "section": "课程打卡",
+      "references": [
+        "https://github.com/zeroduhyy/iclass_buaa"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "checkin",
+        "boya"
+      ]
+    },
+    {
+      "section": "课程打卡",
+      "references": [
+        "https://github.com/Yiki21/iclass_buaa_tui"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "checkin",
+        "boya"
+      ]
+    },
+    {
+      "section": "VPN工具",
+      "references": [
+        "https://github.com/lyc8503/NJUConnect"
+      ],
+      "historical": true,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "vpn"
+      ]
+    },
+    {
+      "section": "VPN工具",
+      "references": [
+        "https://github.com/docker-easyconnect/docker-easyconnect"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "vpn"
+      ]
+    },
+    {
+      "section": "VPN工具",
+      "references": [
+        "https://github.com/Mythologyli/zju-connect"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "vpn"
+      ]
+    },
+    {
+      "section": "VPN工具",
+      "references": [
+        "https://github.com/ESWZY/webvpn-dlut",
+        "https://github.com/lcandy2/webvpn-converter",
+        "https://github.com/spencerwooo/bit-webvpn-converter"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "vpn"
+      ]
+    },
+    {
+      "section": "VPN工具",
+      "references": [
+        "https://github.com/EasyTier/EasyTier"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "vpn"
+      ]
+    },
+    {
+      "section": "VPN工具",
+      "references": [
+        "https://github.com/lihaotong0712/docker-motionpro-cufe"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "vpn"
+      ]
+    },
+    {
+      "section": "博雅系统",
+      "references": [
+        "https://github.com/Dr-Bluemond/BykcTelegramBot"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "boya"
+      ]
+    },
+    {
+      "section": "博雅系统",
+      "references": [
+        "https://github.com/Errno1024/BUAA-Course-Grab"
+      ],
+      "historical": true,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "boya"
+      ]
+    },
+    {
+      "section": "博雅系统",
+      "references": [
+        "https://github.com/Eadral/buaa-bykc"
+      ],
+      "historical": true,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "boya"
+      ]
+    },
+    {
+      "section": "博雅系统",
+      "references": [
+        "https://github.com/wendingp/boya-hunter"
+      ],
+      "historical": true,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "boya"
+      ]
+    },
+    {
+      "section": "ihome",
+      "references": [
+        "https://github.com/buaahub/ihome-crawler"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "ihome"
+      ]
+    },
+    {
+      "section": "ihome",
+      "references": [
+        "https://github.com/shiyake/php-ihome"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "ihome"
+      ]
+    },
+    {
+      "section": "电表查询",
+      "references": [
+        "https://github.com/Apodead/BuaaAmmeterBot"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "electricity"
+      ]
+    },
+    {
+      "section": "电表查询",
+      "references": [
+        "https://github.com/LaciliaExe/BUAA-ECC"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "electricity"
+      ]
+    },
+    {
+      "section": "电表查询",
+      "references": [
+        "https://github.com/Colorfulshadow/buaa-power-monitor"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "electricity"
+      ]
+    },
+    {
+      "section": "基物实验",
+      "references": [
+        "https://www.wzk.plus/project/phyexp/"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "physics-select",
+        "physics-data",
+        "physics-reference"
+      ]
+    },
+    {
+      "section": "基物实验",
+      "references": [
+        "https://gitee.com/PhisicsExperiment/PhysicsExperiment"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "physics-select",
+        "physics-data",
+        "physics-reference"
+      ]
+    },
+    {
+      "section": "基物实验",
+      "references": [
+        "https://github.com/violencemofrog/BUAA_Physical_Experiment"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "physics-select",
+        "physics-data",
+        "physics-reference"
+      ]
+    },
+    {
+      "section": "基物实验",
+      "references": [
+        "https://github.com/Horatio2001/BUAA-PhysicsExp"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "physics-select",
+        "physics-data",
+        "physics-reference"
+      ]
+    },
+    {
+      "section": "基物实验",
+      "references": [
+        "https://github.com/wtdcode/BUAAPhyhelper"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "physics-select",
+        "physics-data",
+        "physics-reference"
+      ]
+    },
+    {
+      "section": "基物实验",
+      "references": [
+        "https://github.com/wwlyeye/PhysicalExperimentSelector"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "physics-select",
+        "physics-data",
+        "physics-reference"
+      ]
+    },
+    {
+      "section": "基物实验",
+      "references": [
+        "https://github.com/qgjyf2001/queryJiwu"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "physics-select",
+        "physics-data",
+        "physics-reference"
+      ]
+    },
+    {
+      "section": "航空航天概论",
+      "references": [
+        "https://github.com/Caniformia/HangGai"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "aerospace"
+      ]
+    },
+    {
+      "section": "航空航天概论",
+      "references": [],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "aerospace"
+      ],
+      "reference_note": "WeChat aerospace practice mini-program named by catalog; identity and rights unverified."
+    },
+    {
+      "section": "北航网盘",
+      "references": [
+        "https://github.com/xdedss/dist_bhpan"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "drive"
+      ]
+    },
+    {
+      "section": "北航网盘",
+      "references": [
+        "https://github.com/Fucov/PanCLI"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "drive"
+      ]
+    },
+    {
+      "section": "三系工具",
+      "references": [
+        "https://github.com/AccSrd/BUAA_Course_Automation"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments"
+      ]
+    },
+    {
+      "section": "六系工具",
+      "references": [
+        "https://github.com/TheBloodthirster/BUAA_Course_Sharing"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments",
+        "os-lab",
+        "coursegrading",
+        "timed-input",
+        "credits"
+      ]
+    },
+    {
+      "section": "六系工具",
+      "references": [
+        "https://github.com/karin0/jumpserver-proxy"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments",
+        "os-lab",
+        "coursegrading",
+        "timed-input",
+        "credits"
+      ]
+    },
+    {
+      "section": "六系工具",
+      "references": [
+        "https://github.com/dhy2000/CG-Submit"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments",
+        "os-lab",
+        "coursegrading",
+        "timed-input",
+        "credits"
+      ]
+    },
+    {
+      "section": "六系工具",
+      "references": [
+        "https://github.com/dhy2000/TimeInput"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments",
+        "os-lab",
+        "coursegrading",
+        "timed-input",
+        "credits"
+      ]
+    },
+    {
+      "section": "六系工具",
+      "references": [
+        "https://github.com/TrickEye/can_I_Graduate",
+        "https://trickeye.github.io/can_I_Graduate/"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments",
+        "os-lab",
+        "coursegrading",
+        "timed-input",
+        "credits"
+      ]
+    },
+    {
+      "section": "八系工具",
+      "references": [
+        "https://github.com/HoBeedzc/CreditCount",
+        "https://cc.hobeedzc.cn"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments",
+        "credits"
+      ]
+    },
+    {
+      "section": "八系工具",
+      "references": [
+        "https://github.com/grandchicken/1708SEM_ISIM"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments",
+        "credits"
+      ]
+    },
+    {
+      "section": "21系工具",
+      "references": [
+        "https://github.com/Soft-Where-21/21CoreDocs"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "departments"
+      ]
+    },
+    {
+      "section": "智慧校车",
+      "references": [
+        "https://github.com/zeroduhyy/school_buss_ticket"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "shuttle"
+      ]
+    },
+    {
+      "section": "WE Learn",
+      "references": [
+        "https://github.com/Micraow/WE-Learn-Answers"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "welearn"
+      ]
+    },
+    {
+      "section": "冯如杯",
+      "references": [
+        "https://github.com/GFCYqw/Fengrubei_LaTeX_Template"
+      ],
+      "historical": false,
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "fengrubei"
+      ]
+    }
+  ]
+}

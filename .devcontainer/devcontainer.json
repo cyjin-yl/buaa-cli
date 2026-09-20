@@ -1,0 +1,17 @@
+{
+  "name": "BUAA CLI — Rust 1.98.1, Node 22, OMP 18.2.6",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "containerUser": "vscode",
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "mounts": [
+    "source=buaa-cli-governed-home,target=/home/vscode,type=volume"
+  ],
+  "userEnvProbe": "none",
+  "postCreateCommand": "cargo --version && node --version && omp --version && python3 --version"
+}

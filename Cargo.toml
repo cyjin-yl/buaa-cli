@@ -1,0 +1,26 @@
+[package]
+name = "buaa-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Agent-native BUAA tools with fail-closed account safety"
+license = "MIT"
+
+[dependencies]
+fs2 = "0.4"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+robotstxt = "0.3"
+sha2 = "0.10"
+url = "2.5"
+
+[lib]
+name = "buaa_cli"
+
+[[bin]]
+name = "buaa"
+path = "src/main.rs"
