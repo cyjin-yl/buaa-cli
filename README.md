@@ -1,6 +1,6 @@
 # buaa-cli
 
-Rust CLI for agent-facing BUAA tools. Timed-input replay and historical archive lookup/capture are implemented and tested offline. Archive reads default to local cache; explicit opt-in can contact Internet Archive only. No campus adapter or authentication command is enabled, and live archive compatibility has not been observed. The acceptance ledger below distinguishes implemented work from pending or blocked services.
+Rust CLI for agent-facing BUAA tools. Timed-input replay, archive lookup/capture and authorized local recording-catalog search are implemented and tested offline. Archive reads default to local cache; explicit opt-in can contact Internet Archive only. Recording search uses an existing local catalog and never retrieves media objects. No campus adapter or authentication command is enabled, and live archive compatibility has not been observed. The acceptance ledger distinguishes these implemented slices from pending or blocked services.
 
 ## Build and discover
 
@@ -47,6 +47,17 @@ printf '%s\n' '{"url":"https://college.example/notice/42.html","limit":100}' | .
 ```
 
 Use `--online` only for authorized archive reads on cache misses, or `--refresh` for conditional revalidation. Robots rules, the shared governor, fixed HTTPS routes and immutable-original conflict checks apply. Rejected provenance never becomes an immutable cache entry. See [archive contracts and examples](docs/ARCHIVE.md); live service availability remains unverified.
+
+## Local recording segment lookup
+
+`buaa recordings search` performs read-only phrase lookup over an operator-authorized Life-compatible SQLite catalog. It returns nullable timing and separate catalog-reported original/derived descriptors and linking hashes. It does not fetch objects or verify media rights; unknown ancestry stays explicit.
+
+```sh
+# Supply an existing local catalog you are authorized to read; this path is an example.
+printf '%s\n' '{"catalog":"/private/catalog.sqlite","query":"linear algebra","authorized":true,"limit":20}' | ./target/debug/buaa recordings search
+```
+
+See [recording catalog contracts](docs/RECORDINGS.md) for cursor binding, FTS semantics, provenance limits, privacy and SQLite sidecar behavior. Remote storage retrieval, recording intake, audio repair and complete Life service integration are not implied by this local query command.
 
 ## Account safety
 
@@ -95,8 +106,8 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | organizations | Authoritative college/institute directory | pending |
 | announcements | College current/historical announcements | pending |
 | archive | CDX/Memento historical lookup | implemented-offline-tested; live unverified |
-| recordings | Historical recordings/transcript segments | pending |
-| life | Life external object storage/catalog | pending contract review |
+| recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |
+| life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |
 | skills-fs | skills-fs HTTP provider | blocked |
 | contribution | Governed autonomous contribution | pending |
 | drift | Read-only API/schema drift detection | pending |
@@ -104,6 +115,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | ci | Exact-SHA private CI bridge | blocked |
 | vpn | VPN implementation | deferred |
 | devcontainer | Pinned credential-free public devcontainer | implemented-definition; image build unverified |
+| recordings-search | Authorized local recording segment lookup | implemented-offline |
 
 ## Verification and publication
 

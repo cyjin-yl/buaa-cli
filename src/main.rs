@@ -29,7 +29,7 @@ fn read_input() -> Result<String, CliError> {
     Ok(input)
 }
 
-fn archive_error(error: buaa_cli::net::Error) -> CliError {
+fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
         "unsupported" | "redirect_refused" | "unsupported_encoding" => ("unsupported", 3),
@@ -68,8 +68,8 @@ fn run_archive(args: &[String]) -> CliResult {
         }
     };
     let input = read_input()?;
-    let client = ArchiveClient::open(mode).map_err(archive_error)?;
-    let output = operation(&input, &client).map_err(archive_error)?;
+    let client = ArchiveClient::open(mode).map_err(service_error)?;
+    let output = operation(&input, &client).map_err(service_error)?;
     emit(&output)
 }
 
@@ -86,7 +86,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "recordings search"],
             "network_policy": {"default":"offline", "opt_in":"archive --online or --refresh", "campus_enabled":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -99,6 +99,7 @@ fn run() -> CliResult {
             "schema_version": 1,
             "commands": {
                 "archive": buaa_cli::archive::schema(),
+                "recordings": buaa_cli::recordings::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -148,6 +149,11 @@ fn run() -> CliResult {
             })
         }
         "archive" => run_archive(&args[1..]),
+        "recordings" if args.len() == 2 && args[1] == "search" => {
+            let input = read_input()?;
+            let output = buaa_cli::recordings::search(&input).map_err(service_error)?;
+            emit(&output)
+        }
         _ => Err((
             "unsupported",
             3,
