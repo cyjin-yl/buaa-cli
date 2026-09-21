@@ -11,3 +11,4 @@
 - Preserve compound HTTP cooldown/challenge/body-failure facts atomically, and validate provenance before any immutable cache commit. End-to-end loopback regressions reproduce both failure modes and pass after fixes.
 - Add cache-first redacted gateway usage and fixed TLS login/logout flows with stdin-only credentials, exact typed intent and a separately armed one-shot authentication lease.
 - Add original SRun protocol derivation with an independent synthetic vector; exclude HTTP AC discovery, network probing, retries, credential files, raw response diagnostics and security-notice bypasses. Live campus compatibility remains unverified.
+- Split gateway logout into immutable offline planning and exact typed online commit with private idempotency receipts; repeated successful plan hashes do not resend the mutation.

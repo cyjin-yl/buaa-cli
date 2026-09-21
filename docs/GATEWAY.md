@@ -45,18 +45,23 @@ Challenge acquisition is one governed interactive request. Credential submission
 
 The SRun-compatible material is produced by original Rust code: XXTEA-style `info`, custom base64 alphabet, HMAC-MD5 password and SHA-1 checksum. A synthetic vector from an independent implementation pins compatibility; no upstream implementation was copied.
 
-## Logout
+## Logout plan and commit
+
+Create an immutable preview without network access:
 
 ```sh
-printf '%s\n' '{
-  "username":"<stdin-only>",
-  "ip":"10.0.0.2",
-  "ac_id":62,
-  "intent":"LOGOUT <stdin-only> 10.0.0.2"
-}' | buaa gateway logout --online
+printf '%s\n' '{"username":"<stdin-only>","ip":"10.0.0.2","ac_id":62}' \
+  | buaa gateway logout-plan
 ```
 
-Logout requires the exact typed intent and explicit online flag, makes one governed request, and never retries. It does not accept or store a password. This development work does not authorize invoking it against a real account.
+The reply omits the raw username, reports its domain-separated SHA-256, binds username/IP/AC ID into `plan_hash`, and gives the exact required intent. Commit by supplying the original fields, returned hash and intent:
+
+```sh
+printf '%s\n' '{"username":"<stdin-only>","ip":"10.0.0.2","ac_id":62,"plan_hash":"<returned>","intent":"COMMIT GATEWAY LOGOUT <returned>"}' \
+  | buaa gateway logout-commit --online
+```
+
+Commit validation occurs before cache/governor/network access. A successful commit writes a private receipt while holding the request lease; repeating the identical plan returns `idempotent_hit` without another request. Logout never accepts a password or retries. This development work does not authorize a real commit.
 
 ## Transport and evidence
 
@@ -73,10 +78,10 @@ Synthetic real-loopback tests verify:
 - original crypto against an independent vector;
 - usage normalization/cache reuse while redacting identity fields;
 - explicit resume before any challenge request;
-- separately governed challenge, one credential submission and logout with at least five seconds between requests;
+- separately governed challenge and credential submission, plus logout plan/commit with one governed commit and idempotent receipt reuse;
 - no plaintext password or Cookie in HTTP requests;
 - successful authentication consumes the one-shot token;
 - credential rejection consumes the token and latches account safety;
 - malformed typed intents fail before transport construction.
 
-These tests establish implementation behavior, not current campus endpoint readiness, `ac_id` correctness, owner account permission or a successful live session. The aggregate gateway acceptance item remains partial: a bounded live observation is still missing, and the current one-step typed logout has not yet been replaced by the parent-required plan/commit/idempotency contract. No development prompt alone authorizes a live observation.
+These tests establish implementation behavior, not current campus endpoint readiness, `ac_id` correctness, owner account permission or a successful live session. The aggregate gateway acceptance remains partial because bounded live usage/login/logout observations are still missing. No development prompt alone authorizes those observations.

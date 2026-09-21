@@ -102,19 +102,24 @@ fn run_gateway(args: &[String]) -> CliResult {
             input.zeroize();
             emit(&output?)
         }
-        Some("logout") if args.len() == 2 && args[1] == "--online" => {
+        Some("logout-plan") if args.len() == 1 => {
             let input = read_input()?;
-            emit(&buaa_cli::gateway::logout(&input).map_err(service_error)?)
+            emit(&buaa_cli::gateway::plan_logout(&input).map_err(service_error)?)
         }
-        Some("login" | "logout") => Err((
+        Some("logout-commit") if args.len() == 2 && args[1] == "--online" => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::commit_logout(&input).map_err(service_error)?)
+        }
+        Some("login" | "logout-commit") => Err((
             "permission",
             5,
-            "gateway mutation requires explicit --online and typed stdin intent".into(),
+            "gateway mutation requires its prerequisite, explicit --online, and typed stdin intent"
+                .into(),
         )),
         _ => Err((
             "unsupported",
             3,
-            "expected gateway usage, resume-auth, login, or logout".into(),
+            "expected gateway usage, resume-auth, login, logout-plan, or logout-commit".into(),
         )),
     }
 }
@@ -131,7 +136,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login|logout --online"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online"],
             "network_policy": {"default":"offline", "opt_in":"archive/gateway explicit online flags", "campus_enabled":true, "automatic_authentication_retry":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),

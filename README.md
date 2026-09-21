@@ -62,7 +62,7 @@ printf '%s\n' '{"username":"<stdin-only>","password":"<stdin-only>","ip":"10.0.0
   | ./target/debug/buaa gateway login --online
 ```
 
-The example values are placeholders. The CLI performs no HTTP AC discovery, interface/DNS probe, credential storage, password argument, automatic retry, invalid-certificate mode or challenge/security-notice bypass. See [gateway safety, usage and logout contracts](docs/GATEWAY.md).
+The example values are placeholders. Login uses an explicit resume and typed intent. Logout is split into offline `logout-plan` and explicit `logout-commit --online`; successful plan hashes have private idempotency receipts. The CLI performs no HTTP AC discovery, interface/DNS probe, credential storage, password argument, automatic retry, invalid-certificate mode or challenge/security-notice bypass. See [gateway safety, usage and mutation contracts](docs/GATEWAY.md).
 
 ## Account safety
 
@@ -76,7 +76,7 @@ See [contributor rules](AGENTS.md), [observed blockers and source research](docs
 
 ## Feature acceptance matrix
 
-This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies a real adapter against offline HTTP fixtures, while `partial-live-unverified` means code exists but the parent acceptance still lacks authorized live proof and any explicitly listed unfinished contracts such as logout plan/commit. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
+This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies a real adapter against offline HTTP fixtures, while `partial-live-unverified` means code exists but the parent acceptance still lacks authorized live proof. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
 
 | ID | Capability | Status |
 | --- | --- | --- |
@@ -121,6 +121,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | vpn | VPN implementation | deferred |
 | devcontainer | Pinned credential-free public devcontainer | implemented-definition; image build unverified |
 | gateway-client | Governed gateway protocol client | implemented-offline |
+| gateway-logout-plan-commit | Idempotent gateway logout plan/commit | implemented-offline |
 
 ## Verification and publication
 

@@ -46,10 +46,19 @@ impl Drop for LoginInput {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LogoutInput {
+struct LogoutPlanInput {
     username: String,
     ip: String,
     ac_id: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogoutCommitInput {
+    username: String,
+    ip: String,
+    ac_id: u32,
+    plan_hash: String,
     intent: String,
 }
 
@@ -105,6 +114,17 @@ struct UsageRecord {
     sum_seconds: Option<u64>,
     user_balance: Option<f64>,
     wallet_balance: Option<f64>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LogoutReceipt {
+    version: u8,
+    plan_hash: String,
+    requested_ip: String,
+    server_online_ip: Option<String>,
+    fetched_at_unix_ms: u64,
+    response_body_sha256: String,
 }
 
 #[derive(Clone, Copy)]
@@ -407,6 +427,117 @@ fn save_usage(directory: &File, record: &UsageRecord) -> Result<(), Error> {
     result
 }
 
+fn logout_plan_hash(username: &str, ip: &str, ac_id: u32) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"buaa-cli:gateway-logout-plan:v1\0");
+    for value in [username.as_bytes(), ip.as_bytes()] {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value);
+    }
+    hash.update(ac_id.to_be_bytes());
+    format!("{:x}", hash.finalize())
+}
+
+fn username_hash(username: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"buaa-cli:gateway-username:v1\0");
+    hash.update(username.as_bytes());
+    format!("{:x}", hash.finalize())
+}
+
+fn valid_hash(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn receipt_name(plan_hash: &str) -> Result<String, Error> {
+    if !valid_hash(plan_hash) {
+        return Err(invalid());
+    }
+    Ok(format!("logout-{plan_hash}.json"))
+}
+
+fn validate_receipt(receipt: &LogoutReceipt, expected: &str) -> Result<(), Error> {
+    if receipt.version != 1
+        || receipt.plan_hash != expected
+        || !valid_hash(&receipt.plan_hash)
+        || receipt.requested_ip.parse::<Ipv4Addr>().is_err()
+        || receipt
+            .server_online_ip
+            .as_ref()
+            .is_some_and(|value| value.parse::<Ipv4Addr>().is_err())
+        || !valid_hash(&receipt.response_body_sha256)
+    {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+fn load_logout_receipt(directory: &File, plan_hash: &str) -> Result<Option<LogoutReceipt>, Error> {
+    let name = receipt_name(plan_hash)?;
+    let file = match governor::open_child(directory, &name, libc::O_RDONLY) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(unavailable()),
+    };
+    governor::validate_private_file(&file).map_err(|_| unavailable())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CACHE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| unavailable())?;
+    if bytes.len() as u64 > MAX_CACHE {
+        return Err(unavailable());
+    }
+    let receipt: LogoutReceipt = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+    validate_receipt(&receipt, plan_hash)?;
+    Ok(Some(receipt))
+}
+
+fn save_logout_receipt(directory: &File, receipt: &LogoutReceipt) -> Result<(), Error> {
+    validate_receipt(receipt, &receipt.plan_hash)?;
+    let name = receipt_name(&receipt.plan_hash)?;
+    match governor::open_child(directory, &name, libc::O_RDONLY) {
+        Ok(file) => governor::validate_private_file(&file).map_err(|_| unavailable())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(unavailable()),
+    }
+    let (temporary_name, mut temporary) =
+        governor::create_temporary(directory).map_err(|_| unavailable())?;
+    let result = (|| {
+        serde_json::to_writer(&mut temporary, receipt).map_err(|_| unavailable())?;
+        temporary.write_all(b"\n").map_err(|_| unavailable())?;
+        temporary.sync_all().map_err(|_| unavailable())?;
+        let target = CString::new(name).map_err(|_| unavailable())?;
+        // SAFETY: both names are validated single components in the pinned directory.
+        if unsafe {
+            libc::renameat(
+                directory.as_raw_fd(),
+                temporary_name.as_ptr(),
+                directory.as_raw_fd(),
+                target.as_ptr(),
+            )
+        } != 0
+        {
+            return Err(unavailable());
+        }
+        directory.sync_all().map_err(|_| unavailable())
+    })();
+    if result.is_err() {
+        // SAFETY: temporary was exclusively created in this directory.
+        unsafe { libc::unlinkat(directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
+    }
+    result
+}
+
+fn logout_receipt_value(receipt: LogoutReceipt, idempotency: &str) -> Value {
+    json!({
+        "schema_version":1,"type":"gateway_logout","result":"disconnected",
+        "plan_hash":receipt.plan_hash,"requested_ip":receipt.requested_ip,
+        "server_online_ip":receipt.server_online_ip,"server_reported_success":true,
+        "provenance":{"source_url":format!("{BASE}{PORTAL_PATH}"),"fetched_at_unix_ms":receipt.fetched_at_unix_ms,"response_body_sha256":receipt.response_body_sha256},
+        "automatic_retry":false,"idempotency":idempotency
+    })
+}
+
 fn usage_value(record: UsageRecord, cache_status: &str) -> Value {
     json!({
         "schema_version":1,"type":"gateway_usage","result":"usage_snapshot",
@@ -640,19 +771,43 @@ pub fn login(input: &str) -> Result<Value, Error> {
     login_with(request, &transport)
 }
 
-fn parse_logout(input: &str) -> Result<LogoutInput, Error> {
+pub fn plan_logout(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_INPUT {
         return Err(invalid());
     }
-    let request: LogoutInput = serde_json::from_str(input).map_err(|_| invalid())?;
+    let request: LogoutPlanInput = serde_json::from_str(input).map_err(|_| invalid())?;
     validate_identity(&request.username, &request.ip, request.ac_id)?;
-    if request.intent != format!("LOGOUT {} {}", request.username, request.ip) {
+    let plan_hash = logout_plan_hash(&request.username, &request.ip, request.ac_id);
+    Ok(json!({
+        "schema_version":1,"type":"gateway_logout_plan","result":"planned",
+        "plan_hash":plan_hash,"username_sha256":username_hash(&request.username),
+        "requested_ip":request.ip,"ac_id":request.ac_id,
+        "required_intent":format!("COMMIT GATEWAY LOGOUT {plan_hash}"),
+        "network_request_performed":false,"immutable_plan":true
+    }))
+}
+
+fn parse_logout_commit(input: &str) -> Result<LogoutCommitInput, Error> {
+    if input.len() > MAX_INPUT {
+        return Err(invalid());
+    }
+    let request: LogoutCommitInput = serde_json::from_str(input).map_err(|_| invalid())?;
+    validate_identity(&request.username, &request.ip, request.ac_id)?;
+    let expected = logout_plan_hash(&request.username, &request.ip, request.ac_id);
+    if request.plan_hash != expected
+        || request.intent != format!("COMMIT GATEWAY LOGOUT {expected}")
+    {
         return Err(invalid());
     }
     Ok(request)
 }
 
-fn logout_with(request: LogoutInput, transport: &GatewayTransport) -> Result<Value, Error> {
+fn commit_logout_with(
+    request: LogoutCommitInput,
+    transport: &GatewayTransport,
+    directory: &File,
+) -> Result<Value, Error> {
+    let plan_hash = request.plan_hash.clone();
     let requested_ip = request.ip.clone();
     let parameters = vec![
         ("action", "logout".to_owned()),
@@ -660,40 +815,76 @@ fn logout_with(request: LogoutInput, transport: &GatewayTransport) -> Result<Val
         ("ip", request.ip),
         ("ac_id", request.ac_id.to_string()),
     ];
-    transport.request_jsonp(RequestKind::Interactive, PORTAL_PATH, parameters, |value, meta| {
-        let parsed: PortalResponse = match serde_json::from_value(value.clone()) {
-            Ok(value) => value,
-            Err(_) => return Processed { result: Err(unavailable()), outcome: AppOutcome::Http },
-        };
-        if parsed.error == "ok" && parsed.res == "ok" {
-            let server_online_ip = if parsed.online_ip.is_empty() {
-                None
-            } else {
-                match parsed.online_ip.parse::<Ipv4Addr>() {
-                    Ok(value) => Some(value.to_string()),
-                    Err(_) => return Processed { result: Err(unavailable()), outcome: AppOutcome::Http },
+    transport.request_jsonp(
+        RequestKind::Interactive,
+        PORTAL_PATH,
+        parameters,
+        |value, meta| {
+            let parsed: PortalResponse = match serde_json::from_value(value.clone()) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Processed {
+                        result: Err(unavailable()),
+                        outcome: AppOutcome::Http,
+                    };
                 }
             };
-            Processed {
-                result: Ok(json!({
-                    "schema_version":1,"type":"gateway_logout","result":"disconnected",
-                    "requested_ip":requested_ip,"server_online_ip":server_online_ip,
-                    "server_reported_success":true,
-                    "provenance":{"source_url":format!("{BASE}{PORTAL_PATH}"),"fetched_at_unix_ms":meta.fetched_at_unix_ms,"response_body_sha256":meta.body_sha256},
-                    "automatic_retry":false
-                })),
-                outcome: AppOutcome::Http,
+            if parsed.error == "ok" && parsed.res == "ok" {
+                let server_online_ip = if parsed.online_ip.is_empty() {
+                    None
+                } else {
+                    match parsed.online_ip.parse::<Ipv4Addr>() {
+                        Ok(value) => Some(value.to_string()),
+                        Err(_) => {
+                            return Processed {
+                                result: Err(unavailable()),
+                                outcome: AppOutcome::Http,
+                            };
+                        }
+                    }
+                };
+                let receipt = LogoutReceipt {
+                    version: 1,
+                    plan_hash: plan_hash.clone(),
+                    requested_ip: requested_ip.clone(),
+                    server_online_ip,
+                    fetched_at_unix_ms: meta.fetched_at_unix_ms,
+                    response_body_sha256: meta.body_sha256.clone(),
+                };
+                let result = save_logout_receipt(directory, &receipt)
+                    .map(|_| logout_receipt_value(receipt, "committed"));
+                Processed {
+                    result,
+                    outcome: AppOutcome::Http,
+                }
+            } else {
+                Processed {
+                    result: Err(Error::new("unavailable", "gateway logout was not accepted")),
+                    outcome: AppOutcome::Http,
+                }
             }
-        } else {
-            Processed { result: Err(Error::new("unavailable", "gateway logout was not accepted")), outcome: AppOutcome::Http }
-        }
-    })
+        },
+    )
 }
 
-pub fn logout(input: &str) -> Result<Value, Error> {
-    let request = parse_logout(input)?;
-    let transport = GatewayTransport::open()?;
-    logout_with(request, &transport)
+fn commit_logout_from(
+    request: LogoutCommitInput,
+    directory: &File,
+    commit: impl FnOnce(LogoutCommitInput) -> Result<Value, Error>,
+) -> Result<Value, Error> {
+    if let Some(receipt) = load_logout_receipt(directory, &request.plan_hash)? {
+        return Ok(logout_receipt_value(receipt, "idempotent_hit"));
+    }
+    commit(request)
+}
+
+pub fn commit_logout(input: &str) -> Result<Value, Error> {
+    let request = parse_logout_commit(input)?;
+    let directory = open_cache_directory()?;
+    commit_logout_from(request, &directory, |request| {
+        let transport = GatewayTransport::open()?;
+        commit_logout_with(request, &transport, &directory)
+    })
 }
 
 pub fn schema() -> Value {
@@ -719,9 +910,13 @@ pub fn schema() -> Value {
             "input":{"type":"object","additionalProperties":false,"required":["username","password","ip","ac_id","intent"],"x-maxInputBytes":16384,"properties":{"username":{"allOf":[identity["username"].clone(),{"pattern":no_control}]},"password":{"type":"string","minLength":1,"maxLength":1024,"pattern":no_control,"writeOnly":true},"ip":identity["ip"].clone(),"ac_id":identity["ac_id"].clone(),"intent":{"type":"string","description":"Exactly LOGIN <username> <ip>."}}},"options":{"--online":{"const":true},"prerequisite":"gateway resume-auth"},
             "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","requested_ip","server_online_ip","ip_matches_request","server_reported_success","provenance","authentication_attempts","automatic_retry"],"properties":{"schema_version":{"const":1},"type":{"const":"gateway_login"},"result":{"const":"connected"},"requested_ip":ip.clone(),"server_online_ip":{"anyOf":[ip.clone(),{"type":"null"}]},"ip_matches_request":{"type":["boolean","null"]},"server_reported_success":{"const":true},"provenance":provenance.clone(),"authentication_attempts":{"const":1},"automatic_retry":{"const":false}}}
         },
-        "logout":{
-            "input":{"type":"object","additionalProperties":false,"required":["username","ip","ac_id","intent"],"x-maxInputBytes":16384,"properties":{"username":{"allOf":[identity["username"].clone(),{"pattern":no_control}]},"ip":identity["ip"].clone(),"ac_id":identity["ac_id"].clone(),"intent":{"type":"string","description":"Exactly LOGOUT <username> <ip>."}}},"options":{"--online":{"const":true}},
-            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","requested_ip","server_online_ip","server_reported_success","provenance","automatic_retry"],"properties":{"schema_version":{"const":1},"type":{"const":"gateway_logout"},"result":{"const":"disconnected"},"requested_ip":ip,"server_online_ip":{"anyOf":[{"type":"string","format":"ipv4"},{"type":"null"}]},"server_reported_success":{"const":true},"provenance":provenance,"automatic_retry":{"const":false}}}
+        "logout-plan":{
+            "input":{"type":"object","additionalProperties":false,"required":["username","ip","ac_id"],"x-maxInputBytes":16384,"properties":{"username":{"allOf":[identity["username"].clone(),{"pattern":no_control}]},"ip":identity["ip"].clone(),"ac_id":identity["ac_id"].clone()}},
+            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","plan_hash","username_sha256","requested_ip","ac_id","required_intent","network_request_performed","immutable_plan"],"properties":{"schema_version":{"const":1},"type":{"const":"gateway_logout_plan"},"result":{"const":"planned"},"plan_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"username_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"requested_ip":ip.clone(),"ac_id":identity["ac_id"].clone(),"required_intent":{"type":"string"},"network_request_performed":{"const":false},"immutable_plan":{"const":true}}}
+        },
+        "logout-commit":{
+            "input":{"type":"object","additionalProperties":false,"required":["username","ip","ac_id","plan_hash","intent"],"x-maxInputBytes":16384,"properties":{"username":{"allOf":[identity["username"].clone(),{"pattern":no_control}]},"ip":identity["ip"].clone(),"ac_id":identity["ac_id"].clone(),"plan_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"intent":{"type":"string","description":"Exactly COMMIT GATEWAY LOGOUT <plan_hash>."}}},"options":{"--online":{"const":true},"prerequisite":"gateway logout-plan"},
+            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","plan_hash","requested_ip","server_online_ip","server_reported_success","provenance","automatic_retry","idempotency"],"properties":{"schema_version":{"const":1},"type":{"const":"gateway_logout"},"result":{"const":"disconnected"},"plan_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"requested_ip":ip,"server_online_ip":{"anyOf":[{"type":"string","format":"ipv4"},{"type":"null"}]},"server_reported_success":{"const":true},"provenance":provenance,"automatic_retry":{"const":false},"idempotency":{"enum":["committed","idempotent_hit"]}}}
         }
     })
 }
@@ -900,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn login_and_logout_are_separately_governed_without_plaintext_password() {
+    fn login_and_logout_plan_commit_are_governed_without_plaintext_password() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, request, index| {
             assert!(!request.contains("synthetic-secret"));
@@ -954,11 +1149,27 @@ mod tests {
         assert_eq!(output["ip_matches_request"], true);
         let status = transport.governor.status().unwrap();
         assert!(!status.safety_latched && !status.authentication_armed);
-        let logout = parse_logout(r#"{"username":"student","ip":"10.0.0.2","ac_id":62,"intent":"LOGOUT student 10.0.0.2"}"#).unwrap();
-        assert_eq!(
-            logout_with(logout, &transport).unwrap()["result"],
-            "disconnected"
-        );
+        let cache = fixture.cache();
+        let plan = plan_logout(r#"{"username":"student","ip":"10.0.0.2","ac_id":62}"#).unwrap();
+        assert!(plan["username_sha256"].as_str().is_some());
+        assert!(!serde_json::to_string(&plan).unwrap().contains("student"));
+        let commit_input = json!({
+            "username":"student","ip":"10.0.0.2","ac_id":62,
+            "plan_hash":plan["plan_hash"],"intent":plan["required_intent"]
+        })
+        .to_string();
+        let commit = parse_logout_commit(&commit_input).unwrap();
+        let committed = commit_logout_from(commit, &cache, |request| {
+            commit_logout_with(request, &transport, &cache)
+        })
+        .unwrap();
+        assert_eq!(committed["idempotency"], "committed");
+        let repeat = parse_logout_commit(&commit_input).unwrap();
+        let repeated = commit_logout_from(repeat, &cache, |_| {
+            panic!("idempotent hit attempted network")
+        })
+        .unwrap();
+        assert_eq!(repeated["idempotency"], "idempotent_hit");
         let observations: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(observations.len(), 3);
         assert!(
@@ -1033,12 +1244,13 @@ mod tests {
         };
         assert_eq!(error.code, "invalid_input");
         assert!(!error.message.contains("private"));
-        assert!(
-            parse_logout(
-                r#"{"username":"student","ip":"10.0.0.2","ac_id":62,"intent":"LOGOUT wrong"}"#
-            )
-            .is_err()
-        );
+        let plan = plan_logout(r#"{"username":"student","ip":"10.0.0.2","ac_id":62}"#).unwrap();
+        let bad_commit = json!({
+            "username":"student","ip":"10.0.0.2","ac_id":62,
+            "plan_hash":plan["plan_hash"],"intent":"COMMIT GATEWAY LOGOUT wrong"
+        })
+        .to_string();
+        assert!(parse_logout_commit(&bad_commit).is_err());
         let long_username = "学".repeat(257);
         let long_input = json!({"username":long_username,"password":"x","ip":"10.0.0.2","ac_id":62,"intent":format!("LOGIN {} 10.0.0.2", "学".repeat(257))}).to_string();
         assert_eq!(
@@ -1059,6 +1271,13 @@ mod tests {
         assert_eq!(
             contract["usage"]["output"]["properties"]["provenance"]["properties"]["cache_status"]["enum"],
             json!(["hit", "miss"])
+        );
+        assert!(
+            contract["logout-plan"]["output"]["properties"]["plan_hash"]["pattern"].is_string()
+        );
+        assert_eq!(
+            contract["logout-commit"]["output"]["properties"]["idempotency"]["enum"],
+            json!(["committed", "idempotent_hit"])
         );
     }
 }
