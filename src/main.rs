@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use std::io::{self, Read, Write};
+use zeroize::Zeroize;
 
 const MAX_INPUT: u64 = 8 * 1024 * 1024;
 const MATRIX: &str = include_str!("../acceptance.json");
@@ -29,7 +30,7 @@ fn read_input() -> Result<String, CliError> {
     Ok(input)
 }
 
-fn archive_error(error: buaa_cli::net::Error) -> CliError {
+fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
         "unsupported" | "redirect_refused" | "unsupported_encoding" => ("unsupported", 3),
@@ -68,11 +69,55 @@ fn run_archive(args: &[String]) -> CliResult {
         }
     };
     let input = read_input()?;
-    let client = ArchiveClient::open(mode).map_err(archive_error)?;
-    let output = operation(&input, &client).map_err(archive_error)?;
+    let client = ArchiveClient::open(mode).map_err(service_error)?;
+    let output = operation(&input, &client).map_err(service_error)?;
     emit(&output)
 }
 
+fn run_gateway(args: &[String]) -> CliResult {
+    use buaa_cli::net::CacheMode;
+    match args.first().map(String::as_str) {
+        Some("usage") => {
+            let mode = match args.get(1).map(String::as_str) {
+                None => CacheMode::Offline,
+                Some("--online") if args.len() == 2 => CacheMode::PreferCache,
+                Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
+                _ => {
+                    return Err((
+                        "invalid_input",
+                        2,
+                        "expected at most one of --online or --refresh".into(),
+                    ));
+                }
+            };
+            emit(&buaa_cli::gateway::usage(mode).map_err(service_error)?)
+        }
+        Some("resume-auth") if args.len() == 1 => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::resume_auth(&input).map_err(service_error)?)
+        }
+        Some("login") if args.len() == 2 && args[1] == "--online" => {
+            let mut input = read_input()?;
+            let output = buaa_cli::gateway::login(&input).map_err(service_error);
+            input.zeroize();
+            emit(&output?)
+        }
+        Some("logout") if args.len() == 2 && args[1] == "--online" => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::logout(&input).map_err(service_error)?)
+        }
+        Some("login" | "logout") => Err((
+            "permission",
+            5,
+            "gateway mutation requires explicit --online and typed stdin intent".into(),
+        )),
+        _ => Err((
+            "unsupported",
+            3,
+            "expected gateway usage, resume-auth, login, or logout".into(),
+        )),
+    }
+}
 fn run() -> CliResult {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
@@ -86,8 +131,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]"],
-            "network_policy": {"default":"offline", "opt_in":"archive --online or --refresh", "campus_enabled":false},
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login|logout --online"],
+            "network_policy": {"default":"offline", "opt_in":"archive/gateway explicit online flags", "campus_enabled":true, "automatic_authentication_retry":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
         "capabilities" if args.len() == 1 => {
@@ -99,6 +144,7 @@ fn run() -> CliResult {
             "schema_version": 1,
             "commands": {
                 "archive": buaa_cli::archive::schema(),
+                "gateway": buaa_cli::gateway::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -112,7 +158,7 @@ fn run() -> CliResult {
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
                 "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9}},
-            "network_policy":{"default":"offline","opt_in":"archive --online or --refresh","campus_enabled":false}
+            "network_policy":{"default":"offline","opt_in":"archive/gateway explicit online flags","campus_enabled":true,"automatic_authentication_retry":false}
         })),
         "timed-input" => {
             let mut raw = false;
@@ -148,6 +194,7 @@ fn run() -> CliResult {
             })
         }
         "archive" => run_archive(&args[1..]),
+        "gateway" => run_gateway(&args[1..]),
         _ => Err((
             "unsupported",
             3,
