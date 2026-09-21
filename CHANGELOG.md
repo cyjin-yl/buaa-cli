@@ -9,3 +9,5 @@
 - Add a public credential-free devcontainer recipe with digest-pinned official Rust/Node 22 images, checksum-verified OMP 18.2.6, non-root runtime and a shared private HOME volume. Full image build is explicitly unverified where no in-container builder is available.
 - Add cache-first CDX lookup and exact Memento replay capture through the shared governor, with robots policy, conditional revalidation, immutable hashes, scoped missing history and explicit network opt-in. Live archive availability is not claimed verified.
 - Preserve compound HTTP cooldown/challenge/body-failure facts atomically, and validate provenance before any immutable cache commit. End-to-end loopback regressions reproduce both failure modes and pass after fixes.
+- Add cache-first, create-new Fengrubei v1.0.3 release retrieval pinned by tag commit, size and SHA-256, with separately governed robots/redirect/asset requests.
+- Preserve upstream LPPL provenance and explicit community-format/font caveats; never unpack, execute, compile, overwrite or relicense the downloaded archive.
