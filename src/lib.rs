@@ -3,4 +3,5 @@
 pub mod archive;
 pub mod governor;
 pub mod net;
+pub mod organizations;
 pub mod timed_input;

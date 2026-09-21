@@ -1,8 +1,8 @@
-//! Archive-only, opt-in HTTP with a private byte-preserving cache.
+//! Opt-in, allowlisted HTTP sources with a private byte-preserving cache.
 //!
 //! Cache reads never open the governor or construct an HTTP client. Every remote
 //! observation, including robots.txt, owns a shared governor lease until its body
-//! and cache write have completed. Errors deliberately contain no remote data.
+//! is validated and cache persistence completes. Errors contain no remote data.
 
 use crate::governor::{self, Governor, Outcome, RequestKind, RequestLease};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -22,7 +22,11 @@ const MAX_BODY: usize = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_HEADERS: usize = 64 * 1024;
 const MAX_URL: usize = 16 * 1024;
-const ROBOTS_URL: &str = "https://web.archive.org/robots.txt";
+const ARCHIVE_ROBOTS_URL: &str = "https://web.archive.org/robots.txt";
+const ORGANIZATIONS_ROBOTS_URL: &str = "https://www.buaa.edu.cn/robots.txt";
+pub(crate) const ORGANIZATIONS_URL: &str = "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm";
+#[cfg(test)]
+const ROBOTS_URL: &str = ARCHIVE_ROBOTS_URL;
 const ROBOTS_MAX_AGE_MS: u64 = 24 * 60 * 60 * 1000;
 const HEADERS: &[&str] = &[
     "content-type",
@@ -36,6 +40,79 @@ const HEADERS: &[&str] = &[
     "x-archive-orig-date",
     "x-archive-orig-last-modified",
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceProfile {
+    Archive,
+    Organizations,
+}
+
+impl SourceProfile {
+    fn robots_url(self) -> &'static str {
+        match self {
+            Self::Archive => ARCHIVE_ROBOTS_URL,
+            Self::Organizations => ORGANIZATIONS_ROBOTS_URL,
+        }
+    }
+
+    fn cache_directory(self) -> &'static str {
+        match self {
+            Self::Archive => ".buaa-cli-archive-cache",
+            Self::Organizations => ".buaa-cli-organizations-cache",
+        }
+    }
+
+    fn validate_url(self, url: &Url) -> Result<(), Error> {
+        let common_invalid = url.as_str().len() > MAX_URL
+            || url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.port().is_some()
+            || url.fragment().is_some();
+        let allowed = match self {
+            Self::Archive => {
+                url.host_str() == Some("web.archive.org")
+                    && (url.path() == "/cdx/search/cdx"
+                        || url.path().starts_with("/web/")
+                        || url.as_str() == ARCHIVE_ROBOTS_URL)
+            }
+            Self::Organizations => {
+                url.host_str() == Some("www.buaa.edu.cn")
+                    && url.query().is_none()
+                    && matches!(url.path(), "/robots.txt" | "/jgsz/jxkyjg02.htm")
+            }
+        };
+        if common_invalid || !allowed {
+            Err(invalid_url())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn allows_missing(self, url: &Url, status: u16) -> bool {
+        matches!(status, 404 | 410)
+            && (url.as_str() == self.robots_url()
+                || (self == Self::Archive && url.path().starts_with("/web/")))
+    }
+
+    fn cacheable(self, url: &Url, response: &Response) -> bool {
+        response.status == 200
+            || url.as_str() == self.robots_url()
+            || (self == Self::Archive
+                && response.headers.contains_key("memento-datetime")
+                && response.headers.contains_key("link"))
+    }
+
+    fn valid_cached(self, url: &Url, cached: &Cached) -> bool {
+        cached.status == 200
+            || (matches!(cached.status, 404 | 410)
+                && (url.as_str() == self.robots_url()
+                    || (self == Self::Archive
+                        && url.path().starts_with("/web/")
+                        && cached.headers.contains_key("memento-datetime")
+                        && cached.headers.contains_key("link"))))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheMode {
@@ -107,6 +184,7 @@ struct Entry {
 
 pub struct ArchiveClient {
     mode: CacheMode,
+    profile: SourceProfile,
     directory: File,
     #[cfg(test)]
     test_route: Option<std::net::SocketAddr>,
@@ -116,13 +194,22 @@ pub struct ArchiveClient {
 
 impl ArchiveClient {
     pub fn open(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Archive)
+    }
+
+    pub(crate) fn open_organizations(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Organizations)
+    }
+
+    fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
         let home = governor::identity_home().map_err(|_| cache_error())?;
         let _home = governor::open_directory(&home, false, false).map_err(|_| cache_error())?;
-        let directory = governor::open_directory(&home.join(".buaa-cli-archive-cache"), true, true)
+        let directory = governor::open_directory(&home.join(profile.cache_directory()), true, true)
             .map_err(|_| cache_error())?;
         Ok(Self {
             mode,
             directory,
+            profile,
             #[cfg(test)]
             test_route: None,
             #[cfg(test)]
@@ -137,7 +224,7 @@ impl ArchiveClient {
         immutable: bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        validate_url(url)?;
+        self.profile.validate_url(url)?;
         let cached = self.load(url)?;
         if self.mode != CacheMode::Revalidate {
             if let Some(entry) = cached {
@@ -153,7 +240,7 @@ impl ArchiveClient {
         // No governor or reqwest construction occurs on either offline path.
         let governor = self.open_governor()?;
         let http = self.http_client()?;
-        if url.as_str() != ROBOTS_URL {
+        if url.as_str() != self.profile.robots_url() {
             self.check_robots(url, &governor, &http)?;
         }
         // Reload only under the lease in fetch: another process may have populated
@@ -202,7 +289,7 @@ impl ArchiveClient {
     }
 
     fn check_robots(&self, target: &Url, governor: &Governor, http: &Client) -> Result<(), Error> {
-        let url = Url::parse(ROBOTS_URL).map_err(|_| invalid_url())?;
+        let url = Url::parse(self.profile.robots_url()).map_err(|_| invalid_url())?;
         let now = unix_ms()?;
         let cached = self.load(&url)?;
         if let Some(entry) = cached.filter(|entry| fresh_robots(&entry.response, now)) {
@@ -219,10 +306,7 @@ impl ArchiveClient {
             404 | 410 => Ok(()),
             200 => {
                 let body = std::str::from_utf8(&response.body).map_err(|_| {
-                    Error::new(
-                        "robots_invalid",
-                        "archive robots policy cannot be interpreted",
-                    )
+                    Error::new("robots_invalid", "robots policy cannot be interpreted")
                 })?;
                 if robotstxt::DefaultMatcher::default().one_agent_allowed_by_robots(
                     body,
@@ -233,13 +317,13 @@ impl ArchiveClient {
                 } else {
                     Err(Error::new(
                         "robots_denied",
-                        "archive robots policy disallows this request",
+                        "robots policy disallows this request",
                     ))
                 }
             }
             _ => Err(Error::new(
                 "robots_unavailable",
-                "archive robots policy is unavailable",
+                "robots policy is unavailable",
             )),
         }
     }
@@ -298,34 +382,33 @@ impl ArchiveClient {
             if challenge || status == 401 || status == 403 {
                 return Err(Error::new(
                     "safety_latched",
-                    "archive access was rejected; explicit safety review is required",
+                    "public source access was rejected; explicit safety review is required",
                 ));
             }
             if status == 429 {
                 return Err(Error::new(
                     "cooldown",
-                    "archive requested a request cooldown",
+                    "public source requested a request cooldown",
                 ));
             }
             if (300..400).contains(&status) && status != 304 {
                 return Err(Error::new(
                     "redirect_refused",
-                    "archive redirects are not followed",
+                    "public source redirects are not followed",
                 ));
             }
-            let missing_response = (url.as_str() == ROBOTS_URL || url.path().starts_with("/web/"))
-                && matches!(status, 404 | 410);
+            let missing_response = self.profile.allows_missing(url, status);
             if status != 200 && status != 304 && !missing_response {
                 return Err(Error::new(
                     "http_rejected",
-                    "archive returned an unsupported HTTP status",
+                    "public source returned an unsupported HTTP status",
                 ));
             }
             for encoding in raw.headers().get_all("content-encoding") {
                 if !encoding.as_bytes().eq_ignore_ascii_case(b"identity") {
                     return Err(Error::new(
                         "unsupported_encoding",
-                        "archive content encoding is not supported",
+                        "public source content encoding is not supported",
                     ));
                 }
             }
@@ -349,7 +432,7 @@ impl ArchiveClient {
                 let mut entry = cached.ok_or_else(|| {
                     Error::new(
                         "invalid_304",
-                        "archive returned not-modified without a valid cached response",
+                        "public source returned not-modified without a valid cached response",
                     )
                 })?;
                 entry.immutable |= immutable;
@@ -409,11 +492,7 @@ impl ArchiveClient {
             let processed = process(response)?;
             // An unattributed replay 404/410 is an archive gap, not immutable
             // captured content. Return its facts without persisting the gap.
-            if response.status == 200
-                || url.as_str() == ROBOTS_URL
-                || (response.headers.contains_key("memento-datetime")
-                    && response.headers.contains_key("link"))
-            {
+            if self.profile.cacheable(url, response) {
                 self.save(&entry)?;
             }
             Ok(processed)
@@ -481,12 +560,7 @@ impl ArchiveClient {
         let cached: Cached = serde_json::from_slice(&bytes).map_err(|_| corrupt_cache())?;
         if cached.version != 1
             || cached.url != url.as_str()
-            || !(cached.status == 200
-                || (matches!(cached.status, 404 | 410)
-                    && (url.as_str() == ROBOTS_URL
-                        || (url.path().starts_with("/web/")
-                            && cached.headers.contains_key("memento-datetime")
-                            && cached.headers.contains_key("link")))))
+            || !self.profile.valid_cached(url, &cached)
             || cached.body_base64.len() > MAX_BODY.div_ceil(3) * 4
             || cached
                 .headers
@@ -609,23 +683,6 @@ impl ArchiveClient {
     }
 }
 
-fn validate_url(url: &Url) -> Result<(), Error> {
-    if url.as_str().len() > MAX_URL
-        || url.scheme() != "https"
-        || url.host_str() != Some("web.archive.org")
-        || url.port_or_known_default() != Some(443)
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-        || !(url.path() == "/cdx/search/cdx"
-            || url.path().starts_with("/web/")
-            || url.as_str() == ROBOTS_URL)
-    {
-        return Err(invalid_url());
-    }
-    Ok(())
-}
-
 fn acquire(governor: &Governor) -> Result<RequestLease<'_>, Error> {
     let status = governor.status().map_err(|_| governor_error())?;
     if status.safety_latched {
@@ -734,11 +791,14 @@ fn cache_name(url: &Url) -> String {
 fn cache_error() -> Error {
     Error::new(
         "cache_unavailable",
-        "archive cache cannot be accessed safely",
+        "public source cache cannot be accessed safely",
     )
 }
 fn corrupt_cache() -> Error {
-    Error::new("cache_invalid", "archive cache failed integrity validation")
+    Error::new(
+        "cache_invalid",
+        "public source cache failed integrity validation",
+    )
 }
 fn governor_error() -> Error {
     Error::new(
@@ -747,15 +807,18 @@ fn governor_error() -> Error {
     )
 }
 fn network_error() -> Error {
-    Error::new("network_error", "archive request did not complete")
+    Error::new("network_error", "public source request did not complete")
 }
 fn body_limit() -> Error {
-    Error::new("body_too_large", "archive response exceeds the byte bound")
+    Error::new(
+        "body_too_large",
+        "public source response exceeds the byte bound",
+    )
 }
 fn invalid_url() -> Error {
     Error::new(
         "egress_denied",
-        "only approved HTTPS archive routes are supported",
+        "only approved HTTPS public-source routes are supported",
     )
 }
 
@@ -790,7 +853,23 @@ mod tests {
         fn client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
             ArchiveClient {
                 mode,
+                profile: SourceProfile::Archive,
                 directory: governor::open_directory(&self.0.join("cache"), true, true).unwrap(),
+                test_route: Some(server.address),
+                test_governor: Some(self.0.join("governor")),
+            }
+        }
+
+        fn organization_client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
+            ArchiveClient {
+                mode,
+                profile: SourceProfile::Organizations,
+                directory: governor::open_directory(
+                    &self.0.join("organizations-cache"),
+                    true,
+                    true,
+                )
+                .unwrap(),
                 test_route: Some(server.address),
                 test_governor: Some(self.0.join("governor")),
             }
@@ -986,6 +1065,58 @@ mod tests {
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
         assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_secs(5));
+    }
+
+    #[test]
+    fn official_directory_profile_checks_robots_paces_and_caches() {
+        const BODY: &[u8] = br#"<html><title>directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>A</h3></div><div class='kyjg-bd'><a href='https://one.buaa.edu.cn/'>One</a></div></div></html>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            if request.starts_with("GET /robots.txt ") {
+                reply(socket, 404, "Content-Type: text/plain\r\n", b"missing");
+            } else {
+                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: text/html; charset=utf-8\r\nETag: \"directory\"\r\n",
+                    BODY,
+                );
+            }
+        });
+        let client = fixture.organization_client(CacheMode::PreferCache, &server);
+        let url = Url::parse(ORGANIZATIONS_URL).unwrap();
+        let count = client
+            .get(&url, false, |response| {
+                Ok(crate::organizations::parse_html(&response.body)?
+                    .entries
+                    .len())
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+        let requests: Vec<_> = server.requests.try_iter().collect();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_secs(5));
+        assert_eq!(
+            client.snapshot(&url, false).unwrap().cache_status,
+            CacheStatus::Hit
+        );
+        assert_eq!(server.count(), 2);
+        for denied in [
+            "https://www.buaa.edu.cn/",
+            "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm?unexpected=1",
+            "https://dept3.buaa.edu.cn/",
+        ] {
+            assert_eq!(
+                client
+                    .snapshot(&Url::parse(denied).unwrap(), false)
+                    .unwrap_err()
+                    .code,
+                "egress_denied"
+            );
+        }
+        assert_eq!(server.count(), 2);
     }
 
     #[test]

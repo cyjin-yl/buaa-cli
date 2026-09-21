@@ -370,9 +370,38 @@
     {
       "id": "organizations",
       "title": "Authoritative college/institute directory",
-      "status": "pending",
+      "status": "implemented-observed-read",
       "acceptance": "All directory-listed colleges/institutes, exact URLs and provenance, no guessed completeness.",
-      "sources": []
+      "sources": [
+        "https://www.buaa.edu.cn/",
+        "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm"
+      ],
+      "evidence": {
+        "command": "buaa organizations list [--online|--refresh]",
+        "implementation": [
+          "src/organizations.rs",
+          "src/net.rs",
+          "src/governor.rs"
+        ],
+        "observed_source": {
+          "directory_url": "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm",
+          "directory_sha256": "f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9",
+          "homepage_sha256": "b936471fe3aaad7ae6e4753b0183f347fd637aaa18c59ecf893c6703c3911ebd",
+          "robots_status": 404,
+          "observed_at_unix_ms": 1789949613688
+        },
+        "coverage": {
+          "categories": 6,
+          "entries": 50,
+          "hidden_source_entries": 6,
+          "missing_hrefs": 5,
+          "non_http_hrefs": 1
+        },
+        "proof": "Three owner-authorized official reads through the production shared governor. Rust production parser processed the private observed HTML offline. Synthetic loopback tests cover robots, real >=5s spacing, fixed egress and cache. Full offline suite: 54 passed, one ignored subprocess worker; strict clippy and formatting passed. Actual CLI help/schema/offline-miss/conflicting-mode paths exercised without further network.",
+        "snapshot": "docs/data/organizations-2026-09-20.json",
+        "limits": "Complete only for entries in the captured official 教学科研机构 document. Missing/non-HTTP URLs remain unresolved; linked-site reachability and announcement content are not claimed.",
+        "review": "Independent safety review found no concrete transport defect. Contract review found and reconciled three fixed parser findings: empty-group omission, trimmed literal href, and category-control acceptance. Focused static re-review reported no remaining concrete finding."
+      }
     },
     {
       "id": "announcements",

@@ -75,7 +75,7 @@
     <main id="content">
       <h1>BUAA CLI</h1>
       <p class="lead">A Rust command line for BUAA workflows, with structured output and conservative request control.</p>
-      <p class="boundary"><strong>Know the boundary.</strong> Timed-input replay and archive lookup/capture are implemented and tested offline. Campus authentication and campus service adapters are not enabled. Live Internet Archive compatibility has not been observed.</p>
+      <p class="boundary"><strong>Know the boundary.</strong> Timed-input replay, archive lookup/capture and the authoritative teaching/research organization directory are implemented. Campus authentication and campus service adapters are not enabled. Announcement crawling and live Internet Archive compatibility remain unverified.</p>
 
       <h2 id="available">Available now</h2>
       <div class="table-scroll" role="region" aria-label="Current capability status" tabindex="0">
@@ -84,6 +84,7 @@
           <tbody>
             <tr><td>Timed input</td><td>Replay timestamped lines as NDJSON or an explicit raw pipe.</td><td>Offline CLI replay, ordering and error boundaries verified.</td></tr>
             <tr><td>Archive reads</td><td>Exact-URL CDX lookup and timestamped Memento capture, with hashes and provenance.</td><td>Real loopback HTTP proof; cache-only by default. Live service unverified.</td></tr>
+            <tr><td>Organization directory</td><td>Every entry in the captured official teaching/research institution document, including hidden and unlinked source facts.</td><td>Three governed official reads plus offline Rust parsing; no linked college sites crawled.</td></tr>
             <tr><td>Shared governor</td><td>One request lease, conservative pacing, durable cooldown and authentication latch.</td><td>Linux, same UID and shared local filesystem state. Cross-process regressions verified.</td></tr>
             <tr><td>Devcontainer</td><td>Pinned official Rust/Node 22 images and checksum-verified OMP 18.2.6.</td><td>Definition and pins verified; a full image build remains unverified.</td></tr>
             <tr><td>Other services</td><td>The full undergraduate, postgraduate and campus capability scope is tracked.</td><td>Pending or specifically blocked. Catalog links are not working adapters.</td></tr>
@@ -114,6 +115,11 @@ cargo build --locked --offline
       <p><code>--online</code> explicitly permits authorized archive reads on a cache miss; <code>--refresh</code> conditionally revalidates. Only approved Internet Archive HTTPS routes are allowed. No original campus host is contacted.</p>
       <p><a href="https://github.com/cyjin-yl/buaa-cli/blob/main/docs/ARCHIVE.md">Archive query, capture and provenance contracts</a></p>
 
+      <h3>List official teaching and research institutions</h3>
+      <pre><code>./target/debug/buaa organizations list</code></pre>
+      <p>The default reads only a private cache. Explicit <code>--online</code>/<code>--refresh</code> permit the fixed official robots and directory routes. Missing and non-HTTP links stay explicit rather than being guessed.</p>
+      <p><a href="https://github.com/cyjin-yl/buaa-cli/blob/main/docs/ORGANIZATIONS.md">Directory semantics and governed source evidence</a></p>
+
       <h2 id="safety">Account safety</h2>
       <ul>
         <li>One in-flight request; at least five seconds after completion. Background observations are at least fifteen minutes apart.</li>
@@ -126,9 +132,9 @@ cargo build --locked --offline
       <p>Credentials and private media stay outside public source. The devcontainer build does not copy private HOME, model, GitHub, SSH or Life configuration.</p>
 
       <h2 id="evidence">Evidence and limits</h2>
-      <p>The current offline suite passes <strong>50 tests</strong>; an ignored worker entry is invoked by the subprocess tests. Strict all-target clippy passes. Independent review findings were reproduced, fixed and re-reviewed.</p>
+      <p>The current offline suite passes <strong>54 tests</strong>; an ignored worker entry is invoked by the subprocess tests. Strict all-target clippy passes. Independent review findings were reproduced, fixed and re-reviewed.</p>
       <p>Capture timestamps are not publication dates. Archive-reported digests are not presented as locally verified resource hashes. Rejected provenance is never committed as an immutable original. Missing history stays missing.</p>
-      <p class="details">No campus authentication or live archive observation was performed for this proof. A full devcontainer image build, general Memento crawling, college discovery, announcement extraction and Life/transcript integration are not claimed complete.</p>
+      <p class="details">No campus authentication, account mutation, linked-college crawl or live archive observation was performed for this proof. A full devcontainer image build, general Memento crawling, announcement extraction and Life/transcript integration are not claimed complete.</p>
       <footer>
         <p>Verification snapshot: 2026-09-20. <a href="https://github.com/cyjin-yl/buaa-cli/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/cyjin-yl/buaa-cli/blob/main/AGENTS.md">Contributor boundaries</a> · <a href="https://github.com/cyjin-yl/buaa-cli/blob/main/LICENSE">MIT license</a></p>
       </footer>

@@ -48,9 +48,20 @@ printf '%s\n' '{"url":"https://college.example/notice/42.html","limit":100}' | .
 
 Use `--online` only for authorized archive reads on cache misses, or `--refresh` for conditional revalidation. Robots rules, the shared governor, fixed HTTPS routes and immutable-original conflict checks apply. Rejected provenance never becomes an immutable cache entry. See [archive contracts and examples](docs/ARCHIVE.md); live service availability remains unverified.
 
+## Authoritative organization directory
+
+`buaa organizations list` returns every entry in the captured official BUAA `教学科研机构` document, including hidden source entries and explicit missing/non-HTTP links. It never invents a URL or silently upgrades HTTP links.
+
+```sh
+# Private cache only; no network request.
+./target/debug/buaa organizations list
+```
+
+Use `--online` only for an authorized cache miss, or `--refresh` for conditional revalidation. Egress is limited to the official robots and directory URLs and shares the same process-wide governor. See [directory semantics and governed observation evidence](docs/ORGANIZATIONS.md) and the [sanitized 2026-09-20 snapshot](docs/data/organizations-2026-09-20.json). Announcement crawling remains separate.
+
 ## Account safety
 
-`src/net.rs` implements archive-only GETs through `src/governor.rs`; no original campus host is contacted. All future adapters/provider processes must retain the same request lease through response validation and persistence, share one private state domain, and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
+`src/net.rs` implements allowlisted archive and official-directory GETs through `src/governor.rs`; the organization command fetches no linked college site, and the archive command fetches no original campus URL. All future adapters/provider processes must retain the same request lease through response validation and persistence, share one private state domain, and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
 
 The Linux governor uses `.buaa-cli-governor` beneath the effective UID's passwd home, ignoring HOME/XDG/worktree overrides. One permanent file lock spans the full request/body lifetime; private atomic state preserves minimum 5-second completion gaps, 15-minute background intervals, Retry-After and one-shot auth permission. Boot-time deadlines cannot be shortened by wall-clock changes. All processes using a campus account must share this OS identity and filesystem state; this is not a distributed cross-host governor.
 
@@ -60,7 +71,7 @@ See [contributor rules](AGENTS.md), [observed blockers and source research](docs
 
 ## Feature acceptance matrix
 
-This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, not live service availability. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
+This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded authorized source observation. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
 
 | ID | Capability | Status |
 | --- | --- | --- |
@@ -92,7 +103,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | welearn | WE Learn materials/practice | pending |
 | fengrubei | Fengrubei template access | pending |
 | crater | Crater allocation/API/SSH | blocked |
-| organizations | Authoritative college/institute directory | pending |
+| organizations | Authoritative college/institute directory | implemented-observed-read |
 | announcements | College current/historical announcements | pending |
 | archive | CDX/Memento historical lookup | implemented-offline-tested; live unverified |
 | recordings | Historical recordings/transcript segments | pending |
