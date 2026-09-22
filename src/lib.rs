@@ -2,5 +2,6 @@
 //! Campus adapters are disabled; archive access requires explicit network opt-in.
 pub mod archive;
 pub mod governor;
+pub mod marks;
 pub mod net;
 pub mod timed_input;

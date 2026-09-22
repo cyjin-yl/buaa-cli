@@ -73,6 +73,50 @@ fn run_archive(args: &[String]) -> CliResult {
     emit(&output)
 }
 
+fn marks_value(value: &Value) -> (&'static str, u8) {
+    match value.get("error").and_then(serde_json::Value::as_str) {
+        Some("invalid_input") => ("invalid_input", 2),
+        Some("unavailable") => ("unavailable", 7),
+        _ => ("unavailable", 7),
+    }
+}
+
+fn run_marks(args: &[String]) -> CliResult {
+    let operation = args.first().map(String::as_str);
+    let subcommand = args.get(1).map(String::as_str);
+    let path = args.get(2).map(String::as_str);
+    let value = match (operation, subcommand) {
+        (Some("gpa"), None) if args.len() == 1 => {
+            let input = read_input()?;
+            buaa_cli::marks::gpa(&input)
+        }
+        (Some("baseline"), Some("save")) if args.len() == 3 => {
+            let input = read_input()?;
+            buaa_cli::marks::baseline_save(&input, path.unwrap())
+        }
+        (Some("baseline"), Some("show")) if args.len() == 3 => {
+            buaa_cli::marks::baseline_show(path.unwrap())
+        }
+        _ => {
+            return Err((
+                "unsupported",
+                3,
+                "expected marks gpa or marks baseline save|show <absolute-path>".into(),
+            ));
+        }
+    };
+    if value.get("error").is_some() {
+        let (code, exit) = marks_value(&value);
+        let message = value
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("marks failed")
+            .to_string();
+        return Err((code, exit, message));
+    }
+    emit(&value)
+}
+
 fn run() -> CliResult {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
@@ -86,7 +130,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>"],
             "network_policy": {"default":"offline", "opt_in":"archive --online or --refresh", "campus_enabled":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -99,6 +143,7 @@ fn run() -> CliResult {
             "schema_version": 1,
             "commands": {
                 "archive": buaa_cli::archive::schema(),
+                "marks": buaa_cli::marks::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -148,6 +193,7 @@ fn run() -> CliResult {
             })
         }
         "archive" => run_archive(&args[1..]),
+        "marks" => run_marks(&args[1..]),
         _ => Err((
             "unsupported",
             3,
