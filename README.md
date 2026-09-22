@@ -60,6 +60,16 @@ printf '%s\n' '{"output":"/home/operator/private/template-v1.0.3.zip"}' | ./targ
 
 Use `fetch --online` only to permit a governed public download on cache miss. The output parent must already exist, be owned by the current user, reject group/other writes, and contain no symlink path components. The client checks robots on both GitHub hosts, validates one explicit redirect, streams and verifies 52,816,733 bytes, and never unpacks, executes, compiles or overwrites. See [license, font and format caveats](docs/FENGRUBEI.md). The community release is not an official/current-format guarantee.
 
+## Marks/GPA (offline)
+
+`buaa marks gpa` computes a weighted GPA from a caller-supplied, provenanced policy (table bands or formula) and course list, with per-course pass flags and an optional structured diff against an inline baseline. No campus grades are fetched.
+
+```sh
+printf '%s\n' '{"policy":{"kind":"table","id":"p1","source":"<published-url>","pass_min":60,"bands":[...]},"courses":[{"name":"...","score":92,"credit":4.0}]}' | ./target/debug/buaa marks gpa
+```
+
+`buaa marks baseline save|show <absolute-path>` persists and reads back an idempotent local `gpa_baseline` snapshot (absolute paths only; identical re-saves report `unchanged`). The stored baseline can be pasted as the `baseline` field of `marks gpa` to produce added/removed/changed and GPA-delta. The live campus grades adapter is a separate blocked capability; see `acceptance.json`.
+
 ## Account safety
 
 Archive and template network reads share the process-wide governor for request, bounded response processing and private atomic persistence. The archive adapter fetches no original campus URL; the template adapter permits only one pinned GitHub release and validated release-asset redirect. All future adapters/provider processes must share the same state domain and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
@@ -72,7 +82,7 @@ See [contributor rules](AGENTS.md), [observed blockers and source research](docs
 
 ## Feature acceptance matrix
 
-This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded public source observation. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
+This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded public source observation. `partial-offline` means the offline engine/contract is complete while a live campus adapter remains blocked. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
 
 | ID | Capability | Status |
 | --- | --- | --- |
@@ -83,7 +93,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | smart | Smart BUAA services | pending |
 | enrol | Undergraduate/postgraduate course selection/drop | pending |
 | evaluation | Teaching evaluations | pending |
-| marks | Marks/GPA/change monitoring | pending |
+| marks | Marks/GPA/change monitoring | partial-offline |
 | timetable-ug | Undergraduate timetable/ICS | pending |
 | timetable-pg | Postgraduate timetable/ICS | pending |
 | checkin | Classroom QR/direct check-in | pending |
