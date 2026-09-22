@@ -68,3 +68,11 @@ The archive checkpoint's bounded credential-format scan covered 22 explicit publ
 ## Documentation landing page
 
 `docs/index.html` is an original static, docs-first page informed by the [requested design reference](https://killaislop.com): neutral surfaces, restrained links, readable commands and explicit capability limits, without gradients or badge walls. Chromium rendered it at desktop and mobile sizes; anchor navigation worked and the mobile document had no horizontal overflow. The page loaded no external resources. Missing browser libraries were extracted privately inside this devcontainer for that proof; no private operational image recipe or host build was used. Pages deployment remains pending publication.
+
+## Verified marks/GPA offline iteration
+
+Implemented `marks gpa` and `marks baseline save|show <absolute-path>` as a fully offline, policy-provenanced GPA engine. No campus grades are fetched: the caller supplies the published policy (table bands or formula) with `id` + `source` provenance and the course list, and the CLI computes the weighted GPA, per-course pass/count flags, and a structured baseline diff (added/removed/changed courses and GPA delta). A baseline is an idempotent local snapshot at an absolute path; identical re-saves report `unchanged` without rewriting the file.
+
+- `cargo test --locked --offline`: **49 passed**, one intentionally ignored subprocess worker (lib) plus 8 integration tests. Strict all-target clippy passed (zero warnings) and Rust formatter applied.
+- Actual CLI proof: table-policy GPA of 3.6667 across weighted courses with a failing course excluded; idempotent baseline save (`saved` then `unchanged`); baseline show round-trip; relative baseline path rejected as `invalid_input` exit 2; missing/oversized policy rejected.
+- The live campus grades adapter remains blocked: no authorized read observation, no credentials supplied, and no published official grade-point table grounded from this seat. Status in `acceptance.json` is `partial-offline`, with the blocker recorded explicitly. No live adapter, fake endpoint, or generic success stub is present.

@@ -100,13 +100,20 @@
     {
       "id": "marks",
       "title": "Marks/GPA/change monitoring",
-      "status": "pending",
+      "status": "partial-offline",
       "acceptance": "Published policy GPA and deltas with cached baseline; polling at least 15 minutes.",
       "sources": [
         "https://github.com/wzk1015/BUAA-getscore",
         "https://github.com/hjc-owo/BUAA_Get_Score",
         "https://github.com/PhantomPower82/buaa-get-score"
-      ]
+      ],
+      "evidence": {
+        "command": "buaa marks gpa; buaa marks baseline save|show <absolute-path>",
+        "tests": "cargo test --locked --offline: marks tests passed (weighted GPA table+formula, failure exclusion, null GPA, structured added/removed/changed diff with gpa delta, baseline idempotency round-trip, policy provenance required, gap/overlap/duplicate/zero-credit rejected); clippy 0 warnings; fmt clean.",
+        "scope": "Deterministic offline GPA + change-monitoring engine. The grade-point policy is caller-supplied with mandatory id/source provenance (table or formula) so no policy is guessed or embedded; the shared governor enforces the >=15-minute background polling cadence for any future campus reads.",
+        "smoke": "Real CLI: table policy {92/4cr,78/2cr,59/3cr} -> gpa 3.6667, counted 6.0, total 9.0, failed course excluded; baseline save->unchanged idempotency and show round-trip verified."
+      },
+      "blocker": "Campus grades-fetching adapter requires a live authorized campus session and the exact published grade-point table; both are unreachable from this seat (all .buaa.edu.cn endpoints reset, VPN/Tailscale absent in devcontainer, web archive offline). The offline engine, policy-provenance contract, and baseline diff are complete; status partial-offline until the live adapter and official policy are grounded."
     },
     {
       "id": "timetable-ug",
