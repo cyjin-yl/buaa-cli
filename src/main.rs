@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use std::io::{self, Read, Write};
+use zeroize::Zeroize;
 
 const MAX_INPUT: u64 = 8 * 1024 * 1024;
 const MATRIX: &str = include_str!("../acceptance.json");
@@ -133,6 +134,56 @@ fn run_fengrubei(args: &[String]) -> CliResult {
         _ => Err(("unsupported", 3, "expected fengrubei info or fetch".into())),
     }
 }
+
+fn run_gateway(args: &[String]) -> CliResult {
+    use buaa_cli::net::CacheMode;
+    match args.first().map(String::as_str) {
+        Some("usage") => {
+            let mode = match args.get(1).map(String::as_str) {
+                None => CacheMode::Offline,
+                Some("--online") if args.len() == 2 => CacheMode::PreferCache,
+                Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
+                _ => {
+                    return Err((
+                        "invalid_input",
+                        2,
+                        "expected at most one of --online or --refresh".into(),
+                    ));
+                }
+            };
+            emit(&buaa_cli::gateway::usage(mode).map_err(service_error)?)
+        }
+        Some("resume-auth") if args.len() == 1 => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::resume_auth(&input).map_err(service_error)?)
+        }
+        Some("login") if args.len() == 2 && args[1] == "--online" => {
+            let mut input = read_input()?;
+            let output = buaa_cli::gateway::login(&input).map_err(service_error);
+            input.zeroize();
+            emit(&output?)
+        }
+        Some("logout-plan") if args.len() == 1 => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::plan_logout(&input).map_err(service_error)?)
+        }
+        Some("logout-commit") if args.len() == 2 && args[1] == "--online" => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::commit_logout(&input).map_err(service_error)?)
+        }
+        Some("login" | "logout-commit") => Err((
+            "permission",
+            5,
+            "gateway mutation requires its prerequisite, explicit --online, and typed stdin intent"
+                .into(),
+        )),
+        _ => Err((
+            "unsupported",
+            3,
+            "expected gateway usage, resume-auth, login, logout-plan, or logout-commit".into(),
+        )),
+    }
+}
 fn run() -> CliResult {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
@@ -146,8 +197,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]"],
-            "network_policy": {"default":"offline", "opt_in":"archive --online/--refresh or fengrubei fetch --online", "campus_enabled":false},
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online"],
+            "network_policy": {"default":"offline", "opt_in":"archive/gateway explicit online flags", "campus_enabled":true, "automatic_authentication_retry":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
         "capabilities" if args.len() == 1 => {
@@ -161,6 +212,7 @@ fn run() -> CliResult {
                 "archive": buaa_cli::archive::schema(),
                 "marks": buaa_cli::marks::schema(),
                 "fengrubei": buaa_cli::fengrubei::schema(),
+                "gateway": buaa_cli::gateway::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -174,7 +226,7 @@ fn run() -> CliResult {
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
                 "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9}},
-            "network_policy":{"default":"offline","opt_in":"archive --online/--refresh or fengrubei fetch --online","campus_enabled":false}
+            "network_policy":{"default":"offline","opt_in":"archive/gateway explicit online flags","campus_enabled":true,"automatic_authentication_retry":false}
         })),
         "timed-input" => {
             let mut raw = false;
@@ -212,6 +264,7 @@ fn run() -> CliResult {
         "archive" => run_archive(&args[1..]),
         "marks" => run_marks(&args[1..]),
         "fengrubei" => run_fengrubei(&args[1..]),
+        "gateway" => run_gateway(&args[1..]),
         _ => Err((
             "unsupported",
             3,

@@ -627,6 +627,13 @@ fn validate_url(url: &Url) -> Result<(), Error> {
 }
 
 pub(crate) fn acquire(governor: &Governor) -> Result<RequestLease<'_>, Error> {
+    acquire_kind(governor, RequestKind::Interactive)
+}
+
+pub(crate) fn acquire_kind(
+    governor: &Governor,
+    kind: RequestKind,
+) -> Result<RequestLease<'_>, Error> {
     let status = governor.status().map_err(|_| governor_error())?;
     if status.safety_latched {
         return Err(Error::new(
@@ -651,9 +658,7 @@ pub(crate) fn acquire(governor: &Governor) -> Result<RequestLease<'_>, Error> {
     }
     // Exactly one attempt after at most one gap sleep. A competing owner is never
     // treated as a request gap, retried, or bypassed.
-    governor
-        .try_acquire(RequestKind::Interactive)
-        .map_err(|_| governor_error())
+    governor.try_acquire(kind).map_err(|_| governor_error())
 }
 
 fn collect_headers(raw: &reqwest::header::HeaderMap) -> Result<BTreeMap<String, String>, Error> {

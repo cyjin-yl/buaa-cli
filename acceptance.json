@@ -20,7 +20,7 @@
     {
       "id": "gateway",
       "title": "Gateway login/logout/usage",
-      "status": "pending",
+      "status": "partial-live-unverified",
       "acceptance": "Observed read-only usage; explicit login once and logout plan/commit.",
       "sources": [
         "https://github.com/ywz978020607/pySrun4k_BeihangLogin",
@@ -35,7 +35,12 @@
         "https://github.com/Izumiko/buaalogin",
         "https://github.com/BUAASubnet/srun",
         "https://github.com/ChiamZhang/SRun-Network-Auto-Login"
-      ]
+      ],
+      "implemented_slices": [
+        "gateway-client",
+        "gateway-logout-plan-commit"
+      ],
+      "remaining": "No real campus gateway usage/authentication/logout commit is authorized or performed; live endpoint compatibility, owner account postconditions and actual ac_id/IP remain unverified."
     },
     {
       "id": "spoc",
@@ -535,6 +540,50 @@
         "smoke": "Configuration parses; three RUN commands pass shell syntax checks; installed Node/OMP version commands work with a fresh credential-free HOME.",
         "review": "Fresh-context independent static review: no concrete findings.",
         "blocker": "Full image build and Dev Containers UID/volume integration unverified: no Docker/Podman/BuildKit/buildah/nerdctl or builder socket inside this devcontainer. Do not build on PVE host."
+      }
+    },
+    {
+      "id": "gateway-client",
+      "title": "Governed gateway protocol client",
+      "status": "implemented-offline",
+      "parent_items": [
+        "gateway"
+      ],
+      "acceptance": "Fixed TLS endpoint, cache-first redacted usage, stdin credentials, explicit one-shot auth resume, separately governed challenge/login, and hash-bound idempotent logout plan/commit; no automatic retry or response leakage.",
+      "sources": [
+        "https://github.com/fontlos/buaa-api",
+        "https://github.com/BUAASubnet/srun"
+      ],
+      "issue": "https://github.com/cyjin-yl/buaa-cli/issues/11",
+      "evidence": {
+        "implementation": [
+          "src/gateway.rs",
+          "src/gateway/crypto.rs",
+          "src/governor.rs"
+        ],
+        "proof": "56 offline tests passed, one ignored worker; strict clippy/formatting. Real loopback challenge/login/logout and usage-cache flows with actual >=5s request gaps; independent synthetic crypto vector. Actual CLI fail-closed smoke made zero campus requests.",
+        "safety": "Separate typed resume-auth arms one final Authentication lease; challenge is separately governed. Credential and indeterminate 2xx rejection consume the token and latch while preserving Retry-After/network facts. Credentials are stdin-only; the original login buffer is zeroized on command return and parsed password zeroizes on every drop path. Errors are static; no HTTP discovery/retry/proxy/cookie/redirect/TLS bypass.",
+        "limits": "Live campus compatibility and account postconditions unverified; no real authentication or logout authorized/performed, so the aggregate gateway capability stays partial. Independent safety/contract reviews reconciled all findings before the plan/commit follow-up; exact follow-up review remains pending.",
+        "review": "Independent safety review found GW-AUTH-001 and confirmed its indeterminate-2xx latch fix; final safety refresh clean. Independent contract review findings on availability wording, remaining parent scope, schemas and credential-buffer wording were fixed; final static refresh clean."
+      }
+    },
+    {
+      "id": "gateway-logout-plan-commit",
+      "title": "Idempotent gateway logout plan/commit",
+      "status": "implemented-offline",
+      "parent_items": [
+        "gateway"
+      ],
+      "acceptance": "Offline immutable username/IP/AC plan hash and redacted preview; exact typed online commit; private success receipt prevents duplicate request.",
+      "sources": [],
+      "issue": "https://github.com/cyjin-yl/buaa-cli/issues/13",
+      "evidence": {
+        "implementation": [
+          "src/gateway.rs"
+        ],
+        "proof": "48 lib tests (one ignored worker) + 8 CLI integration tests pass offline; strict clippy -D warnings and fmt clean. Isolated-HOME CLI smoke: offline plan returns plan_hash verified against independent Python SHA-256 recomputation (40196d4c...d9fb2c8); commit without --online exits permission(5); commit with wrong hash exits invalid_input(2) before cache/network; legacy one-step logout is unsupported(3); plan output contains no raw username.",
+        "safety": "Commit input is recomputed before cache/governor/network; no password; one governed request; receipt persisted while lease held and reused without network; loopback test proves idempotent_hit avoids a second request.",
+        "limits": "No real logout authorized/performed; live postcondition unverified."
       }
     }
   ],

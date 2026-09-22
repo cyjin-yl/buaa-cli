@@ -1,6 +1,6 @@
 # buaa-cli
 
-Rust CLI for agent-facing BUAA tools. Timed-input replay and historical archive lookup/capture are implemented and tested offline. Archive reads default to local cache; explicit opt-in can contact Internet Archive only. No campus adapter or authentication command is enabled, and live archive compatibility has not been observed. The acceptance ledger below distinguishes implemented work from pending or blocked services.
+Rust CLI for agent-facing BUAA tools. Timed-input replay and archive lookup/capture are implemented; a real governed gateway client is offline-tested but live-unverified. Archive and gateway usage default to private cache. No campus authentication or logout has been attempted, and live gateway/archive compatibility has not been observed. The acceptance ledger distinguishes implemented slices from pending, partial or blocked services.
 
 ## Build and discover
 
@@ -35,7 +35,7 @@ Default stdout is flushed NDJSON:
 
 Grammar: nonnegative integer seconds with optional 1–9 decimal places, maximum 86400 seconds inclusive; nondecreasing timestamps, stable ties; 100000 rows and 8 MiB input maximum. LF/CRLF, optional final newline, empty text and empty schedules are supported. Tabs/spaces are preserved; other control characters and blank rows are rejected. Invalid late rows cause **zero output**, including raw mode. Errors never echo input or arguments. Successful replay intentionally returns supplied text: do not feed credentials into a text-replay utility.
 
-Errors are JSON on stderr with `schema_version`, `error` and sanitized `message`. Exit codes: 2 invalid input, 3 unsupported, 4 safety/auth-latched, 5 permission, 7 unavailable I/O, 8 rate-limited and 9 immutable-content conflict. There is no login/unlock command. A replay I/O failure may leave earlier events delivered; do not blindly restart a pipe into a side-effectful program.
+Errors are JSON on stderr with `schema_version`, `error` and sanitized `message`. Exit codes: 2 invalid input, 3 unsupported, 4 safety/auth-latched, 5 permission, 7 unavailable I/O, 8 rate-limited and 9 immutable-content conflict. Gateway authentication requires an explicit typed `resume-auth` before exactly one online login flow; there is no automatic refresh/retry. A replay I/O failure may leave earlier events delivered; do not blindly restart a pipe into a side-effectful program.
 
 ## Historical archive reads
 
@@ -73,6 +73,16 @@ printf '%s\n' '{"policy":{"kind":"table","id":"p1","source":"<published-url>","p
 ## Account safety
 
 Archive and template network reads share the process-wide governor for request, bounded response processing and private atomic persistence. The archive adapter fetches no original campus URL; the template adapter permits only one pinned GitHub release and validated release-asset redirect. All future adapters/provider processes must share the same state domain and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
+## Governed campus gateway client
+The gateway adapter implements fixed TLS usage, login and logout flows, but has only synthetic offline/loopback proof; **no real campus authentication, usage request or logout is authorized or claimed verified**.
+# Cache only.
+./target/debug/buaa gateway usage
+# Deliberately arm one attempt, then submit credentials through bounded stdin once.
+printf '%s\n' '{"intent":"RESUME GATEWAY AUTH"}' | ./target/debug/buaa gateway resume-auth
+printf '%s\n' '{"username":"<stdin-only>","password":"<stdin-only>","ip":"10.0.0.2","ac_id":62,"intent":"LOGIN <stdin-only> 10.0.0.2"}' \
+  | ./target/debug/buaa gateway login --online
+The example values are placeholders. Login uses an explicit resume and typed intent. Logout is split into offline `logout-plan` and explicit `logout-commit --online`; successful plan hashes have private idempotency receipts. The CLI performs no HTTP AC discovery, interface/DNS probe, credential storage, password argument, automatic retry, invalid-certificate mode or challenge/security-notice bypass. See [gateway safety, usage and mutation contracts](docs/GATEWAY.md).
+Archive and gateway requests share the process-wide governor through request, bounded response classification and private persistence. The archive adapter fetches no original campus URL; gateway egress is fixed to TLS-validated `gw.buaa.edu.cn` paths. All future adapters/provider processes must share the same state domain and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, automatic authentication retry, CAPTCHA bypass or development-time campus mutation is allowed.
 
 The Linux governor uses `.buaa-cli-governor` beneath the effective UID's passwd home, ignoring HOME/XDG/worktree overrides. One permanent file lock spans the full request/body lifetime; private atomic state preserves minimum 5-second completion gaps, 15-minute background intervals, Retry-After and one-shot auth permission. Boot-time deadlines cannot be shortened by wall-clock changes. All processes using a campus account must share this OS identity and filesystem state; this is not a distributed cross-host governor.
 
@@ -83,11 +93,12 @@ See [contributor rules](AGENTS.md), [observed blockers and source research](docs
 ## Feature acceptance matrix
 
 This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded public source observation. `partial-offline` means the offline engine/contract is complete while a live campus adapter remains blocked. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
+This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies a real adapter against offline HTTP fixtures, while `partial-live-unverified` means code exists but the parent acceptance still lacks authorized live proof. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
 
 | ID | Capability | Status |
 | --- | --- | --- |
 | governor | Shared cross-process request safety | implemented-offline |
-| gateway | Gateway login/logout/usage | pending |
+| gateway | Gateway login/logout/usage | partial-live-unverified |
 | spoc | SPOC materials/video/PPT/subtitles | pending |
 | live | Classroom live replay/audio repair | pending |
 | smart | Smart BUAA services | pending |
@@ -126,6 +137,8 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | ci | Exact-SHA private CI bridge | blocked |
 | vpn | VPN implementation | deferred |
 | devcontainer | Pinned credential-free public devcontainer | implemented-definition; image build unverified |
+| gateway-client | Governed gateway protocol client | implemented-offline |
+| gateway-logout-plan-commit | Idempotent gateway logout plan/commit | implemented-offline |
 
 ## Verification and publication
 
