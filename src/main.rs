@@ -29,7 +29,7 @@ fn read_input() -> Result<String, CliError> {
     Ok(input)
 }
 
-fn archive_error(error: buaa_cli::net::Error) -> CliError {
+fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
         "unsupported" | "redirect_refused" | "unsupported_encoding" => ("unsupported", 3),
@@ -68,8 +68,8 @@ fn run_archive(args: &[String]) -> CliResult {
         }
     };
     let input = read_input()?;
-    let client = ArchiveClient::open(mode).map_err(archive_error)?;
-    let output = operation(&input, &client).map_err(archive_error)?;
+    let client = ArchiveClient::open(mode).map_err(service_error)?;
+    let output = operation(&input, &client).map_err(service_error)?;
     emit(&output)
 }
 
@@ -117,6 +117,22 @@ fn run_marks(args: &[String]) -> CliResult {
     emit(&value)
 }
 
+fn run_fengrubei(args: &[String]) -> CliResult {
+    match args.first().map(String::as_str) {
+        Some("info") if args.len() == 1 => emit(&buaa_cli::fengrubei::info()),
+        Some("fetch") => {
+            let online = match args.get(1).map(String::as_str) {
+                None => false,
+                Some("--online") if args.len() == 2 => true,
+                _ => return Err(("invalid_input", 2, "expected at most --online".into())),
+            };
+            let input = read_input()?;
+            let output = buaa_cli::fengrubei::fetch(&input, online).map_err(service_error)?;
+            emit(&output)
+        }
+        _ => Err(("unsupported", 3, "expected fengrubei info or fetch".into())),
+    }
+}
 fn run() -> CliResult {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
@@ -130,8 +146,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>"],
-            "network_policy": {"default":"offline", "opt_in":"archive --online or --refresh", "campus_enabled":false},
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]"],
+            "network_policy": {"default":"offline", "opt_in":"archive --online/--refresh or fengrubei fetch --online", "campus_enabled":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
         "capabilities" if args.len() == 1 => {
@@ -144,6 +160,7 @@ fn run() -> CliResult {
             "commands": {
                 "archive": buaa_cli::archive::schema(),
                 "marks": buaa_cli::marks::schema(),
+                "fengrubei": buaa_cli::fengrubei::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -157,7 +174,7 @@ fn run() -> CliResult {
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
                 "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9}},
-            "network_policy":{"default":"offline","opt_in":"archive --online or --refresh","campus_enabled":false}
+            "network_policy":{"default":"offline","opt_in":"archive --online/--refresh or fengrubei fetch --online","campus_enabled":false}
         })),
         "timed-input" => {
             let mut raw = false;
@@ -194,6 +211,7 @@ fn run() -> CliResult {
         }
         "archive" => run_archive(&args[1..]),
         "marks" => run_marks(&args[1..]),
+        "fengrubei" => run_fengrubei(&args[1..]),
         _ => Err((
             "unsupported",
             3,

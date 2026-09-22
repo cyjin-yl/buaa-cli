@@ -49,10 +49,20 @@ printf '%s\n' '{"url":"https://college.example/notice/42.html","limit":100}' | .
 Use `--online` only for authorized archive reads on cache misses, or `--refresh` for conditional revalidation. Robots rules, the shared governor, fixed HTTPS routes and immutable-original conflict checks apply. Rejected provenance never becomes an immutable cache entry. See [archive contracts and examples](docs/ARCHIVE.md); live service availability remains unverified.
 
 The [upstream contract and license assessment](docs/REFERENCES.md) records inspected source revisions, incompatible safety defaults that are not adopted, licensing boundaries and remaining integration gaps. Reference code is not permission or evidence of a working live campus adapter.
+## Pinned Fengrubei template access
+
+`buaa fengrubei info` reports an immutable upstream release reference, LPPL license, byte/hash integrity and caveats without network access. `fengrubei fetch` copies only the verified original ZIP from a private cache to an explicit new absolute path.
+
+```sh
+./target/debug/buaa fengrubei info
+printf '%s\n' '{"output":"/home/operator/private/template-v1.0.3.zip"}' | ./target/debug/buaa fengrubei fetch
+```
+
+Use `fetch --online` only to permit a governed public download on cache miss. The output parent must already exist, be owned by the current user, reject group/other writes, and contain no symlink path components. The client checks robots on both GitHub hosts, validates one explicit redirect, streams and verifies 52,816,733 bytes, and never unpacks, executes, compiles or overwrites. See [license, font and format caveats](docs/FENGRUBEI.md). The community release is not an official/current-format guarantee.
 
 ## Account safety
 
-`src/net.rs` implements archive-only GETs through `src/governor.rs`; no original campus host is contacted. All future adapters/provider processes must retain the same request lease through response validation and persistence, share one private state domain, and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
+Archive and template network reads share the process-wide governor for request, bounded response processing and private atomic persistence. The archive adapter fetches no original campus URL; the template adapter permits only one pinned GitHub release and validated release-asset redirect. All future adapters/provider processes must share the same state domain and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
 
 The Linux governor uses `.buaa-cli-governor` beneath the effective UID's passwd home, ignoring HOME/XDG/worktree overrides. One permanent file lock spans the full request/body lifetime; private atomic state preserves minimum 5-second completion gaps, 15-minute background intervals, Retry-After and one-shot auth permission. Boot-time deadlines cannot be shortened by wall-clock changes. All processes using a campus account must share this OS identity and filesystem state; this is not a distributed cross-host governor.
 
@@ -62,7 +72,7 @@ See [contributor rules](AGENTS.md), [observed blockers and source research](docs
 
 ## Feature acceptance matrix
 
-This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, not live service availability. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
+This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded public source observation. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
 
 | ID | Capability | Status |
 | --- | --- | --- |
@@ -92,7 +102,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | credits | School-specific graduation credits | pending |
 | shuttle | Shuttle tickets | pending |
 | welearn | WE Learn materials/practice | pending |
-| fengrubei | Fengrubei template access | pending |
+| fengrubei | Fengrubei template access | implemented-observed-read |
 | crater | Crater allocation/API/SSH | blocked |
 | organizations | Authoritative college/institute directory | pending |
 | announcements | College current/historical announcements | pending |

@@ -626,7 +626,7 @@ fn validate_url(url: &Url) -> Result<(), Error> {
     Ok(())
 }
 
-fn acquire(governor: &Governor) -> Result<RequestLease<'_>, Error> {
+pub(crate) fn acquire(governor: &Governor) -> Result<RequestLease<'_>, Error> {
     let status = governor.status().map_err(|_| governor_error())?;
     if status.safety_latched {
         return Err(Error::new(

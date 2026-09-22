@@ -360,11 +360,33 @@
     {
       "id": "fengrubei",
       "title": "Fengrubei template access",
-      "status": "pending",
+      "status": "implemented-observed-read",
       "acceptance": "Pinned template retrieval, license, integrity and formatting caveats.",
       "sources": [
-        "https://github.com/GFCYqw/Fengrubei_LaTeX_Template"
-      ]
+        "https://github.com/GFCYqw/Fengrubei_LaTeX_Template",
+        "https://github.com/GFCYqw/Fengrubei_LaTeX_Template/releases/tag/v1.0.3"
+      ],
+      "evidence": {
+        "commands": [
+          "buaa fengrubei info",
+          "buaa fengrubei fetch [--online]"
+        ],
+        "release": {
+          "tag": "v1.0.3",
+          "commit": "20e27c67ebf09cc730d8988d7395d9a8d34acf47",
+          "asset": "v1.0.3.Fengrubei_LaTeX_Template.zip",
+          "bytes": 52816733,
+          "sha256": "08b9ab2e06e440e462b6d8a65e77d579277613fe3cfb31b4bded7cd34e7177d1",
+          "license": "LPPL-1.3c-or-later"
+        },
+        "implementation": [
+          "src/fengrubei.rs",
+          "src/governor.rs"
+        ],
+        "proof": "One-time public release observation used four separately governed reads; exact size/hash established. Synthetic loopback streaming/cache tests and actual cache-only CLI copy/no-overwrite smoke passed. Final offline suite: 54 passed, one ignored subprocess worker; strict clippy/formatting passed.",
+        "safety": "Offline default, fixed release URL, robots on both hosts, one validated HTTPS release-asset redirect, no automatic redirect/retry/proxy/cookie/decompression, atomic private cache, early output validation, pinned owner-controlled output parent, descriptor-relative create-new/cleanup, fchmod0600 and final inode binding.",
+        "limits": "Upstream community template is not an official/current-format guarantee. Archive is never unpacked/executed/compiled; font licensing/runtime availability not verified by BUAA CLI; upstream bytes remain LPPL material, not project MIT source. Independent safety/contract reviews reconciled all findings with no remaining concrete issue."
+      }
     },
     {
       "id": "crater",
