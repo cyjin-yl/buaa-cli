@@ -73,6 +73,31 @@ fn run_archive(args: &[String]) -> CliResult {
     emit(&output)
 }
 
+fn run_credits(args: &[String]) -> CliResult {
+    if args.first().map(String::as_str) != Some("calculate") {
+        return Err(("unsupported", 3, "expected credits calculate".into()));
+    }
+    let input = read_input()?;
+    let output = buaa_cli::credits::calculate(&input);
+    if let Some(raw) = output.get("error").and_then(|v| v.as_str()) {
+        let code = match raw {
+            "invalid_input" => "invalid_input",
+            _ => "unavailable",
+        };
+        let exit = match code {
+            "invalid_input" => 2,
+            _ => 7,
+        };
+        let message = output
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("credits failed")
+            .to_string();
+        return Err((code, exit, message));
+    }
+    emit(&output)
+}
+
 fn run() -> CliResult {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
@@ -86,7 +111,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "credits calculate"],
             "network_policy": {"default":"offline", "opt_in":"archive --online or --refresh", "campus_enabled":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -99,6 +124,7 @@ fn run() -> CliResult {
             "schema_version": 1,
             "commands": {
                 "archive": buaa_cli::archive::schema(),
+                "credits": buaa_cli::credits::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -148,6 +174,7 @@ fn run() -> CliResult {
             })
         }
         "archive" => run_archive(&args[1..]),
+        "credits" => run_credits(&args[1..]),
         _ => Err((
             "unsupported",
             3,
