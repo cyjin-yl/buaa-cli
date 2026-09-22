@@ -184,6 +184,7 @@ fn parse_policy(raw: &Value) -> Result<PolicyContext, Value> {
                 || a > 5.0
                 || b <= 0.0
                 || c <= 0.0
+                || pass_min > 100
                 || !a.is_finite()
                 || !b.is_finite()
                 || !c.is_finite()
@@ -231,7 +232,11 @@ fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
             Ok(value) => value,
             Err(_) => return Err(invalid()),
         };
-        if input.name.is_empty() || !input.credit.is_finite() || input.credit <= 0.0 {
+        if input.name.is_empty()
+            || input.score > 100
+            || !input.credit.is_finite()
+            || input.credit <= 0.0
+        {
             return Err(invalid());
         }
         if seen.insert(input.name.clone(), ()).is_some() {
@@ -243,6 +248,54 @@ fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
             name: input.name,
             score: input.score,
             credit: input.credit,
+        });
+    }
+    Ok(courses)
+}
+
+/// Parse a `gpa_baseline` document's course list leniently: baseline lines
+/// carry derived fields (point, counts) beyond the strict input schema.
+fn parse_baseline_courses(baseline: &Value) -> Result<Vec<Course>, Value> {
+    let Some(list) = baseline.get("courses").and_then(Value::as_array) else {
+        return Err(json!({"error":"invalid_input","message":"baseline courses are malformed"}));
+    };
+    if list.len() > 10_000 {
+        return Err(json!({"error":"invalid_input","message":"baseline courses are malformed"}));
+    }
+    let mut seen: BTreeMap<String, ()> = BTreeMap::new();
+    let mut courses = Vec::with_capacity(list.len());
+    for item in list {
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(
+                || json!({"error":"invalid_input","message":"baseline courses are malformed"}),
+            )?
+            .to_string();
+        let score = item
+            .get("score")
+            .and_then(Value::as_u64)
+            .filter(|score| *score <= 100)
+            .ok_or_else(
+                || json!({"error":"invalid_input","message":"baseline courses are malformed"}),
+            )?;
+        let credit = item
+            .get("credit")
+            .and_then(Value::as_f64)
+            .filter(|credit| credit.is_finite() && *credit > 0.0)
+            .ok_or_else(
+                || json!({"error":"invalid_input","message":"baseline courses are malformed"}),
+            )?;
+        if seen.insert(name.clone(), ()).is_some() {
+            return Err(
+                json!({"error":"invalid_input","message":"duplicate course name in baseline"}),
+            );
+        }
+        courses.push(Course {
+            name,
+            score: score as u8,
+            credit,
         });
     }
     Ok(courses)
@@ -309,15 +362,15 @@ fn policy_provenance(context: &PolicyContext) -> Value {
 /// Compute GPA for `{"policy":{...},"courses":[...]}` (optionally with a
 /// `baseline` object for the structured diff).
 pub fn gpa(input: &str) -> Value {
+    if input.len() as u64 > MAX_POLICY_BYTES {
+        return invalid();
+    }
     let raw: Value = match serde_json::from_str(input) {
         Ok(value) => value,
         Err(_) => return invalid(),
     };
-    if input.len() as u64 > MAX_POLICY_BYTES {
-        return invalid();
-    }
     let Ok(context) = parse_policy(&raw) else {
-        return raw.get("error").cloned().unwrap_or_else(invalid);
+        return invalid();
     };
     let Ok(courses) = parse_courses(&raw) else {
         return invalid();
@@ -354,8 +407,9 @@ fn diff_value(
     if !baseline_policy_ok {
         return json!({"error":"invalid_input","message":"baseline policy id does not match current policy"});
     }
-    let Ok(baseline_courses) = parse_courses(baseline) else {
-        return json!({"error":"invalid_input","message":"baseline courses are malformed"});
+    let baseline_courses = match parse_baseline_courses(baseline) {
+        Ok(value) => value,
+        Err(value) => return value,
     };
     let baseline_calc = compute(context, &baseline_courses);
 
@@ -489,20 +543,38 @@ pub fn baseline_save(input: &str, path: &str) -> Value {
     {
         return unavailable("baseline directory could not be created");
     }
-    match fs::write(
-        &path,
-        format!("{}\n", serde_json::to_string(&document).unwrap()),
-    ) {
-        Ok(()) => json!({
-            "schema_version":1,
-            "type":"baseline_saved",
-            "result":"saved",
-            "path": path.to_string_lossy(),
-            "gpa": calc.gpa,
-            "course_count": courses.len()
-        }),
-        Err(_) => unavailable("baseline could not be written"),
+    // Atomic write: stage in the same directory, then rename over the target.
+    let temp = path.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+    let body = format!("{}\n", serde_json::to_string(&document).unwrap());
+    let outcome = match fs::write(&temp, body) {
+        Ok(()) => match fs::rename(&temp, &path) {
+            Ok(()) => true,
+            Err(_) => {
+                let _ = fs::remove_file(&temp);
+                false
+            }
+        },
+        Err(_) => false,
+    };
+    if !outcome {
+        return unavailable("baseline could not be written");
     }
+    json!({
+        "schema_version":1,
+        "type":"baseline_saved",
+        "result":"saved",
+        "path": path.to_string_lossy(),
+        "policy": policy_provenance(&context),
+        "gpa": calc.gpa,
+        "course_count": courses.len()
+    })
 }
 
 /// Load a baseline and report its provenance and recorded GPA.
@@ -704,6 +776,52 @@ mod tests {
         let third = baseline_save(&changed, path.to_str().unwrap());
         assert_eq!(third["result"], "saved");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saved_baseline_drives_diff_round_trip() {
+        let dir = std::env::temp_dir().join(format!("buaa-marks-rt-{}", std::process::id()));
+        let path = dir.join("baseline.json");
+        let _ = fs::remove_file(&path);
+        let current = format!(
+            r#"{{"policy":{},"courses":[{{"name":"课程A","score":92,"credit":4.0}}]}}"#,
+            TABLE_POLICY
+        );
+        let saved = baseline_save(&current, path.to_str().unwrap());
+        assert_eq!(saved["result"], "saved");
+        // The stored gpa_baseline (with derived point/counts fields) must parse
+        // as a diff baseline, not be rejected by the strict input schema.
+        let baseline = baseline_show(path.to_str().unwrap());
+        let later = format!(
+            r#"{{"policy":{},"courses":[{{"name":"课程A","score":88,"credit":4.0}},{{"name":"课程B","score":90,"credit":2.0}}],"baseline":{}}}"#,
+            TABLE_POLICY, baseline
+        );
+        let out = gpa(&later);
+        assert!(out.get("error").is_none());
+        assert_eq!(out["diff"]["added"], serde_json::json!(["课程B"]));
+        assert_eq!(out["diff"]["removed"], serde_json::json!([]));
+        assert_eq!(out["diff"]["changed"][0]["name"], "课程A");
+        assert_eq!(out["diff"]["changed"][0]["score"]["baseline"], 92);
+        assert_eq!(out["diff"]["changed"][0]["score"]["current"], 88);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn score_over_100_and_error_echo_are_rejected() {
+        // score 150 must not count as a pass; it is invalid input.
+        let over = format!(
+            r#"{{"policy":{},"courses":[{{"name":"A","score":150,"credit":1.0}}]}}"#,
+            TABLE_POLICY
+        );
+        assert_eq!(gpa(&over)["error"], "invalid_input");
+        // A top-level "error" field in the input is data, not an echoed result.
+        let echo = format!(
+            r#"{{"error":"bogus","policy":{},"courses":[{{"name":"A","score":92,"credit":4.0}}]}}"#,
+            TABLE_POLICY
+        );
+        let out = gpa(&echo);
+        assert!(out.get("error").is_none());
+        assert_eq!(out["type"], "gpa_calculation");
     }
 
     #[test]
