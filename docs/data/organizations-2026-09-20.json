@@ -1,0 +1,487 @@
+{
+  "categories": [
+    "航空航天学科群",
+    "信息学科群",
+    "理科学科群",
+    "文科学科群",
+    "医工交叉学科群",
+    "融合创新示范区"
+  ],
+  "completeness": {
+    "includes_hidden_source_entries": true,
+    "raw_html_committed": false,
+    "scope": "entries_in_this_captured_official_directory_document",
+    "university_wide_beyond_this_document": false
+  },
+  "directory_label": "教学科研机构",
+  "discovery": {
+    "authentication_used": false,
+    "governed_requests": 3,
+    "homepage_body_sha256": "b936471fe3aaad7ae6e4753b0183f347fd637aaa18c59ecf893c6703c3911ebd",
+    "homepage_link_href": "jgsz/jxkyjg02.htm",
+    "homepage_url": "https://www.buaa.edu.cn/",
+    "request_spacing_minimum_seconds": 5,
+    "robots_body_sha256": "a71f7d336711705a8ac403fc504633df3f32cf29973fd72a6d6099a032818aed",
+    "robots_http_status": 404,
+    "robots_url": "https://www.buaa.edu.cn/robots.txt"
+  },
+  "document_title": "教学科研机构-北京航空航天大学",
+  "entries": [
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://mse.buaa.edu.cn/",
+      "name": "材料科学与工程学院",
+      "resolved_http_url": "http://mse.buaa.edu.cn/",
+      "source_order": 1
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://rse.buaa.edu.cn",
+      "name": "可靠性与系统工程学院",
+      "resolved_http_url": "http://rse.buaa.edu.cn/",
+      "source_order": 2
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://sepe.buaa.edu.cn/",
+      "name": "能源与动力工程学院",
+      "resolved_http_url": "http://sepe.buaa.edu.cn/",
+      "source_order": 3
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://www.sa.buaa.edu.cn/",
+      "name": "宇航学院",
+      "resolved_http_url": "http://www.sa.buaa.edu.cn/",
+      "source_order": 4
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://www.ase.buaa.edu.cn/",
+      "name": "航空科学与工程学院",
+      "resolved_http_url": "http://www.ase.buaa.edu.cn/",
+      "source_order": 5
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": true,
+      "link_kind": "https",
+      "listed_href": "https://icat.buaa.edu.cn/",
+      "name": "中国商飞-北航大飞机研究院",
+      "resolved_http_url": "https://icat.buaa.edu.cn/",
+      "source_order": 6
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "https",
+      "listed_href": "https://aviation.buaa.edu.cn/",
+      "name": "飞行学院",
+      "resolved_http_url": "https://aviation.buaa.edu.cn/",
+      "source_order": 7
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://www.me.buaa.edu.cn/",
+      "name": "机械工程及自动化学院",
+      "resolved_http_url": "http://www.me.buaa.edu.cn/",
+      "source_order": 8
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": true,
+      "link_kind": "missing",
+      "listed_href": null,
+      "name": "具身智能机器人研究院",
+      "resolved_http_url": null,
+      "source_order": 9
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://wrj.buaa.edu.cn",
+      "name": "无人系统研究院",
+      "resolved_http_url": "http://wrj.buaa.edu.cn/",
+      "source_order": 10
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://transportation.buaa.edu.cn/",
+      "name": "交通科学与工程学院",
+      "resolved_http_url": "http://transportation.buaa.edu.cn/",
+      "source_order": 11
+    },
+    {
+      "category": "航空航天学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://riae.buaa.edu.cn/",
+      "name": "航空发动机研究院",
+      "resolved_http_url": "http://riae.buaa.edu.cn/",
+      "source_order": 12
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://www.ee.buaa.edu.cn/",
+      "name": "电子信息工程学院",
+      "resolved_http_url": "http://www.ee.buaa.edu.cn/",
+      "source_order": 13
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://soft.buaa.edu.cn/",
+      "name": "软件学院",
+      "resolved_http_url": "http://soft.buaa.edu.cn/",
+      "source_order": 14
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://dept3.buaa.edu.cn/",
+      "name": "自动化科学与电气工程学院",
+      "resolved_http_url": "http://dept3.buaa.edu.cn/",
+      "source_order": 15
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": true,
+      "link_kind": "missing",
+      "listed_href": null,
+      "name": "空天仿生智能研究院",
+      "resolved_http_url": null,
+      "source_order": 16
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://cst.buaa.edu.cn",
+      "name": "网络空间安全学院",
+      "resolved_http_url": "http://cst.buaa.edu.cn/",
+      "source_order": 17
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://scse.buaa.edu.cn/",
+      "name": "计算机学院",
+      "resolved_http_url": "http://scse.buaa.edu.cn/",
+      "source_order": 18
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "https",
+      "listed_href": "https://ic.buaa.edu.cn/",
+      "name": "集成电路科学与工程学院",
+      "resolved_http_url": "https://ic.buaa.edu.cn/",
+      "source_order": 19
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://yqgdxy.buaa.edu.cn/",
+      "name": "仪器科学与光电工程学院",
+      "resolved_http_url": "http://yqgdxy.buaa.edu.cn/",
+      "source_order": 20
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": true,
+      "link_kind": "https",
+      "listed_href": "https://piqs.buaa.edu.cn/",
+      "name": "大科学装置研究院",
+      "resolved_http_url": "https://piqs.buaa.edu.cn/",
+      "source_order": 21
+    },
+    {
+      "category": "信息学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://iai.buaa.edu.cn/",
+      "name": "人工智能学院",
+      "resolved_http_url": "http://iai.buaa.edu.cn/",
+      "source_order": 22
+    },
+    {
+      "category": "理科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://math.buaa.edu.cn/",
+      "name": "数学科学学院",
+      "resolved_http_url": "http://math.buaa.edu.cn/",
+      "source_order": 23
+    },
+    {
+      "category": "理科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://sce.buaa.edu.cn/",
+      "name": "化学学院",
+      "resolved_http_url": "http://sce.buaa.edu.cn/",
+      "source_order": 24
+    },
+    {
+      "category": "理科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://physics.buaa.edu.cn/",
+      "name": "物理学院",
+      "resolved_http_url": "http://physics.buaa.edu.cn/",
+      "source_order": 25
+    },
+    {
+      "category": "理科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://sse.buaa.edu.cn/",
+      "name": "空间与地球科学学院",
+      "resolved_http_url": "http://sse.buaa.edu.cn/",
+      "source_order": 26
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://sem.buaa.edu.cn/",
+      "name": "经济管理学院",
+      "resolved_http_url": "http://sem.buaa.edu.cn/",
+      "source_order": 27
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://art.buaa.edu.cn/",
+      "name": "新媒体艺术与设计学院",
+      "resolved_http_url": "http://art.buaa.edu.cn/",
+      "source_order": 28
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": true,
+      "link_kind": "missing",
+      "listed_href": null,
+      "name": "美育中心",
+      "resolved_http_url": null,
+      "source_order": 29
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://www.hss.buaa.edu.cn/",
+      "name": "人文社会科学学院",
+      "resolved_http_url": "http://www.hss.buaa.edu.cn/",
+      "source_order": 30
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://ipth.buaa.edu.cn/",
+      "name": "马克思主义学院",
+      "resolved_http_url": "http://ipth.buaa.edu.cn/",
+      "source_order": 31
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://fld.buaa.edu.cn/",
+      "name": "外国语学院",
+      "resolved_http_url": "http://fld.buaa.edu.cn/",
+      "source_order": 32
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://gyy.buaa.edu.cn/",
+      "name": "人文与社会科学高等研究院",
+      "resolved_http_url": "http://gyy.buaa.edu.cn/",
+      "source_order": 33
+    },
+    {
+      "category": "文科学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://fxy.buaa.edu.cn/",
+      "name": "法学院",
+      "resolved_http_url": "http://fxy.buaa.edu.cn/",
+      "source_order": 34
+    },
+    {
+      "category": "医工交叉学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://bme.buaa.edu.cn/",
+      "name": "生物与医学工程学院",
+      "resolved_http_url": "http://bme.buaa.edu.cn/",
+      "source_order": 35
+    },
+    {
+      "category": "医工交叉学科群",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://ygy.buaa.edu.cn",
+      "name": "医学科学与工程学院",
+      "resolved_http_url": "http://ygy.buaa.edu.cn/",
+      "source_order": 36
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://bhc.buaa.edu.cn/",
+      "name": "北航学院",
+      "resolved_http_url": "http://bhc.buaa.edu.cn/",
+      "source_order": 37
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://is.buaa.edu.cn/",
+      "name": "国际学院",
+      "resolved_http_url": "http://is.buaa.edu.cn/",
+      "source_order": 38
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "https",
+      "listed_href": "https://hc.buaa.edu.cn/",
+      "name": "沈元学院",
+      "resolved_http_url": "https://hc.buaa.edu.cn/",
+      "source_order": 39
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": true,
+      "link_kind": "https",
+      "listed_href": "https://hc.buaa.edu.cn/",
+      "name": "高等理工学院/未来空天技术学院/国家卓越工程师学院/量子科技学院",
+      "resolved_http_url": "https://hc.buaa.edu.cn/",
+      "source_order": 40
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "https",
+      "listed_href": "https://beijing.buaa.edu.cn/",
+      "name": "北京学院",
+      "resolved_http_url": "https://beijing.buaa.edu.cn/",
+      "source_order": 41
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://ecpkn.buaa.edu.cn/",
+      "name": "中法工程师学院",
+      "resolved_http_url": "http://ecpkn.buaa.edu.cn/",
+      "source_order": 42
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "non_http",
+      "listed_href": "javascript:void(0)",
+      "name": "国际通用工程学院",
+      "resolved_http_url": null,
+      "source_order": 43
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://tyb.buaa.edu.cn/",
+      "name": "体育部",
+      "resolved_http_url": "http://tyb.buaa.edu.cn/",
+      "source_order": 44
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "https",
+      "listed_href": "https://h3i.buaa.edu.cn/index.htm",
+      "name": "国际创新学院",
+      "resolved_http_url": "https://h3i.buaa.edu.cn/index.htm",
+      "source_order": 45
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "https",
+      "listed_href": "https://zfai.buaa.edu.cn/",
+      "name": "中法航空学院",
+      "resolved_http_url": "https://zfai.buaa.edu.cn/",
+      "source_order": 46
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "missing",
+      "listed_href": null,
+      "name": "中法未来科技学院",
+      "resolved_http_url": null,
+      "source_order": 47
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "missing",
+      "listed_href": null,
+      "name": "中西智能学院",
+      "resolved_http_url": null,
+      "source_order": 48
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "http",
+      "listed_href": "http://cce.buaa.edu.cn/",
+      "name": "继续教育学院",
+      "resolved_http_url": "http://cce.buaa.edu.cn/",
+      "source_order": 49
+    },
+    {
+      "category": "融合创新示范区",
+      "hidden_in_source": false,
+      "link_kind": "https",
+      "listed_href": "https://iiif.buaa.edu.cn/",
+      "name": "国际前沿交叉科学研究院",
+      "resolved_http_url": "https://iiif.buaa.edu.cn/",
+      "source_order": 50
+    }
+  ],
+  "observed_at_unix_ms": 1789949613688,
+  "publisher": "北京航空航天大学",
+  "schema_version": 1,
+  "source_sha256": "f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9",
+  "source_url": "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm",
+  "type": "organization_directory_evidence"
+}

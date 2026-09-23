@@ -184,6 +184,26 @@ fn run_gateway(args: &[String]) -> CliResult {
         )),
     }
 }
+fn run_organizations(args: &[String]) -> CliResult {
+    use buaa_cli::net::CacheMode;
+    if args.first().map(String::as_str) != Some("list") {
+        return Err(("unsupported", 3, "expected organizations list".into()));
+    }
+    let mode = match args.get(1).map(String::as_str) {
+        None => CacheMode::Offline,
+        Some("--online") if args.len() == 2 => CacheMode::PreferCache,
+        Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
+        _ => {
+            return Err((
+                "invalid_input",
+                2,
+                "expected at most one of --online or --refresh".into(),
+            ));
+        }
+    };
+    let output = buaa_cli::organizations::list(mode).map_err(service_error)?;
+    emit(&output)
+}
 fn run() -> CliResult {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
@@ -197,8 +217,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search"],
-            "network_policy": {"default":"offline", "opt_in":"archive/gateway explicit online flags", "campus_enabled":true, "automatic_authentication_retry":false},
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search"],
+            "network_policy": {"default":"offline", "opt_in":"archive/organizations --online or --refresh; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
         "capabilities" if args.len() == 1 => {
@@ -214,6 +234,7 @@ fn run() -> CliResult {
                 "fengrubei": buaa_cli::fengrubei::schema(),
                 "gateway": buaa_cli::gateway::schema(),
                 "recordings": buaa_cli::recordings::schema(),
+                "organizations": buaa_cli::organizations::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -227,7 +248,7 @@ fn run() -> CliResult {
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
                 "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9}},
-            "network_policy":{"default":"offline","opt_in":"archive/gateway explicit online flags","campus_enabled":true,"automatic_authentication_retry":false}
+            "network_policy":{"default":"offline","opt_in":"archive/organizations --online or --refresh; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
             let mut raw = false;
@@ -271,6 +292,7 @@ fn run() -> CliResult {
             let output = buaa_cli::recordings::search(&input).map_err(service_error)?;
             emit(&output)
         }
+        "organizations" => run_organizations(&args[1..]),
         _ => Err((
             "unsupported",
             3,

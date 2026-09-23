@@ -75,7 +75,7 @@
     <main id="content">
       <h1>BUAA CLI</h1>
       <p class="lead">A Rust command line for BUAA workflows, with structured output and conservative request control.</p>
-      <p class="boundary"><strong>Know the boundary.</strong> Timed-input replay, archive lookup/capture, marks/GPA offline engine, pinned Fengrubei template retrieval and authorized local recording-catalog search are implemented and offline-tested. Gateway usage/login/logout code is offline-loopback-tested but live-unverified; campus authentication has not been attempted. Live Internet Archive compatibility and current competition-format compliance have not been observed.</p>
+      <p class="boundary"><strong>Know the boundary.</strong> Timed-input replay, archive lookup/capture, marks/GPA offline engine, pinned Fengrubei template retrieval, authorized local recording-catalog search and the authoritative teaching/research organization directory are implemented and offline-tested. Gateway usage/login/logout code is offline-loopback-tested but live-unverified; campus authentication has not been attempted. Live Internet Archive compatibility and current competition-format compliance have not been observed.</p>
 
       <h2 id="available">Available now</h2>
       <div class="table-scroll" role="region" aria-label="Current capability status" tabindex="0">
@@ -87,6 +87,7 @@
             <tr><td>Fengrubei template</td><td>Pinned v1.0.3 upstream ZIP retrieval with LPPL provenance, exact size and SHA-256.</td><td>Governed public download plus streaming/cache proof. Archive stays packed; current-format/font rights unverified.</td></tr>
             <tr><td>Gateway client</td><td>Cache-first redacted usage plus typed-intent login/logout with one-shot authentication permission.</td><td>Real loopback protocol proof only. No live campus request, account permission or postcondition verified.</td></tr>
             <tr><td>Recording catalog</td><td>Read-only local segment search with timing, declared hashes and bounded ancestry.</td><td>Synthetic SQLite and real CLI proof. No remote object retrieval or media-rights verification.</td></tr>
+            <tr><td>Organization directory</td><td>Every entry in the captured official teaching/research institution document, including hidden and unlinked source facts.</td><td>Three governed official reads plus offline Rust parsing; no linked college sites crawled.</td></tr>
             <tr><td>Shared governor</td><td>One request lease, conservative pacing, durable cooldown and authentication latch.</td><td>Linux, same UID and shared local filesystem state. Cross-process regressions verified.</td></tr>
             <tr><td>Devcontainer</td><td>Pinned official Rust/Node 22 images and checksum-verified OMP 18.2.6.</td><td>Definition and pins verified; a full image build remains unverified.</td></tr>
             <tr><td>Other services</td><td>The full undergraduate, postgraduate and campus capability scope is tracked.</td><td>Pending or specifically blocked. Catalog links are not working adapters.</td></tr>
@@ -132,6 +133,10 @@ printf '%s\n' '{"output":"/home/operator/private/template-v1.0.3.zip"}' \
   | ./target/debug/buaa recordings search</code></pre>
       <p>Supply an existing local catalog you may read. Authorization is an operator attestation, not proof of media rights. Hashes and object locators remain catalog declarations; no media object is fetched.</p>
       <p><a href="https://github.com/cyjin-yl/buaa-cli/blob/main/docs/RECORDINGS.md">Recording catalog, cursor and provenance contracts</a></p>
+      <h3>List official teaching and research institutions</h3>
+      <pre><code>./target/debug/buaa organizations list</code></pre>
+      <p>The default reads only a private cache. Explicit <code>--online</code>/<code>--refresh</code> permit the fixed official robots and directory routes. Missing and non-HTTP links stay explicit rather than being guessed.</p>
+      <p><a href="https://github.com/cyjin-yl/buaa-cli/blob/main/docs/ORGANIZATIONS.md">Directory semantics and governed source evidence</a></p>
 
       <h2 id="safety">Account safety</h2>
       <ul>
@@ -144,9 +149,10 @@ printf '%s\n' '{"output":"/home/operator/private/template-v1.0.3.zip"}' \
       </ul>
       <p>Credentials and private media stay outside public source. The devcontainer build does not copy private HOME, model, GitHub, SSH or Life configuration.</p>
 
-      <p>The current offline suite passes <strong>82 tests</strong>; an ignored worker entry is invoked by the subprocess tests. Strict all-target clippy passes. Independent review findings were reproduced, fixed and re-reviewed.</p>
+      <h2 id="evidence">Evidence and limits</h2>
+      <p>The current offline suite passes <strong>94 tests</strong>; an ignored worker entry is invoked by the subprocess tests. Strict all-target clippy passes. Independent review findings were reproduced, fixed and re-reviewed.</p>
       <p>Capture timestamps are not publication dates. Archive-reported digests are not presented as locally verified resource hashes. Rejected provenance is never committed as an immutable original. Missing history stays missing.</p>
-      <p class="details">No campus authentication, campus mutation, live archive observation, GPA live read or recording retrieval was performed for this proof. A full devcontainer image build, general Memento crawling, college discovery, announcement extraction, remote recording retrieval, complete Life service integration and current Fengrubei-format compliance are not claimed complete.</p>
+      <p class="details">No campus authentication, campus mutation, live archive observation, GPA live read or recording retrieval was performed for this proof. A full devcontainer image build, general Memento crawling, linked-college announcement crawling, remote recording retrieval, complete Life service integration and current Fengrubei-format compliance are not claimed complete.</p>
       <footer>
         <p>Verification snapshot: 2026-09-20. <a href="https://github.com/cyjin-yl/buaa-cli/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/cyjin-yl/buaa-cli/blob/main/AGENTS.md">Contributor boundaries</a> · <a href="https://github.com/cyjin-yl/buaa-cli/blob/main/LICENSE">MIT license</a></p>
       </footer>

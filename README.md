@@ -89,6 +89,12 @@ printf '%s\n' '{"username":"<stdin-only>","password":"<stdin-only>","ip":"10.0.0
   | ./target/debug/buaa gateway login --online
 The example values are placeholders. Login uses an explicit resume and typed intent. Logout is split into offline `logout-plan` and explicit `logout-commit --online`; successful plan hashes have private idempotency receipts. The CLI performs no HTTP AC discovery, interface/DNS probe, credential storage, password argument, automatic retry, invalid-certificate mode or challenge/security-notice bypass. See [gateway safety, usage and mutation contracts](docs/GATEWAY.md).
 Archive and gateway requests share the process-wide governor through request, bounded response classification and private persistence. The archive adapter fetches no original campus URL; gateway egress is fixed to TLS-validated `gw.buaa.edu.cn` paths. All future adapters/provider processes must share the same state domain and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, automatic authentication retry, CAPTCHA bypass or development-time campus mutation is allowed.
+## Authoritative organization directory
+`buaa organizations list` returns every entry in the captured official BUAA `教学科研机构` document, including hidden source entries and explicit missing/non-HTTP links. It never invents a URL or silently upgrades HTTP links.
+# Private cache only; no network request.
+./target/debug/buaa organizations list
+Use `--online` only for an authorized cache miss, or `--refresh` for conditional revalidation. Egress is limited to the official robots and directory URLs and shares the same process-wide governor. See [directory semantics and governed observation evidence](docs/ORGANIZATIONS.md) and the [sanitized 2026-09-20 snapshot](docs/data/organizations-2026-09-20.json). Announcement crawling remains separate.
+`src/net.rs` implements allowlisted archive and official-directory GETs through `src/governor.rs`; the organization command fetches no linked college site, and the archive command fetches no original campus URL. All future adapters/provider processes must retain the same request lease through response validation and persistence, share one private state domain, and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
 
 The Linux governor uses `.buaa-cli-governor` beneath the effective UID's passwd home, ignoring HOME/XDG/worktree overrides. One permanent file lock spans the full request/body lifetime; private atomic state preserves minimum 5-second completion gaps, 15-minute background intervals, Retry-After and one-shot auth permission. Boot-time deadlines cannot be shortened by wall-clock changes. All processes using a campus account must share this OS identity and filesystem state; this is not a distributed cross-host governor.
 
@@ -100,6 +106,7 @@ See [contributor rules](AGENTS.md), [observed blockers and source research](docs
 
 This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded public source observation. `partial-offline` means the offline engine/contract is complete while a live campus adapter remains blocked. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
 This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies a real adapter against offline HTTP fixtures, while `partial-live-unverified` means code exists but the parent acceptance still lacks authorized live proof. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
+This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded authorized source observation. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
 
 | ID | Capability | Status |
 | --- | --- | --- |
@@ -131,7 +138,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | welearn | WE Learn materials/practice | pending |
 | fengrubei | Fengrubei template access | implemented-observed-read |
 | crater | Crater allocation/API/SSH | blocked |
-| organizations | Authoritative college/institute directory | pending |
+| organizations | Authoritative college/institute directory | implemented-observed-read |
 | announcements | College current/historical announcements | pending |
 | archive | CDX/Memento historical lookup | implemented-offline-tested; live unverified |
 | recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |

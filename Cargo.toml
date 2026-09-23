@@ -22,6 +22,7 @@ md-5 = "0.10"
 sha1 = "0.10"
 zeroize = "1.9"
 rusqlite = { version = "0.37", features = ["bundled", "hooks", "limits"] }
+scraper = "0.24"
 
 [lib]
 name = "buaa_cli"
