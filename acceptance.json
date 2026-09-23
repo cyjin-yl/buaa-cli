@@ -330,7 +330,7 @@
     {
       "id": "credits",
       "title": "School-specific graduation credits",
-      "status": "pending",
+      "status": "partial-offline",
       "acceptance": "School 6 cohort 2020 and school 8 policy-specific calculations, overlap/retake rules and explainable deficits.",
       "sources": [
         "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
@@ -342,7 +342,14 @@
         "https://github.com/HoBeedzc/CreditCount",
         "https://cc.hobeedzc.cn",
         "https://github.com/grandchicken/1708SEM_ISIM"
-      ]
+      ],
+      "evidence": {
+        "command": "buaa credits calculate",
+        "tests": "cargo test --locked --offline: 7 credits tests passed (whole project 53 passed, 1 ignored); clippy 0 warnings; fmt clean.",
+        "smoke": "Real CLI: {major:会计学, selected:[健康经济学,运筹学（二）]} -> total_counted 4.0, remaining 21.0, result deficit, duplicate-name warning surfaced; malformed/empty-major/unknown-course exit 2; missing subcommand exit 3.",
+        "scope": "School 8 (economics_management) 2020 general-major, 136 courses from HoBeedzc/CreditCount reference (public catalog), offline."
+      },
+      "blocker": "School 6 cohort 2020 policy and course catalog not yet ported from an authoritative reference; only school 8 implemented. Status partial-offline until school 6 is added."
     },
     {
       "id": "shuttle",
