@@ -1,6 +1,7 @@
 # buaa-cli
 
 Rust CLI for agent-facing BUAA tools. Timed-input replay and archive lookup/capture are implemented; a real governed gateway client is offline-tested but live-unverified. Archive and gateway usage default to private cache. No campus authentication or logout has been attempted, and live gateway/archive compatibility has not been observed. The acceptance ledger distinguishes implemented slices from pending, partial or blocked services.
+Rust CLI for agent-facing BUAA tools. Timed-input replay, archive lookup/capture and authorized local recording-catalog search are implemented and tested offline. Archive reads default to local cache; explicit opt-in can contact Internet Archive only. Recording search uses an existing local catalog and never retrieves media objects. No campus adapter or authentication command is enabled, and live archive compatibility has not been observed. The acceptance ledger distinguishes these implemented slices from pending or blocked services.
 
 ## Build and discover
 
@@ -69,6 +70,11 @@ printf '%s\n' '{"policy":{"kind":"table","id":"p1","source":"<published-url>","p
 ```
 
 `buaa marks baseline save|show <absolute-path>` persists and reads back an idempotent local `gpa_baseline` snapshot (absolute paths only; identical re-saves report `unchanged`). The stored baseline can be pasted as the `baseline` field of `marks gpa` to produce added/removed/changed and GPA-delta. The live campus grades adapter is a separate blocked capability; see `acceptance.json`.
+## Local recording segment lookup
+`buaa recordings search` performs read-only phrase lookup over an operator-authorized Life-compatible SQLite catalog. It returns nullable timing and separate catalog-reported original/derived descriptors and linking hashes. It does not fetch objects or verify media rights; unknown ancestry stays explicit.
+# Supply an existing local catalog you are authorized to read; this path is an example.
+printf '%s\n' '{"catalog":"/private/catalog.sqlite","query":"linear algebra","authorized":true,"limit":20}' | ./target/debug/buaa recordings search
+See [recording catalog contracts](docs/RECORDINGS.md) for cursor binding, FTS semantics, provenance limits, privacy and SQLite sidecar behavior. Remote storage retrieval, recording intake, audio repair and complete Life service integration are not implied by this local query command.
 
 ## Account safety
 
@@ -128,17 +134,18 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | organizations | Authoritative college/institute directory | pending |
 | announcements | College current/historical announcements | pending |
 | archive | CDX/Memento historical lookup | implemented-offline-tested; live unverified |
-| recordings | Historical recordings/transcript segments | pending |
-| life | Life external object storage/catalog | pending contract review |
+| recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |
+| life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |
 | skills-fs | skills-fs HTTP provider | blocked |
 | contribution | Governed autonomous contribution | pending |
 | drift | Read-only API/schema drift detection | pending |
-| publication | GitHub repository and Pages | repository created; publication in progress |
+| publication | GitHub repository and Pages | published; receipt verified |
 | ci | Exact-SHA private CI bridge | blocked |
 | vpn | VPN implementation | deferred |
 | devcontainer | Pinned credential-free public devcontainer | implemented-definition; image build unverified |
 | gateway-client | Governed gateway protocol client | implemented-offline |
 | gateway-logout-plan-commit | Idempotent gateway logout plan/commit | implemented-offline |
+| recordings-search | Authorized local recording segment lookup | implemented-offline |
 
 ## Verification and publication
 
@@ -150,6 +157,6 @@ cargo clippy --locked --offline --all-targets -- -D warnings
 cargo test --locked --offline
 ```
 
-Cross-process safety tests use synthetic local work and real conservative intervals, never campus traffic. The public [cyjin-yl/buaa-cli repository](https://github.com/cyjin-yl/buaa-cli) has been created with verified owner permissions; initial source and Pages publication are in progress. Private CI integration remains inactive. No credentials or personal media are needed to build or test this source.
+Cross-process safety tests use synthetic local work and real conservative intervals, never campus traffic. Initial public source [26babf3](https://github.com/cyjin-yl/buaa-cli/commit/26babf37a3e4f898af8988ad945e2af6aadfa9c4) passed independent exact-head review and offline verification before publication. [GitHub Pages documentation](https://cyjin-yl.github.io/buaa-cli/) built from that same head and was verified in Chromium. Private CI integration remains inactive; live campus/archive compatibility and a full devcontainer image build are not claimed. No credentials or personal media are needed to build or test this source.
 
 License: [MIT](LICENSE). Reference licenses and non-adopted unsafe behaviors are recorded in the status document.

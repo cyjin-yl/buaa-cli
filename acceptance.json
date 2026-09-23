@@ -444,20 +444,28 @@
     {
       "id": "recordings",
       "title": "Historical recordings/transcript segments",
-      "status": "pending",
+      "status": "partial",
       "acceptance": "Authorized video/subtitle/PPT originals and derived segment lookup with capture/provenance/linking hashes.",
-      "sources": []
+      "sources": [],
+      "implemented_slices": [
+        "recordings-search"
+      ],
+      "remaining": "Remote storage/object retrieval, actual media intake/verification and complete service integration remain unimplemented; the local catalog command does not imply them."
     },
     {
       "id": "life",
       "title": "Life external object storage/catalog",
-      "status": "pending",
+      "status": "partial",
       "acceptance": "Reviewed non-sensitive contract from owner cyjin-yl/life; immutable originals separate from derived objects.",
       "sources": [],
       "evidence": {
         "access": "Authorized repository read access confirmed; no private source or credential contents copied into public project.",
         "remaining": "Review non-sensitive object storage/catalog contracts before implementation."
-      }
+      },
+      "implemented_slices": [
+        "recordings-search"
+      ],
+      "remaining": "Remote storage/object retrieval, actual media intake/verification and complete service integration remain unimplemented; the local catalog command does not imply them."
     },
     {
       "id": "skills-fs",
@@ -484,15 +492,26 @@
     {
       "id": "publication",
       "title": "GitHub repository and Pages",
-      "status": "in-progress",
+      "status": "published",
       "acceptance": "Permission-checked public repository, secret scan and useful neutral documentation with truthful status.",
       "sources": [],
       "evidence": {
         "repository": "https://github.com/cyjin-yl/buaa-cli",
         "visibility": "public",
         "permission_check": "Authenticated owner cyjin-yl; live admin/push permission verified. Repository created after meaningful offline source verification and bounded secret scan.",
-        "stage": "Source publication and Pages pending exact-head review.",
-        "landing": "docs/index.html: neutral docs-first page, real Chromium desktop/mobile inspection, working anchor navigation, no external page resources."
+        "landing": "docs/index.html: neutral docs-first page, real Chromium desktop/mobile inspection, working anchor navigation, no external page resources.",
+        "initial_published_head": "26babf37a3e4f898af8988ad945e2af6aadfa9c4",
+        "pages_url": "https://cyjin-yl.github.io/buaa-cli/",
+        "pages_verified_build": {
+          "status": "built",
+          "commit": "26babf37a3e4f898af8988ad945e2af6aadfa9c4",
+          "source": "main:/docs",
+          "https_enforced": true
+        },
+        "review": "Two independent exact-head source reviews reported no initial-publication blockers; not a GitHub merge approval.",
+        "verification": "50 offline tests, strict clippy and formatter check passed on initial head; deployed HTTPS page visually checked in Chromium.",
+        "receipt_issue": "https://github.com/cyjin-yl/buaa-cli/issues/1",
+        "limits": "No claim of live campus/archive observations, full devcontainer image build, or an enabled private CI bridge."
       }
     },
     {
@@ -584,6 +603,32 @@
         "proof": "48 lib tests (one ignored worker) + 8 CLI integration tests pass offline; strict clippy -D warnings and fmt clean. Isolated-HOME CLI smoke: offline plan returns plan_hash verified against independent Python SHA-256 recomputation (40196d4c...d9fb2c8); commit without --online exits permission(5); commit with wrong hash exits invalid_input(2) before cache/network; legacy one-step logout is unsupported(3); plan output contains no raw username.",
         "safety": "Commit input is recomputed before cache/governor/network; no password; one governed request; receipt persisted while lease held and reused without network; loopback test proves idempotent_hit avoids a second request.",
         "limits": "No real logout authorized/performed; live postcondition unverified."
+      }
+    },
+    {
+      "id": "recordings-search",
+      "title": "Authorized local Life-compatible recording segment lookup",
+      "status": "implemented-offline",
+      "parent_items": [
+        "recordings",
+        "life"
+      ],
+      "acceptance": "Read-only operator-authorized SQLite FTS phrase lookup with catalog/query-bound cursors, nullable timing, separate derived/original object descriptors and declared linking hashes; missing/cyclic/limited ancestry explicit; synthetic offline CLI/API proof.",
+      "sources": [],
+      "issue": "https://github.com/cyjin-yl/buaa-cli/issues/3",
+      "scope_boundary": "Local catalog/query integration only. No remote object-store retrieval, actual media verification, authentication, transcription/repair or live campus recording access. Parent aggregate capabilities remain pending.",
+      "evidence": {
+        "command": "buaa recordings search",
+        "implementation": [
+          "src/recordings.rs",
+          "src/recordings/catalog.rs",
+          "src/recordings/provenance.rs"
+        ],
+        "tests": "71offline tests passed,1ignored subprocessworker; strictclippy passed. RealSQLite fixtures only.",
+        "smoke": "ActualCLI produced two valid result pages, preserved null timing and distinct declared original/derived hashes, rejected query/cursor mismatch(exit2), denied missing authorization(exit5), and left catalog file bytes unchanged.",
+        "review": "Independent catalog safety review clean; RC-1 depth-aware ancestry issue reproduced beforefix, corrected and independently re-reviewed resolved.",
+        "privacy": "No actualprivatecatalog/media/credentials orprivateimplementation copied; only reviewednon-sensitive structuralfield/key/relation/FTS facts used.",
+        "limits": "Localcatalog only, no remoteobject retrieval orblobverification. Operatorattestation isnotrightsproof. WALsidecar coordination possible; no frozensnapshotacrossrequests; metadataandSQLresourcebounds explicit."
       }
     }
   ],

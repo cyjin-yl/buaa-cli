@@ -197,7 +197,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search"],
             "network_policy": {"default":"offline", "opt_in":"archive/gateway explicit online flags", "campus_enabled":true, "automatic_authentication_retry":false},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -213,6 +213,7 @@ fn run() -> CliResult {
                 "marks": buaa_cli::marks::schema(),
                 "fengrubei": buaa_cli::fengrubei::schema(),
                 "gateway": buaa_cli::gateway::schema(),
+                "recordings": buaa_cli::recordings::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -265,6 +266,11 @@ fn run() -> CliResult {
         "marks" => run_marks(&args[1..]),
         "fengrubei" => run_fengrubei(&args[1..]),
         "gateway" => run_gateway(&args[1..]),
+        "recordings" if args.len() == 2 && args[1] == "search" => {
+            let input = read_input()?;
+            let output = buaa_cli::recordings::search(&input).map_err(service_error)?;
+            emit(&output)
+        }
         _ => Err((
             "unsupported",
             3,

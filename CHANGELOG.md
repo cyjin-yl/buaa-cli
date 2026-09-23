@@ -14,3 +14,5 @@
 - Add cache-first redacted gateway usage and fixed TLS login/logout flows with stdin-only credentials, exact typed intent and a separately armed one-shot authentication lease.
 - Add original SRun protocol derivation with an independent synthetic vector; exclude HTTP AC discovery, network probing, retries, credential files, raw response diagnostics and security-notice bypasses. Live campus compatibility remains unverified.
 - Split gateway logout into immutable offline planning and exact typed online commit with private idempotency receipts; repeated successful plan hashes do not resend the mutation.
+- Add operator-authorized, read-only local recording-catalog phrase search with query/catalog-bound cursors, nullable timing, and separate declared source/derived hashes. No remote media retrieval or rights verification is implied.
+- Resolve bounded ancestry with explicit missing/cycle/resource-limit states; revisit shared ancestors when a shorter path provides more remaining depth. Real SQLite and CLI regressions cover the corrected behavior.
