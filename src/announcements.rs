@@ -75,7 +75,11 @@ fn parse_date(raw: &str) -> Result<String, Error> {
         {
             Ok(format!("{y:04}-{m:02}-{d:02}"))
         }
-        _ => Err(failed_contract("announcement date must be yyyy-mm-dd with gross bounds", file!(), line!())),
+        _ => Err(failed_contract(
+            "announcement date must be yyyy-mm-dd with gross bounds",
+            file!(),
+            line!(),
+        )),
     }
 }
 
@@ -97,24 +101,35 @@ pub fn parse_html(bytes: &[u8]) -> Result<AnnouncementsDocument, Error> {
         .next()
         .map(|element| normalized_text(element.text()))
         .filter(|value| !value.is_empty() && value.len() <= MAX_TEXT)
-        .ok_or_else(|| failed_contract("document title must exist, fit 1..max", file!(), line!()))?;
+        .ok_or_else(|| {
+            failed_contract("document title must exist, fit 1..max", file!(), line!())
+        })?;
 
     let base = Url::parse(ANNOUNCEMENTS_URL).map_err(|_| unavailable())?;
     let mut entries = Vec::new();
     for row in document.select(&row_selector) {
-        let anchor = row
-            .select(&anchor_selector)
-            .next()
-            .ok_or_else(|| failed_contract("announcement row must contain a[href] anchor", file!(), line!()))?;
+        let anchor = row.select(&anchor_selector).next().ok_or_else(|| {
+            failed_contract(
+                "announcement row must contain a[href] anchor",
+                file!(),
+                line!(),
+            )
+        })?;
         let title_text = normalized_text(anchor.text());
         if title_text.is_empty() || title_text.len() > MAX_TEXT {
-            return Err(failed_contract("announcement title must fit 1..max bytes", file!(), line!()));
+            return Err(failed_contract(
+                "announcement title must fit 1..max bytes",
+                file!(),
+                line!(),
+            ));
         }
         let date = row
             .select(&date_selector)
             .next()
             .map(|element| normalized_text(element.text()))
-            .ok_or_else(|| failed_contract("announcement row must contain .xwzx-date", file!(), line!()))?;
+            .ok_or_else(|| {
+                failed_contract("announcement row must contain .xwzx-date", file!(), line!())
+            })?;
         let date = parse_date(&date)?;
 
         let listed_href = anchor.attr("href").map(str::to_owned);
@@ -150,7 +165,11 @@ pub fn parse_html(bytes: &[u8]) -> Result<AnnouncementsDocument, Error> {
         });
     }
     if entries.is_empty() {
-        return Err(failed_contract("announcement document must contain at least one .xwzx-list li row", file!(), line!()));
+        return Err(failed_contract(
+            "announcement document must contain at least one .xwzx-list li row",
+            file!(),
+            line!(),
+        ));
     }
     Ok(AnnouncementsDocument { title, entries })
 }
@@ -191,22 +210,65 @@ pub fn list(mode: CacheMode) -> Result<Value, Error> {
     client.get(&url, false, normalize)
 }
 
-pub fn schema() -> Value {
-    json!({"list": {
-        "input": {"type":"null","description":"No stdin. Default is private cache only; --online and --refresh are explicit options."},
-        "output": {
-            "type":"object",
-            "required":["schema_version","type","result","publisher","listing_label","document_title","entries","completeness","retrieval"],
-            "properties": {
-                "schema_version":{"const":1},
-                "type":{"const":"announcements_list"},
-                "result":{"const":"listing_snapshot"},
-                "entries":{"type":"array","maxItems":MAX_ENTRIES}
-            }
+/// Parse a bounded Web Archive snapshot of the listing page and return the
+/// same shape as `list`, without writing to a live-cache slot. The caller
+/// supplies the archived bytes via stdin (e.g. produced by an `archive capture`
+/// step) so probe pacing remains governed and reads stay offline by default.
+pub fn history_parse(bytes: &[u8]) -> Result<Value, Error> {
+    let document = parse_html(bytes)?;
+    Ok(json!({
+        "schema_version": 1,
+        "type": "announcements_list",
+        "result": "listing_snapshot",
+        "publisher": "北京航空航天大学",
+        "listing_label": "新闻中心（历史快照）",
+        "document_title": document.title,
+        "entries": document.entries,
+        "completeness": {
+            "scope": "single_supplied_archive_snapshot",
+            "pagination": "not_applicable",
+            "freshness": "archived_bytes",
         },
-        "source_url": ANNOUNCEMENTS_URL,
-        "policy": "Authoritative news-center index only; historical pages stay on the archive path; no attachment/crawl expansion."
-    }})
+        "retrieval": null,
+    }))
+}
+
+pub fn schema() -> Value {
+    json!({
+        "list": {
+            "input": {"type":"null","description":"No stdin. Default is private cache only; --online and --refresh are explicit options."},
+            "output": {
+                "type":"object",
+                "required":["schema_version","type","result","publisher","listing_label","document_title","entries","completeness","retrieval"],
+                "properties": {
+                    "schema_version":{"const":1},
+                    "type":{"const":"announcements_list"},
+                    "result":{"const":"listing_snapshot"},
+                    "entries":{"type":"array","maxItems":MAX_ENTRIES}
+                }
+            },
+            "source_url": ANNOUNCEMENTS_URL,
+            "policy": "Authoritative news-center index only; historical pages stay on the archive path; no attachment/crawl expansion."
+        },
+        "history": {
+            "input": {
+                "type":"string",
+                "format":"utf-8-html-bytes",
+                "description":"Bounded Web Archive snapshot bytes supplied on stdin (e.g. from `buaa archive capture`); parser performs no network."
+            },
+            "output": {
+                "type":"object",
+                "required":["schema_version","type","result","publisher","listing_label","document_title","entries","completeness","retrieval"],
+                "properties": {
+                    "schema_version":{"const":1},
+                    "type":{"const":"announcements_list"},
+                    "result":{"const":"listing_snapshot"},
+                    "retrieval":{"type":"null"}
+                }
+            },
+            "policy": "Operator-supplied bytes only; no attacker-controlled path or archive redirect chain."
+        }
+    })
 }
 
 #[cfg(test)]
@@ -273,7 +335,12 @@ mod tests {
 
     #[test]
     fn parse_failures_carry_source_location_and_report_hint() {
-        let err = parse_html(&fixture_html(&li("x", "2026/09/20", Some("xwzx/2026/x.htm")))).unwrap_err();
+        let err = parse_html(&fixture_html(&li(
+            "x",
+            "2026/09/20",
+            Some("xwzx/2026/x.htm"),
+        )))
+        .unwrap_err();
         assert_eq!(err.code, "unavailable");
         let src = err.source.expect("parse rejections must carry file/line");
         assert_eq!(src.file, "src/announcements.rs");
@@ -281,6 +348,20 @@ mod tests {
         assert!(src.invariant.contains("yyyy-mm-dd"));
         assert!(err.message.contains("github.com/cyjin-yl/buaa-cli/issues"));
         assert!(err.message.contains("page layout likely changed"));
+    }
+
+    #[test]
+    fn history_parse_reuses_same_parser_without_network() {
+        let bytes = fixture_html(&li("旧闻", "2003-12-01", Some("xwzx/2003/12/1.htm")));
+        let parsed = history_parse(&bytes).unwrap();
+        assert_eq!(parsed["entries"][0]["title"], "旧闻");
+        assert_eq!(parsed["entries"][0]["date"], "2003-12-01");
+        assert_eq!(
+            parsed["completeness"]["scope"],
+            "single_supplied_archive_snapshot"
+        );
+        assert!(parsed["retrieval"].is_null());
+        assert!(history_parse(b"").is_err());
     }
 
     #[test]

@@ -146,7 +146,11 @@ pub struct ErrorSource {
 
 impl Error {
     pub const fn new(code: &'static str, message: &'static str) -> Self {
-        Self { code, message, source: None }
+        Self {
+            code,
+            message,
+            source: None,
+        }
     }
 
     pub const fn with_source(
@@ -156,7 +160,15 @@ impl Error {
         line: u32,
         invariant: &'static str,
     ) -> Self {
-        Self { code, message, source: Some(ErrorSource { file, line, invariant }) }
+        Self {
+            code,
+            message,
+            source: Some(ErrorSource {
+                file,
+                line,
+                invariant,
+            }),
+        }
     }
 }
 

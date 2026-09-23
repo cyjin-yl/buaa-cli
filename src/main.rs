@@ -30,6 +30,18 @@ fn read_input() -> Result<String, CliError> {
     Ok(input)
 }
 
+fn read_input_bytes() -> Result<Vec<u8>, CliError> {
+    let mut input = Vec::new();
+    io::stdin()
+        .take(MAX_INPUT + 1)
+        .read_to_end(&mut input)
+        .map_err(|_| ("unavailable", 7, "stdin is unavailable".into()))?;
+    if input.len() as u64 > MAX_INPUT {
+        return Err(("invalid_input", 2, "input exceeds 8 MiB limit".into()));
+    }
+    Ok(input)
+}
+
 fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
@@ -214,23 +226,34 @@ fn run_organizations(args: &[String]) -> CliResult {
 
 fn run_announcements(args: &[String]) -> CliResult {
     use buaa_cli::net::CacheMode;
-    if args.first().map(String::as_str) != Some("list") {
-        return Err(("unsupported", 3, "expected announcements list".into()));
-    }
-    let mode = match args.get(1).map(String::as_str) {
-        None => CacheMode::Offline,
-        Some("--online") if args.len() == 2 => CacheMode::PreferCache,
-        Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
-        _ => {
-            return Err((
-                "invalid_input",
-                2,
-                "expected at most one of --online or --refresh".into(),
-            ));
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            let mode = match args.get(1).map(String::as_str) {
+                None => CacheMode::Offline,
+                Some("--online") if args.len() == 2 => CacheMode::PreferCache,
+                Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
+                _ => {
+                    return Err((
+                        "invalid_input",
+                        2,
+                        "expected at most one of --online or --refresh".into(),
+                    ));
+                }
+            };
+            let output = buaa_cli::announcements::list(mode).map_err(service_error)?;
+            emit(&output)
         }
-    };
-    let output = buaa_cli::announcements::list(mode).map_err(service_error)?;
-    emit(&output)
+        Some("history") if args.len() == 1 => {
+            let bytes = read_input_bytes()?;
+            let output = buaa_cli::announcements::history_parse(&bytes).map_err(service_error)?;
+            emit(&output)
+        }
+        _ => Err((
+            "unsupported",
+            3,
+            "expected announcements list, announcements list --online/--refresh, or announcements history".into(),
+        )),
+    }
 }
 fn run_credits(args: &[String]) -> CliResult {
     if args.first().map(String::as_str) != Some("calculate") {

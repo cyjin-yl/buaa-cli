@@ -26,7 +26,10 @@ fn invalid() -> Error {
 }
 
 fn unavailable() -> Error {
-    Error::new("unavailable", "Archive response does not establish the requested provenance.")
+    Error::new(
+        "unavailable",
+        "Archive response does not establish the requested provenance.",
+    )
 }
 
 #[derive(Deserialize)]
@@ -194,7 +197,10 @@ fn capture_request(input: &str) -> Result<(CaptureInput, Url), Error> {
     let url = Url::parse(&raw).map_err(|_| invalid())?;
     // URL parsing must not silently remove dot segments or rewrite path/query bytes.
     if url.as_str() != raw {
-        return Err(Error::new("unsupported", "Original URL cannot be replayed without changing its spelling."));
+        return Err(Error::new(
+            "unsupported",
+            "Original URL cannot be replayed without changing its spelling.",
+        ));
     }
     Ok((query, url))
 }
