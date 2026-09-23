@@ -452,15 +452,17 @@
       "sources": [],
       "evidence": {
         "commands": [
-          "buaa announcements list [--online|--refresh]"
+          "buaa announcements list [--online|--refresh]",
+          "buaa announcements history"
         ],
         "implementation": [
           "src/announcements.rs",
           "src/net.rs"
         ],
         "contract": "Parses the official news-center listing (xwzx.htm) into title/date/link entries with `missing|non_http|invalid` link kinds explicit; no attachment, pagination beyond page 1, college crawl, or full-text fetch. Historical query is routed through the archive path, not this command.",
-        "proof": "98 lib tests + 8 CLI integration pass offline; strict clippy -D warnings and fmt clean. Synthetic listing (visible/hidden links, invalid dates, empty/oversized HTML) rejected by parser. Offline CLI smoke returns `offline_miss` and never opens the governor or fetches.",
-        "limits": "Governor boots-only; one named live observation captured at fetch 1790179637041 for https://www.buaa.edu.cn/xwzx.htm (3 governed captures). One more live capture for https://www.buaa.edu.cn at 1790179937729 returned three archives; request spacing remained ≥5s throughout."
+        "additional_slice": "`announcements history` replays the identical contract over operator-supplied Web Archive bytes on stdin (no live cache mutation; same parse invariants). It preserves the exact same output shape as `list` and reports `single_supplied_archive_snapshot`.",
+        "proof": "100 lib tests + 8 CLI integration pass offline; `history_parse` regression synthetic patch verified reads synthetic bytes and a valid replay; contract drift errors name the offending invariant and GitHub issue/PR hint on every rejection path.",
+        "limits": "Governor boots-only; one named live observation captured at fetch 1790179637041 for https://www.buaa.edu.cn/xwzx.htm (3 governed captures), one more live capture for https://www.buaa.edu.cn at 1790179937729 returned three archives; request spacing remained ≥5s throughout. Live detail reading remains gated by the shared governor."
       }
     },
     {
