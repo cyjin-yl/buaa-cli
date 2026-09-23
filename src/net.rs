@@ -132,11 +132,31 @@ pub enum CacheMode {
 pub struct Error {
     pub code: &'static str,
     pub message: &'static str,
+    pub source: Option<ErrorSource>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ErrorSource {
+    /// Rust file path relative to crate root; e.g. `src/announcements.rs`.
+    pub file: &'static str,
+    pub line: u32,
+    /// Human-readable invariant that failed.
+    pub invariant: &'static str,
 }
 
 impl Error {
     pub const fn new(code: &'static str, message: &'static str) -> Self {
-        Self { code, message }
+        Self { code, message, source: None }
+    }
+
+    pub const fn with_source(
+        code: &'static str,
+        message: &'static str,
+        file: &'static str,
+        line: u32,
+        invariant: &'static str,
+    ) -> Self {
+        Self { code, message, source: Some(ErrorSource { file, line, invariant }) }
     }
 }
 

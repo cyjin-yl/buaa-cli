@@ -40,7 +40,14 @@ fn service_error(error: buaa_cli::net::Error) -> CliError {
         "conflict" | "immutable_conflict" => ("conflict", 9),
         _ => ("unavailable", 7),
     };
-    (code, exit, error.message.into())
+    let message = match error.source {
+        Some(source) => format!(
+            "{} [src_file={} src_line={} invariant={}]",
+            error.message, source.file, source.line, source.invariant,
+        ),
+        None => error.message.into(),
+    };
+    (code, exit, message)
 }
 
 fn run_archive(args: &[String]) -> CliResult {

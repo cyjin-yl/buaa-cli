@@ -37,7 +37,20 @@ pub struct AnnouncementsDocument {
 fn unavailable() -> Error {
     Error::new(
         "unavailable",
-        "official news-center listing could not be interpreted safely",
+        "official news-center listing could not be interpreted safely; file an issue at https://github.com/cyjin-yl/buaa-cli/issues/new with this CLI version and URL",
+    )
+}
+
+/// Emit a rejected-parse error anchored to a declared invariant, so an
+/// operator-agent can file a GitHub issue or debug-and-patch the listed
+/// invariant and open a PR.
+fn failed_contract(invariant: &'static str, file: &'static str, line: u32) -> Error {
+    Error::with_source(
+        "unavailable",
+        "official news-center listing contract violated; the public page layout likely changed. File an issue at https://github.com/cyjin-yl/buaa-cli/issues/new or debug the reported invariant yourself and open a PR",
+        file,
+        line,
+        invariant,
     )
 }
 
@@ -62,7 +75,7 @@ fn parse_date(raw: &str) -> Result<String, Error> {
         {
             Ok(format!("{y:04}-{m:02}-{d:02}"))
         }
-        _ => Err(unavailable()),
+        _ => Err(failed_contract("announcement date must be yyyy-mm-dd with gross bounds", file!(), line!())),
     }
 }
 
@@ -84,7 +97,7 @@ pub fn parse_html(bytes: &[u8]) -> Result<AnnouncementsDocument, Error> {
         .next()
         .map(|element| normalized_text(element.text()))
         .filter(|value| !value.is_empty() && value.len() <= MAX_TEXT)
-        .ok_or_else(unavailable)?;
+        .ok_or_else(|| failed_contract("document title must exist, fit 1..max", file!(), line!()))?;
 
     let base = Url::parse(ANNOUNCEMENTS_URL).map_err(|_| unavailable())?;
     let mut entries = Vec::new();
@@ -92,16 +105,16 @@ pub fn parse_html(bytes: &[u8]) -> Result<AnnouncementsDocument, Error> {
         let anchor = row
             .select(&anchor_selector)
             .next()
-            .ok_or_else(unavailable)?;
+            .ok_or_else(|| failed_contract("announcement row must contain a[href] anchor", file!(), line!()))?;
         let title_text = normalized_text(anchor.text());
         if title_text.is_empty() || title_text.len() > MAX_TEXT {
-            return Err(unavailable());
+            return Err(failed_contract("announcement title must fit 1..max bytes", file!(), line!()));
         }
         let date = row
             .select(&date_selector)
             .next()
             .map(|element| normalized_text(element.text()))
-            .ok_or_else(unavailable)?;
+            .ok_or_else(|| failed_contract("announcement row must contain .xwzx-date", file!(), line!()))?;
         let date = parse_date(&date)?;
 
         let listed_href = anchor.attr("href").map(str::to_owned);
@@ -137,7 +150,7 @@ pub fn parse_html(bytes: &[u8]) -> Result<AnnouncementsDocument, Error> {
         });
     }
     if entries.is_empty() {
-        return Err(unavailable());
+        return Err(failed_contract("announcement document must contain at least one .xwzx-list li row", file!(), line!()));
     }
     Ok(AnnouncementsDocument { title, entries })
 }
@@ -256,6 +269,18 @@ mod tests {
     fn oversized_and_empty_documents_rejected() {
         assert!(parse_html(&vec![0u8; MAX_HTML + 1]).is_err());
         assert!(parse_html(&[]).is_err());
+    }
+
+    #[test]
+    fn parse_failures_carry_source_location_and_report_hint() {
+        let err = parse_html(&fixture_html(&li("x", "2026/09/20", Some("xwzx/2026/x.htm")))).unwrap_err();
+        assert_eq!(err.code, "unavailable");
+        let src = err.source.expect("parse rejections must carry file/line");
+        assert_eq!(src.file, "src/announcements.rs");
+        assert!(src.line > 0);
+        assert!(src.invariant.contains("yyyy-mm-dd"));
+        assert!(err.message.contains("github.com/cyjin-yl/buaa-cli/issues"));
+        assert!(err.message.contains("page layout likely changed"));
     }
 
     #[test]
