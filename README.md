@@ -133,7 +133,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | os-lab | Authorized OS-lab jumpserver | pending |
 | coursegrading | CourseGrading submissions | pending |
 | timed-input | Timed-input utility | implemented-offline |
-| credits | School-specific graduation credits | pending |
+| credits | School-specific graduation credits | partial-offline |
 | shuttle | Shuttle tickets | pending |
 | welearn | WE Learn materials/practice | pending |
 | fengrubei | Fengrubei template access | implemented-observed-read |
