@@ -45,13 +45,14 @@ const HEADERS: &[&str] = &[
 enum SourceProfile {
     Archive,
     Organizations,
+    Announcements,
 }
 
 impl SourceProfile {
     fn robots_url(self) -> &'static str {
         match self {
             Self::Archive => ARCHIVE_ROBOTS_URL,
-            Self::Organizations => ORGANIZATIONS_ROBOTS_URL,
+            Self::Organizations | Self::Announcements => ORGANIZATIONS_ROBOTS_URL,
         }
     }
 
@@ -59,6 +60,7 @@ impl SourceProfile {
         match self {
             Self::Archive => ".buaa-cli-archive-cache",
             Self::Organizations => ".buaa-cli-organizations-cache",
+            Self::Announcements => ".buaa-cli-announcements-cache",
         }
     }
 
@@ -80,6 +82,11 @@ impl SourceProfile {
                 url.host_str() == Some("www.buaa.edu.cn")
                     && url.query().is_none()
                     && matches!(url.path(), "/robots.txt" | "/jgsz/jxkyjg02.htm")
+            }
+            Self::Announcements => {
+                url.host_str() == Some("www.buaa.edu.cn")
+                    && url.query().is_none()
+                    && matches!(url.path(), "/robots.txt" | "/xwzx.htm")
             }
         };
         if common_invalid || !allowed {
@@ -199,6 +206,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_organizations(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Organizations)
+    }
+
+    pub(crate) fn open_announcements(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Announcements)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {

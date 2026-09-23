@@ -447,9 +447,21 @@
     {
       "id": "announcements",
       "title": "College current/historical announcements",
-      "status": "pending",
+      "status": "partial-offline",
       "acceptance": "Faculty/college/date filters, full text and attachments, conditional incremental reads.",
-      "sources": []
+      "sources": [],
+      "evidence": {
+        "commands": [
+          "buaa announcements list [--online|--refresh]"
+        ],
+        "implementation": [
+          "src/announcements.rs",
+          "src/net.rs"
+        ],
+        "contract": "Parses the official news-center listing (xwzx.htm) into title/date/link entries with `missing|non_http|invalid` link kinds explicit; no attachment, pagination beyond page 1, college crawl, or full-text fetch. Historical query is routed through the archive path, not this command.",
+        "proof": "98 lib tests + 8 CLI integration pass offline; strict clippy -D warnings and fmt clean. Synthetic listing (visible/hidden links, invalid dates, empty/oversized HTML) rejected by parser. Offline CLI smoke returns `offline_miss` and never opens the governor or fetches.",
+        "limits": "One bounded live observation required before marking `implemented-observed-read`; request spacing min 5s shared across profiles. No Live fetch was performed for this iteration."
+      }
     },
     {
       "id": "archive",

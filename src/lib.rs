@@ -1,5 +1,6 @@
 //! Agent-facing BUAA utilities and mandatory shared request-safety primitives.
 //! Campus gateway code is explicit opt-in and live-unverified; archive access is also opt-in.
+pub mod announcements;
 pub mod archive;
 pub mod credits;
 pub mod fengrubei;
