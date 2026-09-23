@@ -835,8 +835,6 @@ pub(crate) fn create_temporary(directory: &File) -> Result<(CString, File), Stri
 fn retry_after_deadline(header: &str, now: u64) -> Option<u64> {
     let value = header.trim_matches([' ', '\t']);
     if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
-        // Unrepresentably large valid seconds must not collapse into a short
-        // fallback. Saturation denies requests for the representable future.
         let seconds = value.parse::<u64>().unwrap_or(u64::MAX);
         return Some(
             now.saturating_add(seconds.saturating_mul(1_000))
@@ -844,8 +842,6 @@ fn retry_after_deadline(header: &str, now: u64) -> Option<u64> {
         );
     }
     let unix_deadline = http_date_ms(value)?;
-    // Convert once; only the monotonic deadline is persisted. Sample monotonic
-    // time after UTC so the sampling gap cannot shorten the requested delay.
     let wall = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(value) => u64::try_from(value.as_millis()).unwrap_or(u64::MAX),
         Err(_) => return Some(u64::MAX),
@@ -861,24 +857,13 @@ fn retry_after_deadline(header: &str, now: u64) -> Option<u64> {
     )
 }
 
-// IMF-fixdate is the current HTTP-date format. Invalid and obsolete date forms
-// are treated as absent; a 429 then gets the conservative thirty-minute floor.
+// HTTP-date is accepted in all three formats per RFC 9110 §5.6.7:
+//   IMF-fixdate            Sun, 06 Nov 1994 08:49:37 GMT
+//   obsolete RFC 850       Sunday, 06-Nov-94 08:49:37 GMT
+//   ANSI C asctime         Sun Nov  6 08:49:37 1994
+// Anything else is treated as absent; a 4xx/5xx then receives the thirty-minute floor.
 fn http_date_ms(value: &str) -> Option<u64> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 29
-        || !value.is_ascii()
-        || &bytes[3..5] != b", "
-        || bytes[7] != b' '
-        || bytes[11] != b' '
-        || bytes[16] != b' '
-        || bytes[19] != b':'
-        || bytes[22] != b':'
-        || &bytes[25..29] != b" GMT"
-        || !matches!(
-            &value[0..3],
-            "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun"
-        )
-    {
+    if !value.is_ascii() {
         return None;
     }
     fn number(value: &str) -> Option<u64> {
@@ -888,26 +873,117 @@ fn http_date_ms(value: &str) -> Option<u64> {
             .then(|| value.parse().ok())
             .flatten()
     }
-    let day = number(&value[5..7])?;
-    let month = match &value[8..11] {
-        "Jan" => 1,
-        "Feb" => 2,
-        "Mar" => 3,
-        "Apr" => 4,
-        "May" => 5,
-        "Jun" => 6,
-        "Jul" => 7,
-        "Aug" => 8,
-        "Sep" => 9,
-        "Oct" => 10,
-        "Nov" => 11,
-        "Dec" => 12,
+    fn month_index(name: &str) -> Option<u64> {
+        Some(match name {
+            "Jan" => 0,
+            "Feb" => 1,
+            "Mar" => 2,
+            "Apr" => 3,
+            "May" => 4,
+            "Jun" => 5,
+            "Jul" => 6,
+            "Aug" => 7,
+            "Sep" => 8,
+            "Oct" => 9,
+            "Nov" => 10,
+            "Dec" => 11,
+            _ => return None,
+        })
+    }
+    fn weekday_name(name: &str) -> bool {
+        matches!(
+            name,
+            "Mon"
+                | "Mon."
+                | "Monday"
+                | "Tue"
+                | "Tues"
+                | "Tuesday"
+                | "Wed"
+                | "Wed."
+                | "Wednesday"
+                | "Thu"
+                | "Thur"
+                | "Thurs"
+                | "Thursday"
+                | "Fri"
+                | "Fri."
+                | "Friday"
+                | "Sat"
+                | "Sat."
+                | "Saturday"
+                | "Sun"
+                | "Sun."
+                | "Sunday"
+        )
+    }
+    // Split into lexical tokens; weekdays with optional trailing space where
+    // the empty token comes from a double space (e.g. asctime).
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    // Formats after whitespace-splitting:
+    //   IMF: ["Sun,", "06", "Nov", "1994", "08:49:37", "GMT"]   (6)
+    //   850: ["Sunday,", "06-Nov-94", "08:49:37", "GMT"]        (4)
+    //   asc: ["Sun", "Nov", "6", "08:49:37", "1994"]            (5)
+    let (year, month, day, hour, minute, second) = match tokens.len() {
+        4 if tokens[1].contains('-') => {
+            // RFC 850: Weekday, 06-Nov-94 08:49:37 GMT
+            if !weekday_name(tokens[0].trim_end_matches(',')) {
+                return None;
+            }
+            let date = tokens[1];
+            if date.len() != 9 || date.get(2..3) != Some("-") || date.get(6..7) != Some("-") {
+                return None;
+            }
+            let day = number(&date[..2])?;
+            let month = month_index(&date[3..6])?;
+            let mut year = number(&date[7..9])?;
+            year += if year > 50 { 1900 } else { 2000 };
+            let time = tokens[2];
+            if time.len() != 8 || &time[2..3] != ":" || &time[5..6] != ":" || tokens[3] != "GMT" {
+                return None;
+            }
+            let hour = number(&time[..2])?;
+            let minute = number(&time[3..5])?;
+            let second = number(&time[6..])?;
+            (year, month, day, hour, minute, second)
+        }
+        6 if tokens[0].ends_with(',') => {
+            // IMF-fixdate: Sun, 06 Nov 1994 08:49:37 GMT
+            if !weekday_name(tokens[0].trim_end_matches(',')) || tokens[5] != "GMT" {
+                return None;
+            }
+            let day = number(tokens[1])?;
+            let month = month_index(tokens[2])?;
+            let year = number(tokens[3])?;
+            let time = tokens[4];
+            if time.len() != 8 || &time[2..3] != ":" || &time[5..6] != ":" {
+                return None;
+            }
+            let hour = number(&time[..2])?;
+            let minute = number(&time[3..5])?;
+            let second = number(&time[6..])?;
+            (year, month, day, hour, minute, second)
+        }
+        5 => {
+            // asctime: Sun Nov  6 08:49:37 1994
+            if !weekday_name(tokens[0]) {
+                return None;
+            }
+            let month = month_index(tokens[1])?;
+            let day = number(tokens[2])?;
+            let time = tokens[3];
+            if time.len() != 8 || &time[2..3] != ":" || &time[5..6] != ":" {
+                return None;
+            }
+            let hour = number(&time[..2])?;
+            let minute = number(&time[3..5])?;
+            let second = number(&time[6..])?;
+            let year = number(tokens[4])?;
+            (year, month, day, hour, minute, second)
+        }
         _ => return None,
     };
-    let year = number(&value[12..16])?;
-    let hour = number(&value[17..19])?;
-    let minute = number(&value[20..22])?;
-    let second = number(&value[23..25])?;
+    // GMT already validated per-format above; validate calendar bounds only.
     if year < 1601 || hour > 23 || minute > 59 || second > 59 {
         return None;
     }
@@ -926,7 +1002,7 @@ fn http_date_ms(value: &str) -> Option<u64> {
         30,
         31,
     ];
-    if day == 0 || day > month_days[month - 1] {
+    if month >= 12 || day == 0 || day > month_days[month as usize] {
         return None;
     }
     if year < 1970 {
@@ -934,7 +1010,7 @@ fn http_date_ms(value: &str) -> Option<u64> {
     }
     let preceding = year - 1;
     let days = 365 * preceding + preceding / 4 - preceding / 100 + preceding / 400 - 719_162
-        + month_days[..month - 1].iter().sum::<u64>()
+        + month_days[..month as usize].iter().sum::<u64>()
         + day
         - 1;
     Some(((days * 24 + hour) * 60 * 60 + minute * 60 + second) * 1_000)

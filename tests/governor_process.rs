@@ -388,6 +388,60 @@ macro_rules! governor_process_regressions {
         }
 
         #[test]
+        fn obsolete_and_asctime_retry_after_dates_are_accepted() {
+            // RFC 9110 5.6.7: recipients MUST accept all three HTTP-date formats.
+            // Verify dates in each supported format produce bound delays beyond the
+            // ordinary request floor.
+            let cases: &[(u16, &str)] = &[
+                // Sunday, 06-Nov-94 08:49:37 GMT  →
+                (503, "Sunday, 06-Nov-94 08:49:37 GMT"),
+                // Sun Nov  6 08:49:37 1994  (asctime; single space before single-digit day)
+                (503, "Sun Nov  6 08:49:37 1994"),
+                // IMF: Sun, 06 Nov 1994 08:49:37 GMT
+                (503, "Sun, 06 Nov 1994 08:49:37 GMT"),
+            ];
+            for (status, header) in cases {
+                let fixture = Fixture::new();
+                let governor = fixture.open();
+                let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+                let before_finish = timestamp_ms();
+                lease
+                    .finish(Outcome::Http {
+                        status: *status,
+                        retry_after: Some(header),
+                        challenge: false,
+                        network_failure: false,
+                    })
+                    .unwrap();
+                let resumed = fixture.open().status().unwrap();
+                assert!(
+                    resumed.cooldown_until_boottime_ms > before_finish,
+                    "obsolete date {header:?} was silently dropped"
+                );
+            }
+            // Invalid date on a 5xx with no fallback must not produce the 30-minute
+            // 429 floor — only the ordinary 5-second interval applies. The existing
+            // policy/intent difference is documented in the issue tracker (#27).
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            lease
+                .finish(Outcome::Http {
+                    status: 503,
+                    retry_after: Some("garbage"),
+                    challenge: false,
+                    network_failure: false,
+                })
+                .unwrap();
+            let resumed = fixture.open().status().unwrap();
+            assert!(
+                resumed.cooldown_until_boottime_ms == 0,
+                "503 with invalid Retry-After must not latch 30m: got {}",
+                resumed.cooldown_until_boottime_ms
+            );
+        }
+
+        #[test]
         fn network_failure_is_bounded_and_does_not_retry() {
             let fixture = Fixture::new();
             let governor = fixture.open();
