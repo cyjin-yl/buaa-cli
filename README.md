@@ -139,8 +139,8 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | fengrubei | Fengrubei template access | implemented-observed-read |
 | crater | Crater allocation/API/SSH | blocked |
 | organizations | Authoritative college/institute directory | implemented-observed-read |
-| announcements | College current/historical announcements | partial-offline |
-| archive | CDX/Memento historical lookup | implemented-offline-tested; live unverified |
+| announcements | College current/historical announcements | implemented-observed-read |
+| archive | CDX/Memento historical lookup | implemented-offline-tested + implemented-observed-read |
 | recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |
 | life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |
 | skills-fs | skills-fs HTTP provider | blocked |

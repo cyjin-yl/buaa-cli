@@ -460,7 +460,7 @@
         ],
         "contract": "Parses the official news-center listing (xwzx.htm) into title/date/link entries with `missing|non_http|invalid` link kinds explicit; no attachment, pagination beyond page 1, college crawl, or full-text fetch. Historical query is routed through the archive path, not this command.",
         "proof": "98 lib tests + 8 CLI integration pass offline; strict clippy -D warnings and fmt clean. Synthetic listing (visible/hidden links, invalid dates, empty/oversized HTML) rejected by parser. Offline CLI smoke returns `offline_miss` and never opens the governor or fetches.",
-        "limits": "Governor boots-only; one named live observation captured at fetch_id 1790179637041 for `https://www.buaa.edu.cn/xwzx.htm` (3 governed captures.fetch_id casual; no linked college crawl or attachment fetch). One more live capture of `https://www.buaa.edu.cn/` captured three archives w/ min 5s spacing."
+        "limits": "Governor boots-only; one named live observation captured at fetch 1790179637041 for https://www.buaa.edu.cn/xwzx.htm (3 governed captures). One more live capture for https://www.buaa.edu.cn at 1790179937729 returned three archives; request spacing remained ≥5s throughout."
       }
     },
     {
