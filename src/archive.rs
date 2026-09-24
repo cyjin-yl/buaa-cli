@@ -12,7 +12,8 @@ const MAX_INPUT: usize = 32 * 1024;
 const MAX_URL: usize = 8192;
 const MAX_CURSOR: usize = 4096;
 const MAX_CDX: usize = 16 * 1024 * 1024;
-const FIELDS: [&str; 6] = [
+const FIELDS: [&str; 7] = [
+    "urlkey",
     "timestamp",
     "original",
     "mimetype",
@@ -274,7 +275,7 @@ fn normalize_lookup(
                 return Err(unavailable());
             }
         }
-        let mut indexes = [0; 6];
+        let mut indexes = [0; FIELDS.len()];
         for (i, field) in FIELDS.iter().enumerate() {
             indexes[i] = *columns.get(field).ok_or_else(unavailable)?;
         }
@@ -299,8 +300,21 @@ fn normalize_lookup(
             {
                 return Err(unavailable());
             }
-            let [capture_time, original, mimetype, status, digest, length] =
-                indexes.map(|i| row[i].as_str());
+            let [
+                urlkey,
+                capture_time,
+                original,
+                mimetype,
+                status,
+                digest,
+                length,
+            ] = indexes.map(|i| row[i].as_str());
+            if urlkey.is_empty()
+                || !urlkey.is_ascii()
+                || urlkey.bytes().any(|byte| byte.is_ascii_whitespace())
+            {
+                return Err(unavailable());
+            }
             let parsed_time = timestamp(capture_time).map_err(|_| unavailable())?;
             if query
                 .from
@@ -650,6 +664,125 @@ mod tests {
     }
 
     #[test]
+    fn resume_key_pages_include_urlkey_without_exposing_it() {
+        let cursor = "org%2Cexample%29%2Fa+19980101000001%21";
+        let first_input = json!({"url":"https://example.org/a","limit":1}).to_string();
+        let (first_query, first_source) = lookup_request(&first_input).unwrap();
+        let first_pairs: Vec<_> = first_source.query_pairs().collect();
+        assert_eq!(
+            first_pairs.iter().find(|(key, _)| key == "fl").unwrap().1,
+            FIELDS.join(",")
+        );
+        assert_eq!(FIELDS[0], "urlkey");
+
+        let first_page = json!([
+            FIELDS,
+            [
+                "org,example)/a",
+                "19980101000000",
+                "https://example.org/a",
+                "text/html",
+                "200",
+                "HASH1",
+                "10"
+            ],
+            [],
+            [cursor]
+        ])
+        .to_string();
+        let first_result = normalize_lookup(
+            &first_query,
+            &first_source,
+            &response(&first_source, first_page.as_bytes()),
+        )
+        .unwrap();
+        assert_eq!(first_result["next_cursor"], cursor);
+        assert!(first_result["captures"][0].get("urlkey").is_none());
+
+        let second_input =
+            json!({"url":"https://example.org/a","limit":1,"cursor":cursor}).to_string();
+        let (second_query, second_source) = lookup_request(&second_input).unwrap();
+        let second_pairs: Vec<_> = second_source.query_pairs().collect();
+        assert_eq!(
+            second_pairs
+                .iter()
+                .find(|(key, _)| key == "resumeKey")
+                .unwrap()
+                .1,
+            "org,example)/a 19980101000001!"
+        );
+        assert_eq!(
+            second_pairs.iter().find(|(key, _)| key == "fl").unwrap().1,
+            FIELDS.join(",")
+        );
+
+        let second_page = json!([
+            FIELDS,
+            [
+                "org,example)/a",
+                "19980101000002",
+                "https://example.org/a",
+                "text/html",
+                "200",
+                "HASH2",
+                "12"
+            ]
+        ])
+        .to_string();
+        let second_result = normalize_lookup(
+            &second_query,
+            &second_source,
+            &response(&second_source, second_page.as_bytes()),
+        )
+        .unwrap();
+        assert_eq!(
+            second_result["captures"][0]["capture_timestamp"],
+            "19980101000002"
+        );
+        assert_eq!(second_result["next_cursor"], Value::Null);
+    }
+
+    #[test]
+    fn cdx_rows_require_valid_internal_urlkeys() {
+        let (query, source) = query();
+        let empty_urlkey = json!([
+            FIELDS,
+            [
+                "",
+                "20240229120000",
+                "https://example.org/a",
+                "text/html",
+                "200",
+                "-",
+                "1"
+            ]
+        ])
+        .to_string();
+        let non_ascii_urlkey = json!([
+            FIELDS,
+            [
+                "org,é)/a",
+                "20240229120000",
+                "https://example.org/a",
+                "text/html",
+                "200",
+                "-",
+                "1"
+            ]
+        ])
+        .to_string();
+        for body in [
+            r#"[["timestamp","original","mimetype","statuscode","digest","length"]]"#.to_string(),
+            empty_urlkey,
+            non_ascii_urlkey,
+        ] {
+            assert!(
+                normalize_lookup(&query, &source, &response(&source, body.as_bytes())).is_err()
+            );
+        }
+    }
+
+    #[test]
     fn invalid_dates_and_queries_fail_before_transport() {
         for date in [
             "20230229000000",
@@ -684,7 +817,8 @@ mod tests {
         let (query, source) = query();
         for body in [
             b"[]".as_slice(),
-            br#"[["timestamp","original","mimetype","statuscode","digest","length"]]"#,
+            br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"]]"#
+                .as_slice(),
         ] {
             let result = normalize_lookup(&query, &source, &response(&source, body)).unwrap();
             assert_eq!(result["result"], "missing_in_query_scope");
@@ -698,11 +832,11 @@ mod tests {
     fn entire_index_response_must_be_well_formed() {
         let (query, source) = query();
         for body in [
-            r#"[["timestamp","original","mimetype","statuscode","digest","digest"]]"#,
-            r#"[["timestamp","original","mimetype","statuscode","digest","length"],["20240229120000","https://example.org/a","text/html","200","-","1"],["bad"]]"#,
-            r#"[["timestamp","original","mimetype","statuscode","digest","length"],["20240230120000","https://example.org/a","text/html","200","-","1"]]"#,
-            r#"[["timestamp","original","mimetype","statuscode","digest","length"],["20240229120000","https://example.org/a","text/html","600","-","1"]]"#,
-            r#"[["timestamp","original","mimetype","statuscode","digest","length"],[],["key"],["extra"]]"#,
+            r#"[["urlkey","timestamp","original","mimetype","statuscode","digest","digest"]]"#,
+            r#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["org,example)/a","20240229120000","https://example.org/a","text/html","200","-","1"],["bad"]]"#,
+            r#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["org,example)/a","20240230120000","https://example.org/a","text/html","200","-","1"]]"#,
+            r#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["org,example)/a","20240229120000","https://example.org/a","text/html","600","-","1"]]"#,
+            r#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],[],["key"],["extra"]]"#,
             r#"[] trailing"#,
         ] {
             assert!(

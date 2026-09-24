@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="BUAA CLI documentation: offline-first tools, governed archive reads, verified capabilities and explicit service boundaries.">
-  <title>BUAA CLI — commands, safety and status</title>
+  <meta name="description" content="buaa-cli documentation: offline-first tools, governed archive reads, verified capabilities and explicit service boundaries.">
+  <title>buaa-cli — commands, safety and status</title>
   <style>
     :root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1c2024; background: #fff; line-height: 1.6; }
     * { box-sizing: border-box; }
@@ -52,7 +52,7 @@
   <a class="skip" href="#content">Skip to documentation</a>
   <header>
     <div class="top">
-      <a class="name" href="./">BUAA CLI</a>
+      <a class="name" href="./">buaa-cli</a>
       <nav aria-label="Project links">
         <a href="https://github.com/cyjin-yl/buaa-cli">Source</a>
         <a href="https://github.com/cyjin-yl/buaa-cli/blob/main/acceptance.json">Full acceptance matrix</a>
@@ -73,9 +73,9 @@
       </nav>
     </aside>
     <main id="content">
-      <h1>BUAA CLI</h1>
+      <h1>buaa-cli</h1>
       <p class="lead">A Rust command line for BUAA workflows, with structured output and conservative request control.</p>
-      <p class="boundary"><strong>Know the boundary.</strong> Timed-input replay, archive lookup/capture, marks/GPA offline engine, pinned Fengrubei template retrieval, authorized local recording-catalog search and the authoritative teaching/research organization directory are implemented and offline-tested. Gateway usage/login/logout code is offline-loopback-tested but live-unverified; campus authentication has not been attempted. Live Internet Archive compatibility and current competition-format compliance have not been observed.</p>
+      <p class="boundary"><strong>Know the boundary.</strong> Timed-input replay, archive lookup/capture, marks/GPA offline engine, pinned Fengrubei template retrieval, authorized local recording-catalog search and the authoritative teaching/research organization directory are implemented and offline-tested. Gateway usage/login/logout code is offline-loopback-tested but live-unverified; campus authentication has not been attempted. Two governed live Internet Archive CDX pages have been observed; complete history, live Memento replay and current competition-format compliance remain unverified.</p>
 
       <h2 id="available">Available now</h2>
       <div class="table-scroll" role="region" aria-label="Current capability status" tabindex="0">
@@ -83,7 +83,7 @@
           <thead><tr><th scope="col">Surface</th><th scope="col">What it does</th><th scope="col">Verification boundary</th></tr></thead>
           <tbody>
             <tr><td>Timed input</td><td>Replay timestamped lines as NDJSON or an explicit raw pipe.</td><td>Offline CLI replay, ordering and error boundaries verified.</td></tr>
-            <tr><td>Archive reads</td><td>Exact-URL CDX lookup and timestamped Memento capture, with hashes and provenance.</td><td>Real loopback HTTP proof; cache-only by default. Live service unverified.</td></tr>
+            <tr><td>Archive reads</td><td>Exact-URL CDX lookup and timestamped Memento capture, with hashes and provenance.</td><td>Two governed live CDX pages plus prior real-loopback HTTP proof; live Memento replay unverified. Cache-only by default.</td></tr>
             <tr><td>Fengrubei template</td><td>Pinned v1.0.3 upstream ZIP retrieval with LPPL provenance, exact size and SHA-256.</td><td>Governed public download plus streaming/cache proof. Archive stays packed; current-format/font rights unverified.</td></tr>
             <tr><td>Gateway client</td><td>Cache-first redacted usage plus typed-intent login/logout with one-shot authentication permission.</td><td>Real loopback protocol proof only. No live campus request, account permission or postcondition verified.</td></tr>
             <tr><td>Recording catalog</td><td>Read-only local segment search with timing, declared hashes and bounded ancestry.</td><td>Synthetic SQLite and real CLI proof. No remote object retrieval or media-rights verification.</td></tr>

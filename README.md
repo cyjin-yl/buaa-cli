@@ -1,7 +1,6 @@
 # buaa-cli
 
-Rust CLI for agent-facing BUAA tools. Timed-input replay and archive lookup/capture are implemented; a real governed gateway client is offline-tested but live-unverified. Archive and gateway usage default to private cache. No campus authentication or logout has been attempted, and live gateway/archive compatibility has not been observed. The acceptance ledger distinguishes implemented slices from pending, partial or blocked services.
-Rust CLI for agent-facing BUAA tools. Timed-input replay, archive lookup/capture and authorized local recording-catalog search are implemented and tested offline. Archive reads default to local cache; explicit opt-in can contact Internet Archive only. Recording search uses an existing local catalog and never retrieves media objects. No campus adapter or authentication command is enabled, and live archive compatibility has not been observed. The acceptance ledger distinguishes these implemented slices from pending or blocked services.
+`buaa-cli` is an agent-facing Rust CLI. Implemented offline slices include timed-input, archive lookup/capture, policy-provenanced marks/GPA calculation, scoped credit calculation, pinned Fengrubei template retrieval, local recording-catalog search, official organization-directory parsing, and news-index parsing. A governed two-page live Internet Archive CDX read was manually observed; this does not establish complete history or live Memento replay. Gateway workflows remain live-unverified, archive reads default to cache, and no campus authentication, mutation, or origin-host request was performed. Other acceptance items remain partial, pending, or blocked.
 
 ## Build and discover
 
