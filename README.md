@@ -62,13 +62,22 @@ Use `fetch --online` only to permit a governed public download on cache miss. Th
 
 ## Marks/GPA (offline)
 
-`buaa marks gpa` computes a weighted GPA from a caller-supplied, provenanced policy (table bands or formula) and course list, with per-course pass flags and an optional structured diff against an inline baseline. No campus grades are fetched.
+`buaa marks gpa` computes a weighted GPA from a caller-supplied, provenanced policy (table bands or formula) and course list, with per-course pass flags and an optional structured diff against an inline baseline. No campus grades are fetched. A schema-published arithmetic ceiling bounds both individual and aggregate course credits; overflow is rejected rather than serialized as a misleading `null`.
 
 ```sh
 printf '%s\n' '{"policy":{"kind":"table","id":"p1","source":"<published-url>","pass_min":60,"bands":[...]},"courses":[{"name":"...","score":92,"credit":4.0}]}' | ./target/debug/buaa marks gpa
 ```
 
-`buaa marks baseline save|show <absolute-path>` persists and reads back an idempotent local `gpa_baseline` snapshot (absolute paths only; identical re-saves report `unchanged`). The stored baseline can be pasted as the `baseline` field of `marks gpa` to produce added/removed/changed and GPA-delta. The live campus grades adapter is a separate blocked capability; see `acceptance.json`.
+`buaa marks baseline save|show <absolute-path>` persists an idempotent local `gpa_baseline` snapshot. The parent directory must already exist, be owned by the current user, and not be group/other-writable; symlink components are rejected. Baseline files are regular owner-controlled `0600` files. Legacy baselines with broader permissions must be restricted before use. Identical re-saves report `unchanged` without rewriting. The stored baseline can be pasted as the `baseline` field of `marks gpa` to produce added/removed/changed and GPA-delta. The live campus grades adapter is a separate blocked capability; see `acceptance.json`.
+
+## Graduation credits (offline)
+
+`buaa credits calculate` implements the sourced School-8 2020 general-major calculation. `major` must match a declared non-general major tag from the catalog. Same-name catalog rows are accepted only when credit, displayed metadata and classification for that major agree; conflicting identities return `invalid_input`. Other cohorts/programs remain pending evidence.
+
+```sh
+printf '%s\n' '{"major":"会计学","selected":["健康经济学"]}' | ./target/debug/buaa credits calculate
+```
+
 ## Local recording segment lookup
 `buaa recordings search` performs read-only phrase lookup over an operator-authorized Life-compatible SQLite catalog. It returns nullable timing and separate catalog-reported original/derived descriptors and linking hashes. It does not fetch objects or verify media rights; unknown ancestry stays explicit.
 # Supply an existing local catalog you are authorized to read; this path is an example.
