@@ -572,12 +572,12 @@
         "pages_url": "https://cyjin-yl.github.io/buaa-cli/",
         "pages_verified_build": {
           "status": "built",
-          "commit": "6f0dcfbe597acfd698d433daeaa75037e0a3fdcd",
+          "commit": "ce9243a5530d8a919dd3bee3ee7701de0cbaf0ab",
           "source": "main:/docs",
           "https_enforced": true
         },
         "review": "Two independent exact-head source reviews reported no initial-publication blockers; not a GitHub merge approval.",
-        "verification": "Initial head passed its 50 offline tests, strict clippy and formatter check. After PR #38, GitHub reported the deployed main:/docs build at 6f0dcfbe597acfd698d433daeaa75037e0a3fdcd as built; Chromium confirmed live title/H1 buaa-cli, the updated archive evidence row, HTTPS, no external resources and no desktop horizontal overflow.",
+        "verification": "Initial head passed its 50 offline tests, strict clippy and formatter check. After PR #43, GitHub reported the deployed main:/docs build at ce9243a5530d8a919dd3bee3ee7701de0cbaf0ab as built; Chromium confirmed live title/H1 buaa-cli, the updated archive evidence row, HTTPS, no external resources and no desktop horizontal overflow.",
         "receipt_issue": "https://github.com/cyjin-yl/buaa-cli/issues/1",
         "limits": "No claim of live campus/archive observations, full devcontainer image build, or an enabled private CI bridge."
       }
@@ -682,8 +682,9 @@
         "life"
       ],
       "acceptance": "Read-only operator-authorized SQLite FTS phrase lookup with catalog/query-bound cursors, nullable timing, separate derived/original object descriptors and declared linking hashes; missing/cyclic/limited ancestry explicit; synthetic offline CLI/API proof.",
-      "sources": [],
+      "sources": ["https://www.sqlite.org/lang_createtable.html#rowid", "https://www.sqlite.org/rowidtable.html", "https://www.sqlite.org/autoinc.html"],
       "issue": "https://github.com/cyjin-yl/buaa-cli/issues/3",
+      "followup_issue": "https://github.com/cyjin-yl/buaa-cli/issues/39",
       "scope_boundary": "Local catalog/query integration only. No remote object-store retrieval, actual media verification, authentication, transcription/repair or live campus recording access. Parent aggregate capabilities remain pending.",
       "evidence": {
         "command": "buaa recordings search",
@@ -692,11 +693,23 @@
           "src/recordings/catalog.rs",
           "src/recordings/provenance.rs"
         ],
-        "tests": "71offline tests passed,1ignored subprocessworker; strictclippy passed. RealSQLite fixtures only.",
-        "smoke": "ActualCLI produced two valid result pages, preserved null timing and distinct declared original/derived hashes, rejected query/cursor mismatch(exit2), denied missing authorization(exit5), and left catalog file bytes unchanged.",
-        "review": "Independent catalog safety review clean; RC-1 depth-aware ancestry issue reproduced beforefix, corrected and independently re-reviewed resolved.",
-        "privacy": "No actualprivatecatalog/media/credentials orprivateimplementation copied; only reviewednon-sensitive structuralfield/key/relation/FTS facts used.",
-        "limits": "Localcatalog only, no remoteobject retrieval orblobverification. Operatorattestation isnotrightsproof. WALsidecar coordination possible; no frozensnapshotacrossrequests; metadataandSQLresourcebounds explicit."
+        "tests": "Before the signed-rowid follow-up, 71 offline tests passed with one ignored subprocess worker and strict clippy; those tests did not cover non-positive IDs. A signed-rowid regression was added but not run under the manual-only follow-up.",
+        "smoke": "Prior local-catalog smoke: two valid pages, null timing, distinct original/derived hashes, cursor mismatch rejection, missing-authorization denial and unchanged catalog bytes. The 2026-09-24 follow-up was manually exercised as recorded below.",
+        "followup_manual_smoke": {
+          "date_utc": "2026-09-24",
+          "command": "buaa recordings search",
+          "fixture": "synthetic catalog from tests/fixtures/life-catalog.sql",
+          "page_limit": 1,
+          "segment_ids_by_page": [-1, 0, 1],
+          "more_results_by_page": [true, true, false],
+          "network_access": false,
+          "source_objects_fetched": false,
+          "schema_id_domain": {"minimum": -9223372036854775808, "maximum": 9223372036854775807},
+          "automated_tests": "not run; the in-source regression remains unexecuted"
+        },
+        "review": "Independent source review on main 6f0dcfbe597acfd698d433daeaa75037e0a3fdcd confirmed the P3 rowid-domain finding; implementation review is required on the exact signed-rowid PR head before merge.",
+        "privacy": "No actual private catalog/media/credentials or private implementation copied; only reviewed non-sensitive structural field/key/relation/FTS facts used.",
+        "limits": "Local catalog only, no remote object retrieval or blob verification. Operator attestation is not rights proof. WAL sidecar coordination is possible; no frozen snapshot across requests; metadata and SQL resource bounds are explicit."
       }
     }
   ],
