@@ -102,12 +102,11 @@ impl Catalog {
         &self,
         phrase: &str,
         asset_id: Option<&str>,
-        after_id: i64,
+        after_id: Option<i64>,
         limit: usize,
     ) -> Result<Vec<Segment>, Error> {
         if phrase.trim().is_empty()
             || phrase.len() > MAX_FIELD
-            || after_id < 0
             || !(1..=101).contains(&limit)
             || asset_id.is_some_and(|id| id.is_empty() || id.len() > MAX_FIELD)
         {
@@ -124,15 +123,26 @@ impl Catalog {
             }
         }
         literal.push('"');
-        let mut statement = self.connection.prepare(
-            "SELECT s.id,s.asset_id,s.segment_index,s.start_ms,s.end_ms,s.speaker,s.language,s.text
-             FROM transcript_fts JOIN transcript_segment AS s ON transcript_fts.rowid=s.id
-             WHERE transcript_fts MATCH ?1 AND (?2 IS NULL OR s.asset_id COLLATE BINARY=?2) AND s.id>?3
-             ORDER BY s.id LIMIT ?4",
-        ).map_err(|_| unavailable())?;
-        let mut rows = statement
-            .query(params![literal, asset_id, after_id, limit as i64])
-            .map_err(|_| unavailable())?;
+        let mut statement = match after_id {
+            None => self.connection.prepare(
+                "SELECT s.id,s.asset_id,s.segment_index,s.start_ms,s.end_ms,s.speaker,s.language,s.text
+                 FROM transcript_fts JOIN transcript_segment AS s ON transcript_fts.rowid=s.id
+                 WHERE transcript_fts MATCH ?1 AND (?2 IS NULL OR s.asset_id COLLATE BINARY=?2)
+                 ORDER BY s.id LIMIT ?3",
+            ),
+            Some(_) => self.connection.prepare(
+                "SELECT s.id,s.asset_id,s.segment_index,s.start_ms,s.end_ms,s.speaker,s.language,s.text
+                 FROM transcript_fts JOIN transcript_segment AS s ON transcript_fts.rowid=s.id
+                 WHERE transcript_fts MATCH ?1 AND (?2 IS NULL OR s.asset_id COLLATE BINARY=?2) AND s.id>?3
+                 ORDER BY s.id LIMIT ?4",
+            ),
+        }
+        .map_err(|_| unavailable())?;
+        let mut rows = match after_id {
+            Some(after_id) => statement.query(params![literal, asset_id, after_id, limit as i64]),
+            None => statement.query(params![literal, asset_id, limit as i64]),
+        }
+        .map_err(|_| unavailable())?;
         let mut result = Vec::new();
         let mut text_bytes = 0usize;
         while let Some(row) = rows.next().map_err(|_| unavailable())? {
@@ -150,7 +160,7 @@ impl Catalog {
                 return Err(invalid_data());
             }
             result.push(Segment {
-                id: integer(row, 0)?,
+                id: signed_integer(row, 0)?,
                 asset_id: identifier(row, 1)?,
                 segment_index: integer(row, 2)?,
                 start_ms,
@@ -255,10 +265,19 @@ fn identifier(row: &Row<'_>, index: usize) -> Result<String, Error> {
     Ok(value.to_owned())
 }
 
-fn integer(row: &Row<'_>, index: usize) -> Result<i64, Error> {
+fn signed_integer(row: &Row<'_>, index: usize) -> Result<i64, Error> {
     match row.get_ref(index).map_err(|_| invalid_data())? {
-        ValueRef::Integer(value) if value >= 0 => Ok(value),
+        ValueRef::Integer(value) => Ok(value),
         _ => Err(invalid_data()),
+    }
+}
+
+fn integer(row: &Row<'_>, index: usize) -> Result<i64, Error> {
+    let value = signed_integer(row, index)?;
+    if value >= 0 {
+        Ok(value)
+    } else {
+        Err(invalid_data())
     }
 }
 
@@ -555,7 +574,7 @@ mod tests {
         fixture.segment("transcript", 1, "second snapshot", None, None);
         assert_eq!(
             catalog
-                .search_segments("snapshot", None, 0, 10)
+                .search_segments("snapshot", None, None, 10)
                 .unwrap()
                 .len(),
             1
@@ -563,7 +582,7 @@ mod tests {
         let later = Catalog::open(&fixture.path).unwrap();
         assert_eq!(
             later
-                .search_segments("snapshot", None, 0, 10)
+                .search_segments("snapshot", None, None, 10)
                 .unwrap()
                 .len(),
             2
@@ -597,12 +616,14 @@ mod tests {
             .execute_batch("INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild');")
             .unwrap();
         let catalog = Catalog::open(&fixture.path).unwrap();
-        let rows = catalog.search_segments("café OR thé", None, 0, 1).unwrap();
+        let rows = catalog
+            .search_segments("café OR thé", None, None, 1)
+            .unwrap();
         assert_eq!(rows.iter().map(|row| row.id).collect::<Vec<_>>(), [first]);
         assert_eq!(rows[0].text, "CAFÉ OR thé\nwith\ttabs");
         assert_eq!(
             catalog
-                .search_segments("café OR thé", None, first, 10)
+                .search_segments("café OR thé", None, Some(first), 10)
                 .unwrap()
                 .iter()
                 .map(|row| row.id)
@@ -611,25 +632,25 @@ mod tests {
         );
         assert!(
             catalog
-                .search_segments("café OR thé", Some("a"), first, 10)
+                .search_segments("café OR thé", Some("a"), Some(first), 10)
                 .unwrap()
                 .is_empty()
         );
         assert!(
             catalog
-                .search_segments("café OR thé", Some("a' OR 1=1 --"), 0, 10)
+                .search_segments("café OR thé", Some("a' OR 1=1 --"), None, 10)
                 .unwrap()
                 .is_empty()
         );
         assert!(
             catalog
-                .search_segments("\" OR nonexistent --", None, 0, 10)
+                .search_segments("\" OR nonexistent --", None, None, 10)
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
             catalog
-                .search_segments("cafe or the", None, 0, 10)
+                .search_segments("cafe or the", None, None, 10)
                 .unwrap()
                 .len(),
             2
@@ -646,10 +667,16 @@ mod tests {
         }
         let catalog = Catalog::open(&fixture.path).unwrap();
         assert_eq!(
-            catalog.search_segments("needle", None, 0, 8).unwrap().len(),
+            catalog
+                .search_segments("needle", None, None, 8)
+                .unwrap()
+                .len(),
             8
         );
-        let error = catalog.search_segments("needle", None, 0, 9).err().unwrap();
+        let error = catalog
+            .search_segments("needle", None, None, 9)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "unavailable");
         assert!(!error.message.contains("needle"));
     }
@@ -662,7 +689,7 @@ mod tests {
         let partial = fixture.segment("a", 1, "needle", None, Some(10));
         fixture.segment("a", 2, "needle", Some(10), Some(10));
         let catalog = Catalog::open(&fixture.path).unwrap();
-        let rows = catalog.search_segments("needle", None, 0, 10).unwrap();
+        let rows = catalog.search_segments("needle", None, None, 10).unwrap();
         assert_eq!(
             (rows[0].id, rows[0].start_ms, rows[0].end_ms),
             (unknown, None, None)
@@ -683,7 +710,7 @@ mod tests {
             assert_eq!(
                 Catalog::open(&fixture.path)
                     .unwrap()
-                    .search_segments("needle", None, 0, 10)
+                    .search_segments("needle", None, None, 10)
                     .err()
                     .unwrap()
                     .code,
@@ -760,7 +787,7 @@ mod tests {
         assert_eq!(
             Catalog::open(&fixture.path)
                 .unwrap()
-                .search_segments("needle", None, 0, 10)
+                .search_segments("needle", None, None, 10)
                 .err()
                 .unwrap()
                 .code,
@@ -770,7 +797,7 @@ mod tests {
         assert_eq!(
             Catalog::open(&fixture.path)
                 .unwrap()
-                .search_segments("needle", None, 0, 10)
+                .search_segments("needle", None, None, 10)
                 .err()
                 .unwrap()
                 .code,

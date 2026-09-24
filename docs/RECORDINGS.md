@@ -21,7 +21,7 @@ Input is JSON on stdin, output is one JSON object on stdout, and errors are sani
 
 Replies contain segment text, its UTF-8 SHA-256, timing, and provenance keyed by segment-owning asset ID. The segment-text hash verifies only retrieved text, not the original media or the entire transcript asset. The raw query and local catalog path are not echoed; query and catalog identity bindings are reported instead.
 
-Pass `next_cursor` unchanged as `cursor` to obtain the next page. It binds the normalized phrase, exact asset filter and catalog identity. The identity hashes canonical path/device/inode; it is **not a content hash or authorization token**. Results are ordered by increasing segment ID. One read transaction makes a request internally consistent, but a changing catalog is not frozen across separate pages; that limitation is explicit in every reply.
+Pass `next_cursor` unchanged as `cursor` to obtain the next page. It binds the normalized phrase, exact asset filter and catalog identity. The identity hashes canonical path/device/inode; it is **not a content hash or authorization token**. Results are ordered by increasing signed SQLite `INTEGER PRIMARY KEY` value; the segment ID and cursor preserve the full signed 64-bit rowid range. One read transaction makes a request internally consistent, but a changing catalog is not frozen across separate pages; that limitation is explicit in every reply.
 
 ## Original and derived provenance
 
