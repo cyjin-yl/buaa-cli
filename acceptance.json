@@ -12,7 +12,7 @@
       "sources": [],
       "evidence": {
         "implementation": "Linux shared UID governor library, not HTTP transport",
-        "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; 26 total project tests passed.",
+        "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; current full offline suite: 113 passed across five suites (one ignored), with Retry-After year-width/checked-conversion regressions passing in test and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed and require offline operator review; no automatic reset."
       }

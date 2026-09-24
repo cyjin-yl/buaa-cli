@@ -952,6 +952,9 @@ fn http_date_ms(value: &str) -> Option<u64> {
             if !weekday_name(tokens[0].trim_end_matches(',')) || tokens[5] != "GMT" {
                 return None;
             }
+            if tokens[1].len() != 2 || tokens[3].len() != 4 {
+                return None;
+            }
             let day = number(tokens[1])?;
             let month = month_index(tokens[2])?;
             let year = number(tokens[3])?;
@@ -970,6 +973,9 @@ fn http_date_ms(value: &str) -> Option<u64> {
                 return None;
             }
             let month = month_index(tokens[1])?;
+            if !(1..=2).contains(&tokens[2].len()) || tokens[4].len() != 4 {
+                return None;
+            }
             let day = number(tokens[2])?;
             let time = tokens[3];
             if time.len() != 8 || &time[2..3] != ":" || &time[5..6] != ":" {
@@ -1008,16 +1014,49 @@ fn http_date_ms(value: &str) -> Option<u64> {
     if year < 1970 {
         return Some(0);
     }
-    let preceding = year - 1;
-    let days = 365 * preceding + preceding / 4 - preceding / 100 + preceding / 400 - 719_162
-        + month_days[..month as usize].iter().sum::<u64>()
-        + day
-        - 1;
-    Some(((days * 24 + hour) * 60 * 60 + minute * 60 + second) * 1_000)
+    let preceding = year.checked_sub(1)?;
+    let days = 365_u64
+        .checked_mul(preceding)?
+        .checked_add(preceding / 4)?
+        .checked_sub(preceding / 100)?
+        .checked_add(preceding / 400)?
+        .checked_sub(719_162)?
+        .checked_add(month_days[..month as usize].iter().sum::<u64>())?
+        .checked_add(day)?
+        .checked_sub(1)?;
+    let seconds = days
+        .checked_mul(24)?
+        .checked_add(hour)?
+        .checked_mul(60)?
+        .checked_add(minute)?
+        .checked_mul(60)?
+        .checked_add(second)?;
+    seconds.checked_mul(1_000)
 }
 
 #[cfg(test)]
 mod tests {
     include!("../tests/governor_process.rs");
     governor_process_regressions!();
+
+    #[test]
+    fn http_date_requires_protocol_year_width_and_checked_conversion() {
+        for invalid in [
+            "Sun, 06 Nov 999999999 08:49:37 GMT",
+            "Sun, 06 Nov 99999 08:49:37 GMT",
+            "Sun Nov  6 08:49:37 999999999",
+            "Sun Nov  6 08:49:37 99999",
+        ] {
+            assert!(super::http_date_ms(invalid).is_none(), "{invalid}");
+        }
+        for valid in [
+            "Sun, 06 Nov 1994 08:49:37 GMT",
+            "Sun, 06 Nov 9999 08:49:37 GMT",
+            "Sun Nov  6 08:49:37 1994",
+            "Sun Nov  6 08:49:37 9999",
+            "Sunday, 06-Nov-94 08:49:37 GMT",
+        ] {
+            assert!(super::http_date_ms(valid).is_some(), "{valid}");
+        }
+    }
 }
