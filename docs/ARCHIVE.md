@@ -25,6 +25,8 @@ printf '%s\n' '{"url":"https://college.example/notice/42.html","timestamp":"2020
 
 Lookup timestamps use complete UTC civil times (`YYYYMMDDhhmmss`), with inclusive `from`/`to` bounds. The default page limit is 100, maximum 1000. Pass `next_cursor` back as `cursor` without editing or decoding it. The adapter encodes the documented CDX continuation token once as a single query parameter. Wildcard/domain crawls are not supported by this command.
 
+`urlkey` is requested and validated as internal CDX state but remains absent from public results. Internet Archive's [upstream resumption-key report](https://github.com/internetarchive/wayback/issues/121) demonstrates that omitting `urlkey` can make a continuation skip captures; this client therefore includes the canonical field and still passes the server-provided cursor through unchanged.
+
 ## What the evidence means
 
 A lookup returns archive-reported capture timestamp, original URL, MIME type, HTTP status, digest and archive-record length. The archive-reported digest is **not** represented as a locally verified resource hash. Record length is not claimed to be the original resource's byte length. The CDX response itself has a separately verified SHA-256 and retrieval metadata.
