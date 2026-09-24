@@ -54,14 +54,34 @@ printf '%s\n' '{"username":"<stdin-only>","ip":"10.0.0.2","ac_id":62}' \
   | buaa gateway logout-plan
 ```
 
-The reply omits the raw username, reports its domain-separated SHA-256, binds username/IP/AC ID into `plan_hash`, and gives the exact required intent. Commit by supplying the original fields, returned hash and intent:
+Each invocation represents a new logout operation and generates a fresh `operation_id`. The reply omits the raw username, reports its domain-separated SHA-256, and binds the username/IP/AC ID plus operation ID into `plan_hash`. Commit must include the exact operation ID, returned hash and required intent:
 
 ```sh
-printf '%s\n' '{"username":"<stdin-only>","ip":"10.0.0.2","ac_id":62,"plan_hash":"<returned>","intent":"COMMIT GATEWAY LOGOUT <returned>"}' \
+printf '%s\n' '{"username":"<stdin-only>","ip":"10.0.0.2","ac_id":62,"operation_id":"<returned>","plan_hash":"<returned>","intent":"COMMIT GATEWAY LOGOUT <returned>"}' \
   | buaa gateway logout-commit --online
 ```
 
-Commit validation occurs before cache/governor/network access. A successful commit writes a private receipt while holding the request lease; repeating the identical plan returns `idempotent_hit` without another request. Logout never accepts a password or retries. This development work does not authorize a real commit.
+Validation occurs before cache/governor/network access. A per-account process-shared operation lock serializes receipt checks, the mutation boundary and persistence; the shared governor still controls the actual request. Repeating one completed plan returns its private receipt as `idempotent_hit` without another request. A fresh plan has a distinct operation ID and can represent a later logout intent.
+
+After the final shared-governor lease is acquired and before sending, the client durably records an account-level unknown-outcome barrier. It is cleared only after a confirmed success response and a persisted receipt. Any later transport, response-classification, receipt or journal failure leaves the barrier and returns `unknown_outcome`; while it exists, all logout commits for that account fail closed. Do not retry that operation.
+
+### Recovering an unknown outcome
+
+Inspect the local barrier without network access:
+
+```sh
+printf '%s\n' '{"username":"<stdin-only>","ip":"10.0.0.2","ac_id":62}' \
+  | buaa gateway logout-recovery-plan
+```
+
+`no_unknown_outcome` means no barrier needs review. `review_required` returns the operation ID, plan hash, recovery hash and exact typed intent while explicitly reporting `remote_state: unknown` and `network_request_performed: false`. Supply the same username, IP and AC ID as the original logout plan; the recovery preview verifies those fields against its bound operation before it can be committed.
+
+```sh
+printf '%s\n' '{"username":"<stdin-only>","ip":"10.0.0.2","ac_id":62,"operation_id":"<returned-operation-id>","plan_hash":"<returned-plan-hash>","recovery_hash":"<returned-recovery-hash>","intent":"RESOLVE UNKNOWN GATEWAY LOGOUT <returned-recovery-hash>"}' \
+  | buaa gateway logout-recovery-commit --offline
+```
+
+This local-only operation records that the operator reviewed the uncertainty; it performs no remote read/retry and never claims the portal is disconnected. A durable resolved tombstone prevents replaying the same operation. A later, deliberately created plan has a different operation ID. This development work does not authorize a real commit, authentication or live observation.
 
 ## Transport and evidence
 
@@ -71,14 +91,17 @@ Production egress is fixed to TLS-validated `https://gw.buaa.edu.cn` and exactly
 - `/cgi-bin/get_challenge`
 - `/cgi-bin/srun_portal`
 
-Redirects, proxies, cookies, referrers, response decompression, connection reuse and reqwest retries are disabled. Bodies are bounded to 512 KiB. JSONP callback and JSON structure must match; errors are static and never echo bodies, query URLs, user identifiers or credential-derived values. The shared governor lease spans request, bounded response parsing, application classification and usage-cache persistence.
+Redirects, proxies, cookies, referrers, response decompression, connection reuse and reqwest retries are disabled. Bodies are bounded to 512 KiB. JSONP callback and JSON structure must match; errors are static and never echo bodies, query URLs, user identifiers or credential-derived values. The shared governor lease spans each request, bounded response parsing, application classification and private cache/receipt persistence.
 
 Synthetic real-loopback tests verify:
 
 - original crypto against an independent vector;
 - usage normalization/cache reuse while redacting identity fields;
 - explicit resume before any challenge request;
-- separately governed challenge and credential submission, plus logout plan/commit with one governed commit and idempotent receipt reuse;
+- separately governed challenge/login and logout; one identical operation has one governed commit and receipt reuse, while a fresh plan can commit again;
+- malformed 2xx responses and receipt-persistence failures retain the account-wide unknown barrier; a cross-process same-plan regression sends exactly once;
+- a failed pre-send journal preflight emits no request and releases the reservation without leaving an unfinished governor lease;
+- offline review keeps remote state explicitly unknown, performs no request and prevents replaying the resolved operation;
 - no plaintext password or Cookie in HTTP requests;
 - successful authentication consumes the one-shot token;
 - credential rejection consumes the token and latches account safety;

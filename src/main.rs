@@ -49,6 +49,7 @@ fn service_error(error: buaa_cli::net::Error) -> CliError {
         "auth_latched" | "safety_latched" => ("auth_latched", 4),
         "permission" | "robots_denied" | "egress_denied" => ("permission", 5),
         "rate_limited" | "cooldown" | "request_gap" => ("rate_limited", 8),
+        "unknown_outcome" => ("unknown_outcome", 9),
         "conflict" | "immutable_conflict" => ("conflict", 9),
         _ => ("unavailable", 7),
     };
@@ -186,9 +187,17 @@ fn run_gateway(args: &[String]) -> CliResult {
             let input = read_input()?;
             emit(&buaa_cli::gateway::plan_logout(&input).map_err(service_error)?)
         }
+        Some("logout-recovery-plan") if args.len() == 1 => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::plan_logout_recovery(&input).map_err(service_error)?)
+        }
         Some("logout-commit") if args.len() == 2 && args[1] == "--online" => {
             let input = read_input()?;
             emit(&buaa_cli::gateway::commit_logout(&input).map_err(service_error)?)
+        }
+        Some("logout-recovery-commit") if args.len() == 2 && args[1] == "--offline" => {
+            let input = read_input()?;
+            emit(&buaa_cli::gateway::resolve_logout_recovery(&input).map_err(service_error)?)
         }
         Some("login" | "logout-commit") => Err((
             "permission",
@@ -196,10 +205,15 @@ fn run_gateway(args: &[String]) -> CliResult {
             "gateway mutation requires its prerequisite, explicit --online, and typed stdin intent"
                 .into(),
         )),
+        Some("logout-recovery-commit") => Err((
+            "permission",
+            5,
+            "logout recovery is local-only and requires --offline with typed stdin intent".into(),
+        )),
         _ => Err((
             "unsupported",
             3,
-            "expected gateway usage, resume-auth, login, logout-plan, or logout-commit".into(),
+            "expected gateway usage, resume-auth, login, logout-plan, logout-commit, logout-recovery-plan, or logout-recovery-commit --offline".into(),
         )),
     }
 }
@@ -292,7 +306,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search", "credits calculate"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations --online or --refresh; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -324,7 +338,7 @@ fn run() -> CliResult {
                 "capabilities":{"stdout":"single JSON acceptance manifest; pending/deferred entries are not available commands"}
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
-                "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9}},
+                "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
             "network_policy":{"default":"offline","opt_in":"archive/organizations --online or --refresh; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
