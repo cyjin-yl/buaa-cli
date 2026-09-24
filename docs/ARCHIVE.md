@@ -45,7 +45,7 @@ Robots and target requests use the same process-shared governor. Its lease spans
 
 Cache files are private beneath the effective user's passwd home, not the source tree or a per-worktree directory. Cached bodies are hash-checked before use. Immutable capture bytes are never silently overwritten on conflict. Keep private cache and account governor history out of public Git; never delete governor state to regain throughput.
 
-Public CLI error categories include invalid_input (2), unsupported (3), auth_latched (4), permission (5), unavailable (7), rate_limited (8), and conflict (9). A transport error is not proof that a historical page never existed.
+Public CLI error categories include invalid_input (2), unsupported (3), auth_latched (4), permission (5), unavailable (7), rate_limited (8), conflict (9), and unknown_outcome (9). `unknown_outcome` is specific to a logout request that may have been applied but lacks a reliable receipt; retries and new commits for that account remain blocked until typed offline operator resolution. A transport error is not proof that a historical page never existed.
 
 ## Contract sources
 
