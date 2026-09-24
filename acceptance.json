@@ -59,14 +59,16 @@
     {
       "id": "live",
       "title": "Classroom live replay/audio repair",
-      "status": "pending",
+      "status": "blocked",
       "acceptance": "Authorized original replay download; separately hashed audio-repaired derivation.",
       "sources": [
         "https://github.com/peter-erer/buaa-spoc-helper",
         "https://github.com/aleafofwutong/BBUAA",
         "https://github.com/Tukist/buaa-audio-sync",
         "https://github.com/Micraow/BUAA-SPOC-AutoNotPlay"
-      ]
+      ],
+      "blocker": "No owner-reviewed current replay endpoint/session contract, scoped owner-approved read authorization, authorized course recording inventory, or rights-cleared original/derivative sample is available. Historical community helper links do not establish access permission or supported endpoints.",
+      "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/47"
     },
     {
       "id": "smart",
