@@ -488,7 +488,7 @@
         "contract": "Exact-URL CDX lookup, opaque continuation, exact Memento original/date validation, immutable replay bytes/SHA256, HTTP/retrieval facts, unknown publication date, query-scoped missing history. Default cache-only; fixed HTTPS archive endpoint on explicit opt-in.",
         "proof": "Prior archive iteration: 50 offline tests passed, 1 ignored subprocess worker; strict all-target clippy passed. Real-loopback tests preserve the actual 5s governor interval; CLI schema/offline-miss/invalid-date paths were exercised. The 2026-09-24 follow-up was built and manually exercised as recorded below; automated tests were not run for that follow-up.",
         "regressions": "Previously exercised Retry-After/body-failure and rejected replay cache-poisoning cases; added synthetic two-page resume-key and urlkey-validation scenarios, not executed during the manual-only follow-up.",
-        "review": "ARCH-001 resolved in prior review; STR-ARCHIVE-001 is under independent exact-head review and is not yet approved.",
+        "review": "Independent review of implementation head 8c59b374fd1cf54f0b5a0840631dfacd46758fea found no findings; this evidence-record update creates a new PR head, so fresh exact-head review is required before merge.",
         "manual_observation": {
           "date_utc": "2026-09-24",
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/21",

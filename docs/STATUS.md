@@ -72,7 +72,7 @@ Issue [#21](https://github.com/cyjin-yl/buaa-cli/issues/21) matched Internet Arc
 - Manual CLI observation 1: `buaa archive lookup --online` for `https://www.buaa.edu.cn/` with `limit=1` returned HTTP 200, capture `19970416014726`, `more_results=true`, and a next cursor. The request URL included `fl=urlkey,timestamp,original,mimetype,statuscode,digest,length`. Response-body SHA-256: `2872f76049005c06c6cc59415eced8d2f65119f0a85bc52ec65d1c3f80e18d19`.
 - Manual CLI observation 2: the exact returned cursor was supplied unchanged in a second governed query; it returned HTTP 200, capture `19971210122410`, and another cursor. Response-body SHA-256: `71d84e325eb151c28ca6ca6c77e105ed23973356b7342a36396e93f4f79062ec`. The two response timestamps were 238,140 ms apart, above the shared governor's 5,000-ms minimum.
 - Manual offline replay of page 1 returned `cache_status=hit` with the same response hash. Both public outputs omit `urlkey`; `more_results` remains true, so this proof does not claim complete history or absence of all possible gaps.
-- The only live host queried was `web.archive.org`; the original BUAA homepage was not contacted. No campus credential, authentication attempt, or mutation was used. Independent exact-head review is pending.
+- The independent reviewer found no findings on implementation head `8c59b374fd1cf54f0b5a0840631dfacd46758fea`. This review-record update changes the PR head; fresh exact-head review is required before merge.
 
 ## Documentation landing page
 
