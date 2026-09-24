@@ -442,6 +442,37 @@ macro_rules! governor_process_regressions {
         }
 
         #[test]
+        fn rfc850_future_retry_after_survives_503_finish() {
+            let current_year =
+                chrono::Datelike::year(&chrono::DateTime::<chrono::Utc>::from(SystemTime::now()));
+            let target_year = current_year + 49;
+            let weekday = chrono::NaiveDate::from_ymd_opt(target_year, 9, 24)
+                .unwrap()
+                .format("%A");
+            let header = format!(
+                "{weekday}, 24-Sep-{:02} 05:40:00 GMT",
+                target_year.rem_euclid(100)
+            );
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            let before_finish = timestamp_ms();
+            lease
+                .finish(Outcome::Http {
+                    status: 503,
+                    retry_after: Some(&header),
+                    challenge: false,
+                    network_failure: false,
+                })
+                .unwrap();
+            let resumed = fixture.open().status().unwrap();
+            const FORTY_YEARS_MS: u64 = 40 * 365 * 24 * 60 * 60 * 1_000;
+            assert!(
+                resumed.cooldown_until_boottime_ms > before_finish.saturating_add(FORTY_YEARS_MS),
+                "valid future RFC850 date {header:?} lost its extended deadline"
+            );
+        }
+        #[test]
         fn network_failure_is_bounded_and_does_not_retry() {
             let fixture = Fixture::new();
             let governor = fixture.open();

@@ -12,6 +12,7 @@
 //! state or bypass this library. Filesystem locking and fsync must
 //! have local-filesystem semantics. No credential or account identifier is stored.
 
+use chrono::Datelike;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString, OsStr};
@@ -878,8 +879,13 @@ fn retry_after_deadline(header: &str, now: u64) -> Option<u64> {
                 .saturating_add(1),
         );
     }
-    let unix_deadline = http_date_ms(value)?;
-    let wall = match SystemTime::now().duration_since(UNIX_EPOCH) {
+    let wall_now = SystemTime::now();
+    let current_year = match u64::try_from(chrono::DateTime::<chrono::Utc>::from(wall_now).year()) {
+        Ok(year) => year,
+        Err(_) => return Some(u64::MAX),
+    };
+    let unix_deadline = http_date_ms(value, current_year)?;
+    let wall = match wall_now.duration_since(UNIX_EPOCH) {
         Ok(value) => u64::try_from(value.as_millis()).unwrap_or(u64::MAX),
         Err(_) => return Some(u64::MAX),
     };
@@ -899,7 +905,7 @@ fn retry_after_deadline(header: &str, now: u64) -> Option<u64> {
 //   obsolete RFC 850       Sunday, 06-Nov-94 08:49:37 GMT
 //   ANSI C asctime         Sun Nov  6 08:49:37 1994
 // Anything else is treated as absent; a 4xx/5xx then receives the thirty-minute floor.
-fn http_date_ms(value: &str) -> Option<u64> {
+fn http_date_ms(value: &str, reference_year: u64) -> Option<u64> {
     if !value.is_ascii() {
         return None;
     }
@@ -973,8 +979,15 @@ fn http_date_ms(value: &str) -> Option<u64> {
             }
             let day = number(&date[..2])?;
             let month = month_index(&date[3..6])?;
-            let mut year = number(&date[7..9])?;
-            year += if year > 50 { 1900 } else { 2000 };
+            let two_digit_year = number(&date[7..9])?;
+            let mut year = (reference_year / 100)
+                .checked_mul(100)?
+                .checked_add(two_digit_year)?;
+            if year < reference_year.saturating_sub(50) {
+                year = year.checked_add(100)?;
+            } else if year > reference_year.saturating_add(50) {
+                year = year.checked_sub(100)?;
+            }
             let time = tokens[2];
             if time.len() != 8 || &time[2..3] != ":" || &time[5..6] != ":" || tokens[3] != "GMT" {
                 return None;
@@ -1084,7 +1097,7 @@ mod tests {
             "Sun Nov  6 08:49:37 999999999",
             "Sun Nov  6 08:49:37 99999",
         ] {
-            assert!(super::http_date_ms(invalid).is_none(), "{invalid}");
+            assert!(super::http_date_ms(invalid, 2026).is_none(), "{invalid}");
         }
         for valid in [
             "Sun, 06 Nov 1994 08:49:37 GMT",
@@ -1093,7 +1106,38 @@ mod tests {
             "Sun Nov  6 08:49:37 9999",
             "Sunday, 06-Nov-94 08:49:37 GMT",
         ] {
-            assert!(super::http_date_ms(valid).is_some(), "{valid}");
+            assert!(super::http_date_ms(valid, 2026).is_some(), "{valid}");
+        }
+    }
+    #[test]
+    fn rfc850_years_use_the_reference_year_window() {
+        for (rfc850, reference_year, four_digit) in [
+            (
+                "Tuesday, 24-Sep-75 05:40:00 GMT",
+                2026,
+                "Tue, 24 Sep 2075 05:40:00 GMT",
+            ),
+            (
+                "Thursday, 24-Sep-76 05:40:00 GMT",
+                2026,
+                "Thu, 24 Sep 2076 05:40:00 GMT",
+            ),
+            (
+                "Saturday, 24-Sep-77 05:40:00 GMT",
+                2026,
+                "Sat, 24 Sep 1977 05:40:00 GMT",
+            ),
+            (
+                "Friday, 01-Jan-00 00:00:00 GMT",
+                2099,
+                "Fri, 01 Jan 2100 00:00:00 GMT",
+            ),
+        ] {
+            assert_eq!(
+                super::http_date_ms(rfc850, reference_year),
+                super::http_date_ms(four_digit, reference_year),
+                "{rfc850} at reference year {reference_year}"
+            );
         }
     }
 }

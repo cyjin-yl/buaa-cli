@@ -156,3 +156,11 @@ Issue [#44](https://github.com/cyjin-yl/buaa-cli/issues/44) identified that tran
 - This was entirely local synthetic loopback testing. No live Internet Archive replay, campus endpoint, authentication, or mutation was attempted; deployed Wayback status behavior remains unverified.
 
 - Independent fresh-context review of PR #52 head `faffe2e1fd9892429cc26bd2b723a9047c2d36a7` reported no concrete source findings. The review did not rerun tests; verification remains the recorded offline suite/clippy/format checks.
+
+## 2026-09-24: RFC 850 Retry-After year window
+
+Issue [#33](https://github.com/cyjin-yl/buaa-cli/issues/33) identified the fixed 1950/2050 pivot. RFC 850 dates now resolve into the inclusive current UTC year ±50-year window; one wall-clock sample drives both year interpretation and conversion to the monotonic governor deadline. At reference year 2026, `75`/`76` map to 2075/2076 and `77` to 1977; a 2099 reference maps `00` to 2100 across the century boundary.
+
+- Deterministic parser regressions compare those RFC 850 dates with equivalent four-digit IMF dates at reference year 2026. A real governor 503 regression constructs a valid RFC 850 date 49 years in the future and verifies its durable cooldown remains more than 40 years beyond the ordinary request gap.
+- The new boundary and 503 regressions pass in debug and release profiles. Full `cargo test --locked --offline` passes **110 library + 8 CLI tests**, one ignored subprocess worker; strict all-target clippy and formatter checks passed.
+- All verification is offline with an isolated governor state. No live HTTP request, campus endpoint, authentication, or mutation occurred.
