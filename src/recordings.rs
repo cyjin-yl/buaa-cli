@@ -65,7 +65,6 @@ fn decode_cursor(value: &str) -> Result<Cursor, Error> {
     let bytes = URL_SAFE_NO_PAD.decode(value).map_err(|_| invalid())?;
     let cursor: Cursor = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
     if cursor.version != 1
-        || cursor.last_id < 1
         || [&cursor.catalog_binding, &cursor.query_binding]
             .iter()
             .any(|value| value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -113,9 +112,9 @@ pub fn search(input: &str) -> Result<Value, Error> {
             if cursor.catalog_binding != binding || cursor.query_binding != query_binding {
                 return Err(invalid());
             }
-            cursor.last_id
+            Some(cursor.last_id)
         }
-        None => 0,
+        None => None,
     };
     let mut segments = catalog.search_segments(
         phrase,
@@ -179,8 +178,7 @@ pub fn schema() -> Value {
             "ingested_at":{"type":"string"},"source":optional_text,"language":optional_text,"privacy":{"enum":["private","shared","public"]}}});
     let segment = json!({"type":"object","additionalProperties":false,
         "required":["id","asset_id","segment_index","start_ms","end_ms","speaker","language","text"],
-        "properties":{"id":{"type":"integer","minimum":1},"asset_id":{"type":"string"},"segment_index":{"type":"integer","minimum":0},
-            "start_ms":{"type":["integer","null"],"minimum":0},"end_ms":{"type":["integer","null"],"minimum":0},
+        "properties":{"id":{"type":"integer","minimum":i64::MIN,"maximum":i64::MAX},"asset_id":{"type":"string"},"segment_index":{"type":"integer","minimum":0},"start_ms":{"type":["integer","null"],"minimum":0},"end_ms":{"type":["integer","null"],"minimum":0},
             "speaker":optional_text,"language":optional_text,"text":{"type":"string"}}});
     let link = json!({"type":"object","additionalProperties":false,
         "required":["source_asset_id","target_asset_id","relation","created_at","source_sha256","target_sha256"],
@@ -300,5 +298,50 @@ mod tests {
         assert!(!missing.exists());
         let invalid_json = "{private-sentinel";
         assert_eq!(search(invalid_json).unwrap_err().code, "invalid_input");
+    }
+
+    #[test]
+    fn signed_sqlite_rowids_are_searchable_and_paginated() {
+        let fixture = Fixture::new();
+        fixture.asset("original", "audio", &"0".repeat(64));
+        fixture.asset("transcript", "transcript", &"1".repeat(64));
+        fixture.relate("transcript", "original", "transcript_of");
+        let connection = fixture.db();
+        for (id, segment_index) in [(-1_i64, 0_i64), (0, 1), (1, 2)] {
+            connection
+                .execute(
+                    "INSERT INTO transcript_segment(id,asset_id,segment_index,text) VALUES(?1,?2,?3,?4)",
+                    rusqlite::params![id, "transcript", segment_index, format!("needle id {id}")],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        let mut input = request(&fixture, "needle");
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let page = search(&input.to_string()).unwrap();
+            let hits = page["hits"].as_array().unwrap();
+            assert_eq!(hits.len(), 1);
+            ids.push(hits[0]["segment"]["id"].as_i64().unwrap());
+            input["cursor"] = page["next_cursor"].clone();
+        }
+        assert_eq!(ids, vec![-1, 0, 1]);
+        assert!(input["cursor"].is_null());
+        let segment_schema =
+            schema()["search"]["output"]["properties"]["hits"]["items"]["properties"]["segment"]
+                .clone();
+        let id_schema = segment_schema["properties"]["id"].clone();
+        assert_eq!(id_schema["minimum"].as_i64(), Some(i64::MIN));
+        assert_eq!(id_schema["maximum"].as_i64(), Some(i64::MAX));
+
+        assert_eq!(
+            segment_schema["properties"]["start_ms"]["type"],
+            serde_json::json!(["integer", "null"])
+        );
+        assert_eq!(
+            segment_schema["properties"]["end_ms"]["type"],
+            serde_json::json!(["integer", "null"])
+        );
     }
 }

@@ -17,5 +17,6 @@
 - Split gateway logout into immutable offline planning and exact typed online commit with private idempotency receipts; repeated successful plan hashes do not resend the mutation.
 - Add operator-authorized, read-only local recording-catalog phrase search with query/catalog-bound cursors, nullable timing, and separate declared source/derived hashes. No remote media retrieval or rights verification is implied.
 - Resolve bounded ancestry with explicit missing/cycle/resource-limit states; revisit shared ancestors when a shorter path provides more remaining depth. Real SQLite and CLI regressions cover the corrected behavior.
+- Preserve the full signed 64-bit SQLite segment-rowid domain in recording search and keyset cursors; no ID value is reserved as the first-page sentinel.
 - Add cache-first authoritative BUAA teaching/research organization directory lookup with fixed official egress, robots handling, conditional refresh and exact missing/non-HTTP/hidden source facts.
 - Record a three-request governed official observation and a sanitized six-category, 50-entry evidence snapshot without committing raw HTML or claiming broader completeness.
