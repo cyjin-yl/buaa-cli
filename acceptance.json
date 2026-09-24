@@ -9,10 +9,10 @@
       "title": "Shared cross-process request safety",
       "status": "implemented-offline",
       "acceptance": "Single private identity across CLI/provider/worktrees, one in-flight, >=5-second separation, >=15-minute background interval, durable cooldown and one-shot auth latch; offline multi-process proof.",
-      "sources": [],
+      "sources": ["https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7"],
       "evidence": {
         "implementation": "Linux shared UID governor library, not HTTP transport",
-        "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; current full offline suite: 113 passed across five suites (one ignored), with Retry-After year-width/checked-conversion regressions passing in test and release profiles.",
+        "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; current full offline suite: 118 passed across five suites (one ignored). The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed and require offline operator review; no automatic reset."
       }
