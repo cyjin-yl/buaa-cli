@@ -43,7 +43,7 @@ The literal example values are placeholders, not a working account or discovered
 
 Challenge acquisition is one governed interactive request. Credential submission is a second request after the global completion gap and uses `RequestKind::Authentication`, consuming the one-shot permission. There is no retry/fallback loop. A final send failure, indeterminate 2xx body, credential rejection, 401/403, reliable challenge or lock signal leaves authentication latched until another deliberate `resume-auth`. The CLI zeroizes the original login stdin buffer when the command returns, and the parsed password field zeroizes on every drop path; challenge-bound derived fields live only for the bounded request and are never stored or returned.
 
-The SRun-compatible material is produced by original Rust code: XXTEA-style `info`, custom base64 alphabet, HMAC-MD5 password and SHA-1 checksum. A synthetic vector from an independent implementation pins compatibility; no upstream implementation was copied.
+The original Rust XEncode mixer uses the pinned-reference grouping `A + (B ^ C) + D` with wrapping `u32` additions. Source revisions, license boundaries and the formula are documented in [REFERENCES](REFERENCES.md#gateway-xencode-formula-review). These are community protocol references, not an official or live compatibility guarantee; no real login has been attempted.
 
 ## Logout plan and commit
 
@@ -73,9 +73,9 @@ Production egress is fixed to TLS-validated `https://gw.buaa.edu.cn` and exactly
 
 Redirects, proxies, cookies, referrers, response decompression, connection reuse and reqwest retries are disabled. Bodies are bounded to 512 KiB. JSONP callback and JSON structure must match; errors are static and never echo bodies, query URLs, user identifiers or credential-derived values. The shared governor lease spans request, bounded response parsing, application classification and usage-cache persistence.
 
-Synthetic real-loopback tests verify:
+Prior synthetic real-loopback evidence:
 
-- original crypto against an independent vector;
+- the pre-repair synthetic crypto vector, now superseded by the pinned-reference known-answer vectors;
 - usage normalization/cache reuse while redacting identity fields;
 - explicit resume before any challenge request;
 - separately governed challenge and credential submission, plus logout plan/commit with one governed commit and idempotent receipt reuse;
@@ -84,4 +84,6 @@ Synthetic real-loopback tests verify:
 - credential rejection consumes the token and latches account safety;
 - malformed typed intents fail before transport construction.
 
-These tests establish implementation behavior, not current campus endpoint readiness, `ac_id` correctness, owner account permission or a successful live session. The aggregate gateway acceptance remains partial because bounded live usage/login/logout observations are still missing. No development prompt alone authorizes those observations.
+The 2026-09-24 formula correction was manually exercised by invoking the actual `crypto::derive()` path with synthetic ASCII/normal-token and UTF-8/short-key inputs; both outputs matched a separately calculated oracle for the pinned formula. Automated tests were not run for this follow-up, so the new in-source vectors remain unexecuted.
+
+The prior loopback tests establish the surrounding client behavior, not current campus endpoint readiness, `ac_id` correctness, owner account permission or a successful live session. The manual XEncode smoke exercised only synthetic values and does not establish live compatibility. The aggregate gateway acceptance remains partial because bounded live usage/login/logout observations are still missing. No development prompt alone authorizes those observations.
