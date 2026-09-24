@@ -124,8 +124,9 @@ The initial Pages release used main `26babf37a3e4f898af8988ad945e2af6aadfa9c4`; 
 
 Issue [#39](https://github.com/cyjin-yl/buaa-cli/issues/39) identified the mismatch between an accepted SQLite `INTEGER PRIMARY KEY` rowid column and the first-page `id > 0` sentinel. The reader now uses no lower bound on the first page, a signed `i64` cursor on later pages, and separate validation for signed segment IDs versus non-negative segment indexes/times. The output schema declares the full signed 64-bit ID range.
 
-- `cargo build --locked --offline` succeeded in `work/recordings-signed-id`. Automated tests were not run; the new in-source signed-rowid regression remains unexecuted.
+- `cargo build --locked --offline` succeeded in `work/recordings-signed-id`. An independent review found missing timing fields in the first schema revision; the fields and regression assertions were restored and manually checked. Automated tests were not run; the in-source signed-rowid regression remains unexecuted.
 - Manual CLI smoke on a private temporary synthetic catalog with synchronized FTS entries `id=-1,0,1` and `limit=1` returned those three IDs in order over three pages, with `more_results` true/true/false and a null final cursor. Every result declared `network_access=false` and `source_objects_fetched=false`.
+- After the schema correction, `buaa schema` showed signed i64 bounds for `segment.id` and nullable non-negative integer `start_ms`/`end_ms`; a fresh manual CLI page returned `id=-1` with both timing fields null.
 - No private Life catalog, media, object store, campus endpoint or credentials were used. The static rowid review and official SQLite references do not imply that real Life producers emit non-positive IDs; aggregate recordings/Life acceptance remains partial.
 
 ## Authoritative organization directory observation

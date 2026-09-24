@@ -178,7 +178,7 @@ pub fn schema() -> Value {
             "ingested_at":{"type":"string"},"source":optional_text,"language":optional_text,"privacy":{"enum":["private","shared","public"]}}});
     let segment = json!({"type":"object","additionalProperties":false,
         "required":["id","asset_id","segment_index","start_ms","end_ms","speaker","language","text"],
-        "properties":{"id":{"type":"integer","minimum":i64::MIN,"maximum":i64::MAX},"asset_id":{"type":"string"},"segment_index":{"type":"integer","minimum":0},
+        "properties":{"id":{"type":"integer","minimum":i64::MIN,"maximum":i64::MAX},"asset_id":{"type":"string"},"segment_index":{"type":"integer","minimum":0},"start_ms":{"type":["integer","null"],"minimum":0},"end_ms":{"type":["integer","null"],"minimum":0},
             "speaker":optional_text,"language":optional_text,"text":{"type":"string"}}});
     let link = json!({"type":"object","additionalProperties":false,
         "required":["source_asset_id","target_asset_id","relation","created_at","source_sha256","target_sha256"],
@@ -328,8 +328,20 @@ mod tests {
         }
         assert_eq!(ids, vec![-1, 0, 1]);
         assert!(input["cursor"].is_null());
-        let id_schema = schema()["search"]["output"]["properties"]["hits"]["items"]["properties"]["segment"]["properties"]["id"].clone();
+        let segment_schema =
+            schema()["search"]["output"]["properties"]["hits"]["items"]["properties"]["segment"]
+                .clone();
+        let id_schema = segment_schema["properties"]["id"].clone();
         assert_eq!(id_schema["minimum"].as_i64(), Some(i64::MIN));
         assert_eq!(id_schema["maximum"].as_i64(), Some(i64::MAX));
+
+        assert_eq!(
+            segment_schema["properties"]["start_ms"]["type"],
+            serde_json::json!(["integer", "null"])
+        );
+        assert_eq!(
+            segment_schema["properties"]["end_ms"]["type"],
+            serde_json::json!(["integer", "null"])
+        );
     }
 }

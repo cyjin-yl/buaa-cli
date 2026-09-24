@@ -705,9 +705,10 @@
           "network_access": false,
           "source_objects_fetched": false,
           "schema_id_domain": {"minimum": -9223372036854775808, "maximum": 9223372036854775807},
+          "manual_output_shape": "After the signed-range schema fix, the CLI returned id=-1 with start_ms/end_ms null; `buaa schema` reported id bounds i64::MIN..i64::MAX and nullable non-negative integer timing properties.",
           "automated_tests": "not run; the in-source regression remains unexecuted"
         },
-        "review": "Independent source review on main 6f0dcfbe597acfd698d433daeaa75037e0a3fdcd confirmed the P3 rowid-domain finding; implementation review is required on the exact signed-rowid PR head before merge.",
+        "review": "Independent review of pre-correction PR head 629a15a1775822915a4ff11ab91769e65a7cb097 found omitted start_ms/end_ms schema properties. They were restored with manual CLI/schema proof; exact-head review of the updated PR #45 is pending.",
         "privacy": "No actual private catalog/media/credentials or private implementation copied; only reviewed non-sensitive structural field/key/relation/FTS facts used.",
         "limits": "Local catalog only, no remote object retrieval or blob verification. Operator attestation is not rights proof. WAL sidecar coordination is possible; no frozen snapshot across requests; metadata and SQL resource bounds are explicit."
       }
