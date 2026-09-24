@@ -31,7 +31,7 @@ Lookup timestamps use complete UTC civil times (`YYYYMMDDhhmmss`), with inclusiv
 
 A lookup returns archive-reported capture timestamp, original URL, MIME type, HTTP status, digest and archive-record length. The archive-reported digest is **not** represented as a locally verified resource hash. Record length is not claimed to be the original resource's byte length. The CDX response itself has a separately verified SHA-256 and retrieval metadata.
 
-Capture replies retain the exact replay bytes as `immutable_original.body_base64`, with SHA-256 and byte length. `Memento-Datetime` must match the requested timestamp and the `original` Link relation must identify the requested original. Redirects or nearest-capture substitutions do not become exact successes. A missing 404/410 response is distinguished from a genuine archived error response with Memento attribution.
+Capture replies retain the exact replay bytes as `immutable_original.body_base64`, with SHA-256 and byte length. `Memento-Datetime` must match the requested timestamp and the `original` Link relation must identify the requested original. Redirects or nearest-capture substitutions do not become exact successes. An unattributed 404/410 is a query-scoped gap; an attributed 4xx/5xx preserves the archive-reported resource status.
 
 Capture time is **not publication time**. Publication date remains null with `confidence: unknown`; this adapter does not infer a date from a path, title, capture timestamp or HTTP Last-Modified. Original and retrieved URLs, HTTP facts, cache state and revalidation facts remain distinguishable. A local hash verifies retrieved bytes, not the archive's authenticity.
 
@@ -41,7 +41,7 @@ Empty results mean only `missing_in_query_scope`. They never assert complete his
 
 Only approved HTTPS `web.archive.org` routes are allowed. TLS validation is enabled; redirects, proxies, cookies and automatic HTTP retries are disabled. Before a network target request, a robots policy is checked with a cache age of at most 24 hours. Denials and unavailable policy are not bypassed.
 
-Robots and target requests use the same process-shared governor. Its lease spans response handling and cache persistence; only one request is in flight, with at least five seconds after completion. A bounded local wait may precede a request; network failures are not retried. Retry-After and 429 cooldowns persist. Authentication rejection or a reliable challenge signal latches access. No CLI unlock/reset path is introduced.
+Robots and target requests use the same process-shared governor. Its lease spans response handling and cache persistence; only one request is in flight, with at least five seconds after completion. A bounded local wait may precede a request; network failures are not retried. Current-source Retry-After and 429 cooldowns persist. For capture responses, exact Memento date/original attribution classifies 4xx/5xx as archived-resource status before current-source latch/cooldown policy; archived 401/403/429 and their Retry-After do not affect shared state. A reliable `CF-Mitigated: challenge` signal remains authoritative. No CLI unlock/reset path is introduced.
 
 Cache files are private beneath the effective user's passwd home, not the source tree or a per-worktree directory. Cached bodies are hash-checked before use. Immutable capture bytes are never silently overwritten on conflict. Keep private cache and account governor history out of public Git; never delete governor state to regain throughput.
 

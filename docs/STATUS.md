@@ -145,3 +145,11 @@ Issue [#41](https://github.com/cyjin-yl/buaa-cli/issues/41) found that oversized
 
 - `cargo test --locked --offline`: **113 passed** across five suites, one ignored. Strict all-target clippy and `cargo fmt --all -- --check` passed. Focused parser/format regressions passed in both debug and release profiles.
 - A temporary local Rust smoke exercised `RequestLease::finish`: oversized IMF/asctime dates on 503 yielded no cooldown/latch; an oversized IMF date on 429 retained the existing 30-minute fallback; valid four-digit 2100 IMF/asctime dates produced future cooldowns. The temporary runner was removed. No network, campus endpoint, authentication or mutation was used.
+
+## 2026-09-24: Memento archived-status boundary
+
+Issue [#44](https://github.com/cyjin-yl/buaa-cli/issues/44) identified that transport/governor status handling ran before Memento attribution. Exact capture responses now validate `Memento-Datetime` against the requested timestamp and the `rel=original` Link against the requested original before classifying 4xx/5xx as archived-resource status. The raw HTTP status and replay bytes remain in `archive_reported_http`/`immutable_original`; historical 401/403/429 and their `Retry-After` no longer latch or cool down the current shared source governor. A real `CF-Mitigated: challenge` remains authoritative, and body failures still retain their independent backoff.
+
+- `cacheable` and `valid_cached` now cover the same attributed 4xx/5xx replay domain. Offline cache hits run the same exact provenance normalization. Unattributed or mismatched 401/403/429/500/503 retain current-source latch/cooldown/rejection handling; unattributed 404/410 remain query-scoped gaps.
+- `cargo test --locked --offline`: **108 library tests + 8 CLI tests passed**, one ignored subprocess worker. Strict all-target clippy and `cargo fmt --all -- --check` passed. Loopback regressions cover valid 403/429/500/503, invalid attribution, true challenge precedence, 404/410 gap/capture cases, and offline cache round-trips.
+- This was entirely local synthetic loopback testing. No live Internet Archive replay, campus endpoint, authentication, or mutation was attempted; deployed Wayback status behavior remains unverified.

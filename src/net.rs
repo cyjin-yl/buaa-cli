@@ -102,22 +102,29 @@ impl SourceProfile {
                 || (self == Self::Archive && url.path().starts_with("/web/")))
     }
 
+    fn has_attributed_archive_error(
+        self,
+        url: &Url,
+        status: u16,
+        headers: &BTreeMap<String, String>,
+    ) -> bool {
+        self == Self::Archive
+            && url.path().starts_with("/web/")
+            && (400..=599).contains(&status)
+            && headers.contains_key("memento-datetime")
+            && headers.contains_key("link")
+    }
+
     fn cacheable(self, url: &Url, response: &Response) -> bool {
         response.status == 200
             || url.as_str() == self.robots_url()
-            || (self == Self::Archive
-                && response.headers.contains_key("memento-datetime")
-                && response.headers.contains_key("link"))
+            || self.has_attributed_archive_error(url, response.status, &response.headers)
     }
 
     fn valid_cached(self, url: &Url, cached: &Cached) -> bool {
         cached.status == 200
-            || (matches!(cached.status, 404 | 410)
-                && (url.as_str() == self.robots_url()
-                    || (self == Self::Archive
-                        && url.path().starts_with("/web/")
-                        && cached.headers.contains_key("memento-datetime")
-                        && cached.headers.contains_key("link"))))
+            || (matches!(cached.status, 404 | 410) && url.as_str() == self.robots_url())
+            || self.has_attributed_archive_error(url, cached.status, &cached.headers)
     }
 }
 
@@ -267,6 +274,18 @@ impl ArchiveClient {
         immutable: bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.get_with_archive_status(url, immutable, |_, _| false, process)
+    }
+
+    /// Allow a caller with the capture query to identify statuses describing the
+    /// archived resource, before the transport applies live-service status policy.
+    pub(crate) fn get_with_archive_status<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        process: impl FnOnce(&Response) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         self.profile.validate_url(url)?;
         let cached = self.load(url)?;
         if self.mode != CacheMode::Revalidate {
@@ -288,7 +307,14 @@ impl ArchiveClient {
         }
         // Reload only under the lease in fetch: another process may have populated
         // this immutable URL while this process was checking robots or waiting.
-        self.fetch(url, immutable, &governor, &http, process)
+        self.fetch_with_archive_status(
+            url,
+            immutable,
+            &governor,
+            &http,
+            is_attributed_archive_status,
+            process,
+        )
     }
 
     #[cfg(test)]
@@ -379,6 +405,18 @@ impl ArchiveClient {
         http: &Client,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.fetch_with_archive_status(url, immutable, governor, http, |_, _| false, process)
+    }
+
+    fn fetch_with_archive_status<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        governor: &Governor,
+        http: &Client,
+        is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        process: impl FnOnce(&Response) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let lease = acquire(governor)?;
         let cached = match self.load(url) {
             Ok(value) => value,
@@ -421,14 +459,19 @@ impl ArchiveClient {
             .get_all("cf-mitigated")
             .iter()
             .any(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"));
+        let mut attributed_archive_status = false;
         let result = (|| {
-            if challenge || status == 401 || status == 403 {
+            let headers = collect_headers(raw.headers())?;
+            attributed_archive_status = (400..=599).contains(&status)
+                && !challenge
+                && is_attributed_archive_status(status, &headers);
+            if challenge || (!attributed_archive_status && matches!(status, 401 | 403)) {
                 return Err(Error::new(
                     "safety_latched",
                     "public source access was rejected; explicit safety review is required",
                 ));
             }
-            if status == 429 {
+            if !attributed_archive_status && status == 429 {
                 return Err(Error::new(
                     "cooldown",
                     "public source requested a request cooldown",
@@ -441,7 +484,7 @@ impl ArchiveClient {
                 ));
             }
             let missing_response = self.profile.allows_missing(url, status);
-            if status != 200 && status != 304 && !missing_response {
+            if status != 200 && status != 304 && !missing_response && !attributed_archive_status {
                 return Err(Error::new(
                     "http_rejected",
                     "public source returned an unsupported HTTP status",
@@ -461,7 +504,6 @@ impl ArchiveClient {
             {
                 return Err(body_limit());
             }
-            let headers = collect_headers(raw.headers())?;
             let mut body = Vec::new();
             raw.by_ref()
                 .take(MAX_BODY as u64 + 1)
@@ -540,20 +582,25 @@ impl ArchiveClient {
             }
             Ok(processed)
         })();
-        // Preserve independent HTTP, challenge and body-failure facts in one
-        // durable outcome. No synthetic status or competing backoff precedence.
-        let outcome = Outcome::Http {
-            status,
-            retry_after: retry_after.as_deref(),
-            challenge,
-            network_failure: result
-                .as_ref()
-                .is_err_and(|error| error.code == "network_error"),
-        };
+        let network_failure = result
+            .as_ref()
+            .is_err_and(|error| error.code == "network_error");
+        // A validated Memento error status belongs to the archived resource, not
+        // the current source. The independent challenge/body facts still apply.
         // Dropping an unread response cancels it before releasing shared ownership.
         // No early return between receiving headers and this durable finish.
         drop(raw);
-        lease.finish(outcome).map_err(|_| governor_error())?;
+        let finished = if attributed_archive_status {
+            lease.finish_attributed_archive_status(status, challenge, network_failure)
+        } else {
+            lease.finish(Outcome::Http {
+                status,
+                retry_after: retry_after.as_deref(),
+                challenge,
+                network_failure,
+            })
+        };
+        finished.map_err(|_| governor_error())?;
         result
     }
 
@@ -1630,5 +1677,160 @@ mod tests {
         assert_eq!(cached["immutable_original"], accepted["immutable_original"]);
         assert_eq!(cached["retrieval"]["cache_status"], "hit");
         assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn attributed_error_mementos_do_not_poison_governor_and_round_trip_cache() {
+        const QUERY: &str = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
+        const ATTRIBUTION: &str = "Memento-Datetime: Tue, 02 Jan 2024 03:04:05 GMT\r\nLink: <https://www.buaa.edu.cn/>; rel=\"original\"\r\n";
+
+        for status in [403, 429, 500, 503] {
+            let fixture = Fixture::new();
+            let retry_after = if status == 429 {
+                "Retry-After: 3600\r\n"
+            } else {
+                ""
+            };
+            let headers = format!("{ATTRIBUTION}{retry_after}");
+            let server = Server::new(move |socket, _| {
+                reply(socket, status, &headers, b"archived origin error");
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            seed_robots(&client);
+
+            let first = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(first["result"], "capture_found");
+            assert_eq!(first["archive_reported_http"]["status"], status);
+            let state = fixture.governor().status().unwrap();
+            assert!(!state.safety_latched, "status {status}");
+            assert_eq!(state.cooldown_until_boottime_ms, 0, "status {status}");
+            assert_eq!(state.consecutive_network_failures, 0, "status {status}");
+
+            client.mode = CacheMode::Offline;
+            let cached = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(cached["result"], "capture_found");
+            assert_eq!(cached["archive_reported_http"]["status"], status);
+            assert_eq!(cached["retrieval"]["cache_status"], "hit");
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn unattributed_replay_errors_keep_live_service_governor_signals() {
+        const QUERY: &str = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
+        const WRONG_DATE: &str = "Memento-Datetime: Wed, 03 Jan 2024 03:04:05 GMT\r\nLink: <https://www.buaa.edu.cn/>; rel=\"original\"\r\n";
+        const WRONG_ORIGINAL: &str = "Memento-Datetime: Tue, 02 Jan 2024 03:04:05 GMT\r\nLink: <https://example.org/>; rel=\"original\"\r\n";
+        let cases: &[(u16, &str, &str, bool, bool)] = &[
+            (403, "", "safety_latched", true, false),
+            (403, WRONG_DATE, "safety_latched", true, false),
+            (403, WRONG_ORIGINAL, "safety_latched", true, false),
+            (429, "Retry-After: 60\r\n", "cooldown", false, true),
+            (
+                429,
+                "Retry-After: 60\r\nMemento-Datetime: Wed, 03 Jan 2024 03:04:05 GMT\r\nLink: <https://www.buaa.edu.cn/>; rel=\"original\"\r\n",
+                "cooldown",
+                false,
+                true,
+            ),
+            (
+                429,
+                "Retry-After: 60\r\nMemento-Datetime: Tue, 02 Jan 2024 03:04:05 GMT\r\nLink: <https://example.org/>; rel=\"original\"\r\n",
+                "cooldown",
+                false,
+                true,
+            ),
+            (500, "", "http_rejected", false, false),
+            (500, WRONG_DATE, "http_rejected", false, false),
+            (503, "", "http_rejected", false, false),
+            (503, WRONG_ORIGINAL, "http_rejected", false, false),
+        ];
+        for (status, headers, code, latched, cooldown) in cases {
+            let status = *status;
+            let headers = *headers;
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(socket, status, headers, b"not an attributed capture");
+            });
+            let client = fixture.client(CacheMode::PreferCache, &server);
+            seed_robots(&client);
+            assert_eq!(
+                crate::archive::capture(QUERY, &client).unwrap_err().code,
+                *code,
+                "status {status}, headers {headers:?}"
+            );
+            let state = fixture.governor().status().unwrap();
+            assert_eq!(state.safety_latched, *latched, "status {status}");
+            if *cooldown {
+                assert!(state.cooldown_wait > Duration::from_secs(50));
+            } else {
+                assert_eq!(state.cooldown_until_boottime_ms, 0);
+            }
+            assert!(client.load(&Url::parse(TARGET).unwrap()).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+        }
+
+        // A real challenge stays authoritative even when the response also carries
+        // otherwise-valid archived-resource attribution.
+        const ATTRIBUTED_CHALLENGE: &str = "CF-Mitigated: challenge\r\nRetry-After: 60\r\nMemento-Datetime: Tue, 02 Jan 2024 03:04:05 GMT\r\nLink: <https://www.buaa.edu.cn/>; rel=\"original\"\r\n";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(socket, 429, ATTRIBUTED_CHALLENGE, b"challenge");
+        });
+        let client = fixture.client(CacheMode::PreferCache, &server);
+        seed_robots(&client);
+        assert_eq!(
+            crate::archive::capture(QUERY, &client).unwrap_err().code,
+            "safety_latched"
+        );
+        let state = fixture.governor().status().unwrap();
+        assert!(state.safety_latched);
+        assert!(state.cooldown_wait > Duration::from_secs(50));
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn replay_404_410_keep_gap_and_attributed_capture_semantics() {
+        const QUERY: &str = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
+        const ATTRIBUTION: &str = "Memento-Datetime: Tue, 02 Jan 2024 03:04:05 GMT\r\nLink: <https://www.buaa.edu.cn/>; rel=\"original\"\r\n";
+
+        for status in [404, 410] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(socket, status, "", b"archive query gap");
+            });
+            let client = fixture.client(CacheMode::PreferCache, &server);
+            seed_robots(&client);
+            let gap = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(gap["result"], "missing_in_query_scope");
+            assert_eq!(gap["retrieval"]["http"]["status"], status);
+            assert!(client.load(&Url::parse(TARGET).unwrap()).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+        }
+
+        for status in [404, 410] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(socket, status, ATTRIBUTION, b"attributed archived error");
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            seed_robots(&client);
+            let captured = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(captured["result"], "capture_found");
+            assert_eq!(captured["archive_reported_http"]["status"], status);
+            assert_eq!(
+                fixture
+                    .governor()
+                    .status()
+                    .unwrap()
+                    .cooldown_until_boottime_ms,
+                0
+            );
+
+            client.mode = CacheMode::Offline;
+            let cached = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(cached["result"], "capture_found");
+            assert_eq!(cached["retrieval"]["cache_status"], "hit");
+            assert_eq!(server.count(), 1);
+        }
     }
 }

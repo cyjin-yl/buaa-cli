@@ -21,3 +21,4 @@
 - Preserve the full signed 64-bit SQLite segment-rowid domain in recording search and keyset cursors; no ID value is reserved as the first-page sentinel.
 - Add cache-first authoritative BUAA teaching/research organization directory lookup with fixed official egress, robots handling, conditional refresh and exact missing/non-HTTP/hidden source facts.
 - Record a three-request governed official observation and a sanitized six-category, 50-entry evidence snapshot without committing raw HTML or claiming broader completeness.
+- Distinguish attributed archived 4xx/5xx Memento responses from current Archive service failures before governor latch/cooldown policy; preserve valid error captures in the immutable cache.

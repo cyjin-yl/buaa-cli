@@ -215,9 +215,18 @@ pub fn lookup(input: &str, client: &ArchiveClient) -> Result<Value, Error> {
 
 pub fn capture(input: &str, client: &ArchiveClient) -> Result<Value, Error> {
     let (query, source) = capture_request(input)?;
-    client.get(&source, true, |response| {
-        normalize_capture(&query, &source, response)
-    })
+    let expected_date = timestamp(&query.timestamp)?
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    client.get_with_archive_status(
+        &source,
+        true,
+        |status, headers| {
+            (400..=599).contains(&status)
+                && valid_memento_attribution(&query, &expected_date, headers)
+        },
+        |response| normalize_capture(&query, &source, response),
+    )
 }
 
 fn retrieval(response: &Response) -> Value {
@@ -465,6 +474,19 @@ fn original_link(value: &str, expected: &str) -> Result<(), Error> {
     if found { Ok(()) } else { Err(unavailable()) }
 }
 
+fn valid_memento_attribution(
+    query: &CaptureInput,
+    expected_date: &str,
+    headers: &BTreeMap<String, String>,
+) -> bool {
+    headers
+        .get("memento-datetime")
+        .is_some_and(|value| value == expected_date)
+        && headers
+            .get("link")
+            .is_some_and(|value| original_link(value, &query.url).is_ok())
+}
+
 fn normalize_capture(
     query: &CaptureInput,
     source: &Url,
@@ -493,10 +515,9 @@ fn normalize_capture(
     let expected_date = requested_time
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
-    if memento != Some(&expected_date) {
+    if !valid_memento_attribution(query, &expected_date, &response.headers) {
         return Err(unavailable());
     }
-    original_link(link.ok_or_else(unavailable)?, &query.url)?;
     Ok(json!({
         "schema_version": 1, "type": "archive_capture", "result": "capture_found",
         "original_url": query.url, "requested_timestamp": query.timestamp,

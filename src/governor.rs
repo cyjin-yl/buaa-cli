@@ -493,7 +493,41 @@ impl RequestLease<'_> {
     /// Record the actual outcome durably, then release exclusivity. Even success
     /// reserves a full request gap after completion. An I/O failure or invalid
     /// outcome returns an error, leaving the unfinished crash reservation.
-    pub fn finish(mut self, outcome: Outcome<'_>) -> Result<(), String> {
+    pub fn finish(self, outcome: Outcome<'_>) -> Result<(), String> {
+        self.finish_with_status_scope(outcome, false)
+    }
+
+    /// Finish a response whose validated non-2xx status describes the archived
+    /// resource, not the archive service. Challenge and body-failure facts remain
+    /// independent; archived 401/403/429 and Retry-After do not affect account-wide
+    /// safety or cooldown state.
+    pub(crate) fn finish_attributed_archive_status(
+        self,
+        status: u16,
+        challenge: bool,
+        network_failure: bool,
+    ) -> Result<(), String> {
+        if !(400..=599).contains(&status) {
+            return Err(
+                "invalid attributed archive status; unfinished reservation retained".into(),
+            );
+        }
+        self.finish_with_status_scope(
+            Outcome::Http {
+                status,
+                retry_after: None,
+                challenge,
+                network_failure,
+            },
+            true,
+        )
+    }
+
+    fn finish_with_status_scope(
+        mut self,
+        outcome: Outcome<'_>,
+        archived_resource_status: bool,
+    ) -> Result<(), String> {
         let now = now_ms()?;
         self.state.observe(now)?;
         self.state.next_request_ms = self
@@ -517,16 +551,19 @@ impl RequestLease<'_> {
                 if !(100..=599).contains(&status) {
                     return Err("invalid HTTP outcome; unfinished reservation retained".into());
                 }
-                let retry_deadline = retry_after.and_then(|value| retry_after_deadline(value, now));
-                if let Some(until) = retry_deadline {
-                    self.state.cooldown_until_ms = self.state.cooldown_until_ms.max(until);
-                } else if status == 429 {
-                    self.state.cooldown_until_ms = self
-                        .state
-                        .cooldown_until_ms
-                        .max(deadline(now, MISSING_RETRY_AFTER_MS)?);
+                if !archived_resource_status {
+                    let retry_deadline =
+                        retry_after.and_then(|value| retry_after_deadline(value, now));
+                    if let Some(until) = retry_deadline {
+                        self.state.cooldown_until_ms = self.state.cooldown_until_ms.max(until);
+                    } else if status == 429 {
+                        self.state.cooldown_until_ms = self
+                            .state
+                            .cooldown_until_ms
+                            .max(deadline(now, MISSING_RETRY_AFTER_MS)?);
+                    }
                 }
-                if status == 401 || status == 403 || challenge {
+                if challenge || (!archived_resource_status && matches!(status, 401 | 403)) {
                     self.state.safety_latched = true;
                     self.state.authentication_armed = false;
                 }
