@@ -112,7 +112,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | governor | Shared cross-process request safety | implemented-offline |
 | gateway | Gateway login/logout/usage | partial-live-unverified |
 | spoc | SPOC materials/video/PPT/subtitles | blocked |
-| live | Classroom live replay/audio repair | pending |
+| live | Classroom live replay/audio repair | blocked |
 | smart | Smart BUAA services | pending |
 | enrol | Undergraduate/postgraduate course selection/drop | pending |
 | evaluation | Teaching evaluations | pending |
