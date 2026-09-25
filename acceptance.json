@@ -2,7 +2,7 @@
   "schema_version": 1,
   "catalog_source": "https://github.com/buaahub/awesome-buaa",
   "catalog_reviewed_on": "2026-09-20",
-  "scope_note": "Every catalog entry was read; linked implementations are historical/unverified unless specifically recorded. No campus endpoint contacted. Pending is not implemented; catalog links are not APIs.",
+  "scope_note": "Every catalog entry was read; linked implementations are historical/unverified unless specifically recorded. On 2026-09-25 the operator authorized a read-only gateway usage observation; it and diagnostic TLS probes on gw/spoc/ihome buaa.edu.cn were severed at the network edge (zero response bytes), and the operator confirmed no login is possible from this devcontainer: egress to *.buaa.edu.cn is domain-wide unavailable, so live-verification items remain blocked. Pending is not implemented; catalog links are not APIs.",
   "capabilities": [
     {
       "id": "governor",
