@@ -466,7 +466,11 @@
         "contract": "Parses the official news-center listing (xwzx.htm) into title/date/link entries with `missing|non_http|invalid` link kinds explicit; no attachment, pagination beyond page 1, college crawl, or full-text fetch. Historical query is routed through the archive path, not this command.",
         "additional_slice": "`announcements history` replays the identical contract over operator-supplied Web Archive bytes on stdin (no live cache mutation; same parse invariants). It preserves the exact same output shape as `list` and reports `single_supplied_archive_snapshot`.",
         "proof": "100 lib tests + 8 CLI integration pass offline; `history_parse` regression synthetic patch verified reads synthetic bytes and a valid replay; contract drift errors name the offending invariant and GitHub issue/PR hint on every rejection path.",
-        "limits": "Governor boots-only; one named live observation captured at fetch 1790179637041 for https://www.buaa.edu.cn/xwzx.htm (3 governed captures), one more live capture for https://www.buaa.edu.cn at 1790179937729 returned three archives; request spacing remained ≥5s throughout. Live detail reading remains gated by the shared governor."
+        "authorized_attempts": [
+          {"command":"buaa announcements list --online","target":"https://www.buaa.edu.cn/xwzx.htm","result":"unavailable","exit_code":7,"response_body_retained":false},
+          {"command":"buaa archive lookup --online","target":"https://www.buaa.edu.cn/xwzx.htm","result":"unavailable","exit_code":7,"response_body_retained":false}
+        ],
+        "limits": "Prior governed observations remain limited to the central index and homepage CDX results. Later user-authorized cache-first attempts to read xwzx through the official adapter and Web Archive returned no response bytes; no retry or direct egress bypass was used. Detail reading, attachments, pagination and unit-site coverage remain unverified and subject to the shared governor/robots policy."
       }
     },
     {
