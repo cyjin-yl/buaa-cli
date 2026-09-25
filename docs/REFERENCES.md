@@ -46,6 +46,10 @@ Useful contract ideas are explicit DTO/error boundaries and separating shared co
 
 These observations are not a claim that all linked implementation files were audited or that their current services were exercised.
 
+### Gateway XEncode formula review
+
+At [`fontlos/buaa-api@1da573856c7438e69dcf01dc3f0881465ce50049`](https://github.com/fontlos/buaa-api/blob/1da573856c7438e69dcf01dc3f0881465ce50049/src/crypto/xencode.rs), the source mixes BX1 words as `A + (B ^ C) + D` with 32-bit wrapping additions. [`BUAASubnet/srun@2973a5cbfa4b78bb11f322527916d4f7386cf49e`](https://github.com/BUAASubnet/srun/blob/2973a5cbfa4b78bb11f322527916d4f7386cf49/src/xencode.rs) uses the same grouping (source blob `6969c579cc1d2abe6b7a732592ce2d141b28b4a5`, GPL-3.0). The MIT source and GPL source were read as protocol references only; no upstream implementation was copied. These community sources do not prove current live BUAA gateway compatibility.
+
 ## Fengrubei materials
 
 Reviewed repository revision: [`675ef67fa2a1b5338bb370d7371e1b112b50bb48`](https://github.com/GFCYqw/Fengrubei_LaTeX_Template/tree/675ef67fa2a1b5338bb370d7371e1b112b50bb48). README declares LPPL 1.3c or later; `src/INSTRUCTIONS.md` identifies XeLaTeX and optional `make.bat` build/cleanup operations.

@@ -654,10 +654,18 @@
           "src/gateway/crypto.rs",
           "src/governor.rs"
         ],
-        "proof": "56 offline tests passed, one ignored worker; strict clippy/formatting. Real loopback challenge/login/logout and usage-cache flows with actual >=5s request gaps; independent synthetic crypto vector. Actual CLI fail-closed smoke made zero campus requests.",
+        "proof": "Before issue #30, 56 offline tests passed with one ignored worker and strict clippy/format checks; those tests exercised the old self-consistent formula, not an independent XEncode oracle. On 2026-09-24, a manual local invocation of crypto::derive matched an independently calculated pinned-formula oracle for ASCII/normal-token and UTF-8/short-key synthetic inputs. Two permanent reference vectors were added; cargo build passed after the temporary runner was removed; automated tests were not run after this repair.",
         "safety": "Separate typed resume-auth arms one final Authentication lease; challenge is separately governed. Credential and indeterminate 2xx rejection consume the token and latch while preserving Retry-After/network facts. Credentials are stdin-only; the original login buffer is zeroized on command return and parsed password zeroizes on every drop path. Errors are static; no HTTP discovery/retry/proxy/cookie/redirect/TLS bypass.",
-        "limits": "Live campus compatibility and account postconditions unverified; no real authentication or logout authorized/performed, so the aggregate gateway capability stays partial. Independent safety/contract reviews reconciled all findings before the plan/commit follow-up; exact follow-up review remains pending.",
-        "review": "Independent safety review found GW-AUTH-001 and confirmed its indeterminate-2xx latch fix; final safety refresh clean. Independent contract review findings on availability wording, remaining parent scope, schemas and credential-buffer wording were fixed; final static refresh clean."
+        "protocol_formula": {
+          "expression": "A + (B ^ C) + D with wrapping u32 additions",
+          "references": [
+            {"repository": "fontlos/buaa-api", "commit": "1da573856c7438e69dcf01dc3f0881465ce50049", "path": "src/crypto/xencode.rs", "blob": "468a1a91f8a43da2b4a49542623538c55f2c4936", "license": "MIT"},
+            {"repository": "BUAASubnet/srun", "commit": "2973a5cbfa4b78bb11f322527916d4f7386cf49e", "path": "src/xencode.rs", "blob": "6969c579cc1d2abe6b7a732592ce2d141b28b4a5", "license": "GPL-3.0; source inspected only; no code copied"}
+          ],
+          "manual_smoke": "The actual Rust crypto::derive path matched both independently calculated info/HMAC-MD5/SHA-1 vectors; no network request was made."
+        },
+        "limits": "Live campus compatibility, account postconditions, endpoint readiness and actual ip/ac_id remain unverified; no real authentication or logout was authorized or performed. The formula now matches two public community references but is not proof of the live gateway's required version; aggregate gateway acceptance remains partial.",
+        "review": "Independent exact-head protocol review and maintainer approval are mandatory before merge; results are tracked in the linked PR. Previous safety/contract reviews remain as recorded."
       }
     },
     {
