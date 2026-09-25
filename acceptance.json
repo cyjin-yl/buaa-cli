@@ -40,14 +40,26 @@
         "gateway-client",
         "gateway-logout-plan-commit"
       ],
-      "remaining": "The operator authorized a live read-only gateway usage observation on 2026-09-25 with a one-minute request gap. One governed `gateway usage --online` attempt (and one diagnostic TLS probe) both terminated at the network edge: TLS verification passed, but the handshake was severed (SSL_ERROR_SYSCALL / unexpected EOF) with zero response bytes, sanitized `unavailable`, exit 7. No campus request was completed, so live endpoint compatibility, owner account postconditions and actual ac_id/IP remain unverified. The devcontainer has no route to gw.buaa.edu.cn; a later attempt requires reachable egress, the same governor controls, and the same read-only scope.",
+      "remaining": "The operator authorized live read-only gateway usage observations on 2026-09-25; the shared governor request interval was raised to 60 seconds for the session and the two governed attempts were approximately two hours and twenty-two minutes apart. Both terminated at the network edge: TLS verification passed, but the handshake was severed (SSL_ERROR_SYSCALL / unexpected EOF) with zero response bytes, sanitized `unavailable`, exit 7. No campus request was completed, so live endpoint compatibility, owner account postconditions and actual ac_id/IP remain unverified. The devcontainer has no route to gw.buaa.edu.cn; a later attempt requires reachable egress, the same governor controls, and the same read-only scope.",
       "authorized_attempts": [
         {
-          "at_utc": "2026-09-25T20:39:19Z",
-          "at_unix_ms": 1790368759000,
+          "at_utc_approx": "2026-09-25T18:12:54Z",
+          "boottime_unix_ms": 7256149,
           "command": "buaa gateway usage --online",
           "target": "https://gw.buaa.edu.cn/cgi-bin/rad_user_info",
           "scope": "read-only usage; no credentials transmitted",
+          "result": "unavailable",
+          "exit_code": 7,
+          "network_failure": true,
+          "response_body_retained": false,
+          "cause": "TLS handshake severed at the network edge before any HTTP exchange (SSL_ERROR_SYSCALL / unexpected EOF); certificate verification succeeded"
+        },
+        {
+          "at_utc_approx": "2026-09-25T20:35:15Z",
+          "boottime_unix_ms": 15796854,
+          "command": "buaa gateway usage --online",
+          "target": "https://gw.buaa.edu.cn/cgi-bin/rad_user_info",
+          "scope": "read-only usage; no credentials transmitted; governed at the raised 60-second interval",
           "result": "unavailable",
           "exit_code": 7,
           "network_failure": true,
