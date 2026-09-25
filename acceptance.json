@@ -40,7 +40,21 @@
         "gateway-client",
         "gateway-logout-plan-commit"
       ],
-      "remaining": "No real campus gateway usage/authentication/logout commit is authorized or performed; live endpoint compatibility, owner account postconditions and actual ac_id/IP remain unverified."
+      "remaining": "The operator authorized a live read-only gateway usage observation on 2026-09-25 with a one-minute request gap. One governed `gateway usage --online` attempt (and one diagnostic TLS probe) both terminated at the network edge: TLS verification passed, but the handshake was severed (SSL_ERROR_SYSCALL / unexpected EOF) with zero response bytes, sanitized `unavailable`, exit 7. No campus request was completed, so live endpoint compatibility, owner account postconditions and actual ac_id/IP remain unverified. The devcontainer has no route to gw.buaa.edu.cn; a later attempt requires reachable egress, the same governor controls, and the same read-only scope.",
+      "authorized_attempts": [
+        {
+          "at_utc": "2026-09-25T20:39:19Z",
+          "at_unix_ms": 1790368759000,
+          "command": "buaa gateway usage --online",
+          "target": "https://gw.buaa.edu.cn/cgi-bin/rad_user_info",
+          "scope": "read-only usage; no credentials transmitted",
+          "result": "unavailable",
+          "exit_code": 7,
+          "network_failure": true,
+          "response_body_retained": false,
+          "cause": "TLS handshake severed at the network edge before any HTTP exchange (SSL_ERROR_SYSCALL / unexpected EOF); certificate verification succeeded"
+        }
+      ]
     },
     {
       "id": "spoc",
