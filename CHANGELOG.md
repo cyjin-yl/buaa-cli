@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add the local `timed-input` command: exact decimal-second schedules, flushed NDJSON, explicit raw pipes, dry-run, whole-input validation and sanitized structured errors.
+- Bind the `marks` structured diff to the baseline's normalized policy content, not only `policy.id`: a baseline saved under the same id with a changed band/formula is now rejected as `invalid_input` instead of re-scoring unchanged courses under a silently different scale.
 - Add machine-readable `capabilities` and `schema`; preserve all 74 reviewed catalog entries and the complete non-VPN acceptance scope without claiming pending services work.
 - Add a Linux same-UID process-shared request governor with permanent lease locking, boot-time deadlines, conservative pacing, durable authentication permission, Retry-After, and fail-closed unknown outcomes.
 - Reject malformed Retry-After HTTP-date year widths and use checked timestamp arithmetic to prevent profile-dependent overflow; preserve existing status-specific fallback behavior.

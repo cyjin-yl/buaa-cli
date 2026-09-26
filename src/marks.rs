@@ -391,6 +391,39 @@ pub fn gpa(input: &str) -> Value {
     out
 }
 
+fn normalized_policy_content(raw: &Value) -> Option<Value> {
+    // A canonical baseline nests the provenance policy content; a raw policy
+    // object carries id/source inside itself. Compare the normalized content
+    // (same shape as `PolicyContext::as_value`), never the raw bytes.
+    let content = raw.get("policy").unwrap_or(raw);
+    let mut value = content.clone();
+    if let Some(map) = value.as_object_mut() {
+        map.remove("id");
+        map.remove("source");
+    }
+    let kind = value.get("kind")?.as_str()?;
+    match kind {
+        "table" => {
+            let pass_min = value
+                .get("pass_min")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_PASS_MIN as u64);
+            let bands = value.get("bands")?.as_array()?.clone();
+            let mut sorted = bands;
+            sorted.sort_by_key(|band| band.get("min").and_then(Value::as_u64).unwrap_or(u64::MAX));
+            Some(json!({"kind":"table","pass_min":pass_min,"bands":sorted}))
+        }
+        "formula" => Some(json!({
+            "kind":"formula",
+            "a":value.get("a")?,
+            "b":value.get("b")?,
+            "c":value.get("c")?,
+            "pass_min":value.get("pass_min").and_then(Value::as_u64).unwrap_or(DEFAULT_PASS_MIN as u64),
+        })),
+        _ => None,
+    }
+}
+
 fn diff_value(
     baseline: &Value,
     current: &Calculation,
@@ -399,13 +432,20 @@ fn diff_value(
 ) -> Value {
     // The baseline must be a snapshot produced by this tool (or equivalent):
     // it must carry the same policy id and a parseable course list.
-    let baseline_policy_ok = baseline
-        .get("policy")
+    let baseline_policy = baseline.get("policy");
+    let baseline_policy_ok = baseline_policy
         .and_then(|value| value.get("id"))
         .and_then(Value::as_str)
         == Some(context.id.as_str());
     if !baseline_policy_ok {
         return json!({"error":"invalid_input","message":"baseline policy id does not match current policy"});
+    }
+    // A policy id is a label, not a version: the normalized policy content
+    // must match as well, or the diff would re-score unchanged courses under
+    // a silently different scale.
+    let baseline_content = baseline_policy.and_then(normalized_policy_content);
+    if baseline_content.as_ref() != Some(&context.as_value()) {
+        return json!({"error":"invalid_input","message":"baseline policy content does not match current policy for the same id"});
     }
     let baseline_courses = match parse_baseline_courses(baseline) {
         Ok(value) => value,
@@ -618,7 +658,7 @@ pub fn schema() -> Value {
                     "properties":{"name":{"type":"string","minLength":1},
                         "score":{"type":"integer","minimum":0,"maximum":100},
                         "credit":{"type":"number","exclusiveMinimum":0}}}},
-                "baseline":{"type":"object","description":"optional gpa_baseline document for the structured diff"}}},
+                "baseline":{"type":"object","description":"optional gpa_baseline document for the structured diff; must carry the same policy id and the same normalized policy content as the current input"}}},
         "output": {"type":"object","required":["schema_version","type","policy","courses","counted_credits","total_credits","gpa"],
             "properties":{"gpa":{"type":["number","null"],"minimum":0,"maximum":5},
                 "diff":{"type":"object","required":["added","removed","changed","gpa"]}}},
@@ -710,12 +750,12 @@ mod tests {
 
     #[test]
     fn diff_reports_added_removed_changed_and_gpa_delta() {
-        let baseline = format!(
-            r#"{{"policy":{},"courses":[
-                {{"name":"课程A","score":92,"credit":4.0}},
-                {{"name":"课程B","score":78,"credit":2.0}}]}}"#,
-            TABLE_POLICY
-        );
+        let baseline = r#"{
+            "policy":{"id":"test-table","source":"https://example.invalid/policy","policy":{"kind":"table","pass_min":60,"bands":[{"min":85,"max":100,"point":4.0},{"min":75,"max":84,"point":3.0},{"min":60,"max":74,"point":2.0}]}},
+            "courses":[
+                {"name":"课程A","score":92,"credit":4.0},
+                {"name":"课程B","score":78,"credit":2.0}]
+        }"#;
         let current = format!(
             r#"{{"policy":{},"courses":[
                 {{"name":"课程A","score":92,"credit":4.0}},
@@ -748,6 +788,28 @@ mod tests {
         );
         let out = gpa(&current);
         assert_eq!(out["diff"]["error"], "invalid_input");
+    }
+
+    #[test]
+    fn diff_with_same_id_policy_content_change_is_invalid() {
+        // Same id/source, one band re-scored: the diff must reject the
+        // comparison instead of re-scoring unchanged courses under a
+        // silently different scale.
+        let mutated_policy = r#"{"kind":"table","id":"test-table","source":"https://example.invalid/policy","pass_min":60,"bands":[{"min":85,"max":100,"point":3.5},{"min":75,"max":84,"point":3.0},{"min":60,"max":74,"point":2.0}]}"#;
+        let baseline = format!(
+            r#"{{"policy":{},"courses":[{{"name":"课程A","score":92,"credit":4.0}}]}}"#,
+            mutated_policy
+        );
+        let current = format!(
+            r#"{{"policy":{},"courses":[{{"name":"课程A","score":92,"credit":4.0}}],"baseline":{}}}"#,
+            TABLE_POLICY, baseline
+        );
+        let out = gpa(&current);
+        assert_eq!(out["diff"]["error"], "invalid_input");
+        assert_eq!(
+            out["diff"]["message"],
+            "baseline policy content does not match current policy for the same id"
+        );
     }
 
     #[test]
