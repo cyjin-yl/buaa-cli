@@ -8,8 +8,11 @@
 //! pagination beyond page 1, and linked-college crawling stay out of scope.
 
 use crate::net::{ArchiveClient, CacheMode, Error};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{NaiveDate, NaiveDateTime};
 use scraper::{Html, Selector};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use url::Url;
 
 const ANNOUNCEMENTS_URL: &str = "https://www.buaa.edu.cn/xwzx.htm";
@@ -210,12 +213,56 @@ pub fn list(mode: CacheMode) -> Result<Value, Error> {
     client.get(&url, false, normalize)
 }
 
-/// Parse a bounded Web Archive snapshot of the listing page and return the
-/// same shape as `list`, without writing to a live-cache slot. The caller
-/// supplies the archived bytes via stdin (e.g. produced by an `archive capture`
-/// step) so probe pacing remains governed and reads stay offline by default.
-pub fn history_parse(bytes: &[u8]) -> Result<Value, Error> {
-    let document = parse_html(bytes)?;
+/// Parse an operator-supplied Web Archive snapshot of the listing page.
+///
+/// Raw bytes alone cannot prove they are a Memento of the official page:
+/// archive response headers do not travel with the bytes. The input must
+/// therefore carry an explicit operator assertion: `provenance.source_url`
+/// is required and must exactly equal the official listing URL, and an
+/// optional `capture_timestamp` may be attached. The output keeps the
+/// assertion together with the SHA-256 of the supplied bytes and marks it
+/// explicitly as unverified against archive headers. No network access and
+/// no live-cache slot is touched.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryInput {
+    html: String,
+    provenance: HistoryProvenance,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryProvenance {
+    source_url: String,
+    #[serde(default)]
+    capture_timestamp: Option<String>,
+}
+
+pub fn history(input: &str) -> Result<Value, Error> {
+    if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
+        return Err(invalid());
+    }
+    let query: HistoryInput = serde_json::from_str(input).map_err(|_| invalid())?;
+    if query.provenance.source_url != ANNOUNCEMENTS_URL {
+        return Err(invalid());
+    }
+    let timestamp = match &query.provenance.capture_timestamp {
+        Some(value) => Some(
+            capture_timestamp(value)
+                .map(|time| time.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .map_err(|_| invalid()),
+        )
+        .transpose()?,
+        None => None,
+    };
+    let bytes = STANDARD
+        .decode(query.html.as_bytes())
+        .map_err(|_| invalid())?;
+    if bytes.len() > MAX_HTML {
+        return Err(invalid());
+    }
+    let document = parse_html(&bytes)?;
+    let hash = format!("{:x}", Sha256::digest(&bytes));
     Ok(json!({
         "schema_version": 1,
         "type": "announcements_list",
@@ -224,13 +271,42 @@ pub fn history_parse(bytes: &[u8]) -> Result<Value, Error> {
         "listing_label": "新闻中心（历史快照）",
         "document_title": document.title,
         "entries": document.entries,
+        "provenance": {
+            "status": "operator_asserted",
+            "source_url": ANNOUNCEMENTS_URL,
+            "capture_timestamp": timestamp,
+            "verification": "asserted_only; archive response headers were not supplied with the bytes"
+        },
         "completeness": {
             "scope": "single_supplied_archive_snapshot",
             "pagination": "not_applicable",
             "freshness": "archived_bytes",
         },
-        "retrieval": null,
+        "retrieval": {
+            "supplied_bytes_sha256": hash,
+            "supplied_bytes": bytes.len(),
+            "provenance_status": "operator_asserted",
+        },
     }))
+}
+
+fn invalid() -> Error {
+    Error::new(
+        "invalid_input",
+        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be the official news-center listing URL",
+    )
+}
+
+fn capture_timestamp(value: &str) -> Result<NaiveDateTime, ()> {
+    if value.len() != 14 || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(());
+    }
+    let part =
+        |range: std::ops::Range<usize>| -> Result<u32, ()> { value[range].parse().map_err(|_| ()) };
+    let year = part(0..4)? as i32;
+    let date = NaiveDate::from_ymd_opt(year, part(4..6)?, part(6..8)?).ok_or(())?;
+    date.and_hms_opt(part(8..10)?, part(10..12)?, part(12..14)?)
+        .ok_or(())
 }
 
 pub fn schema() -> Value {
@@ -253,20 +329,21 @@ pub fn schema() -> Value {
         "history": {
             "input": {
                 "type":"string",
-                "format":"utf-8-html-bytes",
-                "description":"Bounded Web Archive snapshot bytes supplied on stdin (e.g. from `buaa archive capture`); parser performs no network."
+                "format":"json",
+                "description":"JSON on stdin: {\"html\": base64 UTF-8 snapshot bytes (<= 2 MiB decoded), \"provenance\": {\"source_url\": the official listing URL, \"capture_timestamp\": optional 14-digit UTC civil time YYYYMMDDhhmmss}}. Provenance is an operator assertion, not archive-header verification. Parser performs no network."
             },
             "output": {
                 "type":"object",
-                "required":["schema_version","type","result","publisher","listing_label","document_title","entries","completeness","retrieval"],
+                "required":["schema_version","type","result","publisher","listing_label","document_title","entries","provenance","completeness","retrieval"],
                 "properties": {
                     "schema_version":{"const":1},
                     "type":{"const":"announcements_list"},
                     "result":{"const":"listing_snapshot"},
-                    "retrieval":{"type":"null"}
+                    "provenance":{"type":"object","required":["status","source_url","capture_timestamp","verification"],"properties":{"status":{"const":"operator_asserted"},"verification":{"type":"string"}}},
+                    "retrieval":{"type":"object","required":["supplied_bytes_sha256","supplied_bytes","provenance_status"],"properties":{"provenance_status":{"const":"operator_asserted"}}}
                 }
             },
-            "policy": "Operator-supplied bytes only; no attacker-controlled path or archive redirect chain."
+            "policy": "Operator-asserted provenance only; source_url must exactly equal the official listing URL, supplied bytes are bound by SHA-256, and the assertion is marked unverified. No attacker-controlled path, network, or archive redirect chain."
         }
     })
 }
@@ -351,17 +428,72 @@ mod tests {
     }
 
     #[test]
-    fn history_parse_reuses_same_parser_without_network() {
+    fn history_requires_operator_asserted_provenance() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
         let bytes = fixture_html(&li("旧闻", "2003-12-01", Some("xwzx/2003/12/1.htm")));
-        let parsed = history_parse(&bytes).unwrap();
+        let encoded = STANDARD.encode(&bytes);
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let input = format!(
+            r#"{{"html":"{encoded}","provenance":{{"source_url":"{ANNOUNCEMENTS_URL}","capture_timestamp":"20040101000000"}}}}"#
+        );
+        let parsed = history(&input).unwrap();
         assert_eq!(parsed["entries"][0]["title"], "旧闻");
         assert_eq!(parsed["entries"][0]["date"], "2003-12-01");
         assert_eq!(
             parsed["completeness"]["scope"],
             "single_supplied_archive_snapshot"
         );
-        assert!(parsed["retrieval"].is_null());
-        assert!(history_parse(b"").is_err());
+        assert_eq!(parsed["provenance"]["status"], "operator_asserted");
+        assert_eq!(
+            parsed["provenance"]["capture_timestamp"],
+            "2004-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            parsed["provenance"]["verification"],
+            "asserted_only; archive response headers were not supplied with the bytes"
+        );
+        assert_eq!(parsed["retrieval"]["supplied_bytes_sha256"], hash);
+        assert_eq!(parsed["retrieval"]["supplied_bytes"], bytes.len());
+        assert_eq!(
+            parsed["retrieval"]["provenance_status"],
+            "operator_asserted"
+        );
+
+        // An omitted capture timestamp stays null, not invented.
+        let bare = format!(
+            r#"{{"html":"{encoded}","provenance":{{"source_url":"{ANNOUNCEMENTS_URL}"}}}}"#
+        );
+        let bare_parsed = history(&bare).unwrap();
+        assert_eq!(
+            bare_parsed["provenance"]["capture_timestamp"],
+            serde_json::Value::Null
+        );
+
+        // A foreign source_url must not be labelled as the official listing.
+        let foreign = format!(
+            r#"{{"html":"{encoded}","provenance":{{"source_url":"https://www.buaa.edu.cn/other.htm"}}}}"#
+        );
+        assert_eq!(history(&foreign).unwrap_err().code, "invalid_input");
+
+        // Missing provenance, malformed base64, and an invalid timestamp all fail closed.
+        assert_eq!(
+            history(&format!(r#"{{"html":"{encoded}"}}"#))
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
+        assert_eq!(
+            history(r#"{"html":"!!not-base64!!","provenance":{"source_url":"https://www.buaa.edu.cn/xwzx.htm"}}"#)
+                .unwrap_err()
+            .code,
+            "invalid_input"
+        );
+        let bad_time = format!(
+            r#"{{"html":"{encoded}","provenance":{{"source_url":"{ANNOUNCEMENTS_URL}","capture_timestamp":"20040230000000"}}}}"#
+        );
+        assert_eq!(history(&bad_time).unwrap_err().code, "invalid_input");
+        assert!(history(r#"{}"#).is_err());
     }
 
     #[test]
