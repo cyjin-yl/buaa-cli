@@ -755,6 +755,12 @@ impl ArchiveClient {
                 },
                 Err(_) => return Err(cache_error()),
             };
+        if scope.entries.len() >= MAX_CURSOR_SCOPE_ENTRIES {
+            // A full registry evicts every prior binding. Evicted cursors
+            // fail verify with cursor_scope_mismatch (the intended
+            // fail-closed outcome), and the persisted map stays at the cap.
+            scope.entries.clear();
+        }
         scope
             .entries
             .insert(hash(cursor.as_bytes()), hash(identity.as_bytes()));
@@ -1999,5 +2005,64 @@ mod tests {
             "20240701000000"
         );
         assert_eq!(server.count(), served);
+    }
+
+    #[test]
+    fn cursor_scope_registry_evicts_at_the_entry_cap() {
+        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["20240601000000"]]"#;
+        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk2","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            if request.contains("resumeKey=20240601000000") {
+                reply(socket, 200, "", PAGE_2);
+            } else {
+                reply(socket, 200, "", PAGE_1);
+            }
+        });
+        let client = fixture.client(CacheMode::PreferCache, &server);
+        seed_robots(&client);
+
+        // Seed the registry with exactly the cap number of stale bindings.
+        let mut entries = BTreeMap::new();
+        for index in 0..MAX_CURSOR_SCOPE_ENTRIES {
+            entries.insert(format!("seed-{index:04}"), "0".repeat(64));
+        }
+        let scope = serde_json::json!({ "version": 1, "entries": entries });
+        let (temporary_name, mut temporary) =
+            governor::create_temporary(&client.directory).unwrap();
+        governor::validate_private_file(&temporary).unwrap();
+        serde_json::to_writer(&mut temporary, &scope).unwrap();
+        temporary.write_all(b"\n").unwrap();
+        temporary.sync_all().unwrap();
+        let name = CString::new(CURSOR_SCOPE_FILE).unwrap();
+        // SAFETY: both names are live single components in the pinned directory.
+        assert_eq!(
+            unsafe {
+                libc::renameat(
+                    client.directory.as_raw_fd(),
+                    temporary_name.as_ptr(),
+                    client.directory.as_raw_fd(),
+                    name.as_ptr(),
+                )
+            },
+            0
+        );
+
+        let first = crate::archive::lookup(
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2 }"#,
+            &client,
+        )
+        .unwrap();
+        assert_eq!(first["next_cursor"], "20240601000000");
+
+        // Recording the next binding must evict the stale entries, not
+        // persist an over-cap registry: the continuation verifies and
+        // succeeds without a corrupt-cache rejection.
+        let second = crate::archive::lookup(
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            &client,
+        )
+        .unwrap();
+        assert_eq!(second["captures"][0]["capture_timestamp"], "20240701000000");
     }
 }
