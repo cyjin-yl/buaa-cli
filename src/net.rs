@@ -700,6 +700,92 @@ impl ArchiveClient {
             },
         }))
     }
+    /// Verify that a decoded resume cursor was issued for exactly this query
+    /// identity (url/from/to/limit). A missing or mismatched binding is
+    /// fail-closed: the cursor may only continue the query that minted it.
+    pub(crate) fn verify_cursor_scope(&self, cursor: &str, identity: &str) -> Result<(), Error> {
+        self.validate_directory()?;
+        let file = governor::open_child(&self.directory, CURSOR_SCOPE_FILE, libc::O_RDONLY)
+            .map_err(|_| cache_error())?;
+        governor::validate_private_file(&file).map_err(|_| cache_error())?;
+        let mut bytes = Vec::new();
+        file.take(MAX_CURSOR_SCOPE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| cache_error())?;
+        if bytes.len() > MAX_CURSOR_SCOPE_BYTES {
+            return Err(corrupt_cache());
+        }
+        let scope: CursorScope = serde_json::from_slice(&bytes).map_err(|_| corrupt_cache())?;
+        if scope.version != 1 || scope.entries.len() > MAX_CURSOR_SCOPE_ENTRIES {
+            return Err(corrupt_cache());
+        }
+        match scope.entries.get(&hash(cursor.as_bytes())) {
+            Some(value) if *value == hash(identity.as_bytes()) => Ok(()),
+            _ => Err(Error::new(
+                "cursor_scope_mismatch",
+                "resume cursor does not bind to this query scope; start a fresh lookup",
+            )),
+        }
+    }
+
+    /// Record that a decoded resume cursor was issued for this query identity.
+    pub(crate) fn record_cursor_scope(&self, cursor: &str, identity: &str) -> Result<(), Error> {
+        self.validate_directory()?;
+        let mut scope =
+            match governor::open_child(&self.directory, CURSOR_SCOPE_FILE, libc::O_RDONLY) {
+                Ok(file) => {
+                    governor::validate_private_file(&file).map_err(|_| cache_error())?;
+                    let mut bytes = Vec::new();
+                    file.take(MAX_CURSOR_SCOPE_BYTES as u64 + 1)
+                        .read_to_end(&mut bytes)
+                        .map_err(|_| cache_error())?;
+                    if bytes.len() > MAX_CURSOR_SCOPE_BYTES {
+                        return Err(corrupt_cache());
+                    }
+                    let scope: CursorScope =
+                        serde_json::from_slice(&bytes).map_err(|_| corrupt_cache())?;
+                    if scope.version != 1 || scope.entries.len() > MAX_CURSOR_SCOPE_ENTRIES {
+                        return Err(corrupt_cache());
+                    }
+                    scope
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => CursorScope {
+                    version: 1,
+                    entries: BTreeMap::new(),
+                },
+                Err(_) => return Err(cache_error()),
+            };
+        scope
+            .entries
+            .insert(hash(cursor.as_bytes()), hash(identity.as_bytes()));
+        let (temporary_name, mut temporary) =
+            governor::create_temporary(&self.directory).map_err(|_| cache_error())?;
+        let result = (|| {
+            governor::validate_private_file(&temporary).map_err(|_| cache_error())?;
+            serde_json::to_writer(&mut temporary, &scope).map_err(|_| cache_error())?;
+            temporary.write_all(b"\n").map_err(|_| cache_error())?;
+            temporary.sync_all().map_err(|_| cache_error())?;
+            let name = CString::new(CURSOR_SCOPE_FILE).map_err(|_| cache_error())?;
+            // SAFETY: both names are live single components in the pinned directory.
+            if unsafe {
+                libc::renameat(
+                    self.directory.as_raw_fd(),
+                    temporary_name.as_ptr(),
+                    self.directory.as_raw_fd(),
+                    name.as_ptr(),
+                )
+            } != 0
+            {
+                return Err(cache_error());
+            }
+            self.directory.sync_all().map_err(|_| cache_error())
+        })();
+        if result.is_err() {
+            // SAFETY: this is our exclusively created temporary, not caller input.
+            unsafe { libc::unlinkat(self.directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
+        }
+        result
+    }
 
     fn save(&self, entry: &Entry) -> Result<(), Error> {
         self.validate_directory()?;
@@ -771,6 +857,17 @@ impl ArchiveClient {
         }
         result
     }
+}
+
+const CURSOR_SCOPE_FILE: &str = "cursor-scope.json";
+const MAX_CURSOR_SCOPE_BYTES: usize = 64 * 1024;
+const MAX_CURSOR_SCOPE_ENTRIES: usize = 256;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CursorScope {
+    version: u8,
+    entries: BTreeMap<String, String>,
 }
 
 pub(crate) fn acquire(governor: &Governor) -> Result<RequestLease<'_>, Error> {
@@ -1832,5 +1929,75 @@ mod tests {
             assert_eq!(cached["retrieval"]["cache_status"], "hit");
             assert_eq!(server.count(), 1);
         }
+    }
+    #[test]
+    fn lookup_cursor_is_bound_to_the_query_that_minted_it() {
+        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["20240601000000"]]"#;
+        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk2","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(
+                request.starts_with(
+                    "GET /cdx/search/cdx?url=https%3A%2F%2Fwww.buaa.edu.cn%2Fxwzx.htm"
+                ),
+                "unexpected request: {request}"
+            );
+            if request.contains("resumeKey=20240601000000") {
+                reply(socket, 200, "", PAGE_2);
+            } else {
+                reply(socket, 200, "", PAGE_1);
+            }
+        });
+        let client = fixture.client(CacheMode::PreferCache, &server);
+        seed_robots(&client);
+
+        let first = crate::archive::lookup(
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2 }"#,
+            &client,
+        )
+        .unwrap();
+        assert_eq!(first["next_cursor"], "20240601000000");
+        assert_eq!(first["completeness"]["more_results"], true);
+        assert_eq!(first["captures"].as_array().unwrap().len(), 1);
+
+        let second = crate::archive::lookup(
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            &client,
+        )
+        .unwrap();
+        assert_eq!(second["next_cursor"], serde_json::Value::Null);
+        assert_eq!(second["captures"][0]["capture_timestamp"], "20240701000000");
+        let served = server.count();
+
+        // A cursor from a different query scope is rejected before any request.
+        let cross = crate::archive::lookup(
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 3, "cursor": "20240601000000" }"#,
+            &client,
+        )
+        .unwrap_err();
+        assert_eq!(cross.code, "cursor_scope_mismatch");
+        assert_eq!(server.count(), served);
+
+        // A cursor never issued for this query is rejected the same way.
+        let unknown = crate::archive::lookup(
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240202000000" }"#,
+            &client,
+        )
+        .unwrap_err();
+        assert_eq!(unknown.code, "cursor_scope_mismatch");
+        assert_eq!(server.count(), served);
+
+        // The binding persists across client instances sharing the cache directory.
+        let fresh = fixture.client(CacheMode::PreferCache, &server);
+        let replayed = crate::archive::lookup(
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            &fresh,
+        )
+        .unwrap();
+        assert_eq!(
+            replayed["captures"][0]["capture_timestamp"],
+            "20240701000000"
+        );
+        assert_eq!(server.count(), served);
     }
 }

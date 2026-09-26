@@ -165,3 +165,10 @@ Issue [#33](https://github.com/cyjin-yl/buaa-cli/issues/33) identified the fixed
 - Deterministic parser regressions compare 75/76/77 and the late-2076 cutoff case with equivalent four-digit IMF dates; a 2099 reference verifies `00→2100`. A real governor 503 regression constructs a valid RFC 850 date 49 years ahead and verifies its durable cooldown remains more than 40 years beyond the ordinary request gap.
 - The full-timestamp boundary and 503 regressions pass in debug and release profiles. Full `cargo test --locked --offline` passes **110 library + 8 CLI tests**, one ignored subprocess worker; strict all-target clippy and formatter checks passed.
 - All verification is offline with an isolated governor state. No live HTTP request, campus endpoint, authentication, or mutation occurred.
+
+## 2026-09-26: archive resume cursor query-scope binding
+
+Issue [#49](https://github.com/cyjin-yl/buaa-cli/issues/49) showed that reusing a CDX resume cursor under a different query scope (url/from/to/limit) makes the upstream iterator start mid-range and silently skip captures. The adapter is the sole cursor producer, so each issued `next_cursor` is now bound to the exact query identity that minted it in a bounded private registry (`cursor-scope.json`, 0600, atomic writes, capped entries) inside the shared archive cache directory. Presenting a cursor under any other scope, or one the adapter never issued, fails closed with `cursor_scope_mismatch` before any request; same-scope continuation is unchanged and the server token passes through untouched.
+
+- Loopback regression `net::tests::lookup_cursor_is_bound_to_the_query_that_minted_it` verifies same-scope page continuation, cross-scope rejection with zero additional HTTP requests, unknown-cursor rejection, and binding persistence across client instances sharing the cache directory.
+- Full `cargo test --locked --offline` passes **111 library + 8 CLI tests**, one ignored subprocess worker; strict all-target clippy and formatter checks passed. All verification is offline; no live HTTP request occurred.

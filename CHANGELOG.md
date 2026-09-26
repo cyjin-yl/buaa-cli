@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bind CDX resume cursors to the exact query scope (url, from, to, limit) that minted them; cross-scope and never-issued cursors are rejected before a request. Loopback regressions cover same-scope continuation, cross-scope and unknown-cursor rejection, and binding persistence across client instances.
 - Add the local `timed-input` command: exact decimal-second schedules, flushed NDJSON, explicit raw pipes, dry-run, whole-input validation and sanitized structured errors.
 - Add machine-readable `capabilities` and `schema`; preserve all 74 reviewed catalog entries and the complete non-VPN acceptance scope without claiming pending services work.
 - Add a Linux same-UID process-shared request governor with permanent lease locking, boot-time deadlines, conservative pacing, durable authentication permission, Retry-After, and fail-closed unknown outcomes.
