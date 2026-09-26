@@ -19,6 +19,8 @@ buaa gateway usage --refresh
 
 Usage output omits username, real name and MAC fields. It exposes nullable traffic byte counters, online IP, duration and balance facts plus fetch time/body hash/cache provenance. The cache is private under the effective user's passwd home and is validated before use. Normal interactive reads use the five-second global request interval. Any future scheduler/background worker must additionally use `BackgroundPoll` and the global fifteen-minute minimum; this CLI does not install a poller.
 
+The `online` flag reports the SRun online signal: a parseable `error == "ok"` is online, while a parseable non-ok `error` is the normal **offline** state and is reported as `online: false` (with `online_ip: null`), not folded into `unavailable`. `unavailable` is reserved for transport, parse, and non-JSONP failures that carry no usable status.
+
 ## One deliberate authentication attempt
 
 Credentials are bounded JSON on stdin—never argv, repository files, diagnostic URLs or logs. The operator must first arm exactly one authentication attempt:

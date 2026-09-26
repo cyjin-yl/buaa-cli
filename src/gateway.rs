@@ -584,21 +584,19 @@ fn usage_online(transport: &GatewayTransport, directory: &File) -> Result<Value,
                     };
                 }
             };
-            if parsed.error != "ok" {
-                return Processed {
-                    result: Err(unavailable()),
-                    outcome: AppOutcome::Http,
-                };
-            }
+            // The pinned SRun reference treats `error == "ok"` as the online
+            // signal; a parseable non-ok `error` is the normal offline state,
+            // not a transport failure, so it yields a snapshot with online=false.
+            let online = parsed.error == "ok";
             let record = UsageRecord {
                 version: 1,
                 fetched_at_unix_ms: meta.fetched_at_unix_ms,
                 response_body_sha256: meta.body_sha256.clone(),
-                online: true,
-                online_ip: if parsed.online_ip.is_empty() {
-                    None
-                } else {
+                online,
+                online_ip: if online && !parsed.online_ip.is_empty() {
                     Some(parsed.online_ip)
+                } else {
+                    None
                 },
                 bytes_in: parsed.bytes_in,
                 bytes_out: parsed.bytes_out,
@@ -1091,6 +1089,34 @@ mod tests {
         })
         .unwrap();
         assert_eq!(second["provenance"]["cache_status"], "hit");
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn offline_srun_state_reports_online_false_not_unavailable() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request, _| {
+            reply(
+                socket,
+                request,
+                json!({"error":"not ok","online_ip":"10.0.0.2"}),
+            )
+        });
+        let cache = fixture.cache();
+        let transport = transport(&fixture, &server);
+        let snapshot = usage_from(CacheMode::PreferCache, &cache, || {
+            usage_online(&transport, &cache)
+        })
+        .unwrap();
+        assert_eq!(snapshot["result"], "usage_snapshot");
+        assert_eq!(snapshot["online"], false);
+        assert!(snapshot["online_ip"].is_null());
+        assert_eq!(snapshot["provenance"]["cache_status"], "miss");
+        let replay = usage_from(CacheMode::Offline, &cache, || {
+            panic!("cache hit attempted network")
+        })
+        .unwrap();
+        assert_eq!(replay["online"], false);
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
 
