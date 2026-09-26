@@ -208,9 +208,30 @@ fn capture_request(input: &str) -> Result<(CaptureInput, Url), Error> {
 
 pub fn lookup(input: &str, client: &ArchiveClient) -> Result<Value, Error> {
     let (query, source) = lookup_request(input)?;
-    client.get(&source, false, |response| {
+    let identity = cursor_scope_identity(&query);
+    if let Some(cursor) = query.cursor.as_deref().map(decode_cursor).transpose()? {
+        client.verify_cursor_scope(&cursor, &identity)?;
+    }
+    let value = client.get(&source, false, |response| {
         normalize_lookup(&query, &source, response)
-    })
+    })?;
+    if let Some(next) = value["next_cursor"].as_str() {
+        let decoded = decode_cursor(next).map_err(|_| unavailable())?;
+        client.record_cursor_scope(&decoded, &identity)?;
+    }
+    Ok(value)
+}
+
+/// Stable identity of the query a resume cursor is bound to: the cursor may
+/// only continue the exact query (url, from, to, limit) that minted it.
+fn cursor_scope_identity(query: &LookupInput) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        query.url,
+        query.from.as_deref().unwrap_or("-"),
+        query.to.as_deref().unwrap_or("-"),
+        query.limit
+    )
 }
 
 pub fn capture(input: &str, client: &ArchiveClient) -> Result<Value, Error> {
@@ -539,7 +560,7 @@ fn normalize_capture(
 pub fn schema() -> Value {
     let timestamp = json!({"type":"string", "pattern":"^[0-9]{14}$", "description":"Valid UTC civil date/time YYYYMMDDhhmmss; years 0001..9999, seconds 00..59."});
     let original = json!({"type":"string", "maxLength":MAX_URL, "description":"HTTP(S) URL with host, no userinfo, whitespace, controls, fragment, backslash or wildcard. Original spelling is retained."});
-    let cursor = json!({"type":["string","null"], "maxLength":MAX_CURSOR, "description":"CDX query-encoded resume key; pass next_cursor unchanged. Decoded and reencoded once as one parameter."});
+    let cursor = json!({"type":["string","null"], "maxLength":MAX_CURSOR, "description":"CDX query-encoded resume key; pass next_cursor unchanged. Bound to the exact query (url, from, to, limit) that minted it; a cursor from any other query is rejected."});
     let publication = json!({"type":"object", "additionalProperties":false, "required":["value","confidence"], "properties":{"value":{"type":"null"}, "confidence":{"const":"unknown"}}});
     let retrieval = json!({"type":"object", "additionalProperties":false, "required":["source_url","fetched_at_unix_ms","cache_status","revalidated_at_unix_ms","revalidation_status","response_body_sha256","response_body_byte_length","http","trust"], "properties":{
         "source_url":{"type":"string"}, "fetched_at_unix_ms":{"type":"integer","minimum":0},
