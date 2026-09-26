@@ -30,18 +30,6 @@ fn read_input() -> Result<String, CliError> {
     Ok(input)
 }
 
-fn read_input_bytes() -> Result<Vec<u8>, CliError> {
-    let mut input = Vec::new();
-    io::stdin()
-        .take(MAX_INPUT + 1)
-        .read_to_end(&mut input)
-        .map_err(|_| ("unavailable", 7, "stdin is unavailable".into()))?;
-    if input.len() as u64 > MAX_INPUT {
-        return Err(("invalid_input", 2, "input exceeds 8 MiB limit".into()));
-    }
-    Ok(input)
-}
-
 fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
@@ -244,8 +232,8 @@ fn run_announcements(args: &[String]) -> CliResult {
             emit(&output)
         }
         Some("history") if args.len() == 1 => {
-            let bytes = read_input_bytes()?;
-            let output = buaa_cli::announcements::history_parse(&bytes).map_err(service_error)?;
+            let input = read_input()?;
+            let output = buaa_cli::announcements::history(&input).map_err(service_error)?;
             emit(&output)
         }
         _ => Err((
@@ -292,7 +280,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search", "credits calculate"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search", "credits calculate"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations --online or --refresh; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
