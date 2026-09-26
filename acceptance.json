@@ -680,7 +680,7 @@
           "src/gateway/crypto.rs",
           "src/governor.rs"
         ],
-        "proof": "56 offline tests passed, one ignored worker; strict clippy/formatting. Real loopback challenge/login/logout and usage-cache flows with actual >=5s request gaps; independent synthetic crypto vector. Actual CLI fail-closed smoke made zero campus requests.",
+        "proof": "57 offline tests passed, one ignored worker; strict clippy/formatting. Real loopback challenge/login/logout and usage-cache flows (including the normal SRun offline state reported as `online: false`) with actual >=5s request gaps; independent synthetic crypto vector. Actual CLI fail-closed smoke made zero campus requests.",
         "safety": "Separate typed resume-auth arms one final Authentication lease; challenge is separately governed. Credential and indeterminate 2xx rejection consume the token and latch while preserving Retry-After/network facts. Credentials are stdin-only; the original login buffer is zeroized on command return and parsed password zeroizes on every drop path. Errors are static; no HTTP discovery/retry/proxy/cookie/redirect/TLS bypass.",
         "limits": "Live campus compatibility and account postconditions unverified; no real authentication or logout authorized/performed, so the aggregate gateway capability stays partial. Independent safety/contract reviews reconciled all findings before the plan/commit follow-up; exact follow-up review remains pending.",
         "review": "Independent safety review found GW-AUTH-001 and confirmed its indeterminate-2xx latch fix; final safety refresh clean. Independent contract review findings on availability wording, remaining parent scope, schemas and credential-buffer wording were fixed; final static refresh clean."
