@@ -118,7 +118,7 @@
       ],
       "evidence": {
         "command": "buaa marks gpa; buaa marks baseline save|show <absolute-path>",
-        "tests": "cargo test --locked --offline: marks tests passed (weighted GPA table+formula, failure exclusion, null GPA, structured added/removed/changed diff with gpa delta, stored-baseline round-trip diff, baseline idempotency round-trip, policy provenance required, gap/overlap/duplicate/zero-credit/score-over-100/error-echo rejected); clippy 0 warnings; fmt clean. 9 marks unit tests.",
+        "tests": "cargo test --locked --offline: marks tests passed (weighted GPA table+formula, failure exclusion, null GPA, structured added/removed/changed diff with gpa delta, stored-baseline round-trip diff, baseline idempotency round-trip, policy provenance required, gap/overlap/duplicate/zero-credit/score-over-100/error-echo rejected, same-id policy content change rejected); clippy 0 warnings; fmt clean. 10 marks unit tests.",
         "scope": "Deterministic offline GPA + change-monitoring engine. The grade-point policy is caller-supplied with mandatory id/source provenance (table or formula) so no policy is guessed or embedded; the shared governor enforces the >=15-minute background polling cadence for any future campus reads.",
         "smoke": "Real CLI: table policy {92/4cr,78/2cr,59/3cr} -> gpa 3.6667, counted 6.0, total 9.0, failed course excluded; baseline save->unchanged idempotency and show round-trip verified."
       },
