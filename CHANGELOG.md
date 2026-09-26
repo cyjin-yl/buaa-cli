@@ -23,3 +23,4 @@
 - Add cache-first authoritative BUAA teaching/research organization directory lookup with fixed official egress, robots handling, conditional refresh and exact missing/non-HTTP/hidden source facts.
 - Record a three-request governed official observation and a sanitized six-category, 50-entry evidence snapshot without committing raw HTML or claiming broader completeness.
 - Distinguish attributed archived 4xx/5xx Memento responses from current Archive service failures before governor latch/cooldown policy; preserve valid error captures in the immutable cache.
+- Reject GPA credit arithmetic overflow, unsupported graduation-credit majors and conflicting duplicate course identities; persist baselines atomically as `0600` files under validated owner-controlled directories.

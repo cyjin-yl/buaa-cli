@@ -118,9 +118,13 @@
       ],
       "evidence": {
         "command": "buaa marks gpa; buaa marks baseline save|show <absolute-path>",
-        "tests": "cargo test --locked --offline: marks tests passed (weighted GPA table+formula, failure exclusion, null GPA, structured added/removed/changed diff with gpa delta, stored-baseline round-trip diff, baseline idempotency round-trip, policy provenance required, gap/overlap/duplicate/zero-credit/score-over-100/error-echo rejected); clippy 0 warnings; fmt clean. 9 marks unit tests.",
-        "scope": "Deterministic offline GPA + change-monitoring engine. The grade-point policy is caller-supplied with mandatory id/source provenance (table or formula) so no policy is guessed or embedded; the shared governor enforces the >=15-minute background polling cadence for any future campus reads.",
-        "smoke": "Real CLI: table policy {92/4cr,78/2cr,59/3cr} -> gpa 3.6667, counted 6.0, total 9.0, failed course excluded; baseline save->unchanged idempotency and show round-trip verified."
+        "tests": "Final cargo test --locked --offline: 126 passed across five suites; one subprocess worker intentionally ignored. 12 marks unit tests cover weighted policies, finite-credit bounds, null GPA semantics, baselines and diffs; a CLI umask regression confirms 0600 after new and changed saves. All-target clippy, fmt and offline build pass.",
+        "scope": "Deterministic offline GPA and change-monitoring engine. The policy is caller-supplied with mandatory id/source provenance; no grade-point policy is guessed or embedded. Credit arithmetic uses an explicit finite safety ceiling and rejects overflow before output construction.",
+        "smoke": "Actual CLI proves baseline create/unchanged/changed under umask 0022 with mode 0600. Unsafe parent, symlink, irregular target and overflow inputs fail closed; no campus grades were read.",
+        "review_issues": [
+          "https://github.com/cyjin-yl/buaa-cli/issues/22",
+          "https://github.com/cyjin-yl/buaa-cli/issues/25"
+        ]
       },
       "blocker": "Campus grades-fetching adapter requires a live authorized campus session and the exact published grade-point table; both are unreachable from this seat (all .buaa.edu.cn endpoints reset, VPN/Tailscale absent in devcontainer, web archive offline). The offline engine, policy-provenance contract, and baseline diff are complete; status partial-offline until the live adapter and official policy are grounded."
     },
@@ -349,9 +353,13 @@
       ],
       "evidence": {
         "command": "buaa credits calculate",
-        "tests": "cargo test --locked --offline: 7 credits tests passed (whole project 53 passed, 1 ignored); clippy 0 warnings; fmt clean.",
-        "smoke": "Real CLI: {major:会计学, selected:[健康经济学,运筹学（二）]} -> total_counted 4.0, remaining 21.0, result deficit, duplicate-name warning surfaced; malformed/empty-major/unknown-course exit 2; missing subcommand exit 3.",
-        "scope": "School 8 (economics_management) 2020 general-major, 136 courses from HoBeedzc/CreditCount reference (public catalog), offline."
+        "tests": "Final cargo test --locked --offline: 126 passed across five suites; one ignored worker. 10 credits unit tests cover supported-major schema parity, unknown-major rejection, conflicting duplicate identities, equivalent duplicate rows, and calculation boundaries. CLI integration rejects unknown majors and conflicting duplicates; all-target clippy, fmt and offline build pass.",
+        "smoke": "Offline CLI returns invalid_input for a non-supported major and for conflicting `非参数统计` rows; equivalent `健康经济学` duplicates collapse with a warning. No campus request was made.",
+        "scope": "School 8 (economics_management) 2020 general-major, 136 courses from the public HoBeedzc/CreditCount catalog; the supported major enum is exactly its non-general major tags.",
+        "review_issues": [
+          "https://github.com/cyjin-yl/buaa-cli/issues/23",
+          "https://github.com/cyjin-yl/buaa-cli/issues/24"
+        ]
       },
       "blocker": "School 6 cohort 2020 policy and course catalog not yet ported from an authoritative reference; only school 8 implemented. Status partial-offline until school 6 is added."
     },

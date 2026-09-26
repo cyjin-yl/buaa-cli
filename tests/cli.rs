@@ -154,3 +154,81 @@ fn conflicting_archive_network_modes_reject_before_reading_stdin() {
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["error"], "invalid_input");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn baseline_save_stays_private_under_umask_0022() {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::os::unix::process::CommandExt;
+
+    let directory = std::env::temp_dir().join(format!("buaa-cli-baseline-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
+    let path = directory.join("baseline.json");
+    let run = |score| {
+        let input = format!(
+            r#"{{"policy":{{"kind":"table","id":"synthetic","source":"https://example.invalid/policy","pass_min":60,"bands":[{{"min":85,"max":100,"point":4.0}},{{"min":75,"max":84,"point":3.0}},{{"min":60,"max":74,"point":2.0}}]}},"courses":[{{"name":"Synthetic Course","score":{score},"credit":4.0}}]}}"#
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_buaa"));
+        command
+            .args(["marks", "baseline", "save", path.to_str().unwrap()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: this child hook only sets its process-local umask before exec.
+        unsafe {
+            command.pre_exec(|| {
+                // SAFETY: umask is set only in this isolated child before exec.
+                libc::umask(0o022);
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    for (score, expected) in [(92, "saved"), (92, "unchanged"), (88, "saved")] {
+        let output = run(score);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["result"], expected);
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o7777, 0o600);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn credits_cli_rejects_unknown_major_and_conflicting_course_identity() {
+    let inputs = [
+        serde_json::json!({
+            "major":"NOT_A_REAL_MAJOR",
+            "selected":[
+                "运筹学（二）","管理信息系统","生产与运作管理","现代程序设计",
+                "计量经济学","国际经济学","货币金融学","应用随机过程",
+                "组织行为学","市场营销","财务报表分析"
+            ]
+        })
+        .to_string(),
+        r#"{"major":"经济统计","selected":["非参数统计"]}"#.to_owned(),
+    ];
+    for input in inputs {
+        let output = invoke(&["credits", "calculate"], input.as_bytes());
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+    }
+}

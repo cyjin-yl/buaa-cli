@@ -19,12 +19,18 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
+use std::ffi::CString;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 const MAX_PATH: usize = 4096;
+// Half of f64::MAX/10,000, so round4 scaling remains finite with margin.
+const MAX_SAFE_CREDIT_TOTAL: f64 = f64::MAX / 20_000.0;
 const DEFAULT_PASS_MIN: u8 = 60;
+const MAX_BASELINE_BYTES: u64 = MAX_POLICY_BYTES * 4;
 
 fn invalid() -> Value {
     json!({"error":"invalid_input","message":"marks input is invalid"})
@@ -227,6 +233,7 @@ fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
     }
     let mut seen: BTreeMap<String, ()> = BTreeMap::new();
     let mut courses = Vec::with_capacity(list.len());
+    let mut total_credit = 0.0;
     for item in list {
         let input: CourseInput = match serde_json::from_value(item.clone()) {
             Ok(value) => value,
@@ -236,9 +243,15 @@ fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
             || input.score > 100
             || !input.credit.is_finite()
             || input.credit <= 0.0
+            || input.credit >= MAX_SAFE_CREDIT_TOTAL
         {
             return Err(invalid());
         }
+        let next_total = total_credit + input.credit;
+        if !next_total.is_finite() || next_total >= MAX_SAFE_CREDIT_TOTAL {
+            return Err(invalid());
+        }
+        total_credit = next_total;
         if seen.insert(input.name.clone(), ()).is_some() {
             return Err(
                 json!({"error":"invalid_input","message":"duplicate course name in selection"}),
@@ -264,6 +277,7 @@ fn parse_baseline_courses(baseline: &Value) -> Result<Vec<Course>, Value> {
     }
     let mut seen: BTreeMap<String, ()> = BTreeMap::new();
     let mut courses = Vec::with_capacity(list.len());
+    let mut total_credit = 0.0;
     for item in list {
         let name = item
             .get("name")
@@ -283,10 +297,17 @@ fn parse_baseline_courses(baseline: &Value) -> Result<Vec<Course>, Value> {
         let credit = item
             .get("credit")
             .and_then(Value::as_f64)
-            .filter(|credit| credit.is_finite() && *credit > 0.0)
+            .filter(|credit| credit.is_finite() && *credit > 0.0 && *credit < MAX_SAFE_CREDIT_TOTAL)
             .ok_or_else(
                 || json!({"error":"invalid_input","message":"baseline courses are malformed"}),
             )?;
+        let next_total = total_credit + credit;
+        if !next_total.is_finite() || next_total >= MAX_SAFE_CREDIT_TOTAL {
+            return Err(
+                json!({"error":"invalid_input","message":"baseline courses are malformed"}),
+            );
+        }
+        total_credit = next_total;
         if seen.insert(name.clone(), ()).is_some() {
             return Err(
                 json!({"error":"invalid_input","message":"duplicate course name in baseline"}),
@@ -474,6 +495,74 @@ fn valid_baseline_path(path: &str) -> Result<PathBuf, Value> {
     }
     Ok(PathBuf::from(path))
 }
+fn baseline_location(path: &Path) -> Result<(File, String), Value> {
+    let Some(name) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+    else {
+        return Err(invalid());
+    };
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("/"));
+    let directory = crate::governor::open_directory(parent, false, false).map_err(|_| invalid())?;
+    Ok((directory, name.to_owned()))
+}
+
+fn read_private_baseline(directory: &File, name: &str) -> Result<Option<String>, Value> {
+    let file = match crate::governor::open_child(directory, name, libc::O_RDONLY) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(invalid()),
+    };
+    crate::governor::validate_private_file(&file).map_err(|_| invalid())?;
+    let mut text = String::new();
+    file.take(MAX_BASELINE_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|_| invalid())?;
+    if text.len() as u64 > MAX_BASELINE_BYTES {
+        return Err(invalid());
+    }
+    Ok(Some(text))
+}
+
+fn save_private_baseline(directory: &File, name: &str, body: &[u8]) -> Result<(), Value> {
+    let (temporary_name, mut temporary) = crate::governor::create_temporary(directory)
+        .map_err(|_| unavailable("baseline could not be written"))?;
+    let result = (|| {
+        crate::governor::validate_private_file(&temporary)
+            .map_err(|_| unavailable("baseline could not be written"))?;
+        temporary
+            .write_all(body)
+            .map_err(|_| unavailable("baseline could not be written"))?;
+        temporary
+            .sync_all()
+            .map_err(|_| unavailable("baseline could not be written"))?;
+        let target_name = CString::new(name).map_err(|_| invalid())?;
+        // SAFETY: both names are validated single components in the pinned directory.
+        if unsafe {
+            libc::renameat(
+                directory.as_raw_fd(),
+                temporary_name.as_ptr(),
+                directory.as_raw_fd(),
+                target_name.as_ptr(),
+            )
+        } != 0
+        {
+            return Err(unavailable("baseline could not be written"));
+        }
+        directory
+            .sync_all()
+            .map_err(|_| unavailable("baseline could not be written"))
+    })();
+    if result.is_err() {
+        // SAFETY: the temporary name was created in this pinned directory.
+        unsafe { libc::unlinkat(directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
+    }
+    result
+}
 
 fn load_current(input: &str) -> Result<(PolicyContext, Vec<Course>, Calculation), Value> {
     let raw: Value = serde_json::from_str(input).map_err(|_| invalid())?;
@@ -524,9 +613,16 @@ pub fn baseline_save(input: &str, path: &str) -> Value {
         Err(value) => return value,
     };
     let document = baseline_document(&context, &calc);
-    let unchanged = fs::read_to_string(&path)
-        .ok()
-        .and_then(|existing| serde_json::from_str::<Value>(&existing).ok())
+    let (directory, name) = match baseline_location(&path) {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
+    let existing = match read_private_baseline(&directory, &name) {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
+    let unchanged = existing
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .is_some_and(|existing_doc| {
             without_timestamp(&document) == without_timestamp(&existing_doc)
         });
@@ -538,33 +634,16 @@ pub fn baseline_save(input: &str, path: &str) -> Value {
             "path": path.to_string_lossy()
         });
     }
-    if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty())
-        && fs::create_dir_all(parent).is_err()
-    {
-        return unavailable("baseline directory could not be created");
-    }
-    // Atomic write: stage in the same directory, then rename over the target.
-    let temp = path.with_extension(format!(
-        "{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0)
-    ));
-    let body = format!("{}\n", serde_json::to_string(&document).unwrap());
-    let outcome = match fs::write(&temp, body) {
-        Ok(()) => match fs::rename(&temp, &path) {
-            Ok(()) => true,
-            Err(_) => {
-                let _ = fs::remove_file(&temp);
-                false
-            }
-        },
-        Err(_) => false,
+    let mut body = match serde_json::to_vec(&document) {
+        Ok(value) => value,
+        Err(_) => return unavailable("baseline could not be serialized"),
     };
-    if !outcome {
-        return unavailable("baseline could not be written");
+    body.push(b'\n');
+    if body.len() as u64 > MAX_BASELINE_BYTES {
+        return invalid();
+    }
+    if let Err(error) = save_private_baseline(&directory, &name, &body) {
+        return error;
     }
     json!({
         "schema_version":1,
@@ -583,9 +662,14 @@ pub fn baseline_show(path: &str) -> Value {
         Ok(value) => value,
         Err(value) => return value,
     };
-    let text = match fs::read_to_string(&path) {
+    let (directory, name) = match baseline_location(&path) {
         Ok(value) => value,
-        Err(_) => return unavailable("baseline file is not readable"),
+        Err(value) => return value,
+    };
+    let text = match read_private_baseline(&directory, &name) {
+        Ok(Some(value)) => value,
+        Ok(None) => return unavailable("baseline file is not readable"),
+        Err(value) => return value,
     };
     let doc: Value = match serde_json::from_str(&text) {
         Ok(value) => value,
@@ -614,21 +698,25 @@ pub fn schema() -> Value {
                         "pass_min":{"type":"integer","minimum":0,"maximum":100},
                         "bands":{"type":"array","items":{"type":"object","required":["min","max","point"]}},
                         "a":{"type":"number"},"b":{"type":"number"},"c":{"type":"number"}}},
-                "courses":{"type":"array","items":{"type":"object","required":["name","score","credit"],
+                "courses":{"type":"array","x-maxTotalCredit":MAX_SAFE_CREDIT_TOTAL,"items":{"type":"object","required":["name","score","credit"],
                     "properties":{"name":{"type":"string","minLength":1},
                         "score":{"type":"integer","minimum":0,"maximum":100},
-                        "credit":{"type":"number","exclusiveMinimum":0}}}},
+                        "credit":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL}}}},
                 "baseline":{"type":"object","description":"optional gpa_baseline document for the structured diff"}}},
         "output": {"type":"object","required":["schema_version","type","policy","courses","counted_credits","total_credits","gpa"],
-            "properties":{"gpa":{"type":["number","null"],"minimum":0,"maximum":5},
+            "properties":{"counted_credits":{"type":"number","minimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL},
+                "total_credits":{"type":"number","minimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL},
+                "gpa":{"type":["number","null"],"minimum":0,"maximum":5},
                 "diff":{"type":"object","required":["added","removed","changed","gpa"]}}},
         "policy_provenance":"every result carries the published policy id/source; no policy is embedded in the repository"
     },
     "baseline": {
         "operations": ["save <absolute-path>", "show <absolute-path>"],
-        "save": {"stdin":"same as gpa input","result":"saved|unchanged (idempotent, atomic, local-only)"},
-        "show": {"stdout":"the stored gpa_baseline document"}
-    }})
+        "path_policy": "parent must already exist, be owned by the current user and not group/other writable; symlink path components are rejected; baseline files must be regular owner-controlled mode 0600",
+        "save": {"stdin":"same as gpa input","result":"saved|unchanged (idempotent, atomic, local-only)","file_mode":"0600","max_bytes":MAX_BASELINE_BYTES},
+        "show": {"stdout":"the stored gpa_baseline document","requires_file_mode":"0600"}
+    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +726,8 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     const TABLE_POLICY: &str = r#"{
         "kind": "table",
@@ -753,8 +843,9 @@ mod tests {
     #[test]
     fn baseline_save_is_idempotent_and_round_trips() {
         let dir = std::env::temp_dir().join(format!("buaa-marks-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
         let path = dir.join("baseline.json");
-        let _ = fs::remove_file(&path);
         let input = format!(
             r#"{{"policy":{},"courses":[{{"name":"课程A","score":92,"credit":4.0}}]}}"#,
             TABLE_POLICY
@@ -781,8 +872,9 @@ mod tests {
     #[test]
     fn saved_baseline_drives_diff_round_trip() {
         let dir = std::env::temp_dir().join(format!("buaa-marks-rt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
         let path = dir.join("baseline.json");
-        let _ = fs::remove_file(&path);
         let current = format!(
             r#"{{"policy":{},"courses":[{{"name":"课程A","score":92,"credit":4.0}}]}}"#,
             TABLE_POLICY
@@ -807,6 +899,50 @@ mod tests {
     }
 
     #[test]
+    fn baseline_save_rejects_symlinks_unsafe_parents_and_nonfiles() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("buaa-marks-path-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let input = format!(r#"{{"policy":{} ,"courses":[]}}"#, TABLE_POLICY);
+        let outside = root.join("outside.json");
+        fs::write(&outside, "unchanged").unwrap();
+
+        let file_link = root.join("baseline-link.json");
+        symlink(&outside, &file_link).unwrap();
+        assert_eq!(
+            baseline_save(&input, file_link.to_str().unwrap())["error"],
+            "invalid_input"
+        );
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "unchanged");
+
+        let parent_link = root.join("parent-link");
+        symlink(&root, &parent_link).unwrap();
+        let through_parent_link = parent_link.join("baseline.json");
+        assert_eq!(
+            baseline_save(&input, through_parent_link.to_str().unwrap())["error"],
+            "invalid_input"
+        );
+
+        let shared = root.join("shared");
+        fs::DirBuilder::new().mode(0o700).create(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            baseline_save(&input, shared.join("baseline.json").to_str().unwrap())["error"],
+            "invalid_input"
+        );
+
+        let nonfile = root.join("directory-target");
+        fs::DirBuilder::new().mode(0o700).create(&nonfile).unwrap();
+        assert_eq!(
+            baseline_save(&input, nonfile.to_str().unwrap())["error"],
+            "invalid_input"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn score_over_100_and_error_echo_are_rejected() {
         // score 150 must not count as a pass; it is invalid input.
         let over = format!(
@@ -822,6 +958,58 @@ mod tests {
         let out = gpa(&echo);
         assert!(out.get("error").is_none());
         assert_eq!(out["type"], "gpa_calculation");
+    }
+    #[test]
+    fn oversized_and_aggregate_credits_fail_closed() {
+        for credit in ["2e304", "1e308"] {
+            let input = format!(
+                r#"{{"policy":{} ,"courses":[{{"name":"A","score":92,"credit":{credit}}}]}}"#,
+                TABLE_POLICY
+            );
+            assert_eq!(gpa(&input)["error"], "invalid_input");
+        }
+        let per_course = serde_json::to_string(&(MAX_SAFE_CREDIT_TOTAL * 0.6)).unwrap();
+        let aggregate = format!(
+            r#"{{"policy":{} ,"courses":[{{"name":"A","score":92,"credit":{per_course}}},{{"name":"B","score":92,"credit":{per_course}}}]}}"#,
+            TABLE_POLICY
+        );
+        assert_eq!(gpa(&aggregate)["error"], "invalid_input");
+        let baseline = json!({
+            "courses":[{"name":"A","score":92,"credit":2e304}]
+        });
+        assert!(parse_baseline_courses(&baseline).is_err());
+    }
+
+    #[test]
+    fn largest_safe_credit_domain_keeps_numeric_outputs_finite() {
+        let credit = serde_json::to_string(&(MAX_SAFE_CREDIT_TOTAL * 0.4)).unwrap();
+        let input = format!(
+            r#"{{"policy":{} ,"courses":[{{"name":"A","score":92,"credit":{credit}}}]}}"#,
+            TABLE_POLICY
+        );
+        let output = gpa(&input);
+        assert!(output.get("error").is_none());
+        for field in ["counted_credits", "total_credits", "gpa"] {
+            assert!(output[field].as_f64().unwrap().is_finite());
+        }
+        let contract = schema();
+        assert_eq!(
+            contract["gpa"]["stdin"]["properties"]["courses"]["items"]["properties"]["credit"]["exclusiveMaximum"],
+            json!(MAX_SAFE_CREDIT_TOTAL)
+        );
+        for field in ["counted_credits", "total_credits"] {
+            assert_eq!(
+                contract["gpa"]["output"]["properties"][field]["type"],
+                "number"
+            );
+        }
+        for field in ["counted_credits", "total_credits"] {
+            assert_eq!(
+                contract["gpa"]["output"]["properties"][field]["exclusiveMaximum"],
+                json!(MAX_SAFE_CREDIT_TOTAL)
+            );
+        }
+        assert_eq!(contract["baseline"]["save"]["file_mode"], "0600");
     }
 
     #[test]
