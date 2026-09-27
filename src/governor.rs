@@ -525,7 +525,9 @@ impl RequestLease<'_> {
     /// Finish a response whose validated non-2xx status describes the archived
     /// resource, not the archive service. Challenge and body-failure facts remain
     /// independent; archived 401/403/429 and Retry-After do not affect account-wide
-    /// safety or cooldown state.
+    /// safety or cooldown state. A challenge-free, body-complete attributed status
+    /// is a successful network interaction and clears the consecutive
+    /// network-failure streak.
     pub(crate) fn finish_attributed_archive_status(
         self,
         status: u16,
@@ -584,7 +586,10 @@ impl RequestLease<'_> {
                 if network_failure {
                     self.state.failure_backoff(now)?;
                 }
-                (200..=299).contains(&status) && !challenge && !network_failure
+                ((200..=299).contains(&status)
+                    || (archived_resource_status && (400..=599).contains(&status)))
+                    && !challenge
+                    && !network_failure
             }
             Outcome::NetworkFailure => {
                 self.state.failure_backoff(now)?;

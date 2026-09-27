@@ -491,6 +491,75 @@ macro_rules! governor_process_regressions {
                 first.cooldown_until_boottime_ms
             );
         }
+        fn expire_deadlines(fixture: &Fixture) {
+            let path = fixture.state_dir().join("state.json");
+            let mut state: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            state["next_request_ms"] = serde_json::json!(0);
+            state["cooldown_until_ms"] = serde_json::json!(0);
+            state["next_background_ms"] = serde_json::json!(0);
+            fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        }
+
+        #[test]
+        fn successful_attributed_archive_status_clears_failure_streak() {
+            for status in [403, 429, 500, 503] {
+                let fixture = Fixture::new();
+                let governor = fixture.open();
+
+                let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+                lease.finish(Outcome::NetworkFailure).unwrap();
+                assert_eq!(
+                    fixture
+                        .open()
+                        .status()
+                        .unwrap()
+                        .consecutive_network_failures,
+                    1,
+                    "status {status}"
+                );
+
+                expire_deadlines(&fixture);
+                let governor = fixture.open();
+                let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+                lease
+                    .finish_attributed_archive_status(status, false, false)
+                    .unwrap();
+                let state = fixture.open().status().unwrap();
+                assert_eq!(state.consecutive_network_failures, 0, "status {status}");
+                assert!(!state.safety_latched, "status {status}");
+
+                expire_deadlines(&fixture);
+                let governor = fixture.open();
+                let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+                lease.finish(Outcome::NetworkFailure).unwrap();
+                assert_eq!(
+                    fixture
+                        .open()
+                        .status()
+                        .unwrap()
+                        .consecutive_network_failures,
+                    1,
+                    "status {status}"
+                );
+            }
+
+            // A challenge on an attributed status is not success: the streak
+            // survives and the safety latch engages.
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            lease.finish(Outcome::NetworkFailure).unwrap();
+            expire_deadlines(&fixture);
+            let governor = fixture.open();
+            let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            lease
+                .finish_attributed_archive_status(403, true, false)
+                .unwrap();
+            let state = fixture.open().status().unwrap();
+            assert!(state.safety_latched);
+            assert_eq!(state.consecutive_network_failures, 1);
+        }
 
         #[test]
         fn polling_and_raised_policy_cannot_be_lowered_on_reopen() {
