@@ -267,3 +267,27 @@ fn credits_cli_rejects_unknown_major_and_conflicting_course_identity() {
         assert_eq!(error["error"], "invalid_input");
     }
 }
+
+#[test]
+fn schema_and_help_list_every_online_entry_point() {
+    // STR-CLI-001: the machine-readable network_policy.opt_in must name every
+    // command with an explicit online entry point.
+    for command in ["help", "schema"] {
+        let output = invoke(&[command], b"");
+        assert!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let opt_in = value["network_policy"]["opt_in"].as_str().unwrap_or("");
+        for surface in [
+            "archive",
+            "organizations",
+            "announcements",
+            "fengrubei fetch --online",
+            "gateway explicit online flags",
+        ] {
+            assert!(
+                opt_in.contains(surface),
+                "{command} opt_in missing {surface}: {opt_in}"
+            );
+        }
+    }
+}

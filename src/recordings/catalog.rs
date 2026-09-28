@@ -10,8 +10,11 @@ use rusqlite::{
 };
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
-use std::path::Path;
+use std::os::unix::{
+    ffi::OsStrExt,
+    fs::{MetadataExt, OpenOptionsExt},
+};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const MAX_FIELD: usize = 4096;
@@ -22,6 +25,10 @@ const MAX_SCHEMA: usize = 16 * 1024;
 pub(crate) struct Catalog {
     connection: Connection,
     fingerprint: String,
+    canonical: PathBuf,
+    /// Held, not read: keeps the bound descriptor open for the catalog's lifetime.
+    #[allow(dead_code)]
+    identity: fs::File,
 }
 
 impl Catalog {
@@ -31,7 +38,16 @@ impl Catalog {
             return Err(invalid_input());
         }
         let canonical = fs::canonicalize(path).map_err(|_| unavailable())?;
-        let metadata = fs::metadata(&canonical).map_err(|_| unavailable())?;
+        // Open a descriptor on the exact path and fstat it: the fingerprint and
+        // the post-open identity check bind this connection to the fd's inode,
+        // not to two pathname stats bracketing the SQLite open (rename-swap
+        // ABA window). The descriptor stays open for the catalog's lifetime.
+        let identity = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(0)
+            .open(&canonical)
+            .map_err(|_| unavailable())?;
+        let metadata = identity.metadata().map_err(|_| unavailable())?;
         if !metadata.is_file() {
             return Err(invalid_input());
         }
@@ -41,6 +57,32 @@ impl Catalog {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|_| unavailable())?;
+        Self::harden(&connection)?;
+        connection
+            .execute_batch("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; BEGIN DEFERRED;")
+            .map_err(|_| unavailable())?;
+        validate_schema(&connection)?;
+        let current = fs::metadata(&canonical).map_err(|_| unavailable())?;
+        if current.dev() != metadata.dev() || current.ino() != metadata.ino() {
+            return Err(unavailable());
+        }
+        let mut hash = Sha256::new();
+        hash.update(b"buaa-cli:recording-catalog-identity:v1\0");
+        let name = canonical.as_os_str().as_bytes();
+        hash.update((name.len() as u64).to_be_bytes());
+        hash.update(name);
+        hash.update(metadata.dev().to_be_bytes());
+        hash.update(metadata.ino().to_be_bytes());
+        Ok(Self {
+            connection,
+            fingerprint: format!("{:x}", hash.finalize()),
+            canonical,
+            identity,
+        })
+    }
+    /// Shared connection hardening: bounded timeouts, SQL surface limits,
+    /// defensive mode and one cumulative progress budget.
+    fn harden(connection: &Connection) -> Result<(), Error> {
         connection
             .busy_timeout(Duration::from_millis(250))
             .map_err(|_| unavailable())?;
@@ -60,7 +102,6 @@ impl Catalog {
         connection
             .set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
             .map_err(|_| unavailable())?;
-        // One cumulative budget for schema validation, search and provenance.
         let mut remaining = 20_000usize;
         connection.progress_handler(
             1000,
@@ -72,25 +113,50 @@ impl Catalog {
                 false
             }),
         );
+        Ok(())
+    }
+
+    /// External-content FTS5 keeps no copy of the indexed text, so a
+    /// desynchronized index (upstream writes that skipped the sync triggers)
+    /// can yield a rowid whose current text no longer matches the query.
+    /// Re-verify every returned row against a temporary FTS5 table built from
+    /// the current content with the same tokenizer, and drop rows that do not
+    /// match. Bounded by the result LIMIT and the page byte limit.
+    fn verify_phrase(
+        &self,
+        literal: &str,
+        rows: &[(i64, &str, Option<&str>)],
+    ) -> Result<Vec<i64>, Error> {
+        let connection = Connection::open_with_flags(
+            &self.canonical,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|_| unavailable())?;
+        Self::harden(&connection)?;
         connection
-            .execute_batch("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; BEGIN DEFERRED;")
+            .execute_batch(
+                "CREATE VIRTUAL TABLE temp.vf USING fts5(text, speaker, tokenize=unicode61);",
+            )
             .map_err(|_| unavailable())?;
-        validate_schema(&connection)?;
-        let current = fs::metadata(&canonical).map_err(|_| unavailable())?;
-        if current.dev() != metadata.dev() || current.ino() != metadata.ino() {
-            return Err(unavailable());
+        let mut insert = connection
+            .prepare("INSERT INTO temp.vf(rowid, text, speaker) VALUES(?1,?2,?3)")
+            .map_err(|_| unavailable())?;
+        for (id, text, speaker) in rows {
+            insert
+                .execute(params![id, text, speaker])
+                .map_err(|_| unavailable())?;
         }
-        let mut hash = Sha256::new();
-        hash.update(b"buaa-cli:recording-catalog-identity:v1\0");
-        let name = canonical.as_os_str().as_bytes();
-        hash.update((name.len() as u64).to_be_bytes());
-        hash.update(name);
-        hash.update(metadata.dev().to_be_bytes());
-        hash.update(metadata.ino().to_be_bytes());
-        Ok(Self {
-            connection,
-            fingerprint: format!("{:x}", hash.finalize()),
-        })
+        let mut statement = connection
+            .prepare("SELECT rowid FROM temp.vf WHERE vf MATCH ?1")
+            .map_err(|_| unavailable())?;
+        let mut cursor = statement
+            .query(params![literal])
+            .map_err(|_| unavailable())?;
+        let mut kept = Vec::new();
+        while let Some(row) = cursor.next().map_err(|_| unavailable())? {
+            kept.push(row.get(0).map_err(|_| unavailable())?);
+        }
+        Ok(kept)
     }
 
     /// Identity, not a content hash or a cross-request snapshot guarantee.
@@ -169,6 +235,14 @@ impl Catalog {
                 language: optional_text(row, 6)?,
                 text: segment_text.to_owned(),
             });
+        }
+        if !result.is_empty() {
+            let rows = result
+                .iter()
+                .map(|row| (row.id, row.text.as_str(), row.speaker.as_deref()))
+                .collect::<Vec<_>>();
+            let kept = self.verify_phrase(&literal, &rows)?;
+            result.retain(|row| kept.contains(&row.id));
         }
         Ok(result)
     }
@@ -822,5 +896,58 @@ mod tests {
             [("b", "derived_from"), ("b", "transcript_of")]
         );
         assert!(catalog.parents("a' OR 1=1 --", 129).unwrap().is_empty());
+    }
+    #[test]
+    fn opened_catalog_keeps_inode_when_path_is_replaced() {
+        let fixture = Fixture::new();
+        fixture.asset("a", "transcript", HASH);
+        fixture.segment("a", 0, "original content", None, None);
+        let catalog = Catalog::open(&fixture.path).unwrap();
+        let fingerprint = catalog.fingerprint().to_owned();
+        // Atomically replace the path with a different database via rename(2);
+        // the open catalog keeps serving the inode it bound, and a fresh open
+        // binds to the replacement.
+        let replacement = Fixture::new();
+        replacement.asset("b", "transcript", HASH);
+        replacement.segment("b", 0, "replacement content", None, None);
+        fs::rename(&replacement.path, &fixture.path).unwrap();
+        assert_eq!(
+            catalog
+                .search_segments("original", None, None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(catalog.fingerprint(), fingerprint);
+        let fresh = Catalog::open(&fixture.path).unwrap();
+        assert_ne!(fresh.fingerprint(), fingerprint);
+        assert_eq!(
+            fresh
+                .search_segments("replacement", None, None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn desynced_fts_row_is_filtered_from_search() {
+        let fixture = Fixture::new();
+        fixture.asset("a", "transcript", HASH);
+        let synced = fixture.segment("a", 0, "stable needle term", None, None);
+        let stale = fixture.segment("a", 1, "old needle term", None, None);
+        // Simulate an upstream write that skipped the FTS sync trigger, so the
+        // index still carries the old text for this rowid.
+        fixture
+            .db()
+            .execute(
+                "UPDATE transcript_segment SET text='rewritten entirely fresh' WHERE id=?1",
+                [stale],
+            )
+            .unwrap();
+        let catalog = Catalog::open(&fixture.path).unwrap();
+        let rows = catalog.search_segments("needle", None, None, 10).unwrap();
+        assert_eq!(rows.iter().map(|row| row.id).collect::<Vec<_>>(), [synced]);
+        assert!(rows.iter().all(|row| row.text.contains("needle")));
     }
 }

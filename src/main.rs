@@ -316,7 +316,7 @@ fn run() -> CliResult {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
             "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate", "spoc surface [--online|--refresh]"],
-            "network_policy": {"default":"offline", "opt_in":"archive/organizations --online or --refresh; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
+            "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
         "capabilities" if args.len() == 1 => {
@@ -349,7 +349,7 @@ fn run() -> CliResult {
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
                 "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
-            "network_policy":{"default":"offline","opt_in":"archive/organizations --online or --refresh; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
+            "network_policy":{"default":"offline","opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
             let mut raw = false;
