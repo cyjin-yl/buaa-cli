@@ -207,12 +207,29 @@ pub fn schema() -> Value {
             "required":["schema_version","type","result","policy","major","categories","total_counted","remaining","satisfied","courses","warnings"],
             "properties":{"schema_version":{"const":1},"type":{"const":"credits_calculate"},
                 "result":{"enum":["satisfied","deficit"]},
+                "policy":{"type":"object","additionalProperties":false,
+                    "required":["school","cohort","track","required_credits"],
+                    "properties":{"school":{"const":"economics_management"},
+                        "cohort":{"const":"2020"},
+                        "track":{"const":"general_major"},
+                        "required_credits":{"const":25.0}}},
+                "major":{"type":"string","minLength":1},
                 "categories":{"type":"object","additionalProperties":false,
-                    "required":["general","core_major_not_counted","core_other"]},
+                    "required":["general","core_major_not_counted","core_other"],
+                    "properties":{"general":{"type":"number","minimum":0},
+                        "core_major_not_counted":{"type":"number","minimum":0},
+                        "core_other":{"type":"number","minimum":0}}},
                 "total_counted":{"type":"number","minimum":0},
                 "remaining":{"type":"number","minimum":0},
                 "satisfied":{"type":"boolean"},
-                "courses":{"type":"array"},
+                "courses":{"type":"array","items":{"type":"object","additionalProperties":false,
+                    "required":["name","credit","category","counts_toward_25"],
+                    "properties":{"name":{"type":"string","minLength":1},
+                        "credit":{"type":"number"},
+                        "category":{"enum":["general","core_major","core_other"]},
+                        "counts_toward_25":{"type":"boolean"},
+                        "grade":{"type":"string"},
+                        "term":{"type":"string"}}}},
                 "warnings":{"type":"array","items":{"type":"string"}}}}}
     })
 }
@@ -280,6 +297,77 @@ mod tests {
         assert_eq!(out["satisfied"], true);
         assert_eq!(out["remaining"], 0.0);
         assert_eq!(out["result"], "satisfied");
+    }
+    #[test]
+    fn output_schema_declares_every_field_the_runtime_emits() {
+        let output = schema()["calculate"]["output"].clone();
+        let properties = output["properties"].clone();
+
+        // `required` and `additionalProperties:false` must not contradict:
+        // every required field is declared.
+        let required: Vec<&str> = output["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        for name in &required {
+            assert!(
+                properties.get(*name).is_some(),
+                "required field {name} is not declared in properties"
+            );
+        }
+
+        let categories = properties["categories"].clone();
+        let category_required: Vec<&str> = categories["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        for name in &category_required {
+            assert!(
+                categories["properties"].get(*name).is_some(),
+                "required category field {name} is not declared in properties"
+            );
+        }
+
+        // Runtime shape: every key a real success output emits, in both the
+        // deficit and satisfied results, is declared by the schema.
+        let catalog: Value = serde_json::from_str(include_str!("credits_catalog.json")).unwrap();
+        let mut name_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for course in catalog["courses"].as_array().unwrap() {
+            *name_counts
+                .entry(course["name"].as_str().unwrap().to_string())
+                .or_insert(0) += 1;
+        }
+        let names: Vec<String> = catalog["courses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|course| course["majors"][0] == GENERAL_TAG)
+            .filter(|course| name_counts[course["name"].as_str().unwrap()] == 1)
+            .map(|course| course["name"].as_str().unwrap().to_string())
+            .collect();
+        let input = json!({"major":"会计学","selected":names});
+        for out in [
+            calculate(r#"{"major":"信息管理与信息系统","selected":["运筹学（二）","健康经济学"]}"#),
+            calculate(&input.to_string()),
+        ] {
+            for key in out.as_object().unwrap().keys() {
+                assert!(
+                    properties.get(key).is_some(),
+                    "runtime field {key} is missing from the output schema"
+                );
+            }
+            for key in out["categories"].as_object().unwrap().keys() {
+                assert!(
+                    categories["properties"].get(key).is_some(),
+                    "runtime category field {key} is missing from the output schema"
+                );
+            }
+        }
     }
 
     #[test]

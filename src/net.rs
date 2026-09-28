@@ -685,9 +685,13 @@ impl ArchiveClient {
                 .as_ref()
                 .is_some_and(|value| !valid_header(value))
             || cached.revalidated_at_unix_ms.is_some() != cached.revalidation_status.is_some()
-            || cached
-                .revalidation_status
-                .is_some_and(|status| !matches!(status, 200 | 304 | 404 | 410))
+            || cached.revalidation_status.is_some_and(|status| {
+                !matches!(status, 200 | 304 | 404 | 410)
+                    && !(status == cached.status
+                        && self
+                            .profile
+                            .has_attributed_archive_error(url, status, &cached.headers))
+            })
         {
             return Err(corrupt_cache());
         }
@@ -1830,6 +1834,77 @@ mod tests {
             assert_eq!(cached["retrieval"]["cache_status"], "hit");
             assert_eq!(server.count(), 1);
         }
+    }
+    #[test]
+    fn attributed_error_revalidation_round_trips_after_reopen() {
+        const QUERY: &str = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
+        const ATTRIBUTION: &str = "Memento-Datetime: Tue, 02 Jan 2024 03:04:05 GMT\r\nLink: <https://www.buaa.edu.cn/>; rel=\"original\"\r\n";
+
+        for status in [403, 429, 500, 503] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(socket, status, ATTRIBUTION, b"archived origin error");
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            seed_robots(&client);
+
+            let first = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(first["result"], "capture_found");
+            assert_eq!(first["archive_reported_http"]["status"], status);
+
+            client.mode = CacheMode::Revalidate;
+            let refreshed = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(refreshed["result"], "capture_found");
+            assert_eq!(refreshed["archive_reported_http"]["status"], status);
+
+            let client = fixture.client(CacheMode::Offline, &server);
+            let cached = crate::archive::capture(QUERY, &client).unwrap();
+            assert_eq!(cached["result"], "capture_found");
+            assert_eq!(cached["archive_reported_http"]["status"], status);
+            assert_eq!(cached["retrieval"]["cache_status"], "hit");
+            assert_eq!(server.count(), 2, "status {status}");
+        }
+    }
+
+    #[test]
+    fn writer_impossible_revalidation_statuses_fail_closed() {
+        const MD: &str = "Tue, 02 Jan 2024 03:04:05 GMT";
+        const LINK: &str = "<https://www.buaa.edu.cn/>; rel=\"original\"";
+        let fixture = Fixture::new();
+        let server = Server::new(|_, _| panic!("network must not run"));
+        let client = fixture.client(CacheMode::Offline, &server);
+        let url = Url::parse(TARGET).unwrap();
+        let path = fixture.0.join("cache").join(cache_name(&url));
+
+        // Attributed 503 entry revalidated with a different status: the writer
+        // requires the revalidation response to equal the retained status.
+        seed(&client, TARGET, b"archived origin error", true);
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        stored["status"] = serde_json::json!(503);
+        stored["headers"]["memento-datetime"] = serde_json::json!(MD);
+        stored["headers"]["link"] = serde_json::json!(LINK);
+        stored["revalidated_at_unix_ms"] = serde_json::json!(1);
+        stored["revalidation_status"] = serde_json::json!(403);
+        fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        assert_eq!(
+            client.snapshot(&url, true).unwrap_err().code,
+            "cache_invalid"
+        );
+
+        // Plain 200 entry carrying an attributed-error revalidation status: the
+        // writer can only persist a non-2xx revalidation on an attributed entry.
+        seed(&client, TARGET, b"authentic bytes", true);
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        stored["revalidated_at_unix_ms"] = serde_json::json!(1);
+        stored["revalidation_status"] = serde_json::json!(503);
+        fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        assert_eq!(
+            client.snapshot(&url, true).unwrap_err().code,
+            "cache_invalid"
+        );
+        assert_eq!(server.count(), 0);
     }
 
     #[test]

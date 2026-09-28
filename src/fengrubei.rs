@@ -172,7 +172,7 @@ fn copy_new(mut source: File, output: &OutputTarget, spec: &ReleaseSpec) -> Resu
     let mut target = governor::open_child(
         &output.directory,
         &output.name,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
     )
     .map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
@@ -181,6 +181,7 @@ fn copy_new(mut source: File, output: &OutputTarget, spec: &ReleaseSpec) -> Resu
             unavailable()
         }
     })?;
+    let mut created: Option<(u64, u64)> = None;
     let result = (|| {
         // openat creation mode is affected by umask; enforce the published mode.
         // SAFETY: target is our live, exclusively-created regular-file candidate.
@@ -189,11 +190,22 @@ fn copy_new(mut source: File, output: &OutputTarget, spec: &ReleaseSpec) -> Resu
         }
         governor::validate_private_file(&target).map_err(|_| conflict())?;
         let opened = target.metadata().map_err(|_| unavailable())?;
+        created = Some((opened.dev(), opened.ino()));
         let copied = std::io::copy(&mut source, &mut target).map_err(|_| unavailable())?;
         if copied != spec.bytes {
             return Err(conflict());
         }
         target.sync_all().map_err(|_| unavailable())?;
+        // Re-read the bytes written through our own descriptor and re-verify the
+        // pinned SHA-256: a concurrent same-length rewrite of the cache inode
+        // must not be published under the pinned identity.
+        target.seek(SeekFrom::Start(0)).map_err(|_| unavailable())?;
+        let mut digest = Sha256::new();
+        let mut reader = target.take(spec.bytes);
+        std::io::copy(&mut reader, &mut digest).map_err(|_| unavailable())?;
+        if format!("{:x}", digest.finalize()) != spec.sha256 {
+            return Err(conflict());
+        }
         let current = governor::open_child(&output.directory, &output.name, libc::O_RDONLY)
             .map_err(|_| conflict())?;
         governor::validate_private_file(&current).map_err(|_| conflict())?;
@@ -204,10 +216,34 @@ fn copy_new(mut source: File, output: &OutputTarget, spec: &ReleaseSpec) -> Resu
         output.directory.sync_all().map_err(|_| unavailable())
     })();
     if result.is_err() {
-        // SAFETY: the name is one validated component in the pinned safe parent.
-        unsafe { libc::unlinkat(output.directory.as_raw_fd(), name.as_ptr(), 0) };
+        // Remove the partial output only while the final name still resolves
+        // to the inode we created; a concurrent replacement under the same
+        // name is never ours to delete.
+        let removable = created
+            .map(|id| name_still_ours(&output.directory, &name, id))
+            .unwrap_or(false);
+        if removable {
+            // SAFETY: the name is one validated component in the pinned safe parent.
+            unsafe { libc::unlinkat(output.directory.as_raw_fd(), name.as_ptr(), 0) };
+        }
     }
     result
+}
+
+fn name_still_ours(directory: &File, name: &CString, id: (u64, u64)) -> bool {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: stat is initialized by a successful fstatat; name is one
+    // validated component in the pinned safe parent directory.
+    unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        ) == 0
+            && stat.assume_init().st_dev == id.0
+            && stat.assume_init().st_ino == id.1
+    }
 }
 
 struct SmallResponse {
@@ -907,5 +943,57 @@ mod tests {
         assert_eq!(server.count.load(Ordering::SeqCst), 3);
         assert!(downloader.governor.status().is_ok());
         fs::set_permissions(fixture.0.join("cache"), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[test]
+    fn copy_new_rejects_equal_length_unpinned_bytes() {
+        let fixture = Fixture::new();
+        let out_dir = fixture.0.join("out");
+        fs::DirBuilder::new().mode(0o700).create(&out_dir).unwrap();
+        let directory = governor::open_directory(&out_dir, false, false).unwrap();
+        let output = OutputTarget {
+            directory,
+            name: "victim.zip".to_owned(),
+        };
+        // Same length as the pinned asset, but the bytes do not match the
+        // pinned SHA-256: a concurrent same-length rewrite of the cache
+        // inode must not be published under the pinned identity.
+        let source_path = fixture.0.join("source.zip");
+        fs::write(&source_path, b"synthetic-template-bad").unwrap();
+        let source = fs::File::open(&source_path).unwrap();
+        assert_eq!(
+            copy_new(source, &output, &TEST_RELEASE).unwrap_err().code,
+            "conflict"
+        );
+        assert!(!out_dir.join("victim.zip").exists());
+    }
+
+    #[test]
+    fn failure_cleanup_only_removes_the_created_inode() {
+        let fixture = Fixture::new();
+        let out_dir = fixture.0.join("out");
+        fs::DirBuilder::new().mode(0o700).create(&out_dir).unwrap();
+        let directory = governor::open_directory(&out_dir, false, false).unwrap();
+        let path = out_dir.join("victim.zip");
+        fs::write(&path, b"synthetic-template-zip").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        let id = (metadata.dev(), metadata.ino());
+        let name = CString::new("victim.zip").unwrap();
+
+        assert!(name_still_ours(&directory, &name, id));
+
+        // A concurrent replacement under the same name is not ours.
+        let other = out_dir.join("other.zip");
+        fs::write(&other, b"someone-else-bytes").unwrap();
+        fs::rename(&other, &path).unwrap();
+        assert!(!name_still_ours(&directory, &name, id));
+
+        // A symlink standing in for the name is not ours.
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(!name_still_ours(&directory, &name, id));
+
+        // A missing name is not ours.
+        fs::remove_file(&path).unwrap();
+        assert!(!name_still_ours(&directory, &name, id));
     }
 }
