@@ -335,11 +335,19 @@ mod tests {
         // Runtime shape: every key a real success output emits, in both the
         // deficit and satisfied results, is declared by the schema.
         let catalog: Value = serde_json::from_str(include_str!("credits_catalog.json")).unwrap();
+        let mut name_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for course in catalog["courses"].as_array().unwrap() {
+            *name_counts
+                .entry(course["name"].as_str().unwrap().to_string())
+                .or_insert(0) += 1;
+        }
         let names: Vec<String> = catalog["courses"]
             .as_array()
             .unwrap()
             .iter()
             .filter(|course| course["majors"][0] == GENERAL_TAG)
+            .filter(|course| name_counts[course["name"].as_str().unwrap()] == 1)
             .map(|course| course["name"].as_str().unwrap().to_string())
             .collect();
         let input = json!({"major":"会计学","selected":names});
