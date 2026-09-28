@@ -52,9 +52,10 @@ fn xencode(message: &[u8], key: &[u8]) -> Vec<u8> {
         let e = (sum >> 2) & 3;
         for index in 0..length {
             let left = values[(index + 1) % length];
+            // Reference grouping is A + (B ^ C) + D with wrapping u32 additions.
             let mixed = ((right >> 5) ^ left.wrapping_shl(2))
-                .wrapping_add((left >> 3) ^ right.wrapping_shl(4))
-                ^ ((sum ^ left).wrapping_add(key[(index & 3) ^ e as usize] ^ right));
+                .wrapping_add(((left >> 3) ^ right.wrapping_shl(4)) ^ (sum ^ left))
+                .wrapping_add(key[(index & 3) ^ e as usize] ^ right);
             right = values[index].wrapping_add(mixed);
             values[index] = right;
         }
@@ -106,7 +107,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn synthetic_protocol_vector_matches_independent_implementation() {
+    fn synthetic_protocol_vector_matches_pinned_reference_formula() {
         let material = derive(
             "student",
             "synthetic-secret",
@@ -118,11 +119,25 @@ mod tests {
         assert_eq!(material.hmd5, "dba5ccebf5a5bf85ddee428f833a2b92");
         assert_eq!(
             material.checksum,
-            "180a6a8f42990f46e34417d207d801fda0814e3b"
+            "3753ba43ea193b985bd23026ec4e192b0aa0b5f1"
         );
         assert_eq!(
             material.info,
-            "{SRBX1}dlPYdz+AOPp6xqRerQSP0b+xj0JIQWn55V8BU3BVUzYlEf/5PVqpeCUVdHWg68WR5nztmQU1QUVEGqpmXSyw/zb8Um6OVo92lhc2OxfIhbe52bJ5a5OJv7cp6TMpmXXK+g7//KkOee2="
+            "{SRBX1}WmXBedGI9fZn6RbCTUtUVlZjGctc0VpGVP8MeGw9E5jEpX5BM9KBULtcKBL1s9qZuIWJc7NgB5cuufzz8+tLyGGvRINX7rB8LMdGDXI9ka2HiD+E6LGialDx+ObG0ax9DQw7w8xTDEL="
+        );
+    }
+
+    #[test]
+    fn synthetic_utf8_short_key_vector_matches_pinned_reference_formula() {
+        let material = derive("学生✓", "manual-synthetic-pass", "192.0.2.1", 62, "key").unwrap();
+        assert_eq!(material.hmd5, "2ccae0963db0ff2e5ebaa5cc23bf6ad4");
+        assert_eq!(
+            material.checksum,
+            "913a790cb6621b0d872ecef7c041bbb38b46eeb6"
+        );
+        assert_eq!(
+            material.info,
+            "{SRBX1}1wJ8x+9pQgmGIbvCdAmHcCGVj/JkDaeOE0IcIHWjd5R1njtVJ2zVgPEMNa/Ozrcr8WWdZ3HOry9DmGhtFozX1Y83g6dWwi8e3QB9jFIFKSLlhgcHIEQ2L0ISL/CAM4fo9L4wSv3jE5asnHVcFgozsv=="
         );
     }
 }
