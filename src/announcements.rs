@@ -65,25 +65,46 @@ fn normalized_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
 }
 
 fn parse_date(raw: &str) -> Result<String, Error> {
-    let mut parts = raw.split('-');
-    let year = parts.next().and_then(|p| p.parse::<i32>().ok());
-    let month = parts.next().and_then(|p| p.parse::<u32>().ok());
-    let day = parts.next().and_then(|p| p.parse::<u32>().ok());
-    if parts.next().is_some() {
-        return Err(unavailable());
-    }
-    match (year, month, day) {
-        (Some(y), Some(m), Some(d))
-            if (1970..=2100).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) =>
-        {
-            Ok(format!("{y:04}-{m:02}-{d:02}"))
-        }
-        _ => Err(failed_contract(
-            "announcement date must be yyyy-mm-dd with gross bounds",
+    // Exact lexical shape: four ASCII digits, dash, two digits, dash, two digits.
+    // Non-canonical forms (for example 2026-2-3) are rejected, never rewritten.
+    let bytes = raw.as_bytes();
+    if bytes.len() != 10
+        || !bytes[0..4].iter().all(u8::is_ascii_digit)
+        || bytes[4] != b'-'
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || bytes[7] != b'-'
+        || !bytes[8..10].iter().all(u8::is_ascii_digit)
+    {
+        return Err(failed_contract(
+            "announcement date must be exactly yyyy-mm-dd",
             file!(),
             line!(),
-        )),
+        ));
     }
+    let year = raw[0..4].parse::<u32>().unwrap_or(0);
+    let month = raw[5..7].parse::<u32>().unwrap_or(0);
+    let day = raw[8..10].parse::<u32>().unwrap_or(0);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    };
+    if !(1970..=2100).contains(&year) || max_day == 0 || day > max_day {
+        return Err(failed_contract(
+            "announcement date must be a real Gregorian yyyy-mm-dd date in 1970..=2100",
+            file!(),
+            line!(),
+        ));
+    }
+    Ok(raw.to_owned())
 }
 
 /// Parse one news-center listing document. This is public for offline
@@ -396,6 +417,46 @@ mod tests {
         assert!(parse_html(&fixture_html(&li("x", "2026/09/20", None))).is_err());
         assert!(parse_html(&fixture_html(&li("x", "20-09-20", None))).is_err());
         assert!(parse_html(&fixture_html(&li("x", "2026-13-01", None))).is_err());
+    }
+
+    #[test]
+    fn impossible_and_noncanonical_dates_are_rejected() {
+        // STR-ANN-001: impossible Gregorian dates and non-canonical spellings
+        // must fail closed, including the century non-leap-year edge.
+        for rejected in [
+            "2026-02-29",
+            "2026-02-30",
+            "2026-02-31",
+            "2026-04-31",
+            "2026-06-31",
+            "2026-09-31",
+            "2100-02-29",
+            "2026-2-3",
+            "2026-02-3",
+            "2026-0-3",
+            "2026-00-10",
+            "2026-12-00",
+            "2026-13-01",
+            "2026-01-32",
+            "2101-01-01",
+            "1969-12-31",
+        ] {
+            assert!(
+                parse_html(&fixture_html(&li("x", rejected, None))).is_err(),
+                "{rejected} must be rejected"
+            );
+        }
+        for accepted in [
+            "2028-02-29",
+            "2000-02-29",
+            "2026-09-20",
+            "1970-01-01",
+            "2100-02-28",
+            "2100-12-31",
+        ] {
+            let parsed = parse_html(&fixture_html(&li("x", accepted, Some("a.htm")))).unwrap();
+            assert_eq!(parsed.entries[0].date, accepted);
+        }
     }
 
     #[test]
