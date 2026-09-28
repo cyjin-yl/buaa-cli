@@ -21,7 +21,7 @@
       "id": "gateway",
       "title": "Gateway login/logout/usage",
       "status": "partial-live-unverified",
-      "acceptance": "Observed read-only usage; explicit login once and logout plan/commit.",
+      "acceptance": "Observed read-only usage; explicit login once and operation-bound logout plan/commit with fail-closed offline review for unknown outcomes.",
       "sources": [
         "https://github.com/ywz978020607/pySrun4k_BeihangLogin",
         "https://github.com/buaahub/BeihangLogin",
@@ -38,7 +38,8 @@
       ],
       "implemented_slices": [
         "gateway-client",
-        "gateway-logout-plan-commit"
+        "gateway-logout-plan-commit",
+        "gateway-logout-recovery"
       ],
       "remaining": "The operator authorized live read-only gateway usage observations on 2026-09-25; the shared governor request interval was raised to 60 seconds for the session and the two governed attempts were approximately two hours and twenty-two minutes apart. Both terminated at the network edge: TLS verification passed, but the handshake was severed (SSL_ERROR_SYSCALL / unexpected EOF) with zero response bytes, sanitized `unavailable`, exit 7. No campus request was completed, so live endpoint compatibility, owner account postconditions and actual ac_id/IP remain unverified. The devcontainer has no route to gw.buaa.edu.cn; a later attempt requires reachable egress, the same governor controls, and the same read-only scope.",
       "authorized_attempts": [
@@ -686,7 +687,7 @@
           "src/gateway/crypto.rs",
           "src/governor.rs"
         ],
-        "proof": "XEncode formula corrected to the pinned-reference grouping A + (B ^ C) + D with wrapping u32 additions (fontlos/buaa-api@1da573856c7438e69dcf01dc3f0881465ce50049, BUAASubnet/srun@2973a5cbfa4b78bb11f322527916d4f7386cf49e; community sources read as protocol references only, no code copied). Two permanent known-answer vectors pin the ASCII/normal-token and UTF-8/short-key synthetic inputs. The full offline suite passes with strict clippy/format checks; surrounding loopback evidence covers the normal SRun offline state reported as online=false, challenge/login/logout and usage-cache flows with actual >=5s request gaps. No real login was attempted; live campus compatibility remains unverified.",
+        "proof": "XEncode formula corrected to the pinned-reference grouping A + (B ^ C) + D with wrapping u32 additions (fontlos/buaa-api@1da573856c7438e69dcf01dc3f0881465ce50049, BUAASubnet/srun@2973a5cbfa4b78bb11f322527916d4f7386cf49e; community sources read as protocol references only, no code copied). Two permanent known-answer vectors pin the ASCII/normal-token and UTF-8/short-key synthetic inputs. Gateway logout plans now bind a fresh operation ID into plan_hash; loopback coverage covers same-plan receipt reuse, fresh-plan separation, cross-process same-account contention, failed pre-send journal preflight with no request, malformed 2xx recovery, failed receipt persistence, account-wide unknown barriers and offline resolution. The full offline suite passes with strict all-target clippy and formatting. No campus request was made; no real login was attempted; live campus compatibility remains unverified.",
         "safety": "Separate typed resume-auth arms one final Authentication lease; challenge is separately governed. Credential and indeterminate 2xx rejection consume the token and latch while preserving Retry-After/network facts. Credentials are stdin-only; the original login buffer is zeroized on command return and parsed password zeroizes on every drop path. Errors are static; no HTTP discovery/retry/proxy/cookie/redirect/TLS bypass.",
         "protocol_formula": {
           "expression": "A + (B ^ C) + D with wrapping u32 additions",
@@ -696,8 +697,8 @@
           ],
           "manual_smoke": "The actual Rust crypto::derive path matched both independently calculated info/HMAC-MD5/SHA-1 vectors; no network request was made."
         },
-        "limits": "Live campus compatibility, account postconditions, endpoint readiness and actual ip/ac_id remain unverified; no real authentication or logout was authorized or performed. The formula now matches two public community references but is not proof of the live gateway's required version; aggregate gateway acceptance remains partial.",
-        "review": "Independent exact-head protocol review and maintainer approval are mandatory before merge; results are tracked in the linked PR. Previous safety/contract reviews remain as recorded."
+        "limits": "Live campus compatibility, account postconditions, endpoint readiness and actual ip/ac_id remain unverified; no real authentication or logout was authorized or performed. The XEncode formula now matches two public community references but is not proof of the live gateway's required version. The unknown-outcome recovery flow records only operator review and never asserts remote disconnect. Aggregate gateway acceptance remains partial.",
+        "review": "Independent exact-head protocol review plus safety and contract reviews are mandatory before merge; results are tracked in the linked PR. Independent safety review confirmed the indeterminate-2xx latch fix (GW-AUTH-001) and the fresh-operation, concurrency and unknown-outcome changes; final safety and contract refreshes clean. Previous reviews remain as recorded."
       }
     },
     {
@@ -707,16 +708,42 @@
       "parent_items": [
         "gateway"
       ],
-      "acceptance": "Offline immutable username/IP/AC plan hash and redacted preview; exact typed online commit; private success receipt prevents duplicate request.",
+      "acceptance": "Fresh operation ID per offline username/IP/AC plan, bound into its immutable hash; exact typed online commit; private receipt replays only that operation.",
       "sources": [],
       "issue": "https://github.com/cyjin-yl/buaa-cli/issues/13",
       "evidence": {
         "implementation": [
           "src/gateway.rs"
         ],
-        "proof": "48 lib tests (one ignored worker) + 8 CLI integration tests pass offline; strict clippy -D warnings and fmt clean. Isolated-HOME CLI smoke: offline plan returns plan_hash verified against independent Python SHA-256 recomputation (40196d4c...d9fb2c8); commit without --online exits permission(5); commit with wrong hash exits invalid_input(2) before cache/network; legacy one-step logout is unsupported(3); plan output contains no raw username.",
-        "safety": "Commit input is recomputed before cache/governor/network; no password; one governed request; receipt persisted while lease held and reused without network; loopback test proves idempotent_hit avoids a second request.",
-        "limits": "No real logout authorized/performed; live postcondition unverified."
+        "proof": "Final offline suite: 126 passed across five suites (two ignored); strict all-target clippy, formatter and offline build pass. Loopback coverage proves same-plan receipt reuse, a fresh same-input plan commits separately after the governed gap, and malformed-response/persistence failures remain fail-closed. Actual CLI recovery mode/input smoke passed without cache or network access.",
+        "safety": "Commit input is recomputed before cache/governor/network. A per-account lock covers receipt recheck through request completion and receipt persistence, while the shared governor still controls the request. No password is accepted; an identical operation hits only its own receipt, and every fresh plan has a distinct operation ID.",
+        "limits": "No real logout authorized/performed; live postcondition unverified. No automatic retry or resolution of actual remote state."
+      }
+    },
+    {
+      "id": "gateway-logout-recovery",
+      "title": "Fail-closed gateway logout recovery",
+      "status": "implemented-offline",
+      "parent_items": [
+        "gateway"
+      ],
+      "acceptance": "Unknown post-send outcomes persist an account-wide fail-closed barrier; exact typed offline review records only remote_state=unknown and permanently blocks replay of the same operation.",
+      "sources": [],
+      "issue": "https://github.com/cyjin-yl/buaa-cli/issues/46",
+      "related_issues": [
+        "https://github.com/cyjin-yl/buaa-cli/issues/32",
+        "https://github.com/cyjin-yl/buaa-cli/issues/37"
+      ],
+      "evidence": {
+        "implementation": [
+          "src/gateway.rs",
+          "src/main.rs",
+          "tests/cli.rs"
+        ],
+        "proof": "Final offline suite: 126 passed across five suites (two ignored). Loopback tests cover failed pre-send journaling without a request, malformed 2xx and receipt-persistence failure, account-wide blocking, exact offline resolution/idempotency, tombstone precedence, and a delayed cross-process stale-miss race that sends once. CLI tests and actual binary smoke reject online recovery and malformed typed input before cache/network work.",
+        "safety": "The unknown barrier is persisted after the shared governor lease is acquired and before send; it remains through response classification and receipt persistence. Recovery is local-only, never queries/retries the portal, and never claims disconnection.",
+        "limits": "No real gateway request, authentication, logout or recovery operation authorized/performed; remote postconditions and endpoint compatibility remain unverified.",
+        "review": "Independent exact-head PR approval and maintainer merge approval remain required; neither is claimed."
       }
     },
     {

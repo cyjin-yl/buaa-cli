@@ -85,7 +85,7 @@
             <tr><td>Timed input</td><td>Replay timestamped lines as NDJSON or an explicit raw pipe.</td><td>Offline CLI replay, ordering and error boundaries verified.</td></tr>
             <tr><td>Archive reads</td><td>Exact-URL CDX lookup and timestamped Memento capture, with hashes and provenance.</td><td>Two governed live CDX pages plus prior real-loopback HTTP proof; live Memento replay unverified. Cache-only by default.</td></tr>
             <tr><td>Fengrubei template</td><td>Pinned v1.0.3 upstream ZIP retrieval with LPPL provenance, exact size and SHA-256.</td><td>Governed public download plus streaming/cache proof. Archive stays packed; current-format/font rights unverified.</td></tr>
-            <tr><td>Gateway client</td><td>Cache-first redacted usage plus typed-intent login/logout with one-shot authentication permission.</td><td>Real loopback protocol proof only. No live campus request, account permission or postcondition verified.</td></tr>
+            <tr><td>Gateway client</td><td>Cache-first redacted usage, one-shot typed login, fresh operation-bound logout plans and local unknown-outcome review.</td><td>Real loopback protocol proof only. Recovery preserves remote state as unknown; no live campus request, account permission or postcondition verified.</td></tr>
             <tr><td>Recording catalog</td><td>Read-only local segment search with timing, declared hashes and bounded ancestry.</td><td>Synthetic SQLite and real CLI proof. No remote object retrieval or media-rights verification.</td></tr>
             <tr><td>Organization directory</td><td>Every entry in the captured official teaching/research institution document, including hidden and unlinked source facts.</td><td>Three governed official reads plus offline Rust parsing; no linked college sites crawled.</td></tr>
             <tr><td>Graduation credits</td><td>School-8 2020-cohort general-major 25-credit calculation from the sourced policy catalog.</td><td>Fully offline deterministic evaluation with duplicate/selection warnings; other schools and cohorts remain pending evidence.</td></tr>
@@ -128,8 +128,8 @@ printf '%s\n' '{"output":"/home/operator/private/template-v1.0.3.zip"}' \
       <p><a href="https://github.com/cyjin-yl/buaa-cli/blob/main/docs/FENGRUBEI.md">License, font and format caveats</a></p>
       <h3>Inspect cached gateway usage</h3>
       <pre><code>./target/debug/buaa gateway usage</code></pre>
-      <p>Login is never automatic: a typed <code>gateway resume-auth</code> arms one final credential submission, and credentials are bounded JSON on stdin. No real account operation was performed for this iteration.</p>
-      <p><a href="https://github.com/cyjin-yl/buaa-cli/blob/main/docs/GATEWAY.md">Gateway usage, resume, login and logout safety contract</a></p>
+      <p>Login is never automatic: a typed <code>gateway resume-auth</code> arms one final credential submission, and credentials are bounded JSON on stdin. Logout commits require explicit <code>--online</code>; unknown outcomes can only be reviewed through a local-only flow that keeps remote state unknown. No real account operation was performed for this iteration.</p>
+      <p><a href="https://github.com/cyjin-yl/buaa-cli/blob/main/docs/GATEWAY.md">Gateway usage, login, logout and offline recovery safety contract</a></p>
       <h3>Search an authorized local recording catalog</h3>
       <pre><code>printf '%s\n' '{"catalog":"/private/catalog.sqlite","query":"linear algebra","authorized":true}' \
   | ./target/debug/buaa recordings search</code></pre>

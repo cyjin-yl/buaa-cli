@@ -498,6 +498,30 @@ impl RequestLease<'_> {
         self.finish_with_status_scope(outcome, false)
     }
 
+    /// Release a lease when local preflight failed before any request was sent.
+    /// Preserve existing cooldown/latch/failure state while retaining the gap.
+    pub(crate) fn finish_without_request(mut self) -> Result<(), String> {
+        self.prepare_finish()?;
+        self.state.pending = None;
+        self.governor.save(&self.state, false)
+    }
+
+    fn prepare_finish(&mut self) -> Result<u64, String> {
+        let now = now_ms()?;
+        self.state.observe(now)?;
+        self.state.next_request_ms = self
+            .state
+            .next_request_ms
+            .max(deadline(now, self.state.request_interval_ms)?);
+        if self.kind == RequestKind::BackgroundPoll {
+            self.state.next_background_ms = self
+                .state
+                .next_background_ms
+                .max(deadline(now, self.state.background_interval_ms)?);
+        }
+        Ok(now)
+    }
+
     /// Finish a response whose validated non-2xx status describes the archived
     /// resource, not the archive service. Challenge and body-failure facts remain
     /// independent; archived 401/403/429 and Retry-After do not affect account-wide
@@ -529,18 +553,7 @@ impl RequestLease<'_> {
         outcome: Outcome<'_>,
         archived_resource_status: bool,
     ) -> Result<(), String> {
-        let now = now_ms()?;
-        self.state.observe(now)?;
-        self.state.next_request_ms = self
-            .state
-            .next_request_ms
-            .max(deadline(now, self.state.request_interval_ms)?);
-        if self.kind == RequestKind::BackgroundPoll {
-            self.state.next_background_ms = self
-                .state
-                .next_background_ms
-                .max(deadline(now, self.state.background_interval_ms)?);
-        }
+        let now = self.prepare_finish()?;
         let success = match outcome {
             Outcome::Success => true,
             Outcome::Http {

@@ -154,3 +154,38 @@ fn conflicting_archive_network_modes_reject_before_reading_stdin() {
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["error"], "invalid_input");
 }
+
+#[test]
+fn gateway_logout_recovery_is_offline_only_and_validates_typed_input() {
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_buaa"))
+        .args(["gateway", "logout-recovery-commit", "--online"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = child.stdin.take().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("online recovery mode waited for stdin");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"], "permission");
+
+    let output = invoke(&["gateway", "logout-recovery-commit", "--offline"], b"{}");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"], "invalid_input");
+}
