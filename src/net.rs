@@ -25,6 +25,9 @@ const MAX_URL: usize = 16 * 1024;
 const ARCHIVE_ROBOTS_URL: &str = "https://web.archive.org/robots.txt";
 const ORGANIZATIONS_ROBOTS_URL: &str = "https://www.buaa.edu.cn/robots.txt";
 pub(crate) const ORGANIZATIONS_URL: &str = "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm";
+const SPOC_ROBOTS_URL: &str = "https://spoc.buaa.edu.cn/robots.txt";
+pub(crate) const SPOC_ROOT_URL: &str = "https://spoc.buaa.edu.cn/";
+pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
 #[cfg(test)]
 const ROBOTS_URL: &str = ARCHIVE_ROBOTS_URL;
 const ROBOTS_MAX_AGE_MS: u64 = 24 * 60 * 60 * 1000;
@@ -46,6 +49,7 @@ enum SourceProfile {
     Archive,
     Organizations,
     Announcements,
+    Spoc,
 }
 
 impl SourceProfile {
@@ -53,6 +57,7 @@ impl SourceProfile {
         match self {
             Self::Archive => ARCHIVE_ROBOTS_URL,
             Self::Organizations | Self::Announcements => ORGANIZATIONS_ROBOTS_URL,
+            Self::Spoc => SPOC_ROBOTS_URL,
         }
     }
 
@@ -61,6 +66,7 @@ impl SourceProfile {
             Self::Archive => ".buaa-cli-archive-cache",
             Self::Organizations => ".buaa-cli-organizations-cache",
             Self::Announcements => ".buaa-cli-announcements-cache",
+            Self::Spoc => ".buaa-cli-spoc-cache",
         }
     }
 
@@ -87,6 +93,11 @@ impl SourceProfile {
                 url.host_str() == Some("www.buaa.edu.cn")
                     && url.query().is_none()
                     && matches!(url.path(), "/robots.txt" | "/xwzx.htm")
+            }
+            Self::Spoc => {
+                url.host_str() == Some("spoc.buaa.edu.cn")
+                    && url.query().is_none()
+                    && matches!(url.path(), "/" | "/spocnew/" | "/robots.txt")
             }
         };
         if common_invalid || !allowed {
@@ -249,6 +260,9 @@ impl ArchiveClient {
 
     pub(crate) fn open_announcements(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Announcements)
+    }
+    pub(crate) fn open_spoc(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Spoc)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
