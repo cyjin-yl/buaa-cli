@@ -2,7 +2,7 @@
   "schema_version": 1,
   "catalog_source": "https://github.com/buaahub/awesome-buaa",
   "catalog_reviewed_on": "2026-09-20",
-  "scope_note": "Every catalog entry was read; linked implementations are historical/unverified unless specifically recorded. On 2026-09-25 the operator authorized a read-only gateway usage observation; it and diagnostic TLS probes on gw/spoc/ihome buaa.edu.cn were severed at the network edge (zero response bytes), and the operator confirmed no login is possible from this devcontainer: egress to *.buaa.edu.cn is domain-wide unavailable, so live-verification items remain blocked. Pending is not implemented; catalog links are not APIs.",
+  "scope_note": "Every catalog entry was read; linked implementations are historical/unverified unless specifically recorded. On 2026-09-25 the operator authorized a read-only gateway usage observation; it and diagnostic TLS probes on gw/spoc/ihome buaa.edu.cn were severed at the network edge (zero response bytes), and the operator confirmed no login is possible from this devcontainer, so gateway/ihome live-verification items remain blocked. On 2026-09-28 egress to spoc.buaa.edu.cn recovered; one governed read-only public-surface observation was recorded (docs/SPOC.md) as contract evidence, while the SPOC acceptance item remains blocked on the owner-reviewed contract and rights-cleared inventory. Pending is not implemented; catalog links are not APIs.",
   "capabilities": [
     {
       "id": "governor",
@@ -79,8 +79,14 @@
         "https://github.com/Tukist/buaa-audio-sync",
         "https://github.com/Micraow/BUAA-SPOC-AutoNotPlay"
       ],
-      "blocker": "No owner-reviewed SPOC service contract, authorized course inventory or rights-reviewed sample is available. Historical catalog links do not establish an API endpoint or download permission.",
-      "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/42"
+      "blocker": "Egress to spoc.buaa.edu.cn recovered on 2026-09-28; the read-only governed public-surface probe (buaa spoc surface) was observed once and the sanitized evidence plus a contract draft are in docs/SPOC.md. The owner-reviewed SPOC service contract and a rights-cleared authorized course inventory are still required. Historical catalog links do not establish an API endpoint or download permission.",
+      "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/42",
+      "evidence": {
+        "command": "buaa spoc surface [--online|--refresh]",
+        "observation": "2026-09-28 governed public-surface read (one in flight, shared raised 60-second interval, TLS on, no cookies/redirects/proxy/retry): robots.txt HTTP 200 (998 B); root / HTTP 200 (377 B, sha256 373cd4cd521ae2c33d27ce647d416b6a4d44523e100fa8503fd7f984af355243, no title, no server-rendered form); entry /spocnew/ HTTP 200 (2173 B, sha256 5b6709aa5aafd07227e9348c619a5b0e07bff36059fc0ea33e8c1e6c897cdf9f, title 智学北航, no server-rendered form). INCO middleware; newSpoc session cookie.",
+        "contract_draft": "docs/SPOC.md (pending owner review; login is client-rendered, endpoint discovery from the client bundle is the principal open item)",
+        "tests": "cargo test --locked --offline: spoc sanitize/reject tests passed (sanitized structural facts with no body/field names; non-200 and non-HTML rejected; oversized title, unsafe action control char, and over-cap form count rejected); 117 library + 8 CLI tests green; strict all-target clippy 0 warnings; fmt clean"
+      }
     },
     {
       "id": "live",

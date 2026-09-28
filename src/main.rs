@@ -212,6 +212,27 @@ fn run_organizations(args: &[String]) -> CliResult {
     emit(&output)
 }
 
+fn run_spoc(args: &[String]) -> CliResult {
+    use buaa_cli::net::CacheMode;
+    if args.first().map(String::as_str) != Some("surface") {
+        return Err(("unsupported", 3, "expected spoc surface".into()));
+    }
+    let mode = match args.get(1).map(String::as_str) {
+        None => CacheMode::Offline,
+        Some("--online") if args.len() == 2 => CacheMode::PreferCache,
+        Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
+        _ => {
+            return Err((
+                "invalid_input",
+                2,
+                "expected at most one of --online or --refresh".into(),
+            ));
+        }
+    };
+    let output = buaa_cli::spoc::surface(mode).map_err(service_error)?;
+    emit(&output)
+}
+
 fn run_announcements(args: &[String]) -> CliResult {
     use buaa_cli::net::CacheMode;
     match args.first().map(String::as_str) {
@@ -280,7 +301,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search", "credits calculate"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "recordings search", "credits calculate", "spoc surface [--online|--refresh]"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations --online or --refresh; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -298,6 +319,7 @@ fn run() -> CliResult {
                 "gateway": buaa_cli::gateway::schema(),
                 "recordings": buaa_cli::recordings::schema(),
                 "organizations": buaa_cli::organizations::schema(),
+                "spoc": buaa_cli::spoc::schema(),
                 "announcements": buaa_cli::announcements::schema(),
                 "credits": buaa_cli::credits::schema(),
                 "timed-input": {
@@ -359,6 +381,7 @@ fn run() -> CliResult {
             emit(&output)
         }
         "organizations" => run_organizations(&args[1..]),
+        "spoc" => run_spoc(&args[1..]),
         "announcements" => run_announcements(&args[1..]),
         _ => Err((
             "unsupported",
