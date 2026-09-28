@@ -19,6 +19,17 @@ use serde_json::{Value, json};
 
 const REQUIRED_CREDITS: f64 = 25.0;
 const GENERAL_TAG: &str = "一般专业类";
+// Derived from non-general major tags in the sourced 2020 school-8 catalog.
+const SUPPORTED_MAJORS: &[&str] = &[
+    "会计学",
+    "信息管理与信息系统",
+    "工业工程",
+    "工商管理",
+    "工程管理",
+    "经济统计",
+    "能源经济",
+    "金融工程",
+];
 
 fn invalid() -> Value {
     json!({"error":"invalid_input","message":"credits input is invalid"})
@@ -45,6 +56,20 @@ struct CalculateInput {
     selected: Vec<String>,
 }
 
+fn classify_course(course: &Course, major: &str) -> (&'static str, bool) {
+    if course
+        .majors
+        .first()
+        .is_some_and(|value| value == GENERAL_TAG)
+    {
+        ("general", true)
+    } else if course.majors.iter().any(|value| value == major) {
+        ("core_major", false)
+    } else {
+        ("core_other", true)
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct CourseLine {
     name: String,
@@ -62,7 +87,7 @@ pub fn calculate(input: &str) -> Value {
         Ok(value) => value,
         Err(_) => return invalid(),
     };
-    if request.major.is_empty() {
+    if request.major.is_empty() || !SUPPORTED_MAJORS.contains(&request.major.as_str()) {
         return invalid();
     }
     let catalog: Value = match serde_json::from_str(include_str!("credits_catalog.json")) {
@@ -100,19 +125,21 @@ pub fn calculate(input: &str) -> Value {
         let Some(matches) = name_to_index.get(name) else {
             return json!({"error":"invalid_input","message":"unknown course in selection"});
         };
-        // Faithful to the source: a name listed more than once is ambiguous;
-        // treat it as one entry and surface the ambiguity as a warning.
+        let course = &courses[matches[0]];
+        let (category, counts) = classify_course(course, &request.major);
         if matches.len() > 1 {
+            let equivalent = matches.iter().skip(1).all(|index| {
+                let candidate = &courses[*index];
+                candidate.credit == course.credit
+                    && candidate.grade == course.grade
+                    && candidate.term == course.term
+                    && classify_course(candidate, &request.major) == (category, counts)
+            });
+            if !equivalent {
+                return invalid();
+            }
             duplicate_names.push(name.clone());
         }
-        let course = &courses[matches[0]];
-        let (category, counts) = if course.majors.first().is_some_and(|m| m == GENERAL_TAG) {
-            ("general", true)
-        } else if course.majors.iter().any(|m| m == &request.major) {
-            ("core_major", false)
-        } else {
-            ("core_other", true)
-        };
         let credit = course.credit;
         match category {
             "general" => general += credit,
@@ -138,7 +165,7 @@ pub fn calculate(input: &str) -> Value {
     let mut warnings: Vec<String> = Vec::new();
     if !duplicate_names.is_empty() {
         warnings.push(format!(
-            "ambiguous course names listed more than once in the source catalog: {}",
+            "equivalent duplicate course rows were collapsed: {}",
             duplicate_names.join(", ")
         ));
     }
@@ -174,7 +201,7 @@ fn round2(value: f64) -> f64 {
 pub fn schema() -> Value {
     json!({"calculate": {
         "input": {"type":"object","additionalProperties":false,"required":["major","selected"],
-            "properties":{"major":{"type":"string","minLength":1},
+            "properties":{"major":{"type":"string","enum":SUPPORTED_MAJORS},
                 "selected":{"type":"array","items":{"type":"string","minLength":1}}}},
         "output": {"type":"object","additionalProperties":false,
             "required":["schema_version","type","result","policy","major","categories","total_counted","remaining","satisfied","courses","warnings"],
@@ -256,13 +283,72 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_source_duplicates_are_warned() {
-        let out = calculate(r#"{"major":"经济统计","selected":["非参数统计"]}"#);
-        let warnings = out["warnings"].as_array().unwrap();
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.as_str().unwrap().contains("非参数统计"))
+    fn unknown_major_rejects_previously_satisfied_core_selection() {
+        let selected = [
+            "运筹学（二）",
+            "管理信息系统",
+            "生产与运作管理",
+            "现代程序设计",
+            "计量经济学",
+            "国际经济学",
+            "货币金融学",
+            "应用随机过程",
+            "组织行为学",
+            "市场营销",
+            "财务报表分析",
+        ];
+        let catalog: Value = serde_json::from_str(include_str!("credits_catalog.json")).unwrap();
+        let courses = catalog["courses"].as_array().unwrap();
+        let selected_credits: f64 = selected
+            .iter()
+            .map(|name| {
+                let course = courses
+                    .iter()
+                    .find(|course| course["name"] == *name)
+                    .unwrap();
+                assert_ne!(course["majors"][0], GENERAL_TAG);
+                course["credit"].as_f64().unwrap()
+            })
+            .sum();
+        assert_eq!(selected_credits, 25.0);
+        let input = json!({"major":"NOT_A_REAL_MAJOR","selected":selected});
+        let out = calculate(&input.to_string());
+        assert_eq!(out["error"], "invalid_input");
+        assert!(out.get("satisfied").is_none());
+    }
+
+    #[test]
+    fn supported_major_schema_matches_catalog_tags() {
+        let catalog: Value = serde_json::from_str(include_str!("credits_catalog.json")).unwrap();
+        let catalog_majors: std::collections::BTreeSet<_> = catalog["courses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|course| course["majors"].as_array().unwrap())
+            .map(|major| major.as_str().unwrap())
+            .filter(|major| *major != GENERAL_TAG)
+            .collect();
+        let contract_majors: std::collections::BTreeSet<_> =
+            SUPPORTED_MAJORS.iter().copied().collect();
+        assert_eq!(contract_majors, catalog_majors);
+        assert_eq!(
+            schema()["calculate"]["input"]["properties"]["major"]["enum"],
+            json!(SUPPORTED_MAJORS)
         );
+    }
+
+    #[test]
+    fn conflicting_duplicate_course_identity_is_rejected() {
+        let out = calculate(r#"{"major":"经济统计","selected":["非参数统计"]}"#);
+        assert_eq!(out["error"], "invalid_input");
+        assert!(out.get("result").is_none());
+    }
+
+    #[test]
+    fn equivalent_duplicate_catalog_rows_are_deduplicated_with_warning() {
+        let out = calculate(r#"{"major":"会计学","selected":["健康经济学"]}"#);
+        assert_eq!(out["total_counted"], 2.0);
+        assert_eq!(out["courses"].as_array().unwrap().len(), 1);
+        assert!(out["warnings"][0].as_str().unwrap().contains("健康经济学"));
     }
 }
