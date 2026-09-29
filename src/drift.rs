@@ -4,8 +4,9 @@
 //! document, both supplied as JSON on stdin. The command is offline: it performs
 //! no network access and no writes. It reports the structural drift — added,
 //! removed, type-changed and value-changed paths — and never applies, guesses
-//! or auto-merges a change. Sanitized: the report names paths and change kinds
-//! plus type names and array lengths, never the raw values of the documents.
+//! or auto-merges a change. Sanitized: the only document-derived text carried
+//! is the original object key names (contract field identifiers); the values of
+//! fields, and array element values, never enter the report.
 
 use serde_json::{Value, json};
 
