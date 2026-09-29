@@ -69,6 +69,45 @@ fn drift_check_reports_changes_and_rejects_invalid_input() {
 }
 
 #[test]
+fn physics_commands_report_results_and_reject_invalid_input() {
+    let pend = invoke(
+        &["physics", "pendulum"],
+        br#"{"length_m":0.980,"length_uncertainty_m":0.001,"cycles":50,"total_time_s":99.50,"total_time_uncertainty_s":0.05}"#,
+    );
+    assert!(
+        pend.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pend.stderr)
+    );
+    let value: Value = serde_json::from_slice(&pend.stdout).unwrap();
+    assert_eq!(value["type"], "physics_pendulum");
+    assert_eq!(value["units"]["g"], "m/s^2");
+    assert!((value["g_m_s2"].as_f64().unwrap() - 9.769664718635964).abs() < 1e-9);
+
+    let fit = invoke(
+        &["physics", "fit"],
+        br#"{"points":[[0,0.2],[1,0.9],[2,2.1],[3,3.0],[4,4.2],[5,4.9]]}"#,
+    );
+    let value: Value = serde_json::from_slice(&fit.stdout).unwrap();
+    assert_eq!(value["type"], "physics_fit");
+    assert_eq!(value["n"], 6);
+
+    let type_a = invoke(
+        &["physics", "type-a"],
+        br#"{"samples":[0.980,0.978,0.981,0.979,0.980]}"#,
+    );
+    let value: Value = serde_json::from_slice(&type_a.stdout).unwrap();
+    assert_eq!(value["type"], "physics_type_a");
+    assert_eq!(value["n"], 5);
+
+    let bad = invoke(&["physics", "pendulum"], b"not json");
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(bad.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&bad.stderr).unwrap();
+    assert_eq!(error["error"], "invalid_input");
+}
+
+#[test]
 fn raw_replay_closes_with_exact_payload_and_no_json_wrapper() {
     let output = invoke(&["timed-input", "--raw"], "[0]  雪\t\r\n[0]\r\n".as_bytes());
     assert!(output.status.success());

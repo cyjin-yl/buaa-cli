@@ -263,8 +263,16 @@
     {
       "id": "physics-data",
       "title": "Physics experiment data processing",
-      "status": "pending",
+      "status": "implemented-offline",
       "acceptance": "Documented experiment-specific calculations, units and uncertainty against independent fixtures.",
+      "evidence": {
+        "command": "buaa physics pendulum|fit|type-a",
+        "implementation": ["src/physics.rs"],
+        "contract": "Offline, unit-explicit experiment data reduction in SI. type-a: sample mean with (n-1) sample standard deviation and standard uncertainty of the mean s/sqrt(n). fit: ordinary least-squares line y = intercept + slope*x with parameter standard errors from the residual variance (n-2 degrees of freedom) and r-squared. pendulum: g = 4*pi^2*L/T^2 with T = total_time_s/cycles (cycle count exact, no uncertainty), combined standard uncertainty from the sensitivity coefficients dg/dL = g/L and dg/dT = -2g/T. Inputs are JSON on stdin; invalid or non-finite input returns an invalid_input error. No network access, no campus contact, no writes.",
+        "tests": "cargo test --locked --offline: 9 physics lib tests + 1 CLI integration test pass, asserting each result against an independent pure-Python statistics reference fixture (Type A mean/std/std-uncertainty; linear-fit slope/intercept/se/r2; pendulum period/g/g-uncertainty/relative-uncertainty; combined root-sum-square; CLI JSON fields; invalid-input rejection across all three subcommands).",
+        "scope": "Offline data-reduction engine and report contract are complete, wired into buaa help / schema / physics. Live campus experiment retrieval (physics-select, physics-reference) remains separate and pending on rights-reviewed source contracts.",
+        "smoke": "Real CLI: pendulum fixture -> g_m_s2 9.769664718635964, period 1.99, g_uncertainty 0.013992494041423482, units.g m/s^2; fit fixture -> slope 0.98, n 6; type-a fixture -> mean 0.9796, n 5; non-JSON and missing-field inputs -> invalid_input exit 2."
+      },
       "sources": [
         "https://www.wzk.plus/project/phyexp/",
         "https://gitee.com/PhisicsExperiment/PhysicsExperiment",
