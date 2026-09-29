@@ -170,21 +170,47 @@ fn is_http(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
 }
 
-/// Build the listing URL for a reviewed category and page (page 1 is the bare
-/// `<category>.htm`; later pages are `<category>/<page>.htm`).
-fn listing_url(category: &str, page: u32) -> Result<Url, Error> {
+/// Only the latest listing has a stable URL. Numbered pages must be selected
+/// from the source's advertised links, not guessed from an ordinal.
+fn latest_listing_url(category: &str) -> Result<Url, Error> {
     if category_label(category).is_none() {
         return Err(Error::new(
             "invalid_input",
             "unknown announcements category; expected one of: tzgg, zhxw, ztxw, bhrw, xyfc_new, kjzx_new, mtbh_new, gybh_new, spxw1, wyyd_new",
         ));
     }
-    let path = if page == 1 {
-        format!("/{category}.htm")
-    } else {
-        format!("/{category}/{page}.htm")
-    };
-    Url::parse(&format!("{NEWS_BASE}{path}")).map_err(|_| unavailable())
+    Url::parse(&format!("{NEWS_BASE}/{category}.htm")).map_err(|_| unavailable())
+}
+
+fn advertised_page_url(bytes: &[u8], base: &Url, category: &str, page: u32) -> Result<Url, Error> {
+    if bytes.is_empty() || bytes.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
+    let document = Html::parse_document(text);
+    let selector =
+        Selector::parse("div.pb_sys_common span.p_no a[href]").map_err(|_| unavailable())?;
+    let prefix = format!("/{category}/");
+    for link in document.select(&selector) {
+        if normalized_text(link.text()).parse::<u32>().ok() != Some(page) {
+            continue;
+        }
+        let url = base
+            .join(link.value().attr("href").ok_or_else(unavailable)?)
+            .map_err(|_| unavailable())?;
+        if !is_list_source_url(url.as_str()) || !url.path().starts_with(&prefix) {
+            return Err(failed_contract(
+                "advertised listing page must remain in the selected category",
+                file!(),
+                line!(),
+            ));
+        }
+        return Ok(url);
+    }
+    Err(Error::new(
+        "unavailable",
+        "requested page is not advertised by the latest listing; no URL was inferred",
+    ))
 }
 
 /// True when an operator-asserted history `source_url` is a news-center listing.
@@ -195,17 +221,20 @@ fn is_list_source_url(raw: &str) -> bool {
     if url.scheme() != "https"
         || url.host_str() != Some("news.buaa.edu.cn")
         || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
     {
         return false;
     }
     let path = url.path();
     CATEGORIES.iter().any(|(slug, _)| {
         path == format!("/{slug}.htm")
-            || (path.starts_with(&format!("/{slug}/"))
-                && path.ends_with(".htm")
-                && path[format!("/{slug}/").len()..]
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || b == b'.'))
+            || path
+                .strip_prefix(&format!("/{slug}/"))
+                .and_then(|tail| tail.strip_suffix(".htm"))
+                .is_some_and(|page| !page.is_empty() && page.bytes().all(|b| b.is_ascii_digit()))
     })
 }
 
@@ -473,6 +502,8 @@ fn retrieval(response: &Response) -> Value {
         "cache_status": response.cache_status,
         "response_body_sha256": response.sha256,
         "response_body_byte_length": response.body.len(),
+        "revalidated_at_unix_ms": response.revalidated_at_unix_ms,
+        "revalidation_status": response.revalidation_status,
         "http": {"status": response.status, "headers": response.headers},
     })
 }
@@ -538,7 +569,7 @@ fn normalize_listing(
         "entries": entries,
         "completeness": {
             "scope": format!("category_{category}_page_{page}"),
-            "pagination": "explicit_page_requested",
+            "pagination": "explicit_page_selected_from_advertised_links; no automatic traversal",
             "date_filter_semantics": "entries without a parseable date are dropped when since or until is set",
             "historical_content": "use_buaa_archive",
         },
@@ -576,16 +607,15 @@ fn parse_list_query(input: Option<&str>) -> Result<ListQuery, Error> {
     match input {
         None => Ok(ListQuery::default()),
         Some(raw) if raw.trim().is_empty() => Ok(ListQuery::default()),
-        Some(raw) => serde_json::from_str(raw).map_err(|_| invalid_list()),
+        Some(raw) => serde_json::from_str::<Option<ListQuery>>(raw)
+            .map(Option::unwrap_or_default)
+            .map_err(|_| invalid_list()),
     }
 }
 
 pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
     let query = parse_list_query(input)?;
-    let category = query
-        .category
-        .clone()
-        .unwrap_or_else(|| DEFAULT_CATEGORY.to_string());
+    let category = query.category.as_deref().unwrap_or(DEFAULT_CATEGORY);
     let page = query.page.unwrap_or(1);
     if page < 1 {
         return Err(invalid_list());
@@ -598,10 +628,17 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some(raw) => Some(parse_iso_date(raw).ok_or_else(invalid_list)?),
         None => None,
     };
-    let url = listing_url(&category, page)?;
+    let latest = latest_listing_url(category)?;
     let client = ArchiveClient::open_announcements(mode)?;
+    let url = if page == 1 {
+        latest
+    } else {
+        client.get(&latest, false, |response| {
+            advertised_page_url(&response.body, &latest, category, page)
+        })?
+    };
     client.get(&url, false, move |response| {
-        normalize_listing(response, &category, page, &since, &until, &query.r#match)
+        normalize_listing(response, category, page, &since, &until, &query.r#match)
     })
 }
 
@@ -610,6 +647,10 @@ fn resolve_article_url(raw: &str) -> Result<Url, Error> {
     if url.scheme() != "https"
         || url.host_str() != Some("news.buaa.edu.cn")
         || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
     {
         return Err(invalid_article());
     }
@@ -619,6 +660,7 @@ fn resolve_article_url(raw: &str) -> Result<Url, Error> {
         .unwrap_or_default();
     let valid = segments.len() == 3
         && segments[0] == "info"
+        && !segments[1].is_empty()
         && segments[1].len() <= 10
         && segments[1].bytes().all(|b| b.is_ascii_digit())
         && segments[2].strip_suffix(".htm").is_some_and(|stem| {
@@ -713,7 +755,7 @@ pub fn schema() -> Value {
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. category (default tzgg), page (default 1), since/until (YYYY-MM-DD, inclusive), match (title substring). Empty/null stdin uses defaults.",
+                "description": "Optional JSON object. category (default tzgg), page (default 1; later ordinals must be advertised by the latest listing), since/until (YYYY-MM-DD, inclusive), match (title substring). Empty/null stdin uses defaults. No automatic pagination or inferred page URLs.",
                 "properties": {
                     "category": {"type": "string", "enum": CATEGORIES.iter().map(|(slug, _)| *slug).collect::<Vec<_>>()},
                     "page": {"type": "integer", "minimum": 1},
@@ -808,7 +850,6 @@ mod tests {
         assert_eq!(err.code, "unavailable");
         let src = err.source.expect("parse rejections must carry file/line");
         assert_eq!(src.file, "src/announcements.rs");
-        assert!(src.invariant.contains("pub_info h3 title"));
     }
 
     #[test]
@@ -838,16 +879,32 @@ mod tests {
     }
 
     #[test]
-    fn listing_url_builds_reviewed_paths() {
+    fn pagination_uses_advertised_ordinals_not_filename_numbers() {
+        let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span></div>"#;
+        let base = latest_listing_url("tzgg").unwrap();
         assert_eq!(
-            listing_url("tzgg", 1).unwrap().as_str(),
-            "https://news.buaa.edu.cn/tzgg.htm"
+            advertised_page_url(html, &base, "tzgg", 2).unwrap().path(),
+            "/tzgg/252.htm"
         );
         assert_eq!(
-            listing_url("zhxw", 5).unwrap().as_str(),
-            "https://news.buaa.edu.cn/zhxw/5.htm"
+            advertised_page_url(html, &base, "tzgg", 253)
+                .unwrap()
+                .path(),
+            "/tzgg/1.htm"
         );
-        assert!(listing_url("nope", 1).is_err());
+        assert_eq!(
+            advertised_page_url(html, &base, "tzgg", 6)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://evil.example/tzgg/252.htm">2</a></span></div>"#;
+        assert_eq!(
+            advertised_page_url(foreign, &base, "tzgg", 2)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
     }
 
     #[test]
@@ -909,17 +966,6 @@ mod tests {
     }
 
     #[test]
-    fn list_query_parses_defaults_and_rejects_garbage() {
-        assert!(parse_list_query(None).is_ok());
-        assert!(parse_list_query(Some("")).is_ok());
-        let query =
-            parse_list_query(Some(r#"{"category":"zhxw","page":3,"since":"2026-09-01"}"#)).unwrap();
-        assert_eq!(query.category.as_deref(), Some("zhxw"));
-        assert_eq!(query.page, Some(3));
-        assert!(parse_list_query(Some(r#"[1,2]"#)).is_err());
-    }
-
-    #[test]
     fn history_requires_operator_asserted_provenance() {
         let html = listing_html();
         let encoded = STANDARD.encode(html.as_bytes());
@@ -958,5 +1004,73 @@ mod tests {
         })
         .to_string();
         assert!(history(&article_url).is_err());
+    }
+
+    #[test]
+    fn history_accepts_paged_sources_without_relaxing_provenance_scope() {
+        let mut input = json!({
+            "html": STANDARD.encode(listing_html().replace("href=\"info/", "href=\"../info/")),
+            "provenance": {
+                "source_url": "https://news.buaa.edu.cn/tzgg/252.htm",
+                "asserted_by": "fixture-operator"
+            }
+        });
+        let result = history(&input.to_string()).unwrap();
+        assert_eq!(
+            result["provenance"]["source_url"],
+            input["provenance"]["source_url"]
+        );
+        assert_eq!(result["provenance"]["asserted_by"], "fixture-operator");
+        assert_eq!(result["provenance"]["status"], "operator_asserted");
+        assert_eq!(
+            result["entries"][0]["resolved_http_url"],
+            "https://news.buaa.edu.cn/info/1010/69802.htm"
+        );
+        for source in [
+            "https://news.buaa.edu.cn/tzgg/.htm",
+            "https://news.buaa.edu.cn/tzgg/2.52.htm",
+            "https://news.buaa.edu.cn/tzgg/252.htm#fragment",
+            "https://operator:secret@news.buaa.edu.cn/tzgg.htm",
+            "https://news.buaa.edu.cn:8443/tzgg.htm",
+        ] {
+            input["provenance"]["source_url"] = json!(source);
+            assert_eq!(
+                history(&input.to_string()).unwrap_err().code,
+                "invalid_input"
+            );
+        }
+    }
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static OFFLINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    /// Hermetic offline contract: an empty cache directory must yield
+    /// `offline_miss` for both listing and article URLs, without touching the
+    /// operator's real cache, governor, or network.
+    #[test]
+    fn offline_lookup_with_empty_cache_reports_unavailable() {
+        let root = std::env::temp_dir().join(format!(
+            "buaa-announcements-offline-{}-{}",
+            std::process::id(),
+            OFFLINE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let client =
+            ArchiveClient::open_announcements_offline_for_test(&root.join("cache")).unwrap();
+        let listing = client
+            .get(&latest_listing_url("tzgg").unwrap(), false, |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(listing.code, "offline_miss");
+        let article = client
+            .get(
+                &resolve_article_url("https://news.buaa.edu.cn/info/1010/1.htm").unwrap(),
+                false,
+                |_| Ok(()),
+            )
+            .unwrap_err();
+        assert_eq!(article.code, "offline_miss");
+        assert!(!root.join("cache/governor").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

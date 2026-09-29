@@ -1,6 +1,6 @@
 # buaa-cli
 
-`buaa-cli` is an agent-facing Rust CLI. Implemented offline slices include timed-input, archive lookup/capture, policy-provenanced marks/GPA calculation, scoped credit calculation, pinned Fengrubei template retrieval, local recording-catalog search, official organization-directory parsing, news-index parsing, and a read-only SPOC public-surface contract probe. A governed two-page live Internet Archive CDX read and one governed SPOC public-surface read were manually observed; this does not establish complete history, live Memento replay, or an authenticated SPOC contract. Gateway workflows remain live-unverified, archive reads default to cache, and no campus authentication, mutation, or origin-host request was performed. Other acceptance items remain partial, pending, or blocked.
+`buaa-cli` is an agent-facing Rust CLI. Implemented slices include offline timed-input, archive lookup/capture, policy-provenanced marks/GPA calculation, scoped credit calculation, pinned Fengrubei template retrieval, local recording-catalog search, official organization-directory parsing, university-wide news-center reads, and a read-only SPOC public-surface contract probe. Governed live Internet Archive CDX, official directory, SPOC public-surface, and news-center listing/article reads were manually observed; this does not establish complete history, live Memento replay, per-college coverage, or an authenticated SPOC contract. Gateway workflows remain live-unverified; no campus authentication or mutation is claimed verified. Network reads default to cache. Other acceptance items remain partial, pending or explicitly blocked; catalog links are not APIs.
 
 ## Build and discover
 
@@ -103,6 +103,20 @@ Archive and gateway requests share the process-wide governor through request, bo
 ./target/debug/buaa organizations list
 Use `--online` only for an authorized cache miss, or `--refresh` for conditional revalidation. Egress is limited to the official robots and directory URLs and shares the same process-wide governor. See [directory semantics and governed observation evidence](docs/ORGANIZATIONS.md) and the [sanitized 2026-09-20 snapshot](docs/data/organizations-2026-09-20.json). Announcement crawling remains separate.
 `src/net.rs` implements allowlisted archive and official-directory GETs through `src/governor.rs`; the organization command fetches no linked college site, and the archive command fetches no original campus URL. All future adapters/provider processes must retain the same request lease through response validation and persistence, share one private state domain, and use cache-first conditional reads. No per-worktree limiter, parallel account alias, fast-test production mode, autonomous auth retry, CAPTCHA bypass or real development-time campus mutation is allowed.
+## University-wide announcements and news
+
+The retired `www.buaa.edu.cn/xwzx.htm` source returned HTTP 404. `buaa announcements list` now reads `news.buaa.edu.cn`: default `tzgg` (通知公告), with `zhxw` (综合新闻) and the other section slugs exposed in `buaa schema`. Optional stdin JSON accepts `category`, `page`, inclusive `since`/`until` dates and a title-substring `match`. Missing dates stay null and cannot satisfy a date filter. Later page ordinals must be advertised by the latest listing: the site's page 2 can be `tzgg/252.htm`, not `tzgg/2.htm`. No address is guessed and no pages are automatically traversed.
+
+```sh
+# Cache only; these commands do not fetch campus pages.
+printf '%s\n' '{"since":"2026-09-01","match":"交换"}' | ./target/debug/buaa announcements list
+printf '%s\n' '{"url":"https://news.buaa.edu.cn/info/1010/69802.htm"}' | ./target/debug/buaa announcements article
+```
+
+`article` returns the selected page's `v_news_content` paragraphs, publication date and attachment-link hints; it never downloads attachments. Use `--online` for an authorized cache miss or `--refresh` for conditional revalidation. Robots and content requests each retain the same cross-process governor lease. With the operator's raised 60-second interval, a cold robots fetch can leave the content request beyond the 30-second bounded wait; the CLI reports rate-limited and never retries automatically.
+
+`announcements history` remains fully offline: base64 UTF-8 HTML with `provenance.source_url` identifying a news-center listing, optional `capture_timestamp` and `asserted_by`. Output is `announcements_history`, with `retrieval.sha256` binding the supplied bytes. Provenance is operator-asserted, not verified archive attribution. Per-college site adapters, real faculty/college filters, complete history and attachment retrieval remain unimplemented. [Current proof and limitations](docs/STATUS.md#2026-09-29-announcements-news-center-migration).
+
 ## SPOC public surface (contract evidence)
 `buaa spoc surface` is read-only contract tooling for the SPOC acceptance item, not an authenticated adapter. It fetches the two fixed public SPOC pages through the same process-wide governor (robots policy first) and reports only sanitized structural facts: status, content type, byte length, SHA-256, document title and form shape. Bodies, field names and values never enter output, logs or the repository; no authentication is attempted.
 # Private cache only; no network request.
@@ -181,7 +195,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | fengrubei | Fengrubei template access | implemented-observed-read |
 | crater | Crater allocation/API/SSH | blocked |
 | organizations | Authoritative college/institute directory | implemented-observed-read |
-| announcements | College current/historical announcements | partial-offline |
+| announcements | College current/historical announcements | partial-live-verified: university-wide listings/articles; college adapters pending |
 | archive | CDX/Memento historical lookup | implemented-offline-tested |
 | recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |
 | life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |

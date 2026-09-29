@@ -159,12 +159,27 @@ fn announcements_list_validates_filters_before_any_network_access() {
     }
 }
 
+/// The operator may already have a cached listing. Neither HOME nor unrelated
+/// cache files establish that fact; assert the CLI's two valid offline outcomes.
+/// The empty-cache branch itself is pinned hermetically by the lib test
+/// `offline_lookup_with_empty_cache_reports_unavailable`.
 #[test]
-fn announcements_list_offline_without_cache_reports_unavailable() {
+fn announcements_list_offline_serves_cache_or_reports_unavailable() {
     let output = invoke(&["announcements", "list"], b"");
-    assert_eq!(output.status.code(), Some(7));
-    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(error["error"], "unavailable");
+    match output.status.code() {
+        Some(0) => {
+            assert!(output.stderr.is_empty());
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(value["type"], "announcements_list");
+            assert_eq!(value["retrieval"]["cache_status"], "hit");
+        }
+        Some(7) => {
+            assert!(output.stdout.is_empty());
+            let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(error["error"], "unavailable");
+        }
+        status => panic!("unexpected offline status {status:?}: {:?}", output.stderr),
+    }
 }
 
 #[test]

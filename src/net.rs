@@ -337,6 +337,22 @@ impl ArchiveClient {
         })
     }
 
+    /// Hermetic offline announcements fixture. A regression entering the live
+    /// path still cannot touch the operator's governor.
+    #[cfg(test)]
+    pub(crate) fn open_announcements_offline_for_test(
+        directory: &std::path::Path,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            mode: CacheMode::Offline,
+            profile: SourceProfile::Announcements,
+            directory: governor::open_directory(directory, true, true)
+                .map_err(|_| cache_error())?,
+            test_route: None,
+            test_governor: Some(directory.join("governor")),
+        })
+    }
+
     /// Process and validate a response before caching it or releasing its lease.
     pub fn get<T>(
         &self,
