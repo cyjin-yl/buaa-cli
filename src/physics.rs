@@ -58,8 +58,8 @@ pub fn combined(terms: &[f64]) -> f64 {
 /// freedom.
 pub fn linear_fit(points: &[(f64, f64)]) -> Result<(f64, f64, f64, f64, f64), String> {
     let n = points.len();
-    if n < 2 {
-        return Err("linear_fit requires at least 2 points".into());
+    if n < 3 {
+        return Err("linear_fit requires at least 3 points for standard errors".into());
     }
     if n > MAX_POINTS {
         return Err("too many points".into());
@@ -304,7 +304,7 @@ pub fn schema() -> Value {
                 "type": "object",
                 "required": ["points"],
                 "properties": {
-                    "points": {"type": "array", "description": "array of [x, y] number pairs (>= 2)"}
+                    "points": {"type": "array", "description": "array of [x, y] number pairs (>= 3)"}
                 }
             },
             "output": {
@@ -459,9 +459,13 @@ mod tests {
             check(r#"{"samples":[1.0]}"#, "type-a")["error"],
             "invalid_input"
         );
-        // Single point for fit.
+        // Too few points for fit (need >= 3 for standard errors).
         assert_eq!(
             check(r#"{"points":[[0,1]]}"#, "fit")["error"],
+            "invalid_input"
+        );
+        assert_eq!(
+            check(r#"{"points":[[0,1],[1,2]]}"#, "fit")["error"],
             "invalid_input"
         );
         // Malformed pair.
