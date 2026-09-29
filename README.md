@@ -125,6 +125,19 @@ printf '%s\n' '{"semester":{"start_date":"2026-09-21","weeks":16},"courses":[{"n
 ```
 
 
+## Physics experiment data processing (offline)
+`buaa physics <method>` performs documented, unit-explicit experiment data reduction in SI. It is fully offline: no network access, no campus contact, no writes. Methods read JSON on stdin and emit a typed JSON result with explicit units.
+
+- `physics type-a` — repeated measurements: sample mean, (n-1) sample standard deviation and standard uncertainty of the mean `s/sqrt(n)`.
+- `physics fit` — ordinary least-squares line `y = intercept + slope*x` with parameter standard errors and r-squared.
+- `physics pendulum` — gravity from `g = 4*pi^2*L/T^2` with `T = total_time_s/cycles`, combined standard uncertainty from the sensitivity coefficients `dg/dL = g/L` and `dg/dT = -2g/T`.
+
+```sh
+printf '%s\n' '{"length_m":0.980,"length_uncertainty_m":0.001,"cycles":50,"total_time_s":99.50,"total_time_uncertainty_s":0.05}' | ./target/debug/buaa physics pendulum
+printf '%s\n' '{"points":[[0,0.2],[1,0.9],[2,2.1],[3,3.0],[4,4.2],[5,4.9]]}' | ./target/debug/buaa physics fit
+printf '%s\n' '{"samples":[0.980,0.978,0.981,0.979,0.980]}' | ./target/debug/buaa physics type-a
+```
+
 The Linux governor uses `.buaa-cli-governor` beneath the effective UID's passwd home, ignoring HOME/XDG/worktree overrides. One permanent file lock spans the full request/body lifetime; private atomic state preserves minimum 5-second completion gaps, 15-minute background intervals, Retry-After and one-shot auth permission. Boot-time deadlines cannot be shortened by wall-clock changes. All processes using a campus account must share this OS identity and filesystem state; this is not a distributed cross-host governor.
 
 Unknown request outcomes (including crash or failed outcome persistence), reboot/boot-ID mismatch and corrupt/missing governor history fail closed. Ordinary auth resume does **not** clear these states; governor-state failures still require offline operator review and have no reset command. Gateway logout unknown outcomes have a separate typed, local-only review flow that records `remote_state=unknown` and cannot clear governor state. Local filesystem locking/fsync semantics and cooperating same-UID clients are required.
@@ -154,7 +167,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | ihome | ihome announcements | pending |
 | electricity | Electricity query/alerts | pending |
 | physics-select | Physics experiment selection | pending |
-| physics-data | Physics experiment data processing | pending |
+| physics-data | Physics experiment data processing | implemented-offline |
 | physics-reference | Physics reference access | pending |
 | aerospace | Aerospace study/questions | pending |
 | drive | AnyShare campus drive | pending |

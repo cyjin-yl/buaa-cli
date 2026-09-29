@@ -10,6 +10,7 @@ pub mod governor;
 pub mod marks;
 pub mod net;
 pub mod organizations;
+pub mod physics;
 pub mod recordings;
 pub mod spoc;
 pub mod timed_input;
