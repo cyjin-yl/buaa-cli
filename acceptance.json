@@ -164,7 +164,7 @@
     {
       "id": "timetable-ug",
       "title": "Undergraduate timetable/ICS",
-      "status": "pending",
+      "status": "implemented-offline",
       "acceptance": "Verified semester/week/date/time mapping and standards-compliant ICS.",
       "sources": [
         "https://github.com/roife/BUAAIcsGen",
@@ -172,7 +172,15 @@
         "https://github.com/Bhipee/BeiHangPostgraduateTimetable",
         "https://github.com/yinwoods/Fuck-BUAA-JiaoWu-Anyway",
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
-      ]
+      ],
+      "evidence": {
+        "command": "buaa timetable ics",
+        "implementation": ["src/timetable.rs"],
+        "contract": "Offline generation of a standards-compliant RFC 5545 ICS calendar from operator-supplied JSON on stdin. `semester.start_date` is the week-1 Monday; an occurrence lands on `start_date + (week - 1) * 7 + day_offset` (Monday=0 .. Sunday=6), so the date is computed, not asserted. `parity` (all/odd/even) filters weeks; occurrences that fall past the semester end (`start_date + weeks*7 - 1`) are dropped rather than rejected. Output is CRLF-terminated with 75-octet line folding on UTF-8 character boundaries, RFC 5545 text escaping, and per-event UID/DTSTAMP/DTSTART/DTEND/SUMMARY plus optional LOCATION. No network access, no writes, no campus contact.",
+        "tests": "cargo test --locked --offline: 9 timetable unit tests pass (Gregorian date math round-trips; invalid date/time rejection; Monday->week-date mapping; odd parity; semester-bound dropping; ICS standards compliance; 75-octet folding on character boundaries; invalid-input rejection; empty-courses zero-event calendar) plus 1 CLI integration test. Full suite: 157 lib + 13 CLI green; strict all-target clippy 0 warnings; fmt clean.",
+        "scope": "The offline mapping + ICS generation engine and the `timetable ics` CLI are complete and standards-compliant. Fetching the live undergraduate schedule from the campus system and feeding it to this generator remains pending (requires the governed, authorized campus observation path).",
+        "smoke": "Real CLI: a Monday course over weeks 1..6 in a 4-week semester yields 4 VEVENTs (weeks 5-6 dropped); odd parity drops even weeks; a >75-octet SUMMARY folds on a UTF-8 character boundary with continuation lines <= 75 octets; missing end_time / start_week>end_week / invalid day -> invalid_input exit 2."
+      }
     },
     {
       "id": "timetable-pg",
