@@ -3,6 +3,7 @@
 pub mod announcements;
 pub mod archive;
 pub mod credits;
+pub mod drift;
 pub mod fengrubei;
 pub mod gateway;
 pub mod governor;
