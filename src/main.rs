@@ -315,7 +315,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate", "spoc surface [--online|--refresh]", "drift check"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate", "spoc surface [--online|--refresh]", "drift check", "timetable ics"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -337,6 +337,7 @@ fn run() -> CliResult {
                 "announcements": buaa_cli::announcements::schema(),
                 "credits": buaa_cli::credits::schema(),
                 "drift": buaa_cli::drift::schema(),
+                "timetable": buaa_cli::timetable::schema(),
                 "timed-input": {
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -409,6 +410,22 @@ fn run() -> CliResult {
                         .get("message")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("drift check failed")
+                        .to_string(),
+                ));
+            }
+            emit(&output)
+        }
+        "timetable" if args.len() == 2 && args[1] == "ics" => {
+            let input = read_input()?;
+            let output = buaa_cli::timetable::check(&input);
+            if output.get("error").is_some() {
+                return Err((
+                    "invalid_input",
+                    2,
+                    output
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("timetable ics failed")
                         .to_string(),
                 ));
             }

@@ -13,3 +13,4 @@ pub mod organizations;
 pub mod recordings;
 pub mod spoc;
 pub mod timed_input;
+pub mod timetable;

@@ -117,6 +117,14 @@ printf '%s\n' '{"baseline":{"v":"s"},"candidate":{"v":5}}' | ./target/debug/buaa
 ```
 
 
+## Timetable to ICS (offline)
+`buaa timetable ics` turns operator-supplied JSON on stdin into a standards-compliant RFC 5545 ICS calendar. It is fully offline: no network access, no writes, no campus contact. `semester.start_date` is the week-1 Monday; each occurrence lands on `start_date + (week - 1) * 7 + day_offset`, so dates are computed from the anchor rather than asserted. `parity` (`all`/`odd`/`even`) filters weeks, and occurrences that fall past the semester end are dropped. Output uses CRLF line endings, 75-octet folding on UTF-8 character boundaries, and RFC 5545 text escaping.
+
+```sh
+printf '%s\n' '{"semester":{"start_date":"2026-09-21","weeks":16},"courses":[{"name":"Mathematics","day":"monday","start_week":1,"end_week":16,"start_time":"08:00","end_time":"09:40"}]}' | ./target/debug/buaa timetable ics
+```
+
+
 The Linux governor uses `.buaa-cli-governor` beneath the effective UID's passwd home, ignoring HOME/XDG/worktree overrides. One permanent file lock spans the full request/body lifetime; private atomic state preserves minimum 5-second completion gaps, 15-minute background intervals, Retry-After and one-shot auth permission. Boot-time deadlines cannot be shortened by wall-clock changes. All processes using a campus account must share this OS identity and filesystem state; this is not a distributed cross-host governor.
 
 Unknown request outcomes (including crash or failed outcome persistence), reboot/boot-ID mismatch and corrupt/missing governor history fail closed. Ordinary auth resume does **not** clear these states; governor-state failures still require offline operator review and have no reset command. Gateway logout unknown outcomes have a separate typed, local-only review flow that records `remote_state=unknown` and cannot clear governor state. Local filesystem locking/fsync semantics and cooperating same-UID clients are required.
@@ -139,7 +147,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | enrol | Undergraduate/postgraduate course selection/drop | pending |
 | evaluation | Teaching evaluations | pending |
 | marks | Marks/GPA/change monitoring | partial-offline |
-| timetable-ug | Undergraduate timetable/ICS | pending |
+| timetable-ug | Undergraduate timetable/ICS | implemented-offline |
 | timetable-pg | Postgraduate timetable/ICS | pending |
 | checkin | Classroom QR/direct check-in | pending |
 | boya | Boya browse/enrol/drop/check/status | pending |
