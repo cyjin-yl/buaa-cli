@@ -687,15 +687,9 @@ mod tests {
 
     #[test]
     fn invalid_input_is_rejected() {
-        for bad in [
-            "not json",
-            "{}",
-            r#"{"semester":{"start_date":"2026-09-21","weeks":16},"courses":[]}"#, // empty ok? no -> valid, 0 events
-        ] {
+        for bad in ["not json", "{}"] {
             let out = run(bad);
-            if bad == "not json" || bad == "{}" {
-                assert_eq!(out["error"], "invalid_input", "{out}");
-            }
+            assert_eq!(out["error"], "invalid_input", "{out}");
         }
         // Missing required course field.
         let out = run(r#"{
