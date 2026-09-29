@@ -600,9 +600,17 @@
     {
       "id": "drift",
       "title": "Read-only API/schema drift detection",
-      "status": "pending",
+      "status": "implemented-offline",
       "acceptance": "Low-rate authorized observation, sanitized evidence and proposed changes; no auto-merged contract guesses.",
-      "sources": []
+      "sources": [],
+      "evidence": {
+        "command": "buaa drift check",
+        "implementation": ["src/drift.rs"],
+        "contract": "Offline comparison of a pinned baseline contract document against a candidate contract document, both supplied as JSON on stdin. Emits a sanitized structural drift report (added / removed / value_changed / length_changed paths, with type names and array lengths) plus in_sync, change_count and truncated. No network access, no writes, and no application/guessing/auto-merging of any change. Raw document values never enter the report. Change list capped at 256 entries and path depth at 64 (deeper subtrees emit a truncated marker).",
+        "tests": "cargo test --locked --offline: 8 drift tests pass (identical in-sync; added/removed/value changes named by path; type-change dual type names; array length + element drift; raw-value non-leak; invalid-input rejection; deep-nesting bounded; change-count cap + truncated flag). Full suite: 148 lib + 12 CLI tests green; strict all-target clippy 0 warnings; fmt clean.",
+        "scope": "The offline comparison engine and report contract are complete. Wires into buaa help / schema / drift check. The low-rate authorized observation and proposed-change workflow that consumes this report against live contracts remains pending (requires the governed observation path for each specific contract).",
+        "smoke": "Real CLI: identical schemas -> in_sync true, 0 changes; a type-changed field -> value_changed with baseline_type/candidate_type; added/removed keys named; a 270-field diff caps at 256 with truncated=true; non-JSON and missing-candidate inputs -> invalid_input exit 2."
+      }
     },
     {
       "id": "publication",

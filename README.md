@@ -109,6 +109,14 @@ Use `--online` only for an authorized cache miss, or `--refresh` for conditional
 ./target/debug/buaa spoc surface
 Use `--online` only for an authorized cache miss, or `--refresh` for conditional revalidation. Egress is limited to `spoc.buaa.edu.cn` robots, `/` and `/spocnew/`. A 2026-09-28 governed observation is recorded in [docs/SPOC.md](docs/SPOC.md) as a **pending-review** contract draft; the SPOC item stays blocked until the owner reviews the contract and supplies a rights-cleared course inventory.
 
+## Contract drift detection (offline)
+`buaa drift check` compares a pinned baseline contract document against a candidate contract document, both supplied as JSON on stdin. It is fully offline: no network access, no writes. The output is a JSON drift report naming added, removed, type-changed and array-length-changed paths (with type names and lengths) and never applies, guesses or merges a change. Raw document values never enter the report.
+
+```sh
+printf '%s\n' '{"baseline":{"v":"s"},"candidate":{"v":5}}' | ./target/debug/buaa drift check
+```
+
+
 The Linux governor uses `.buaa-cli-governor` beneath the effective UID's passwd home, ignoring HOME/XDG/worktree overrides. One permanent file lock spans the full request/body lifetime; private atomic state preserves minimum 5-second completion gaps, 15-minute background intervals, Retry-After and one-shot auth permission. Boot-time deadlines cannot be shortened by wall-clock changes. All processes using a campus account must share this OS identity and filesystem state; this is not a distributed cross-host governor.
 
 Unknown request outcomes (including crash or failed outcome persistence), reboot/boot-ID mismatch and corrupt/missing governor history fail closed. Ordinary auth resume does **not** clear these states; governor-state failures still require offline operator review and have no reset command. Gateway logout unknown outcomes have a separate typed, local-only review flow that records `remote_state=unknown` and cannot clear governor state. Local filesystem locking/fsync semantics and cooperating same-UID clients are required.
@@ -158,7 +166,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |
 | skills-fs | skills-fs HTTP provider | blocked |
 | contribution | Governed autonomous contribution | pending |
-| drift | Read-only API/schema drift detection | pending |
+| drift | Read-only API/schema drift detection | implemented-offline |
 | publication | GitHub repository and Pages | published; receipt verified |
 | ci | Exact-SHA private CI bridge | blocked |
 | vpn | VPN implementation | deferred |

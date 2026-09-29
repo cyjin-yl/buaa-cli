@@ -30,6 +30,43 @@ fn invalid_late_input_emits_nothing_and_never_echoes_payload() {
             .contains("sentinel")
     );
 }
+#[test]
+fn drift_check_reports_changes_and_rejects_invalid_input() {
+    let output = invoke(
+        &["drift", "check"],
+        br#"{"baseline":{"v":"s","gone":2},"candidate":{"v":5,"new":9}}"#,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["type"], "contract_drift_report");
+    assert_eq!(value["in_sync"], false);
+    assert_eq!(value["change_count"], 3);
+    let kinds: Vec<&str> = value["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"value_changed"));
+    assert!(kinds.contains(&"removed"));
+    assert!(kinds.contains(&"added"));
+    // Raw values must not leak.
+    assert!(
+        !String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("sensitive")
+    );
+
+    let bad = invoke(&["drift", "check"], b"not json");
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(bad.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&bad.stderr).unwrap();
+    assert_eq!(error["error"], "invalid_input");
+}
 
 #[test]
 fn raw_replay_closes_with_exact_payload_and_no_json_wrapper() {
