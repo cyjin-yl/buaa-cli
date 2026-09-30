@@ -11,13 +11,15 @@
 //! links are surfaced as hints and never downloaded. Historical bytes remain
 //! operator-asserted provenance, bound by SHA-256.
 
-use crate::net::{ArchiveClient, CacheMode, Error, Response};
+use crate::net::{ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{NaiveDate, NaiveDateTime};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
+
+mod scse;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
 const MAX_HTML: usize = 2 * 1024 * 1024;
@@ -80,6 +82,7 @@ struct ArticleDocument {
 #[derive(serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ListQuery {
+    college: Option<String>,
     category: Option<String>,
     page: Option<u32>,
     since: Option<String>,
@@ -159,6 +162,53 @@ fn normalized_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
         .join(" ")
 }
 
+/// Linear DOM walk with no ancestor rescans or subtree copies. Script/style,
+/// template and noscript payloads are not source prose.
+fn element_text(element: ElementRef<'_>) -> String {
+    if element.ancestors().any(|node| {
+        node.value()
+            .as_element()
+            .is_some_and(|node| matches!(node.name(), "script" | "style" | "template" | "noscript"))
+    }) {
+        return String::new();
+    }
+    let root = element.id();
+    let mut current = element.first_child();
+    let mut output = String::new();
+    while let Some(node) = current {
+        let skip = node.value().as_element().is_some_and(|node| {
+            matches!(node.name(), "script" | "style" | "template" | "noscript")
+        });
+        if let Node::Text(text) = node.value() {
+            for word in text.text.split_whitespace() {
+                if !output.is_empty() {
+                    output.push(' ');
+                }
+                output.push_str(word);
+            }
+        }
+        if !skip && let Some(child) = node.first_child() {
+            current = Some(child);
+            continue;
+        }
+        let mut cursor = node;
+        loop {
+            if let Some(sibling) = cursor.next_sibling() {
+                current = Some(sibling);
+                break;
+            }
+            match cursor.parent() {
+                Some(parent) if parent.id() != root => cursor = parent,
+                _ => {
+                    current = None;
+                    break;
+                }
+            }
+        }
+    }
+    output
+}
+
 fn category_label(slug: &str) -> Option<&'static str> {
     CATEGORIES
         .iter()
@@ -182,7 +232,12 @@ fn latest_listing_url(category: &str) -> Result<Url, Error> {
     Url::parse(&format!("{NEWS_BASE}/{category}.htm")).map_err(|_| unavailable())
 }
 
-fn advertised_page_url(bytes: &[u8], base: &Url, category: &str, page: u32) -> Result<Url, Error> {
+fn advertised_page_url(
+    bytes: &[u8],
+    base: &Url,
+    page: u32,
+    allowed_page: impl Fn(&Url) -> bool,
+) -> Result<Url, Error> {
     if bytes.is_empty() || bytes.len() > MAX_HTML {
         return Err(unavailable());
     }
@@ -190,7 +245,6 @@ fn advertised_page_url(bytes: &[u8], base: &Url, category: &str, page: u32) -> R
     let document = Html::parse_document(text);
     let selector =
         Selector::parse("div.pb_sys_common span.p_no a[href]").map_err(|_| unavailable())?;
-    let prefix = format!("/{category}/");
     for link in document.select(&selector) {
         if normalized_text(link.text()).parse::<u32>().ok() != Some(page) {
             continue;
@@ -198,7 +252,7 @@ fn advertised_page_url(bytes: &[u8], base: &Url, category: &str, page: u32) -> R
         let url = base
             .join(link.value().attr("href").ok_or_else(unavailable)?)
             .map_err(|_| unavailable())?;
-        if !is_list_source_url(url.as_str()) || !url.path().starts_with(&prefix) {
+        if !allowed_page(&url) {
             return Err(failed_contract(
                 "advertised listing page must remain in the selected category",
                 file!(),
@@ -434,7 +488,7 @@ fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
     let body_selector = Selector::parse("div.v_news_content p").map_err(|_| unavailable())?;
     let mut paragraphs: Vec<String> = Vec::new();
     for paragraph in document.select(&body_selector) {
-        let text = normalized_text(paragraph.text());
+        let text = element_text(paragraph);
         if text.is_empty() {
             continue;
         }
@@ -628,6 +682,11 @@ fn parse_list_query(input: Option<&str>) -> Result<ListQuery, Error> {
 
 pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
     let query = parse_list_query(input)?;
+    match query.college.as_deref() {
+        Some("scse") => return scse::list(mode, &query),
+        Some(_) => return Err(invalid_list()),
+        None => {}
+    }
     let category = query.category.as_deref().unwrap_or(DEFAULT_CATEGORY);
     let page = query.page.unwrap_or(1);
     if page < 1 {
@@ -653,8 +712,11 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
     let url = if page == 1 {
         latest
     } else {
+        let prefix = format!("/{category}/");
         discovery_client.get(&latest, false, |response| {
-            advertised_page_url(&response.body, &latest, category, page)
+            advertised_page_url(&response.body, &latest, page, |url| {
+                is_list_source_url(url.as_str()) && url.path().starts_with(&prefix)
+            })
         })?
     };
     let client = discovery_client.with_cache_mode(mode);
@@ -700,9 +762,87 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         .as_deref()
         .filter(|url| !url.trim().is_empty())
         .ok_or_else(invalid_article)?;
+    if Url::parse(raw_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .as_deref()
+        == Some("scse.buaa.edu.cn")
+    {
+        return scse::article(mode, raw_url);
+    }
     let url = resolve_article_url(raw_url)?;
     let client = ArchiveClient::open_announcements(mode)?;
     client.get(&url, false, normalize_article)
+}
+
+/// Fixed public college pages, not a unified college crawler or a verified
+/// announcement parser. Never follows the returned hints.
+pub fn scse_surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
+    let raw = match page {
+        "root" => SCSE_ROOT_URL,
+        "notices" => SCSE_NOTICES_URL,
+        _ => return Err(Error::new("invalid_input", "unknown college surface page")),
+    };
+    let url = Url::parse(raw).map_err(|_| unavailable())?;
+    let client = ArchiveClient::open_scse(mode)?;
+    client.get(&url, false, describe_scse_surface)
+}
+
+fn describe_scse_surface(response: &Response) -> Result<Value, Error> {
+    if response.status != 200 || response.body.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let input = std::str::from_utf8(&response.body).map_err(|_| unavailable())?;
+    let document = Html::parse_document(input);
+    let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
+    let title = document
+        .select(&title_selector)
+        .next()
+        .map(|node| normalized_text(node.text()))
+        .filter(|title| !title.is_empty());
+    if title.as_ref().is_some_and(|title| title.len() > MAX_TEXT) {
+        return Err(unavailable());
+    }
+    let anchor_selector = Selector::parse("a[href]").map_err(|_| unavailable())?;
+    let base = Url::parse(&response.url).map_err(|_| unavailable())?;
+    let mut hints = Vec::new();
+    let mut hints_truncated = false;
+    for node in document.select(&anchor_selector) {
+        let raw = node.value().attr("href").unwrap_or_default();
+        if raw.len() > MAX_HREF {
+            continue;
+        }
+        let Ok(url) = base.join(raw) else {
+            continue;
+        };
+        if !is_http(&url)
+            || url.host_str() != Some("scse.buaa.edu.cn")
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.port().is_some()
+        {
+            continue;
+        }
+        let label = normalized_text(node.text());
+        if label.is_empty() || label.len() > MAX_TEXT {
+            continue;
+        }
+        if hints.len() == 64 {
+            hints_truncated = true;
+            break;
+        }
+        hints.push(json!({"path":url.path(),"listed_scheme":url.scheme(),"label":label}));
+    }
+    Ok(json!({
+        "schema_version":1,"type":"college_source_surface","result":"surface_snapshot",
+        "college":"computer_science",
+        "directory_attribution":{"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","note":"the directory href is preserved; this command explicitly observes HTTPS separately"},
+        "document_title":title,"same_host_path_hints":hints,"hints_truncated":hints_truncated,
+        "completeness":{"scope":"single_explicit_public_page","announcement_adapter_verified":false,"links_followed":false,"publication_date":"unknown"},
+        "retrieval":retrieval(response),
+    }))
 }
 
 pub fn history(input: &str) -> Result<Value, Error> {
@@ -710,7 +850,8 @@ pub fn history(input: &str) -> Result<Value, Error> {
         return Err(invalid_history());
     }
     let query: HistoryInput = serde_json::from_str(input).map_err(|_| invalid_history())?;
-    if !is_list_source_url(&query.provenance.source_url) {
+    let college_snapshot = scse::is_history_source(&query.provenance.source_url);
+    if !college_snapshot && !is_list_source_url(&query.provenance.source_url) {
         return Err(invalid_history());
     }
     let timestamp = match &query.provenance.capture_timestamp {
@@ -729,13 +870,19 @@ pub fn history(input: &str) -> Result<Value, Error> {
         return Err(invalid_history());
     }
     let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
-    let document = parse_listing(&bytes, &base).map_err(|_| invalid_history())?;
+    let document = if college_snapshot {
+        scse::parse_listing(&bytes, &base)
+    } else {
+        parse_listing(&bytes, &base)
+    }
+    .map_err(|_| invalid_history())?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
     Ok(json!({
         "schema_version": 1,
         "type": "announcements_history",
         "result": "listing_snapshot",
-        "publisher": "北京航空航天大学",
+        "publisher": if college_snapshot {scse::PUBLISHER} else {"北京航空航天大学"},
+        "college": if college_snapshot {Some("scse")} else {None},
         "listing_label": "新闻中心（历史快照）",
         "document_title": document.title,
         "entries": document.entries,
@@ -772,39 +919,54 @@ fn capture_timestamp(value: &str) -> Result<NaiveDateTime, ()> {
 }
 
 pub fn schema() -> Value {
+    let news_categories: Vec<Value> = CATEGORIES
+        .iter()
+        .map(|(slug, _)| json!(slug))
+        .chain(std::iter::once(Value::Null))
+        .collect();
     json!({
+        "college_source": {
+            "input":{"description":"announcements college-source scse [root|notices] [--online|--refresh]; fixed public pages only. No stdin or arbitrary URL."},
+            "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
+        },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. category (default tzgg), page (default 1; later ordinals must be advertised by the latest listing), since/until (YYYY-MM-DD, inclusive), match (title substring). Empty/null stdin uses defaults. No automatic pagination or inferred page URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects the separately verified computer-college notices source, category gggs. Page defaults to 1; later ordinals must be advertised by the selected source. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred page URLs.",
+                "additionalProperties": false,
                 "properties": {
-                    "category": {"type": "string", "enum": CATEGORIES.iter().map(|(slug, _)| *slug).collect::<Vec<_>>()},
-                    "page": {"type": "integer", "minimum": 1},
-                    "since": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
-                    "until": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
-                    "match": {"type": "string"}
-                }
+                    "college": {"enum": ["scse",null]},
+                    "category": {"type": ["string","null"]},
+                    "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
+                    "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                    "until": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                    "match": {"type": ["string","null"]}
+                },
+                "allOf":[{"if":{"required":["college"],"properties":{"college":{"const":"scse"}}},
+                    "then":{"properties":{"category":{"enum":["gggs",null]}}},
+                    "else":{"properties":{"category":{"enum":news_categories}}}}]
             },
             "output": {
                 "type": "object",
-                "description": "News-center listing snapshot: title/date/category-label/summary/link entries with filters applied, plus retrieval provenance.",
+                "description": "Selected-source listing snapshot with title/date/link entries, explicit college scope when selected, filters and retrieval provenance. No all-college coverage claim.",
             }
         },
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: a news.buaa.edu.cn /info/<category>/<id>.htm article path.",
+                "description": "JSON object with url: a news-center article or a reviewed scse.buaa.edu.cn notice article in category 1099/1299. HTTPS only; no query, credentials, custom port or fragment.",
+                "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"}}
             },
             "output": {
                 "type": "object",
-                "description": "Full article text (v_news_content paragraphs), publish date, and attachment-link hints (never downloaded).",
+                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. College image/PDF-preview pages explicitly return embedded_document or partial_text rather than fabricated full text; preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {
             "input": {
                 "type": "object",
-                "description": "Operator-asserted Web Archive snapshot: base64 html + provenance.source_url (a news.buaa.edu.cn listing URL) + optional capture_timestamp (YYYYMMDDHHMMSS) + optional asserted_by.",
+                "description": "Offline operator-asserted snapshot: base64 html, provenance.source_url (a reviewed news-center or SCSE notices listing), optional capture_timestamp and asserted_by. Historical SCSE HTTP originals are preserved; no request or archive-attribution verification occurs.",
             },
             "output": {
                 "type": "object",
@@ -919,25 +1081,27 @@ mod tests {
     fn pagination_uses_advertised_ordinals_not_filename_numbers() {
         let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span></div>"#;
         let base = latest_listing_url("tzgg").unwrap();
+        let allowed =
+            |url: &Url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/");
         assert_eq!(
-            advertised_page_url(html, &base, "tzgg", 2).unwrap().path(),
+            advertised_page_url(html, &base, 2, allowed).unwrap().path(),
             "/tzgg/252.htm"
         );
         assert_eq!(
-            advertised_page_url(html, &base, "tzgg", 253)
+            advertised_page_url(html, &base, 253, allowed)
                 .unwrap()
                 .path(),
             "/tzgg/1.htm"
         );
         assert_eq!(
-            advertised_page_url(html, &base, "tzgg", 6)
+            advertised_page_url(html, &base, 6, allowed)
                 .unwrap_err()
                 .code,
             "unavailable"
         );
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://evil.example/tzgg/252.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(foreign, &base, "tzgg", 2)
+            advertised_page_url(foreign, &base, 2, allowed)
                 .unwrap_err()
                 .code,
             "unavailable"
@@ -991,6 +1155,16 @@ mod tests {
         let html = r#"<!DOCTYPE html><html><head><title>t</title></head><body><h2>标题</h2><div class="v_news_content"></div></body></html>"#;
         let url = Url::parse("https://news.buaa.edu.cn/info/1010/1.htm").unwrap();
         assert!(parse_article(html.as_bytes(), &url).is_err());
+    }
+
+    #[test]
+    fn executable_or_fallback_markup_is_not_article_text() {
+        let html = r#"<title>Fixture</title><h2>Fixture title</h2><div class="v_news_content"><p><script>var embedded_document = ["not policy text"];</script><style>.hidden { display:none }</style><noscript>Enable JavaScript</noscript></p></div>"#;
+        let url = Url::parse("https://news.buaa.edu.cn/info/1010/1.htm").unwrap();
+        assert_eq!(
+            parse_article(html.as_bytes(), &url).unwrap_err().code,
+            "unavailable"
+        );
     }
 
     #[test]

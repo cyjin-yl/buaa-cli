@@ -83,6 +83,35 @@ pub(crate) const ORGANIZATIONS_URL: &str = "https://www.buaa.edu.cn/jgsz/jxkyjg0
 const SPOC_ROBOTS_URL: &str = "https://spoc.buaa.edu.cn/robots.txt";
 pub(crate) const SPOC_ROOT_URL: &str = "https://spoc.buaa.edu.cn/";
 pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
+pub(crate) const SCSE_ROOT_URL: &str = "https://scse.buaa.edu.cn/";
+pub(crate) const SCSE_NOTICES_URL: &str = "https://scse.buaa.edu.cn/xwgg/gggs.htm";
+const SCSE_ROBOTS_URL: &str = "https://scse.buaa.edu.cn/robots.txt";
+
+pub(crate) fn scse_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwgg/gggs.htm") {
+        return true;
+    }
+    if let Some(page) = path
+        .strip_prefix("/xwgg/gggs/")
+        .and_then(|page| page.strip_suffix(".htm"))
+    {
+        return !page.is_empty()
+            && page.len() <= 10
+            && page.bytes().all(|byte| byte.is_ascii_digit());
+    }
+    let Some(tail) = path
+        .strip_prefix("/info/")
+        .and_then(|tail| tail.strip_suffix(".htm"))
+    else {
+        return false;
+    };
+    tail.split_once('/').is_some_and(|(category, id)| {
+        matches!(category, "1099" | "1299")
+            && !id.is_empty()
+            && id.len() <= 10
+            && id.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
 #[cfg(test)]
 const ROBOTS_URL: &str = ARCHIVE_ROBOTS_URL;
 const ROBOTS_MAX_AGE_MS: u64 = 24 * 60 * 60 * 1000;
@@ -105,6 +134,7 @@ enum SourceProfile {
     Organizations,
     Announcements,
     Spoc,
+    Scse,
 }
 
 impl SourceProfile {
@@ -114,6 +144,7 @@ impl SourceProfile {
             Self::Organizations => ORGANIZATIONS_ROBOTS_URL,
             Self::Announcements => ANNOUNCEMENTS_ROBOTS_URL,
             Self::Spoc => SPOC_ROBOTS_URL,
+            Self::Scse => SCSE_ROBOTS_URL,
         }
     }
 
@@ -123,6 +154,7 @@ impl SourceProfile {
             Self::Organizations => ".buaa-cli-organizations-cache",
             Self::Announcements => ".buaa-cli-announcements-cache",
             Self::Spoc => ".buaa-cli-spoc-cache",
+            Self::Scse => ".buaa-cli-scse-cache",
         }
     }
 
@@ -154,6 +186,11 @@ impl SourceProfile {
                 url.host_str() == Some("spoc.buaa.edu.cn")
                     && url.query().is_none()
                     && matches!(url.path(), "/" | "/spocnew/" | "/robots.txt")
+            }
+            Self::Scse => {
+                url.host_str() == Some("scse.buaa.edu.cn")
+                    && url.query().is_none()
+                    && scse_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -326,6 +363,10 @@ impl ArchiveClient {
     }
     pub(crate) fn open_spoc(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Spoc)
+    }
+
+    pub(crate) fn open_scse(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Scse)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {

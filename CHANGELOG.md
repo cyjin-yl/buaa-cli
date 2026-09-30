@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add the independently observed computer-college notices source (`college=scse`), source-advertised pagination, English article dates and source-scoped HTTP history assertions. Exclude executable/fallback markup from article prose; report image/PDF previews and opaque JSP attachment links without inventing text, OCR or fetching those assets. Other college boards remain unsupported.
 - Migrate the retired announcements source to `news.buaa.edu.cn`, with category/date/title filtering, explicitly advertised page selection, article paragraphs and attachment-link hints. Cache-first reads and conditional refresh retain the shared governor; no per-college crawl or attachment download is implied. Historical replay remains offline, operator-asserted and byte-bound, including paged listing sources and optional `asserted_by`.
 - Make announcements offline-miss proof hermetic; the CLI cache test accepts a real cache hit or unavailable without reading mutable `HOME`, clearing caches or relying on unrelated cache entries.
 - Bind CDX resume cursors to the exact query scope (url, from, to, limit) that minted them; cross-scope and never-issued cursors are rejected before a request. The cursor-scope registry evicts deterministically at its 256-entry cap so a full registry keeps recording new bindings. Loopback regressions cover same-scope continuation, cross-scope and unknown-cursor rejection, binding persistence across client instances, and cap eviction.
