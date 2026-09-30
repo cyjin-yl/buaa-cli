@@ -8,7 +8,11 @@ use super::{
     entry_in_scope, failed_contract, invalid_article, invalid_list, is_document_href, is_http,
     parse_iso_date, retrieval, unavailable,
 };
-use crate::net::{ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, scse_path_allowed};
+use crate::net::{
+    ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, scse_document_path_allowed,
+    scse_path_allowed,
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::NaiveDateTime;
 use scraper::{Html, Selector};
 use serde_json::{Value, json};
@@ -196,6 +200,119 @@ pub(super) fn article(mode: CacheMode, raw: &str) -> Result<Value, Error> {
     client.get(&url, false, normalize_article)
 }
 
+fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
+    let scripts = Selector::parse("div.v_news_content script").map_err(|_| unavailable())?;
+    let mut selected: Option<Url> = None;
+    for node in document.select(&scripts) {
+        for text in node.text() {
+            let mut remainder = text;
+            while let Some(position) = remainder.find("showVsbpdfIframe") {
+                remainder = &remainder[position + "showVsbpdfIframe".len()..];
+                let Some(arguments) = remainder.trim_start().strip_prefix('(') else {
+                    continue;
+                };
+                let bounded = arguments
+                    .get(..arguments.len().min(64 * 1024))
+                    .ok_or_else(unavailable)?;
+                let mut stream = serde_json::Deserializer::from_str(bounded).into_iter::<String>();
+                let path = stream
+                    .next()
+                    .ok_or_else(unavailable)?
+                    .map_err(|_| unavailable())?;
+                if path.len() > MAX_HREF
+                    || !bounded[stream.byte_offset()..]
+                        .trim_start()
+                        .starts_with([',', ')'])
+                {
+                    return Err(unavailable());
+                }
+                let url = article.join(&path).map_err(|_| unavailable())?;
+                if !plain_url(&url, false) || !scse_document_path_allowed(url.path()) {
+                    return Err(failed_contract(
+                        "source-declared PDF must use the reviewed college document namespace",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                if selected.as_ref().is_some_and(|previous| previous != &url) {
+                    return Err(failed_contract(
+                        "article declares ambiguous original PDF documents",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                selected = Some(url);
+            }
+        }
+    }
+    Ok(selected)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentInput {
+    article_url: String,
+}
+
+pub(super) fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
+    if input.len() > 32 * 1024 {
+        return Err(invalid_article());
+    }
+    let input: DocumentInput = serde_json::from_str(input).map_err(|_| invalid_article())?;
+    let article = resolve_article(&input.article_url)?;
+    // Resolve against the retained article snapshot. An operator may refresh
+    // that article separately; document --refresh revalidates only its PDF.
+    let source_mode = if mode == CacheMode::Revalidate {
+        CacheMode::PreferCache
+    } else {
+        mode
+    };
+    let client = ArchiveClient::open_scse(source_mode)?;
+    let (document_url, source) = client.get(&article, false, |response| {
+        let declared = declared_pdf(&html(&response.body)?, &article)?.ok_or_else(|| {
+            failed_contract(
+                "article has no supported source-declared original PDF",
+                file!(),
+                line!(),
+            )
+        })?;
+        Ok((declared, retrieval(response)))
+    })?;
+    client.with_cache_mode(mode).get(&document_url, true, |response| {
+        validate_pdf(response)?;
+        Ok(json!({
+            "schema_version":1,"type":"announcement_document","result":"source_document_bytes",
+            "publisher":PUBLISHER,"college":"scse","source_article":source,
+            "reference_policy":"retained_article_snapshot; refresh the article separately to discover a changed document declaration",
+            "relationship":"original PDF declared by the source viewer; not a derived preview image",
+            "document":{"media_type":"application/pdf","byte_length":response.body.len(),"sha256":response.sha256,"content_base64":STANDARD.encode(&response.body)},
+            "retrieval":retrieval(response),
+            "verification":{"hash_scope":"retrieved_document_bytes","pdf_framing_checked":true,"external_published_checksum_verified":false,"publisher_signature_verified":false,"document_safety_scan_performed":false},
+            "completeness":{"scope":"single_source_declared_pdf","other_attachments_fetched":false,"preview_images_fetched":false,"text_extracted":false,"ocr_performed":false},
+        }))
+    })
+}
+
+fn validate_pdf(response: &Response) -> Result<(), Error> {
+    let tail = &response.body[response.body.len().saturating_sub(1024)..];
+    let mime_ok = response.headers.get("content-type").is_none_or(|value| {
+        let media = value.split(';').next().unwrap_or_default().trim();
+        media.eq_ignore_ascii_case("application/pdf")
+            || media.eq_ignore_ascii_case("application/octet-stream")
+    });
+    if !mime_ok
+        || !response.body.starts_with(b"%PDF-")
+        || !tail.windows(5).any(|window| window == b"%%EOF")
+    {
+        return Err(failed_contract(
+            "source document lacks reviewed PDF MIME/framing; bytes are not cached as a PDF",
+            file!(),
+            line!(),
+        ));
+    }
+    Ok(())
+}
+
 fn preview_paths(document: &Html) -> Result<(bool, Vec<String>), Error> {
     let selector = Selector::parse("div.v_news_content script").map_err(|_| unavailable())?;
     for node in document.select(&selector) {
@@ -268,6 +385,10 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
         paragraphs.push(text);
     }
     let (has_previews, previews) = preview_paths(&document)?;
+    let original_pdf = declared_pdf(
+        &document,
+        &Url::parse(&response.url).map_err(|_| unavailable())?,
+    )?;
     let attachment_selector = Selector::parse("a[href]").map_err(|_| unavailable())?;
     let mut hints = Vec::new();
     let mut hints_truncated = false;
@@ -308,7 +429,7 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
         "schema_version":1,"type":"announcements_article","result":result,"publisher":PUBLISHER,"college":"scse",
         "title":title,"published_at":published_at,"published_at_raw":published_at_raw,
         "body_paragraph_count":paragraphs.len(),"body_paragraphs":paragraphs,
-        "embedded_document":{"present":has_previews,"preview_paths":previews,"preview_kind":"source_declared_derived_images","assets_fetched":false,"ocr_performed":false,"original_document_verified":false},
+        "embedded_document":{"present":has_previews,"original_pdf_url":original_pdf.as_ref().map(Url::as_str),"preview_paths":previews,"preview_kind":"source_declared_derived_images","assets_fetched":false,"ocr_performed":false,"original_document_verified":false},
         "attachments":{"found":!hints.is_empty(),"hints":hints,"hints_truncated":hints_truncated,"note":"source-declared links only; never fetched"},
         "completeness":{"scope":"single_college_article_page","body_source":"v_news_content paragraphs excluding executable/fallback markup","missing_document_text":"not_reconstructed"},
         "retrieval":retrieval(response),
@@ -396,6 +517,58 @@ mod tests {
             "https://scse.buaa.edu.cn/info/1099/42.htm#fragment",
         ] {
             assert_eq!(resolve_article(url).unwrap_err().code, "invalid_input");
+        }
+    }
+
+    #[test]
+    fn original_pdf_is_declared_by_viewer_not_inferred_from_preview_names() {
+        let article = Url::parse("https://scse.buaa.edu.cn/info/1099/42.htm").unwrap();
+        let path = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+        let body = format!(
+            r#"<div class="v_news_content"><script>var vsb_pdf_image_data=["/__local/preview.jpg"];showVsbpdfIframe("{path}","100%");</script></div>"#
+        );
+        assert_eq!(
+            declared_pdf(&html(body.as_bytes()).unwrap(), &article)
+                .unwrap()
+                .unwrap()
+                .path(),
+            path
+        );
+        let preview_only = br#"<div class="v_news_content"><script>var vsb_pdf_image_data=["/__local/preview.jpg"];</script></div>"#;
+        assert!(
+            declared_pdf(&html(preview_only).unwrap(), &article)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn viewer_expressions_and_foreign_document_routes_are_not_followed() {
+        let article = Url::parse("https://scse.buaa.edu.cn/info/1099/42.htm").unwrap();
+        for argument in [
+            r#""https://evil.example/file.pdf""#,
+            r#""/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf?session=fixture""#,
+            r#""/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf"+suffix"#,
+        ] {
+            let body = format!(
+                "<div class=\"v_news_content\"><script>showVsbpdfIframe({argument},\"100%\");</script></div>"
+            );
+            assert_eq!(
+                declared_pdf(&html(body.as_bytes()).unwrap(), &article)
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn login_html_and_truncated_pdf_are_not_retained_as_documents() {
+        for body in ["<html>Not a document</html>", "%PDF-1.7\ntruncated"] {
+            assert_eq!(
+                validate_pdf(&response(body)).unwrap_err().code,
+                "unavailable"
+            );
         }
     }
 }

@@ -775,6 +775,12 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
     client.get(&url, false, normalize_article)
 }
 
+/// Retrieve one original PDF explicitly declared by a reviewed college article.
+/// Does not infer a document from preview names or follow unreviewed links.
+pub fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
+    scse::document(mode, input)
+}
+
 /// Fixed public college pages, not a unified college crawler or a verified
 /// announcement parser. Never follows the returned hints.
 pub fn scse_surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
@@ -925,6 +931,10 @@ pub fn schema() -> Value {
         .chain(std::iter::once(Value::Null))
         .collect();
     json!({
+        "document": {
+            "input":{"type":"object","additionalProperties":false,"required":["article_url"],"properties":{"article_url":{"type":"string","description":"Reviewed HTTPS SCSE notice article; the viewer must declare exactly one supported original PDF."}}},
+            "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
+        },
         "college_source": {
             "input":{"description":"announcements college-source scse [root|notices] [--online|--refresh]; fixed public pages only. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}

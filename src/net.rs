@@ -87,7 +87,46 @@ pub(crate) const SCSE_ROOT_URL: &str = "https://scse.buaa.edu.cn/";
 pub(crate) const SCSE_NOTICES_URL: &str = "https://scse.buaa.edu.cn/xwgg/gggs.htm";
 const SCSE_ROBOTS_URL: &str = "https://scse.buaa.edu.cn/robots.txt";
 
+pub(crate) fn scse_document_path_allowed(path: &str) -> bool {
+    let Some(tail) = path.strip_prefix("/__local/") else {
+        return false;
+    };
+    let mut parts = tail.split('/');
+    let (Some(first), Some(second), Some(third), Some(file), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
+        return false;
+    };
+    let hex = |value: &str, length: usize| {
+        value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    if !hex(first, 1) || !hex(second, 2) || !hex(third, 2) {
+        return false;
+    }
+    let Some(stem) = file.strip_suffix(".pdf") else {
+        return false;
+    };
+    let mut fields = stem.split('_');
+    let (Some(content), Some(revision), Some(size), None) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return false;
+    };
+    hex(content, 27)
+        && hex(revision, 8)
+        && !size.is_empty()
+        && size.len() <= 16
+        && size.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 pub(crate) fn scse_path_allowed(path: &str) -> bool {
+    if scse_document_path_allowed(path) {
+        return true;
+    }
     if matches!(path, "/" | "/robots.txt" | "/xwgg/gggs.htm") {
         return true;
     }
