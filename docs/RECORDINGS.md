@@ -33,6 +33,18 @@ Resolution is bounded to 16 ancestry hops, 64 loaded asset IDs and 128 retained 
 
 `hash_verification` is always `catalog_declared_not_blob_verified`. Bucket/key fields are catalog locators, not proof that an object was fetched or exists. This command does not verify or disclose object-store credentials and does not reconstruct missing originals or history.
 
+## Object-storage interface facts — source-only draft
+
+Authorized, authenticated repository reads pinned the Life source to `af59427c7f6bac3382b5989b811b69872f4de928`. A structural Python AST inspection, not execution of the private implementation, found S3-compatible `HeadObject(Bucket, Key)` and `GetObject(Bucket, Key)` operations. The read inspector delegates to existence and digest helpers; the digest helper streams `Body` in 262,144-byte chunks, computes SHA-256 and closes the stream in a `finally` block. The same source also contains a `PutObject` operation in a separate workflow; it is explicitly excluded from this proposed read-only integration. No source code, operational default, endpoint, credential configuration, catalog row or media bytes were copied into this project.
+
+These are interface facts, **not an owner-approved contract or working buaa-cli remote adapter**. No private helper was run and no object-store request occurred. Repository read permission does not authorize bucket enumeration, object downloads, publishing course materials, or executing the upstream upload/remote-task tooling.
+
+Owner review and the private operational prerequisites are tracked in [issue #74](https://github.com/cyjin-yl/buaa-cli/issues/74). Keep endpoints, credentials and private inventory out of public comments.
+
+The existing consumer provides declared `bucket`, `object_key`, `sha256` and `bytes` for each original/derived descriptor. A future authorized read must select an exact object under a rights-cleared inventory, retain the process-shared governor through bounded body hashing/private cache persistence, compare both observed SHA-256 and byte length with that declaration, and keep original and derived receipts separate. `HeadObject` existence, ETag, or a catalog hash alone must not be reported as verified object bytes. Ingestion time must not become capture time; unresolved ancestry must remain unresolved. No automatic retries, auth refresh, independent worktree limiter or batch parallelism may be inherited from private tooling.
+
+Implementation prerequisites remain: owner approval of a narrowly scoped HTTPS read/authentication/immutability contract; an explicit allowlist and maximum byte budget; an authorized object inventory with rights for the original and permitted derived use; private stdin/keyring credential delivery; and synthetic streaming/error fixtures. None of the operational values belongs in public fixtures or diagnostics. Shared governor timing, Retry-After, rejection/challenge latches and deliberate authentication resume remain mandatory. Issue [#47](https://github.com/cyjin-yl/buaa-cli/issues/47) separately tracks the missing classroom-replay source/rights contract; storage interface inspection does not close it.
+
 ## Read-only and resource limits
 
 The catalog must already exist and have the supported table/column/key/FTS mapping. Missing, unsupported or malformed data is not replaced with an empty success or a new database. The reader disables URI options and extension loading, opens read-only, uses query-only/defensive settings, and bounds SQLite execution, busy waiting, metadata and text sizes.
