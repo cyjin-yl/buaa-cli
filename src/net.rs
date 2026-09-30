@@ -337,8 +337,8 @@ impl ArchiveClient {
         })
     }
 
-    /// Hermetic offline announcements fixture. A regression entering the live
-    /// path still cannot touch the operator's governor.
+    /// Hermetic offline fixture. Even an offline-path regression is routed to
+    /// loopback port zero and an isolated governor, never the operator/source.
     #[cfg(test)]
     pub(crate) fn open_announcements_offline_for_test(
         directory: &std::path::Path,
@@ -348,7 +348,7 @@ impl ArchiveClient {
             profile: SourceProfile::Announcements,
             directory: governor::open_directory(directory, true, true)
                 .map_err(|_| cache_error())?,
-            test_route: None,
+            test_route: Some(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
             test_governor: Some(directory.join("governor")),
         })
     }
