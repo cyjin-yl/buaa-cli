@@ -72,7 +72,16 @@ printf '%s\n' '{"policy":{"kind":"table","id":"p1","source":"<published-url>","p
 
 ## Graduation credits (offline)
 
-`buaa credits calculate` implements the sourced School-8 2020 general-major calculation. `major` must match a declared non-general major tag from the catalog. Same-name catalog rows are accepted only when credit, displayed metadata and classification for that major agree; conflicting identities return `invalid_input`. Other cohorts/programs remain pending evidence.
+`buaa credits calculate` implements the sourced School-8 2020 general-major calculation. `major` must match a declared non-general major tag from the catalog. Same-name catalog rows are accepted only when credit, displayed metadata and classification for that major agree; conflicting identities return `invalid_input`. Other authoritative cohort/program policies remain unverified.
+
+`buaa credits school6` checks the pinned community description of the School-6 CS 2020 plan against operator-supplied earned courses. It reports each category deficit even when the 150-credit total is reached. Input requires `cohort: "2020"` and `courses`; each course has a stable `id`, `name`, `credits` (0.01–100 in exact hundredths), `category` from `buaa schema`, and explicit `passed`. Optional `qualifications` attest eligible local `english`, non-practical `english_exchange`, `cross_major` and `humanities_core` attributes. Local English witnesses use core-major/general-major/general-education categories; exchange English witnesses may use any primary category. Both require one 2-credit course and never add witness credits again. A course ID identifies the same course across attempts, not an individual attempt: any listed pass counts once; conflicting name, credit, category or attributes are rejected.
+
+```sh
+# Synthetic earned-course declaration; reports deficits, not campus records.
+printf '%s\n' '{"cohort":"2020","courses":[{"id":"example","name":"Synthetic elective","credits":2,"category":"general_major","passed":true,"qualifications":{"english":true}}]}' | ./target/debug/buaa credits school6
+```
+
+Source: [pinned community explanation](https://github.com/TrickEye/can_I_Graduate/blob/5e0f0355455d7eb7e69f953a23ca405e5af7ebed/src/App.vue#L450-L461). Numerical requirement facts inform original code; the unlicensed upstream implementation is neither copied nor executed. Classification, passing status and eligible course attributes remain operator assertions. The result always has `graduation_eligibility: "not_verified"`; official retake, substitution, waiver, overlap rules and full catalog validation remain missing. Both commands are fully offline and do not fetch grades or certify graduation.
 
 ```sh
 printf '%s\n' '{"major":"会计学","selected":["健康经济学"]}' | ./target/debug/buaa credits calculate

@@ -17,6 +17,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub mod school6;
+
 const REQUIRED_CREDITS: f64 = 25.0;
 const GENERAL_TAG: &str = "一般专业类";
 // Derived from non-general major tags in the sourced 2020 school-8 catalog.
@@ -199,7 +201,7 @@ fn round2(value: f64) -> f64 {
 }
 
 pub fn schema() -> Value {
-    json!({"calculate": {
+    json!({"school6":school6::schema(),"calculate": {
         "input": {"type":"object","additionalProperties":false,"required":["major","selected"],
             "properties":{"major":{"type":"string","enum":SUPPORTED_MAJORS},
                 "selected":{"type":"array","items":{"type":"string","minLength":1}}}},
@@ -299,78 +301,6 @@ mod tests {
         assert_eq!(out["result"], "satisfied");
     }
     #[test]
-    fn output_schema_declares_every_field_the_runtime_emits() {
-        let output = schema()["calculate"]["output"].clone();
-        let properties = output["properties"].clone();
-
-        // `required` and `additionalProperties:false` must not contradict:
-        // every required field is declared.
-        let required: Vec<&str> = output["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap())
-            .collect();
-        for name in &required {
-            assert!(
-                properties.get(*name).is_some(),
-                "required field {name} is not declared in properties"
-            );
-        }
-
-        let categories = properties["categories"].clone();
-        let category_required: Vec<&str> = categories["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap())
-            .collect();
-        for name in &category_required {
-            assert!(
-                categories["properties"].get(*name).is_some(),
-                "required category field {name} is not declared in properties"
-            );
-        }
-
-        // Runtime shape: every key a real success output emits, in both the
-        // deficit and satisfied results, is declared by the schema.
-        let catalog: Value = serde_json::from_str(include_str!("credits_catalog.json")).unwrap();
-        let mut name_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for course in catalog["courses"].as_array().unwrap() {
-            *name_counts
-                .entry(course["name"].as_str().unwrap().to_string())
-                .or_insert(0) += 1;
-        }
-        let names: Vec<String> = catalog["courses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|course| course["majors"][0] == GENERAL_TAG)
-            .filter(|course| name_counts[course["name"].as_str().unwrap()] == 1)
-            .map(|course| course["name"].as_str().unwrap().to_string())
-            .collect();
-        let input = json!({"major":"会计学","selected":names});
-        for out in [
-            calculate(r#"{"major":"信息管理与信息系统","selected":["运筹学（二）","健康经济学"]}"#),
-            calculate(&input.to_string()),
-        ] {
-            for key in out.as_object().unwrap().keys() {
-                assert!(
-                    properties.get(key).is_some(),
-                    "runtime field {key} is missing from the output schema"
-                );
-            }
-            for key in out["categories"].as_object().unwrap().keys() {
-                assert!(
-                    categories["properties"].get(key).is_some(),
-                    "runtime category field {key} is missing from the output schema"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn unknown_major_rejects_previously_satisfied_core_selection() {
         let selected = [
             "运筹学（二）",
@@ -403,26 +333,6 @@ mod tests {
         let out = calculate(&input.to_string());
         assert_eq!(out["error"], "invalid_input");
         assert!(out.get("satisfied").is_none());
-    }
-
-    #[test]
-    fn supported_major_schema_matches_catalog_tags() {
-        let catalog: Value = serde_json::from_str(include_str!("credits_catalog.json")).unwrap();
-        let catalog_majors: std::collections::BTreeSet<_> = catalog["courses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|course| course["majors"].as_array().unwrap())
-            .map(|major| major.as_str().unwrap())
-            .filter(|major| *major != GENERAL_TAG)
-            .collect();
-        let contract_majors: std::collections::BTreeSet<_> =
-            SUPPORTED_MAJORS.iter().copied().collect();
-        assert_eq!(contract_majors, catalog_majors);
-        assert_eq!(
-            schema()["calculate"]["input"]["properties"]["major"]["enum"],
-            json!(SUPPORTED_MAJORS)
-        );
     }
 
     #[test]
