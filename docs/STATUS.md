@@ -263,3 +263,5 @@ Final college gate: offline build, full tests (**177 library + 18 CLI passed, 2 
 ## Maintainer-authorized college history review fix
 
 Fresh reviewer ReviewCollege found SCSE historical notices mislabeled as university news-center snapshots. The historical board label now follows the selected source, retaining 公告公示 for the college and the original news-center label only for news-center sources. A source-identity regression failed before the fix and passed afterward. HTTP provenance remains unchanged. Updated exact-head review is required.
+
+College integration onto reviewed main preserves the source-scoped paging predicate and parent cache-first refresh fix. The same reviewed absent-versus-rejected link budget is applied to college rows before allocation; no source profile, governor identity or throughput limit is relaxed. Updated-head focused announcements tests/build/strict clippy pass.

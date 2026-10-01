@@ -76,8 +76,16 @@ pub(super) fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument,
         let listed_href = row
             .select(&anchor)
             .next()
-            .and_then(|node| node.value().attr("href"))
-            .filter(|href| !href.is_empty() && href.len() <= MAX_HREF)
+            .and_then(|node| node.value().attr("href"));
+        if listed_href.is_some_and(|href| href.len() > MAX_HREF) {
+            return Err(failed_contract(
+                "college href exceeds the reviewed byte budget",
+                file!(),
+                line!(),
+            ));
+        }
+        let listed_href = listed_href
+            .filter(|href| !href.is_empty())
             .map(str::to_owned);
         let date = row
             .select(&year)
@@ -138,7 +146,12 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         .map(|value| parse_iso_date(value).ok_or_else(invalid_list))
         .transpose()?;
     let latest = Url::parse(SCSE_NOTICES_URL).map_err(|_| unavailable())?;
-    let client = ArchiveClient::open_scse(mode)?;
+    let discovery_mode = if mode == CacheMode::Revalidate {
+        CacheMode::PreferCache
+    } else {
+        mode
+    };
+    let client = ArchiveClient::open_scse(discovery_mode)?;
     let target = if page == 1 {
         latest
     } else {
@@ -150,7 +163,7 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
             })
         })?
     };
-    client.get(&target, false, |response| {
+    client.with_cache_mode(mode).get(&target, false, |response| {
         let base = Url::parse(&response.url).map_err(|_| unavailable())?;
         let document = parse_listing(&response.body, &base)?;
         let entries: Vec<&ListingEntry> = document.entries.iter()
