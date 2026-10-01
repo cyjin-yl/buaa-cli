@@ -109,6 +109,10 @@ The computer-college notice board has a separate observed CMS contract. Supply `
 
 Some college policies are image/PDF-preview pages. They return `embedded_document` or `partial_text`, not invented plaintext: preview scripts are excluded, OCR is not performed, and attachment/preview paths are unverified hints, never downloads. Historical SCSE listing bytes stay offline and operator-asserted, including original HTTP source URLs. Other colleges and complete historical coverage remain unimplemented.
 
+`announcements document [--online|--refresh]` accepts `{"article_url":"https://scse.buaa.edu.cn/info/1099/12508.htm"}` on stdin. It retrieves only the original PDF explicitly declared by that reviewed article's viewer, never an inferred original from image names or an arbitrary URL. Output preserves the original bytes as base64, byte length and SHA-256, with separate article-snapshot/document retrieval facts. Source scripts are not executed; other attachments and previews are not fetched. The private byte cache is immutable for the document URL.
+
+`document --refresh` revalidates the PDF against its retained source-article snapshot; use `article --refresh` separately to update that declaration. A cold source/robots cache may require another deliberate invocation after spacing, never an automatic retry. PDF MIME/header/EOF framing is checked, not publisher signatures, externally published checksums or document safety. CLI text extraction/OCR is not performed; any operator-extracted text is a derivative of the linked original bytes, not reconstructed webpage text.
+
 The retired `www.buaa.edu.cn/xwzx.htm` source returned HTTP 404. `buaa announcements list` now reads `news.buaa.edu.cn`: default `tzgg` (通知公告), with `zhxw` (综合新闻) and the other section slugs exposed in `buaa schema`. Optional stdin JSON accepts `category`, `page`, inclusive `since`/`until` dates and a title-substring `match`. Missing dates stay null and cannot satisfy a date filter. Later page ordinals must be advertised by the latest listing: the site's page 2 can be `tzgg/252.htm`, not `tzgg/2.htm`. No address is guessed and no pages are automatically traversed.
 
 ```sh

@@ -630,7 +630,7 @@
             "response_body_retained": true
           }
         ],
-        "limits": "Partial acceptance: university-wide news center, not all college announcement boards. No per-college CMS adapters or true faculty/college filters. Live listing/article evidence covers tzgg and one article only; the other configured category layouts and later page contents remain live-unverified. Pagination can select only ordinals advertised by the latest listing; it does not compute undisplayed addresses or crawl history. Attachment hints are capped at 32 raw links, not downloads or verified attachment bytes; the live sample contained none. Article text scope is div.v_news_content paragraphs, not media/table reconstruction. Historical replay verifies only supplied bytes and the operator assertion; live Memento replay, complete history and missing captures remain unresolved.",
+        "limits": "Partial acceptance: university news center plus independently observed computer-college notices and one source-declared original PDF retrieval path. Other colleges, faculty-wide classification, other attachment types, complete history and live Memento replay remain unimplemented/unverified. HTML paragraph extraction does not reconstruct images/tables; original PDFs are returned as source bytes with a hash, not publisher-signature or document-safety certification.",
         "college_slice": {
           "college": "scse",
           "scope": "Computer college only, separately observed CMS; other college adapters remain absent.",
@@ -657,9 +657,35 @@
             "attachment_hints": 11,
             "declared_derived_preview_images": 12
           },
-          "limits": "No attachment/preview bytes fetched; no OCR or fabricated document text. No all-college coverage. No validators were supplied in the observed college responses. Historical bytes remain operator assertions, not verified Memento replay.",
+          "limits": "HTML article command does not fetch attachments/previews or perform OCR. The separate source-bound original PDF retrieval slice is recorded below. No all-college coverage; historical bytes remain operator assertions, not verified Memento replay.",
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/78",
           "quality_gate": "177 library + 18 CLI passed; 2 ignored; offline build, strict all-target clippy and fmt check passed."
+        },
+        "original_pdf_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/80",
+          "command": "buaa announcements document [--online|--refresh]",
+          "source_article_url": "https://scse.buaa.edu.cn/info/1099/12508.htm",
+          "source_article_sha256": "6b9a717ae00c83eed33e6a0378548c7cb25fef3875ba40671302204f0f33e8c7",
+          "declared_document_url": "https://scse.buaa.edu.cn/__local/C/C7/70/7A65CC05249EE9101EA540E4749_0C3E1EBC_6343C.pdf",
+          "source_declaration": "First literal argument of the observed showVsbpdfIframe call; script not executed. Reviewed opaque PDF namespace, no inferred path from derived images.",
+          "http_status": 200,
+          "content_type": "application/pdf",
+          "byte_length": 406588,
+          "sha256": "cc829e9a40ef539b36ce674699367a1872c47b485aa1a47750481a45301fe2c2",
+          "fetched_at_unix_ms": 1790751665278,
+          "offline_replay": "Actual CLI exit 0, cache_status=hit, independent base64/length/SHA verification passed.",
+          "conditional_revalidation": {
+            "http_status": 304,
+            "cache_status": "revalidated",
+            "revalidated_at_unix_ms": 1790753276444,
+            "original_timestamp_and_sha_preserved": true,
+            "source_article_cache_status": "hit"
+          },
+          "reference_policy": "Retained source-article snapshot; explicitly refresh the article separately to update its declaration. No source revalidation loop on document refresh.",
+          "operator_document_inspection": "Retrieved original PDF has readable policy text through the document reader; derived extraction is not original HTML text. CLI text_extracted=false and ocr_performed=false.",
+          "verification_limits": "MIME/header/EOF framing and own observed byte hash, not an external published checksum, publisher signature or document safety scan.",
+          "quality_gate": "180 library + 18 CLI passes, 2 ignored; locked offline build, strict all-target clippy and fmt clean.",
+          "remaining": "Other attachments/college sources, full historical coverage and rights-reviewed recording/Life inventory. No other attachment or derived preview was retrieved."
         }
       }
     },
