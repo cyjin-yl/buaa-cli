@@ -4,7 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Serialize,
+    de::{self, Deserializer},
+};
 use serde_json::{Value, json};
 
 const SOURCE: &str = "https://github.com/TrickEye/can_I_Graduate/blob/5e0f0355455d7eb7e69f953a23ca405e5af7ebed/src/App.vue#L450-L461";
@@ -60,11 +63,23 @@ struct Qualifications {
 struct Course {
     id: String,
     name: String,
-    credits: f64,
+    #[serde(deserialize_with = "deserialize_credits")]
+    credits: u32,
     category: Category,
     passed: bool,
     #[serde(default)]
     qualifications: Qualifications,
+}
+
+fn deserialize_credits<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde_json::value::RawValue;
+    let raw = <&RawValue>::deserialize(deserializer)
+        .map_err(|_| de::Error::custom("credits must be a JSON number"))?;
+    credit_units(raw.get())
+        .ok_or_else(|| de::Error::custom("credits must be a positive exact hundredth <= 100"))
 }
 
 #[derive(Deserialize)]
@@ -78,19 +93,60 @@ fn invalid() -> Value {
     json!({"error":"invalid_input","message":"school6 credits input is invalid"})
 }
 
-fn credit_units(credits: f64) -> Option<u32> {
-    // A bounded hundredth-credit representation keeps all aggregate arithmetic
-    // exact. This is an input representation limit, not a university policy.
-    if !credits.is_finite() || credits <= 0.0 || credits > 100.0 {
+fn credit_units(token: &str) -> Option<u32> {
+    // Raw JSON preserves decimal significance before any floating-point parse.
+    // Scale and divide only exact powers of ten; never round into eligibility.
+    let (mantissa, exponent) = match token.find(['e', 'E']) {
+        Some(index) => (&token[..index], token[index + 1..].parse::<i64>().ok()?),
+        None => (token, 0),
+    };
+    if !mantissa.as_bytes().first()?.is_ascii_digit()
+        || !mantissa
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
         return None;
     }
-    let units = credits * 100.0;
-    let rounded = units.round();
-    // Canonical round-trip, not an epsilon that admits near-threshold inputs.
-    if rounded < 1.0 || rounded / 100.0 != credits {
-        return None;
+    let fraction = mantissa.split_once('.').map_or(0, |(_, tail)| tail.len());
+    let scale = exponent
+        .checked_add(2)?
+        .checked_sub(i64::try_from(fraction).ok()?)?;
+    let digit_count = mantissa.bytes().filter(u8::is_ascii_digit).count();
+    let remove = if scale < 0 {
+        let remove = usize::try_from(scale.checked_neg()?).ok()?;
+        let zeros = mantissa
+            .bytes()
+            .rev()
+            .filter(u8::is_ascii_digit)
+            .take_while(|byte| *byte == b'0')
+            .count();
+        if remove > zeros {
+            return None;
+        }
+        remove
+    } else {
+        0
+    };
+    let mut units = 0_u32;
+    for digit in mantissa
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .take(digit_count.checked_sub(remove)?)
+    {
+        units = units
+            .checked_mul(10)?
+            .checked_add(u32::from(digit - b'0'))?;
+        if units > 10_000 {
+            return None;
+        }
     }
-    Some(rounded as u32)
+    if scale > 0 {
+        if scale > 4 {
+            return None;
+        }
+        units = units.checked_mul(10_u32.pow(scale as u32))?;
+    }
+    (1..=10_000).contains(&units).then_some(units)
 }
 
 fn text_valid(text: &str, limit: usize) -> bool {
@@ -111,22 +167,19 @@ pub fn calculate(input: &str) -> Value {
     if request.cohort != "2020" || request.courses.len() > MAX_COURSES {
         return invalid();
     }
-    let mut unique: BTreeMap<&str, (&Course, u32, bool)> = BTreeMap::new();
+    let mut unique: BTreeMap<&str, (&Course, bool)> = BTreeMap::new();
     let mut duplicate_attempts = 0;
     for course in &request.courses {
-        let Some(units) = credit_units(course.credits) else {
-            return invalid();
-        };
         if !text_valid(&course.id, 256) || !text_valid(&course.name, 512) {
             return invalid();
         }
         match unique.get_mut(course.id.as_str()) {
             None => {
-                unique.insert(&course.id, (course, units, course.passed));
+                unique.insert(&course.id, (course, course.passed));
             }
-            Some((previous, previous_units, passed)) => {
+            Some((previous, passed)) => {
                 if previous.name != course.name
-                    || *previous_units != units
+                    || previous.credits != course.credits
                     || previous.category != course.category
                     || previous.qualifications != course.qualifications
                 {
@@ -142,14 +195,14 @@ pub fn calculate(input: &str) -> Value {
     let mut cross_major = Vec::new();
     let mut humanities = Vec::new();
     let mut earned = Vec::new();
-    for (id, (course, units, passed)) in unique {
+    for (id, (course, passed)) in unique {
         if !passed {
             continue;
         }
         let index = course.category as usize;
-        totals[index] += units;
+        totals[index] += course.credits;
         earned.push(id);
-        if units == 200
+        if course.credits == 200
             && (course.qualifications.english_exchange
                 || (course.qualifications.english
                     && matches!(
@@ -160,7 +213,7 @@ pub fn calculate(input: &str) -> Value {
             english.push(id);
         }
         if course.qualifications.cross_major
-            && units >= 200
+            && course.credits >= 200
             && matches!(
                 course.category,
                 Category::CoreMajor | Category::GeneralMajor
@@ -169,7 +222,7 @@ pub fn calculate(input: &str) -> Value {
             cross_major.push(id);
         }
         if course.qualifications.humanities_core
-            && units == 200
+            && course.credits == 200
             && course.category == Category::CoreGeneral
         {
             humanities.push(id);
@@ -411,5 +464,11 @@ mod tests {
         }
         let input = json!({"cohort":"2020","courses":[{"id":"fraction","name":"synthetic","category":"general_major","credits":0.29,"passed":true}]});
         assert_eq!(calculate(&input.to_string())["total_earned"], 0.29);
+    }
+
+    #[test]
+    fn lexical_decimal_precision_is_not_lost_before_credit_validation() {
+        let input = r#"{"cohort":"2020","courses":[{"id":"near","name":"Synthetic","category":"general_major","credits":1.99999999999999999,"passed":true,"qualifications":{"english":true}}]}"#;
+        assert_eq!(calculate(input)["error"], "invalid_input");
     }
 }
