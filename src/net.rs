@@ -306,6 +306,13 @@ pub struct ArchiveClient {
 }
 
 impl ArchiveClient {
+    /// Retain source/cache identity while switching the selected request's
+    /// policy after cache-first reference discovery.
+    pub(crate) fn with_cache_mode(mut self, mode: CacheMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
     pub fn open(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Archive)
     }

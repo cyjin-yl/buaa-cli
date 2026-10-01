@@ -261,11 +261,16 @@ fn parse_compact_date(day_raw: &str, yearmonth_raw: &str) -> Option<String> {
 /// Canonical ISO date filter value (`YYYY-MM-DD`), validated as a real date.
 fn parse_iso_date(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if raw.len() != 10 || !raw.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+    if raw.len() != 10 {
         return None;
     }
     let b = raw.as_bytes();
-    if b[4] != b'-' || b[7] != b'-' {
+    if b[4] != b'-'
+        || b[7] != b'-'
+        || !b[0..4].iter().all(|c| c.is_ascii_digit())
+        || !b[5..7].iter().all(|c| c.is_ascii_digit())
+        || !b[8..10].iter().all(|c| c.is_ascii_digit())
+    {
         return None;
     }
     let year: i32 = raw[0..4].parse().ok()?;
@@ -309,9 +314,17 @@ pub fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error>
         let listed_href = row
             .select(&anchor_selector)
             .next()
-            .and_then(|anchor| anchor.value().attr("href"))
-            .filter(|href| !href.is_empty() && href.len() <= MAX_HREF)
-            .map(str::to_string);
+            .and_then(|anchor| anchor.value().attr("href"));
+        if listed_href.is_some_and(|href| href.len() > MAX_HREF) {
+            return Err(failed_contract(
+                "listing href exceeds the reviewed byte budget",
+                file!(),
+                line!(),
+            ));
+        }
+        let listed_href = listed_href
+            .filter(|href| !href.is_empty())
+            .map(str::to_owned);
 
         let title = row
             .select(&row_title_selector)
@@ -629,14 +642,22 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         None => None,
     };
     let latest = latest_listing_url(category)?;
-    let client = ArchiveClient::open_announcements(mode)?;
+    // Page discovery is always cache-first; --refresh applies to the selected
+    // page, not to the latest-listing snapshot used for ordinal resolution.
+    let discovery_mode = if mode == CacheMode::Revalidate {
+        CacheMode::PreferCache
+    } else {
+        mode
+    };
+    let discovery_client = ArchiveClient::open_announcements(discovery_mode)?;
     let url = if page == 1 {
         latest
     } else {
-        client.get(&latest, false, |response| {
+        discovery_client.get(&latest, false, |response| {
             advertised_page_url(&response.body, &latest, category, page)
         })?
     };
+    let client = discovery_client.with_cache_mode(mode);
     client.get(&url, false, move |response| {
         normalize_listing(response, category, page, &since, &until, &query.r#match)
     })
@@ -856,6 +877,22 @@ mod tests {
     fn parse_listing_rejects_empty_list() {
         let html = r#"<!DOCTYPE html><html><head><title>t</title></head><body><div class="tlist"><ul></ul></div></body></html>"#;
         assert!(parse_listing(html.as_bytes(), &base_url()).is_err());
+    }
+
+    #[test]
+    fn present_over_budget_links_are_rejected_not_reported_missing() {
+        let body = listing_html().replace("info/1010/69802.htm", &"x".repeat(MAX_HREF + 1));
+        assert_eq!(
+            parse_listing(body.as_bytes(), &base_url())
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn iso_filter_rejects_signed_years_instead_of_widening_query_scope() {
+        assert_eq!(parse_iso_date("-001-01-01"), None);
     }
 
     #[test]

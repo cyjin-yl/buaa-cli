@@ -239,3 +239,8 @@ Actual offline CLI smoke exercised a date/title-filtered cached listing (one mat
 The real CLI also returned the cached default listing from a TTY without any stdin data, completing within a five-second smoke deadline. The updated local Pages document was rendered in Chromium at 1280×900 and 390×844; the changed announcement row was visually checked and the document had no horizontal overflow. This is local surface proof, not a claim that the unmerged update has been deployed to GitHub Pages.
 
 Follow-up test-safety review pinned the test-only offline client's fallback transport to loopback port zero as well as an isolated governor. The tested offline path still opens neither governor nor HTTP transport; if a later regression reaches transport, this fixture no longer targets the real news host with a test governor. Production clients, governor policy and cache identity are unchanged.
+
+
+## Maintainer-authorized independent review fixes
+
+Fresh exact-head reviewer ReviewNewsBase found three P2 defects at 50d8d059a9686bded9404b63e696fa873145f0eb: repeated latest-page revalidation before selected-page refresh, signed ISO-year acceptance, and oversized hrefs being mislabeled missing. Discovery now uses a retained cache-first reference before switching the same client/cache identity to the selected request policy; date components require ASCII digits; present over-budget hrefs fail closed before copying. Focused regressions and cached/invalid CLI smoke are re-run before new-head approval. No governor timing or account safety policy is relaxed.
