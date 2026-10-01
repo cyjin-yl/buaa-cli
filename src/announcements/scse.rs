@@ -20,6 +20,8 @@ use url::Url;
 
 pub(super) const PUBLISHER: &str = "北京航空航天大学计算机学院";
 
+mod viewer;
+
 fn plain_url(url: &Url, allow_http: bool) -> bool {
     (url.scheme() == "https" || (allow_http && url.scheme() == "http"))
         && url.host_str() == Some("scse.buaa.edu.cn")
@@ -205,25 +207,8 @@ fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
     let mut selected: Option<Url> = None;
     for node in document.select(&scripts) {
         for text in node.text() {
-            let mut remainder = text;
-            while let Some(position) = remainder.find("showVsbpdfIframe") {
-                remainder = &remainder[position + "showVsbpdfIframe".len()..];
-                let Some(arguments) = remainder.trim_start().strip_prefix('(') else {
-                    continue;
-                };
-                let bounded = arguments
-                    .get(..arguments.len().min(64 * 1024))
-                    .ok_or_else(unavailable)?;
-                let mut stream = serde_json::Deserializer::from_str(bounded).into_iter::<String>();
-                let path = stream
-                    .next()
-                    .ok_or_else(unavailable)?
-                    .map_err(|_| unavailable())?;
-                if path.len() > MAX_HREF
-                    || !bounded[stream.byte_offset()..]
-                        .trim_start()
-                        .starts_with([',', ')'])
-                {
+            for path in viewer::declarations(text)? {
+                if path.len() > MAX_HREF {
                     return Err(unavailable());
                 }
                 let url = article.join(&path).map_err(|_| unavailable())?;
@@ -389,6 +374,7 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
         &document,
         &Url::parse(&response.url).map_err(|_| unavailable())?,
     )?;
+    let has_document = has_previews || original_pdf.is_some();
     let attachment_selector = Selector::parse("a[href]").map_err(|_| unavailable())?;
     let mut hints = Vec::new();
     let mut hints_truncated = false;
@@ -407,14 +393,14 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
         }
         hints.push(json!({"href":href,"text":name,"fetched":false}));
     }
-    if paragraphs.is_empty() && !has_previews && hints.is_empty() {
+    if paragraphs.is_empty() && !has_document && hints.is_empty() {
         return Err(failed_contract(
             "SCSE article requires text or declared document/attachment content",
             file!(),
             line!(),
         ));
     }
-    let result = if has_previews {
+    let result = if has_document {
         if paragraphs.is_empty() {
             "embedded_document"
         } else {
@@ -429,7 +415,7 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
         "schema_version":1,"type":"announcements_article","result":result,"publisher":PUBLISHER,"college":"scse",
         "title":title,"published_at":published_at,"published_at_raw":published_at_raw,
         "body_paragraph_count":paragraphs.len(),"body_paragraphs":paragraphs,
-        "embedded_document":{"present":has_previews,"original_pdf_url":original_pdf.as_ref().map(Url::as_str),"preview_paths":previews,"preview_kind":"source_declared_derived_images","assets_fetched":false,"ocr_performed":false,"original_document_verified":false},
+        "embedded_document":{"present":has_document,"original_pdf_url":original_pdf.as_ref().map(Url::as_str),"preview_paths":previews,"preview_kind":"source_declared_derived_images","assets_fetched":false,"ocr_performed":false,"original_document_verified":false},
         "attachments":{"found":!hints.is_empty(),"hints":hints,"hints_truncated":hints_truncated,"note":"source-declared links only; never fetched"},
         "completeness":{"scope":"single_college_article_page","body_source":"v_news_content paragraphs excluding executable/fallback markup","missing_document_text":"not_reconstructed"},
         "retrieval":retrieval(response),
@@ -570,5 +556,44 @@ mod tests {
                 "unavailable"
             );
         }
+    }
+
+    #[test]
+    fn inactive_viewer_text_cannot_declare_an_original_pdf() {
+        let article = Url::parse("https://scse.buaa.edu.cn/info/1099/42.htm").unwrap();
+        let path = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+        let scripts = [
+            format!("// showVsbpdfIframe(\"{path}\",\"100%\");"),
+            format!("/* showVsbpdfIframe(\"{path}\",\"100%\"); */"),
+            format!("var inert = 'showVsbpdfIframe(\"{path}\",\"100%\");';"),
+        ];
+        for script in scripts {
+            let source = format!("<div class=\"v_news_content\"><script>{script}</script></div>");
+            assert!(
+                declared_pdf(&html(source.as_bytes()).unwrap(), &article)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn original_pdf_without_previews_is_not_mislabeled_full_text() {
+        let path = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+        let header = "<div class=\"d1\"><p class=\"bt\">Fixture document</p></div>";
+        let viewer = format!(
+            "<div class=\"v_news_content\"><p><script>showVsbpdfIframe(\"{path}\",\"100%\");</script></p></div>"
+        );
+        let source = format!("{header}{viewer}");
+        let out = normalize_article(&response(&source)).unwrap();
+        assert_eq!(out["result"], "embedded_document");
+        assert_eq!(out["embedded_document"]["present"], true);
+        let intro = format!(
+            "{header}<div class=\"v_news_content\"><p>Introductory text</p><script>showVsbpdfIframe(\"{path}\",\"100%\");</script></div>"
+        );
+        assert_eq!(
+            normalize_article(&response(&intro)).unwrap()["result"],
+            "partial_text"
+        );
     }
 }
