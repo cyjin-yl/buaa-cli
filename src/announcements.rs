@@ -883,7 +883,7 @@ pub fn history(input: &str) -> Result<Value, Error> {
         "result": "listing_snapshot",
         "publisher": if college_snapshot {scse::PUBLISHER} else {"北京航空航天大学"},
         "college": if college_snapshot {Some("scse")} else {None},
-        "listing_label": "新闻中心（历史快照）",
+        "listing_label": if college_snapshot {"公告公示（历史快照）"} else {"新闻中心（历史快照）"},
         "document_title": document.title,
         "entries": document.entries,
         "provenance": {
@@ -1215,6 +1215,19 @@ mod tests {
         })
         .to_string();
         assert!(history(&article_url).is_err());
+    }
+
+    #[test]
+    fn college_history_keeps_the_notice_board_identity() {
+        let body = "<title>Fixture notices</title><div class=\"ej_nr\"><div class=\"list\"><ul><li><p class=\"bt\">Synthetic notice</p></li></ul></div></div>";
+        let input = json!({"html":STANDARD.encode(body),"provenance":{"source_url":"http://scse.buaa.edu.cn/xwgg/gggs.htm"}});
+        let out = history(&input.to_string()).unwrap();
+        assert_eq!(out["college"], "scse");
+        assert_eq!(out["listing_label"], "公告公示（历史快照）");
+        assert_eq!(
+            out["provenance"]["source_url"],
+            "http://scse.buaa.edu.cn/xwgg/gggs.htm"
+        );
     }
 
     #[test]

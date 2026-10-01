@@ -258,3 +258,8 @@ The selected policy article uses an English timestamp and contains image/PDF pre
 Focused offline proof covers source-scoped paging, HTTP history/link preservation, unknown-date filtering, image-only documents, opaque JSP attachment hints and rejected credential/query/category routes. Overall announcements acceptance remains partial; public college responses supplied no conditional validators and live Memento replay remains unverified. Independent exact-head review and source-contract maintainer approval are required before merge.
 
 Final college gate: offline build, full tests (**177 library + 18 CLI passed, 2 ignored**), strict all-target clippy and formatter check passed. Real offline history smoke preserved the HTTP original, resolved its relative article link and matched the supplied-byte SHA-256; the university default still returned five cached entries. [Issue #78](https://github.com/cyjin-yl/buaa-cli/issues/78) binds the bounded source slice. Exact-head independent review and maintainer approval remain pending; no complete-all-colleges or original-document-text claim is made.
+
+
+## Maintainer-authorized college history review fix
+
+Fresh reviewer ReviewCollege found SCSE historical notices mislabeled as university news-center snapshots. The historical board label now follows the selected source, retaining 公告公示 for the college and the original news-center label only for news-center sources. A source-identity regression failed before the fix and passed afterward. HTTP provenance remains unchanged. Updated exact-head review is required.
