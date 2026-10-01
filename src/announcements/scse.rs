@@ -206,6 +206,29 @@ fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
     let scripts = Selector::parse("div.v_news_content script").map_err(|_| unavailable())?;
     let mut selected: Option<Url> = None;
     for node in document.select(&scripts) {
+        if node.value().attr("src").is_some() {
+            continue;
+        }
+        let kind = node.value().attr("type").unwrap_or_default().trim();
+        if kind.eq_ignore_ascii_case("module") {
+            if node.text().any(|text| text.contains("showVsbpdfIframe")) {
+                return Err(unavailable());
+            }
+            continue;
+        }
+        if !kind.is_empty()
+            && ![
+                "text/javascript",
+                "application/javascript",
+                "text/ecmascript",
+                "application/ecmascript",
+                "application/x-javascript",
+            ]
+            .iter()
+            .any(|allowed| kind.eq_ignore_ascii_case(allowed))
+        {
+            continue;
+        }
         for text in node.text() {
             for path in viewer::declarations(text)? {
                 if path.len() > MAX_HREF {
@@ -566,6 +589,7 @@ mod tests {
             format!("// showVsbpdfIframe(\"{path}\",\"100%\");"),
             format!("/* showVsbpdfIframe(\"{path}\",\"100%\"); */"),
             format!("var inert = 'showVsbpdfIframe(\"{path}\",\"100%\");';"),
+            format!("<!-- ;showVsbpdfIframe(\"{path}\");\n"),
         ];
         for script in scripts {
             let source = format!("<div class=\"v_news_content\"><script>{script}</script></div>");
@@ -575,6 +599,40 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn viewer_calls_require_executable_classic_script_content() {
+        let article = Url::parse("https://scse.buaa.edu.cn/info/1099/42.htm").unwrap();
+        let path = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+        for attributes in [
+            "type=\"text/plain\"",
+            "type=\"application/json\"",
+            "src=\"/external.js\"",
+        ] {
+            let source = format!(
+                "<div class=\"v_news_content\"><script {attributes}>showVsbpdfIframe(\"{path}\");</script></div>"
+            );
+            assert!(
+                declared_pdf(&html(source.as_bytes()).unwrap(), &article)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let source = format!(
+            "<div class=\"v_news_content\"><script>// comment\rshowVsbpdfIframe(\"{path}\");</script></div>"
+        );
+        assert_eq!(
+            declared_pdf(&html(source.as_bytes()).unwrap(), &article)
+                .unwrap()
+                .unwrap()
+                .path(),
+            path
+        );
+        let interpolation = format!(
+            "<div class=\"v_news_content\"><script>var unsupported = `x${{showVsbpdfIframe(\"{path}\")}}`;</script></div>"
+        );
+        assert!(declared_pdf(&html(interpolation.as_bytes()).unwrap(), &article).is_err());
     }
 
     #[test]

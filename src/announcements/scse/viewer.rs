@@ -7,13 +7,48 @@ const MAX_SCRIPT: usize = 64 * 1024;
 const MAX_DEPTH: usize = 128;
 const MAX_CALLS: usize = 32;
 
+fn line_end(bytes: &[u8], offset: usize) -> usize {
+    if bytes
+        .get(offset)
+        .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        return 1;
+    }
+    if matches!(
+        bytes.get(offset..offset + 3),
+        Some([0xe2, 0x80, 0xa8 | 0xa9])
+    ) {
+        return 3;
+    }
+    0
+}
+
 fn trivia(bytes: &[u8], offset: &mut usize) -> Result<(), Error> {
     loop {
-        while bytes.get(*offset).is_some_and(u8::is_ascii_whitespace) {
-            *offset += 1;
+        while bytes.get(*offset).is_some_and(u8::is_ascii_whitespace)
+            || line_end(bytes, *offset) != 0
+        {
+            *offset += line_end(bytes, *offset).max(1);
         }
-        if bytes.get(*offset..*offset + 2) == Some(b"//") {
-            while bytes.get(*offset).is_some_and(|byte| *byte != b'\n') {
+        if bytes.get(*offset..*offset + 2) == Some(b"//")
+            || bytes.get(*offset..*offset + 4) == Some(b"<!--")
+        {
+            while *offset < bytes.len() && line_end(bytes, *offset) == 0 {
+                *offset += 1;
+            }
+        } else if bytes.get(*offset..*offset + 3) == Some(b"-->") {
+            // Annex-B closing comments are supported only at a line boundary.
+            let mut start = *offset;
+            while start > 0
+                && bytes[start - 1].is_ascii_whitespace()
+                && !matches!(bytes[start - 1], b'\r' | b'\n')
+            {
+                start -= 1;
+            }
+            if start != 0 && !matches!(bytes[start - 1], b'\r' | b'\n') {
+                return Err(unavailable());
+            }
+            while *offset < bytes.len() && line_end(bytes, *offset) == 0 {
                 *offset += 1;
             }
         } else if bytes.get(*offset..*offset + 2) == Some(b"/*") {
@@ -38,6 +73,9 @@ fn quoted(bytes: &[u8], offset: &mut usize) -> Result<(), Error> {
         *offset += 1;
         if *byte == quote {
             return Ok(());
+        }
+        if quote == b'`' && *byte == b'$' && bytes.get(*offset) == Some(&b'{') {
+            return Err(unavailable()); // active interpolation is unsupported
         }
         if *byte == b'\\' {
             if *offset == bytes.len() {
