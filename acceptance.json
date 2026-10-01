@@ -9,7 +9,9 @@
       "title": "Shared cross-process request safety",
       "status": "implemented-offline",
       "acceptance": "Single private identity across CLI/provider/worktrees, one in-flight, >=5-second separation, >=15-minute background interval, durable cooldown and one-shot auth latch; offline multi-process proof.",
-      "sources": ["https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7"],
+      "sources": [
+        "https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7"
+      ],
       "evidence": {
         "implementation": "Linux shared UID governor library, not HTTP transport",
         "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; current full offline suite: 118 passed across five suites (one ignored). The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
@@ -175,7 +177,9 @@
       ],
       "evidence": {
         "command": "buaa timetable ics",
-        "implementation": ["src/timetable.rs"],
+        "implementation": [
+          "src/timetable.rs"
+        ],
         "contract": "Offline generation of a standards-compliant RFC 5545 ICS calendar from operator-supplied JSON on stdin. `semester.start_date` is the week-1 Monday; an occurrence lands on `start_date + (week - 1) * 7 + day_offset` (Monday=0 .. Sunday=6), so the date is computed, not asserted. `parity` (all/odd/even) filters weeks; occurrences that fall past the semester end (`start_date + weeks*7 - 1`) are dropped rather than rejected. Output is CRLF-terminated with 75-octet line folding on UTF-8 character boundaries, RFC 5545 text escaping, and per-event UID/DTSTAMP/DTSTART/DTEND/SUMMARY plus optional LOCATION. No network access, no writes, no campus contact.",
         "tests": "cargo test --locked --offline: 9 timetable unit tests pass (Gregorian date math round-trips; invalid date/time rejection; Monday->week-date mapping; odd parity; semester-bound dropping; ICS standards compliance; 75-octet folding on character boundaries; invalid-input rejection; empty-courses zero-event calendar) plus 1 CLI integration test. Full suite: 157 lib + 13 CLI green; strict all-target clippy 0 warnings; fmt clean.",
         "scope": "The offline mapping + ICS generation engine and the `timetable ics` CLI are complete and standards-compliant. Fetching the live undergraduate schedule from the campus system and feeding it to this generator remains pending (requires the governed, authorized campus observation path).",
@@ -267,7 +271,9 @@
       "acceptance": "Documented experiment-specific calculations, units and uncertainty against independent fixtures.",
       "evidence": {
         "command": "buaa physics pendulum|fit|type-a",
-        "implementation": ["src/physics.rs"],
+        "implementation": [
+          "src/physics.rs"
+        ],
         "contract": "Offline, unit-explicit experiment data reduction in SI. type-a: sample mean with (n-1) sample standard deviation and standard uncertainty of the mean s/sqrt(n). fit: ordinary least-squares line y = intercept + slope*x with parameter standard errors from the residual variance (n-2 degrees of freedom) and r-squared. pendulum: g = 4*pi^2*L/T^2 with T = total_time_s/cycles (cycle count exact, no uncertainty), combined standard uncertainty from the sensitivity coefficients dg/dL = g/L and dg/dT = -2g/T. Inputs are JSON on stdin; invalid or non-finite input returns an invalid_input error. No network access, no campus contact, no writes.",
         "tests": "cargo test --locked --offline: 9 physics lib tests + 1 CLI integration test pass, asserting each result against an independent pure-Python statistics reference fixture (Type A mean/std/std-uncertainty; linear-fit slope/intercept/se/r2; pendulum period/g/g-uncertainty/relative-uncertainty; combined root-sum-square; CLI JSON fields; invalid-input rejection across all three subcommands).",
         "scope": "Offline data-reduction engine and report contract are complete, wired into buaa help / schema / physics. Live campus experiment retrieval (physics-select, physics-reference) remains separate and pending on rights-reviewed source contracts.",
@@ -508,26 +514,123 @@
     {
       "id": "announcements",
       "title": "College current/historical announcements",
-      "status": "partial-offline",
+      "status": "partial-live-verified",
       "acceptance": "Faculty/college/date filters, full text and attachments, conditional incremental reads.",
-      "sources": [],
+      "sources": [
+        "https://news.buaa.edu.cn/tzgg.htm",
+        "https://news.buaa.edu.cn/zhxw.htm"
+      ],
       "evidence": {
+        "quality_gate": "cargo build --locked --offline; cargo test --locked --offline (172 library + 18 CLI passed, 2 ignored); cargo clippy --locked --offline --all-targets -- -D warnings; cargo fmt --all -- --check: all passed.",
+        "review": "Local source review corrected cache-test assumptions, paged history validation and pagination ordinal routing. Independent exact-head review and explicit maintainer approval for the source contract are pending; no approval or merge is inferred.",
         "commands": [
           "buaa announcements list [--online|--refresh]",
+          "buaa announcements article [--online|--refresh]",
           "buaa announcements history"
         ],
         "implementation": [
           "src/announcements.rs",
-          "src/net.rs"
+          "src/net.rs",
+          "src/main.rs"
         ],
-        "contract": "Parses the official news-center listing (xwzx.htm) into title/date/link entries with `missing|non_http|invalid` link kinds explicit; no attachment, pagination beyond page 1, college crawl, or full-text fetch. Historical query is routed through the archive path, not this command.",
-        "additional_slice": "`announcements history` replays the identical parse contract over operator-supplied Web Archive bytes. The stdin JSON carries an explicit operator provenance assertion: `source_url` must exactly equal the official listing URL and `capture_timestamp` (optional 14-digit UTC civil time) is normalized; the output echoes the assertion with `status=operator_asserted` and an explicit unverified note, and binds the supplied bytes by SHA-256. Raw bytes alone can no longer be labelled as the official historical snapshot.",
-        "proof": "114 lib tests + 8 CLI integration pass offline; `history_requires_operator_asserted_provenance` regression verifies same-scope parse, asserted-provenance echo, SHA-256 byte binding, null-when-omitted timestamp, and fail-closed rejection of foreign source_url, missing provenance, malformed base64 and invalid timestamps; contract drift errors name the offending invariant and GitHub issue/PR hint on every rejection path.",
+        "contract": "Source drift: the retired www.buaa.edu.cn/xwzx.htm returned HTTP 404 in status diagnostics; the adapter now reads news.buaa.edu.cn. list defaults to tzgg (通知公告), with category/page/since/until/title-substring match filters. Page 1 is the latest listing; later page ordinals must be linked by its pagination widget (observed page 2 -> tzgg/252.htm). No URL inference or automatic traversal. article reads /info/<category>/<id>.htm title, publish date and div.v_news_content paragraphs; attachment links are raw hints and never downloaded. Egress rejects foreign hosts, credentials, custom ports, queries and fragments. history remains offline: base64 UTF-8 HTML plus asserted listing source_url, optional capture_timestamp/asserted_by; output type announcements_history with retrieval.sha256 byte binding, not verified archive provenance.",
+        "additional_slice": "Offline and --online cache hits perform no request. --refresh conditionally revalidates with cached validators and exposes revalidated_at_unix_ms/revalidation_status. All live observations, including robots and pagination selection, retain the same cross-process governor lease through body validation and cache persistence. With the operator-raised 60-second interval and 30-second bounded wait, cold robots or uncached latest-page discovery can prevent a second content request in that invocation. The first observed cold-robots run cached robots HTTP 404 and then exited rate_limited without issuing the listing request. There is no automatic retry or governor-policy relaxation.",
+        "proof": "Offline focused announcements tests and CLI smoke cover date/title filtering, null/default input, cached article paragraphs, paged operator-asserted history and advertised ordinal routing. history_accepts_paged_sources_without_relaxing_provenance_scope failed before the fix (invalid_input for /tzgg/252.htm) and passes after it; foreign hosts, userinfo, custom ports, fragments and malformed page stems stay rejected. offline_lookup_with_empty_cache_reports_unavailable uses a fixed-offline test constructor and private fixture directory; both listing/article return offline_miss without opening a governor. The adaptive CLI test accepts only offline cache-hit success or exit 7 unavailable and reads neither HOME nor unrelated cache entries; it passes with a deliberately misleading HOME. Full offline gate results are recorded in docs/STATUS.md.",
+        "live_verification": [
+          {
+            "date": "2026-09-29",
+            "command": "buaa announcements list --online",
+            "target": "https://news.buaa.edu.cn/tzgg.htm",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "entries": 5,
+            "response_body_sha256": "9021f2b387ae3fd2273692e7f7b05936775cea78eec86a5c32d0fd680c3937a1",
+            "response_body_bytes": 20653,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1790713000641
+          },
+          {
+            "date": "2026-09-29",
+            "command": "buaa announcements list (offline, cache)",
+            "target": "https://news.buaa.edu.cn/tzgg.htm",
+            "result": "success",
+            "exit_code": 0,
+            "cache_status": "hit",
+            "response_body_sha256": "9021f2b387ae3fd2273692e7f7b05936775cea78eec86a5c32d0fd680c3937a1",
+            "network_requests": 0
+          },
+          {
+            "date": "2026-09-29",
+            "command": "buaa announcements article --online",
+            "target": "https://news.buaa.edu.cn/info/1010/69802.htm",
+            "result": "success",
+            "exit_code": 0,
+            "type": "announcements_article",
+            "outcome": "full_text",
+            "published_at": "2026-09-15",
+            "body_paragraphs": 26,
+            "attachments_found": false,
+            "cache_status": "miss",
+            "response_body_sha256": "80f4c3243e6cf2629ee4d908a6fd5d51d246659c44c8e5aaebf27d5480b2c87f",
+            "response_body_bytes": 19749,
+            "fetched_at_unix_ms": 1790713252798,
+            "http_status": 200
+          },
+          {
+            "date": "2026-09-29",
+            "command": "buaa announcements list --refresh",
+            "target": "https://news.buaa.edu.cn/tzgg.htm",
+            "result": "success",
+            "exit_code": 0,
+            "cache_status": "revalidated",
+            "revalidation_status": 304,
+            "revalidated_at_unix_ms": 1790724706337,
+            "original_fetched_at_unix_ms": 1790713000641,
+            "response_body_sha256": "9021f2b387ae3fd2273692e7f7b05936775cea78eec86a5c32d0fd680c3937a1"
+          }
+        ],
         "authorized_attempts": [
-          {"command":"buaa announcements list --online","target":"https://www.buaa.edu.cn/xwzx.htm","result":"unavailable","exit_code":7,"response_body_retained":false},
-          {"command":"buaa archive lookup --online","target":"https://www.buaa.edu.cn/xwzx.htm","result":"unavailable","exit_code":7,"response_body_retained":false}
+          {
+            "command": "buaa announcements list --online (old contract)",
+            "target": "https://www.buaa.edu.cn/xwzx.htm",
+            "result": "unavailable",
+            "exit_code": 7,
+            "note": "HTTP 404 drift; no response bytes retained",
+            "response_body_retained": false
+          },
+          {
+            "command": "buaa archive lookup --online (prior observation)",
+            "target": "https://www.buaa.edu.cn/xwzx.htm",
+            "result": "unavailable",
+            "exit_code": 7,
+            "response_body_retained": false,
+            "note": "Archive availability failure is separate from the original-host HTTP 404 diagnostic."
+          },
+          {
+            "command": "buaa announcements list --online (cold robots)",
+            "target": "https://news.buaa.edu.cn/tzgg.htm",
+            "result": "rate_limited",
+            "exit_code": 8,
+            "note": "robots.txt fetch consumed the shared lease; the listing request saw a 60s wait exceeding the 30s bounded wait; robots 404 cached afterwards; no governor change",
+            "response_body_retained": false
+          },
+          {
+            "command": "buaa announcements list --online",
+            "target": "https://news.buaa.edu.cn/tzgg.htm",
+            "result": "success",
+            "exit_code": 0,
+            "response_body_retained": true
+          },
+          {
+            "command": "buaa announcements article --online",
+            "target": "https://news.buaa.edu.cn/info/1010/69802.htm",
+            "result": "success",
+            "exit_code": 0,
+            "response_body_retained": true
+          }
         ],
-        "limits": "Prior governed observations remain limited to the central index and homepage CDX results. Later user-authorized cache-first attempts to read xwzx through the official adapter and Web Archive returned no response bytes; no retry or direct egress bypass was used. Detail reading, attachments, pagination and unit-site coverage remain unverified and subject to the shared governor/robots policy."
+        "limits": "Partial acceptance: university-wide news center, not all college announcement boards. No per-college CMS adapters or true faculty/college filters. Live listing/article evidence covers tzgg and one article only; the other configured category layouts and later page contents remain live-unverified. Pagination can select only ordinals advertised by the latest listing; it does not compute undisplayed addresses or crawl history. Attachment hints are capped at 32 raw links, not downloads or verified attachment bytes; the live sample contained none. Article text scope is div.v_news_content paragraphs, not media/table reconstruction. Historical replay verifies only supplied bytes and the operator assertion; live Memento replay, complete history and missing captures remain unresolved."
       }
     },
     {
@@ -561,12 +664,27 @@
           "original_url": "https://www.buaa.edu.cn/",
           "page_limit": 1,
           "pages": [
-            {"capture_timestamp": "19970416014726", "http_status": 200, "fetched_at_unix_ms": 1790215517261, "response_body_sha256": "2872f76049005c06c6cc59415eced8d2f65119f0a85bc52ec65d1c3f80e18d19", "more_results": true},
-            {"capture_timestamp": "19971210122410", "http_status": 200, "fetched_at_unix_ms": 1790215755401, "response_body_sha256": "71d84e325eb151c28ca6ca6c77e105ed23973356b7342a36396e93f4f79062ec", "more_results": true}
+            {
+              "capture_timestamp": "19970416014726",
+              "http_status": 200,
+              "fetched_at_unix_ms": 1790215517261,
+              "response_body_sha256": "2872f76049005c06c6cc59415eced8d2f65119f0a85bc52ec65d1c3f80e18d19",
+              "more_results": true
+            },
+            {
+              "capture_timestamp": "19971210122410",
+              "http_status": 200,
+              "fetched_at_unix_ms": 1790215755401,
+              "response_body_sha256": "71d84e325eb151c28ca6ca6c77e105ed23973356b7342a36396e93f4f79062ec",
+              "more_results": true
+            }
           ],
           "request_fields": "urlkey,timestamp,original,mimetype,statuscode,digest,length",
           "observed_fetch_timestamp_gap_ms": 238140,
-          "cache_replay": {"status": "hit", "response_body_sha256": "2872f76049005c06c6cc59415eced8d2f65119f0a85bc52ec65d1c3f80e18d19"},
+          "cache_replay": {
+            "status": "hit",
+            "response_body_sha256": "2872f76049005c06c6cc59415eced8d2f65119f0a85bc52ec65d1c3f80e18d19"
+          },
           "scope": "Two public CDX pages only; no direct campus-host request, authentication, credential use, or mutation. Both results still report more_results=true; full history is not claimed."
         },
         "limits": "The manual live CDX pagination read is recorded above; no live Memento replay or direct campus-origin request was performed. General TimeGate/TimeMap crawling, organization discovery, announcement extraction and Life/transcript integration are not implemented by this adapter."
@@ -621,7 +739,9 @@
       "sources": [],
       "evidence": {
         "command": "buaa drift check",
-        "implementation": ["src/drift.rs"],
+        "implementation": [
+          "src/drift.rs"
+        ],
         "contract": "Offline comparison of a pinned baseline contract document against a candidate contract document, both supplied as JSON on stdin. Emits a sanitized structural drift report (added / removed / value_changed / length_changed paths, with type names and array lengths) plus in_sync, change_count and truncated. No network access, no writes, and no application/guessing/auto-merging of any change. Raw document values never enter the report. Change list capped at 256 entries and path depth at 64 (deeper subtrees emit a truncated marker).",
         "tests": "cargo test --locked --offline: 8 drift tests pass (identical in-sync; added/removed/value changes named by path; type-change dual type names; array length + element drift; raw-value non-leak; invalid-input rejection; deep-nesting bounded; change-count cap + truncated flag). Full suite: 148 lib + 12 CLI tests green; strict all-target clippy 0 warnings; fmt clean.",
         "scope": "The offline comparison engine and report contract are complete. Wires into buaa help / schema / drift check. The low-rate authorized observation and proposed-change workflow that consumes this report against live contracts remains pending (requires the governed observation path for each specific contract).",
@@ -724,8 +844,20 @@
         "protocol_formula": {
           "expression": "A + (B ^ C) + D with wrapping u32 additions",
           "references": [
-            {"repository": "fontlos/buaa-api", "commit": "1da573856c7438e69dcf01dc3f0881465ce50049", "path": "src/crypto/xencode.rs", "blob": "468a1a91f8a43da2b4a49542623538c55f2c4936", "license": "MIT"},
-            {"repository": "BUAASubnet/srun", "commit": "2973a5cbfa4b78bb11f322527916d4f7386cf49e", "path": "src/xencode.rs", "blob": "6969c579cc1d2abe6b7a732592ce2d141b28b4a5", "license": "GPL-3.0; source inspected only; no code copied"}
+            {
+              "repository": "fontlos/buaa-api",
+              "commit": "1da573856c7438e69dcf01dc3f0881465ce50049",
+              "path": "src/crypto/xencode.rs",
+              "blob": "468a1a91f8a43da2b4a49542623538c55f2c4936",
+              "license": "MIT"
+            },
+            {
+              "repository": "BUAASubnet/srun",
+              "commit": "2973a5cbfa4b78bb11f322527916d4f7386cf49e",
+              "path": "src/xencode.rs",
+              "blob": "6969c579cc1d2abe6b7a732592ce2d141b28b4a5",
+              "license": "GPL-3.0; source inspected only; no code copied"
+            }
           ],
           "manual_smoke": "The actual Rust crypto::derive path matched both independently calculated info/HMAC-MD5/SHA-1 vectors; no network request was made."
         },
@@ -787,7 +919,11 @@
         "life"
       ],
       "acceptance": "Read-only operator-authorized SQLite FTS phrase lookup with catalog/query-bound cursors, nullable timing, separate derived/original object descriptors and declared linking hashes; missing/cyclic/limited ancestry explicit; synthetic offline CLI/API proof.",
-      "sources": ["https://www.sqlite.org/lang_createtable.html#rowid", "https://www.sqlite.org/rowidtable.html", "https://www.sqlite.org/autoinc.html"],
+      "sources": [
+        "https://www.sqlite.org/lang_createtable.html#rowid",
+        "https://www.sqlite.org/rowidtable.html",
+        "https://www.sqlite.org/autoinc.html"
+      ],
       "issue": "https://github.com/cyjin-yl/buaa-cli/issues/3",
       "followup_issue": "https://github.com/cyjin-yl/buaa-cli/issues/39",
       "scope_boundary": "Local catalog/query integration only. No remote object-store retrieval, actual media verification, authentication, transcription/repair or live campus recording access. Parent aggregate capabilities remain pending.",
@@ -805,11 +941,22 @@
           "command": "buaa recordings search",
           "fixture": "synthetic catalog from tests/fixtures/life-catalog.sql",
           "page_limit": 1,
-          "segment_ids_by_page": [-1, 0, 1],
-          "more_results_by_page": [true, true, false],
+          "segment_ids_by_page": [
+            -1,
+            0,
+            1
+          ],
+          "more_results_by_page": [
+            true,
+            true,
+            false
+          ],
           "network_access": false,
           "source_objects_fetched": false,
-          "schema_id_domain": {"minimum": -9223372036854775808, "maximum": 9223372036854775807},
+          "schema_id_domain": {
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
           "manual_output_shape": "After the signed-range schema fix, the CLI returned id=-1 with start_ms/end_ms null; `buaa schema` reported id bounds i64::MIN..i64::MAX and nullable non-negative integer timing properties.",
           "automated_tests": "not run; the in-source regression remains unexecuted"
         },

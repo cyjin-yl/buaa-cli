@@ -24,6 +24,61 @@ const MAX_HEADERS: usize = 64 * 1024;
 const MAX_URL: usize = 16 * 1024;
 const ARCHIVE_ROBOTS_URL: &str = "https://web.archive.org/robots.txt";
 const ORGANIZATIONS_ROBOTS_URL: &str = "https://www.buaa.edu.cn/robots.txt";
+/// News-center host that replaced the retired `www.buaa.edu.cn/xwzx.htm`
+/// listing. `robots.txt` is absent (404) on this host, which the policy
+/// treats as "no restrictions".
+const ANNOUNCEMENTS_ROBOTS_URL: &str = "https://news.buaa.edu.cn/robots.txt";
+/// Section listing slugs served by the news center. The university-wide
+/// notice/announcement section is `tzgg` (通知公告); the rest are news
+/// sections. College subdomains are intentionally out of scope: each runs a
+/// different CMS layout, so a single parser cannot cover them safely.
+const ANNOUNCEMENT_CATEGORIES: &[&str] = &[
+    "tzgg", "zhxw", "ztxw", "bhrw", "xyfc_new", "kjzx_new", "mtbh_new", "gybh_new", "spxw1",
+    "wyyd_new",
+];
+
+/// News-center paths the announcements profile may read: the (absent)
+/// robots file, a section listing `/\<slug>.htm` or its page
+/// `/\<slug>\/N.htm`, and an article `/info/\<digits>\/\<digits>.htm`.
+/// Anything else is rejected before a request is formed.
+fn announcements_path_allowed(path: &str) -> bool {
+    let rest = match path.strip_prefix('/') {
+        Some(value) => value,
+        None => return false,
+    };
+    if rest == "robots.txt" {
+        return true;
+    }
+    if let Some(tail) = rest
+        .strip_prefix("info/")
+        .and_then(|value| value.strip_suffix(".htm"))
+    {
+        return match tail.split_once('/') {
+            Some((category, id)) => {
+                !category.is_empty()
+                    && category.bytes().all(|b| b.is_ascii_digit())
+                    && !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit())
+            }
+            None => false,
+        };
+    }
+    let stem = match rest.strip_suffix(".htm") {
+        Some(value) => value,
+        None => return false,
+    };
+    let (slug, page) = match stem.rsplit_once('/') {
+        Some((slug, page)) => (slug, Some(page)),
+        None => (stem, None),
+    };
+    if !ANNOUNCEMENT_CATEGORIES.contains(&slug) {
+        return false;
+    }
+    match page {
+        None => true,
+        Some(page) => !page.is_empty() && page.bytes().all(|b| b.is_ascii_digit()),
+    }
+}
 pub(crate) const ORGANIZATIONS_URL: &str = "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm";
 const SPOC_ROBOTS_URL: &str = "https://spoc.buaa.edu.cn/robots.txt";
 pub(crate) const SPOC_ROOT_URL: &str = "https://spoc.buaa.edu.cn/";
@@ -56,7 +111,8 @@ impl SourceProfile {
     fn robots_url(self) -> &'static str {
         match self {
             Self::Archive => ARCHIVE_ROBOTS_URL,
-            Self::Organizations | Self::Announcements => ORGANIZATIONS_ROBOTS_URL,
+            Self::Organizations => ORGANIZATIONS_ROBOTS_URL,
+            Self::Announcements => ANNOUNCEMENTS_ROBOTS_URL,
             Self::Spoc => SPOC_ROBOTS_URL,
         }
     }
@@ -90,9 +146,9 @@ impl SourceProfile {
                     && matches!(url.path(), "/robots.txt" | "/jgsz/jxkyjg02.htm")
             }
             Self::Announcements => {
-                url.host_str() == Some("www.buaa.edu.cn")
+                url.host_str() == Some("news.buaa.edu.cn")
                     && url.query().is_none()
-                    && matches!(url.path(), "/robots.txt" | "/xwzx.htm")
+                    && announcements_path_allowed(url.path())
             }
             Self::Spoc => {
                 url.host_str() == Some("spoc.buaa.edu.cn")
@@ -250,6 +306,13 @@ pub struct ArchiveClient {
 }
 
 impl ArchiveClient {
+    /// Retain source/cache identity while switching the selected request's
+    /// policy after cache-first reference discovery.
+    pub(crate) fn with_cache_mode(mut self, mode: CacheMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
     pub fn open(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Archive)
     }
@@ -278,6 +341,22 @@ impl ArchiveClient {
             test_route: None,
             #[cfg(test)]
             test_governor: None,
+        })
+    }
+
+    /// Hermetic offline fixture. Even an offline-path regression is routed to
+    /// loopback port zero and an isolated governor, never the operator/source.
+    #[cfg(test)]
+    pub(crate) fn open_announcements_offline_for_test(
+        directory: &std::path::Path,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            mode: CacheMode::Offline,
+            profile: SourceProfile::Announcements,
+            directory: governor::open_directory(directory, true, true)
+                .map_err(|_| cache_error())?,
+            test_route: Some(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
+            test_governor: Some(directory.join("governor")),
         })
     }
 

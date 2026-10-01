@@ -140,6 +140,99 @@ fn unimplemented_command_cannot_report_success_or_echo_arguments() {
     );
 }
 
+#[test]
+fn announcements_list_validates_filters_before_any_network_access() {
+    for input in [
+        br#"{"category":"nope"}"# as &[u8],
+        br#"{"since":"2026/09/01"}"# as &[u8],
+        br#"{"page":0}"# as &[u8],
+        b"[1,2]" as &[u8],
+    ]
+    .iter()
+    {
+        let input = *input;
+        let output = invoke(&["announcements", "list"], input);
+        assert_eq!(output.status.code(), Some(2), "{input:?}");
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+    }
+}
+
+/// The operator may already have a cached listing. Neither HOME nor unrelated
+/// cache files establish that fact; assert the CLI's two valid offline outcomes.
+/// The empty-cache branch itself is pinned hermetically by the lib test
+/// `offline_lookup_with_empty_cache_reports_unavailable`.
+#[test]
+fn announcements_list_offline_serves_cache_or_reports_unavailable() {
+    let output = invoke(&["announcements", "list"], b"");
+    match output.status.code() {
+        Some(0) => {
+            assert!(output.stderr.is_empty());
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(value["type"], "announcements_list");
+            assert_eq!(value["retrieval"]["cache_status"], "hit");
+        }
+        Some(7) => {
+            assert!(output.stdout.is_empty());
+            let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(error["error"], "unavailable");
+        }
+        status => panic!("unexpected offline status {status:?}: {:?}", output.stderr),
+    }
+}
+
+#[test]
+fn announcements_article_rejects_foreign_and_query_urls() {
+    for input in [
+        br#"{"url":"https://evil.example/info/1010/1.htm"}"# as &[u8],
+        br#"{"url":"https://news.buaa.edu.cn/info/1010/1.htm?x=1"}"# as &[u8],
+        br#"{"url":"https://news.buaa.edu.cn/info/abc/1.htm"}"# as &[u8],
+        b"[]" as &[u8],
+    ]
+    .iter()
+    {
+        let input = *input;
+        let output = invoke(&["announcements", "article"], input);
+        assert_eq!(output.status.code(), Some(2), "{input:?}");
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+    }
+}
+
+#[test]
+fn announcements_history_replays_operator_asserted_snapshot_offline() {
+    let html = "<!DOCTYPE html><html><head><title>通知公告-新闻网</title></head><body><div class=\"tlist\"><ul><li><a href=\"info/1010/69802.htm\"><div class=\"pub_date\"><div><b>15</b><span>2026.09</span></div></div><div class=\"pub_info\"><span>通知公告</span><h3>测试通知</h3><p>摘要</p></div></a></li></ul></div></body></html>";
+    let encoded =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, html.as_bytes());
+    let payload = format!(
+        "{{\"html\":\"{encoded}\",\"provenance\":{{\"source_url\":\"https://news.buaa.edu.cn/tzgg.htm\",\"asserted_by\":\"operator\"}}}}"
+    );
+    let output = invoke(&["announcements", "history"], payload.as_bytes());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["type"], "announcements_history");
+    assert_eq!(value["entries"].as_array().unwrap().len(), 1);
+    let entry = &value["entries"][0];
+    assert_eq!(entry["title"], "测试通知");
+    assert_eq!(entry["date"], "2026-09-15");
+    assert_eq!(
+        entry["resolved_http_url"],
+        "https://news.buaa.edu.cn/info/1010/69802.htm"
+    );
+    assert_eq!(value["provenance"]["asserted_by"], "operator");
+    assert_eq!(
+        value["provenance"]["source_url"],
+        "https://news.buaa.edu.cn/tzgg.htm"
+    );
+    assert!(value["retrieval"]["sha256"].as_str().is_some());
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn output_failure_is_unavailable_not_invalid_input() {

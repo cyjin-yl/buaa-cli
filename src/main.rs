@@ -30,6 +30,16 @@ fn read_input() -> Result<String, CliError> {
     Ok(input)
 }
 
+/// Read stdin only when data is actually piped; interactive terminals fall
+/// back to module defaults so `announcements list` never blocks a TTY.
+fn read_input_optional() -> Result<Option<String>, CliError> {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    Ok(Some(read_input()?))
+}
+
 fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
@@ -249,21 +259,31 @@ fn run_spoc(args: &[String]) -> CliResult {
 
 fn run_announcements(args: &[String]) -> CliResult {
     use buaa_cli::net::CacheMode;
+    let mode = |args: &[String]| -> Result<CacheMode, CliError> {
+        match args.get(1).map(String::as_str) {
+            None => Ok(CacheMode::Offline),
+            Some("--online") if args.len() == 2 => Ok(CacheMode::PreferCache),
+            Some("--refresh") if args.len() == 2 => Ok(CacheMode::Revalidate),
+            _ => Err((
+                "invalid_input",
+                2,
+                "expected at most one of --online or --refresh".into(),
+            )),
+        }
+    };
     match args.first().map(String::as_str) {
         Some("list") => {
-            let mode = match args.get(1).map(String::as_str) {
-                None => CacheMode::Offline,
-                Some("--online") if args.len() == 2 => CacheMode::PreferCache,
-                Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
-                _ => {
-                    return Err((
-                        "invalid_input",
-                        2,
-                        "expected at most one of --online or --refresh".into(),
-                    ));
-                }
-            };
-            let output = buaa_cli::announcements::list(mode).map_err(service_error)?;
+            let mode = mode(args)?;
+            let input = read_input_optional()?;
+            let output = buaa_cli::announcements::list(mode, input.as_deref())
+                .map_err(service_error)?;
+            emit(&output)
+        }
+        Some("article") => {
+            let mode = mode(args)?;
+            let input = read_input()?;
+            let output =
+                buaa_cli::announcements::article(mode, &input).map_err(service_error)?;
             emit(&output)
         }
         Some("history") if args.len() == 1 => {
@@ -274,7 +294,7 @@ fn run_announcements(args: &[String]) -> CliResult {
         _ => Err((
             "unsupported",
             3,
-            "expected announcements list, announcements list --online/--refresh, or announcements history".into(),
+            "expected announcements list, announcements list --online/--refresh, announcements article [--online|--refresh], or announcements history".into(),
         )),
     }
 }
@@ -315,7 +335,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Migrate the retired announcements source to `news.buaa.edu.cn`, with category/date/title filtering, explicitly advertised page selection, article paragraphs and attachment-link hints. Cache-first reads and conditional refresh retain the shared governor; no per-college crawl or attachment download is implied. Historical replay remains offline, operator-asserted and byte-bound, including paged listing sources and optional `asserted_by`.
+- Make announcements offline-miss proof hermetic; the CLI cache test accepts a real cache hit or unavailable without reading mutable `HOME`, clearing caches or relying on unrelated cache entries.
 - Bind CDX resume cursors to the exact query scope (url, from, to, limit) that minted them; cross-scope and never-issued cursors are rejected before a request. The cursor-scope registry evicts deterministically at its 256-entry cap so a full registry keeps recording new bindings. Loopback regressions cover same-scope continuation, cross-scope and unknown-cursor rejection, binding persistence across client instances, and cap eviction.
 - Require an explicit operator provenance assertion for `announcements history` (base64 HTML plus `source_url` matching the official listing URL and an optional capture timestamp); the output echoes the assertion as `operator_asserted`, marks archive headers unverified, and binds the supplied bytes by SHA-256. Raw bytes alone can no longer be labelled as the official historical snapshot.
 - Add the local `timed-input` command: exact decimal-second schedules, flushed NDJSON, explicit raw pipes, dry-run, whole-input validation and sanitized structured errors.
