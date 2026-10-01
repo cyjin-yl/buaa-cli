@@ -209,7 +209,17 @@ fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
         if node.value().attr("src").is_some() {
             continue;
         }
-        let kind = node.value().attr("type").unwrap_or_default().trim();
+        let explicit_type = node.value().attr("type");
+        if explicit_type.is_none()
+            && node.value().attr("language").is_some_and(|language| {
+                !language.is_empty() && !language.eq_ignore_ascii_case("javascript")
+            })
+        {
+            continue; // unreviewed legacy language-derived data block
+        }
+        let kind = explicit_type
+            .unwrap_or_default()
+            .trim_matches(|ch| matches!(ch, '\t' | '\n' | '\u{000c}' | '\r' | ' '));
         if kind.eq_ignore_ascii_case("module") {
             if node.text().any(|text| text.contains("showVsbpdfIframe")) {
                 return Err(unavailable());
@@ -609,6 +619,8 @@ mod tests {
             "type=\"text/plain\"",
             "type=\"application/json\"",
             "src=\"/external.js\"",
+            "language=\"vbscript\"",
+            "type=\"\u{00a0}text/javascript\"",
         ] {
             let source = format!(
                 "<div class=\"v_news_content\"><script {attributes}>showVsbpdfIframe(\"{path}\");</script></div>"
