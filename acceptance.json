@@ -630,7 +630,37 @@
             "response_body_retained": true
           }
         ],
-        "limits": "Partial acceptance: university-wide news center, not all college announcement boards. No per-college CMS adapters or true faculty/college filters. Live listing/article evidence covers tzgg and one article only; the other configured category layouts and later page contents remain live-unverified. Pagination can select only ordinals advertised by the latest listing; it does not compute undisplayed addresses or crawl history. Attachment hints are capped at 32 raw links, not downloads or verified attachment bytes; the live sample contained none. Article text scope is div.v_news_content paragraphs, not media/table reconstruction. Historical replay verifies only supplied bytes and the operator assertion; live Memento replay, complete history and missing captures remain unresolved."
+        "limits": "Partial acceptance: university-wide news center, not all college announcement boards. No per-college CMS adapters or true faculty/college filters. Live listing/article evidence covers tzgg and one article only; the other configured category layouts and later page contents remain live-unverified. Pagination can select only ordinals advertised by the latest listing; it does not compute undisplayed addresses or crawl history. Attachment hints are capped at 32 raw links, not downloads or verified attachment bytes; the live sample contained none. Article text scope is div.v_news_content paragraphs, not media/table reconstruction. Historical replay verifies only supplied bytes and the operator assertion; live Memento replay, complete history and missing captures remain unresolved.",
+        "college_slice": {
+          "college": "scse",
+          "scope": "Computer college only, separately observed CMS; other college adapters remain absent.",
+          "directory_binding": {
+            "name": "计算机学院",
+            "listed_href": "http://scse.buaa.edu.cn/",
+            "source_body_sha256": "f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9"
+          },
+          "commands": [
+            "announcements list with college=scse",
+            "announcements article with reviewed SCSE notice URL",
+            "announcements history with operator-asserted SCSE listing source"
+          ],
+          "live_proof": {
+            "root_sha256": "88385fa52013a94625661b9b579e4b006e9baab7e8a21858790954837f0fed39",
+            "notices_sha256": "cb1ea486054942b85c2550c74769df70f8b0affc20754016d455a0e996b4857b",
+            "page2_sha256": "9bb31a6afb457105050be3462a30ade4db083f70d1f60e6ce7b6f8fc9f7b1f9f",
+            "policy_article_sha256": "6b9a717ae00c83eed33e6a0378548c7cb25fef3875ba40671302204f0f33e8c7",
+            "current_rows": 10,
+            "second_page_rows": 5,
+            "date_filtered_rows": 3,
+            "policy_result": "embedded_document",
+            "text_paragraphs": 0,
+            "attachment_hints": 11,
+            "declared_derived_preview_images": 12
+          },
+          "limits": "No attachment/preview bytes fetched; no OCR or fabricated document text. No all-college coverage. No validators were supplied in the observed college responses. Historical bytes remain operator assertions, not verified Memento replay.",
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/78",
+          "quality_gate": "177 library + 18 CLI passed; 2 ignored; offline build, strict all-target clippy and fmt check passed."
+        }
       }
     },
     {
