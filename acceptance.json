@@ -775,7 +775,17 @@
       "sources": [],
       "evidence": {
         "access": "Authorized repository read access confirmed; no private source or credential contents copied into public project.",
-        "remaining": "Review non-sensitive object storage/catalog contracts before implementation."
+        "storage_interface_draft": {
+          "upstream_head": "af59427c7f6bac3382b5989b811b69872f4de928",
+          "review_issue": "https://github.com/cyjin-yl/buaa-cli/issues/74",
+          "proof_kind": "Authenticated repository read plus structural AST inspection; private helpers were not executed and no object-store request occurred.",
+          "read_operations": ["HeadObject(Bucket, Key)", "GetObject(Bucket, Key)"],
+          "digest_facts": "Source digest helper reads Body in 262144-byte chunks, computes SHA-256 and closes the stream in finally. This is source evidence, not runtime remote proof.",
+          "excluded": "PutObject and all upstream upload/remote-task execution; endpoint/default/credential configuration, private records and media were not copied.",
+          "approval": "pending owner-reviewed read/authentication/immutability contract",
+          "document": "docs/RECORDINGS.md"
+        },
+        "remaining": "Approve the source-only object-read draft, exact HTTPS egress/authentication/immutability and byte-budget contract, and a rights-cleared object inventory before implementing remote reads. Repository permissions and catalog locators do not supply these approvals."
       },
       "implemented_slices": [
         "recordings-search"
