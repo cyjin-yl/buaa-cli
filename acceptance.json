@@ -407,16 +407,26 @@
         "https://github.com/grandchicken/1708SEM_ISIM"
       ],
       "evidence": {
-        "command": "buaa credits calculate",
-        "tests": "Final cargo test --locked --offline: 126 passed across five suites; one ignored worker. 10 credits unit tests cover supported-major schema parity, unknown-major rejection, conflicting duplicate identities, equivalent duplicate rows, and calculation boundaries. CLI integration rejects unknown majors and conflicting duplicates; all-target clippy, fmt and offline build pass.",
+        "commands": ["buaa credits calculate", "buaa credits school6"],
+        "tests": "Focused cargo test --locked --offline credits: 17 passed across the selected suites. Six uncertain School-6 edge regressions defend category deficits despite sufficient total, qualification-overlap non-double-counting, failed/repeated attempts with conflicting identity rejection, single-course English witnesses, the separate exchange-English route and exact-credit boundaries. The exchange-route regression failed before the fix and passed after it. Two schema/source-constant plumbing tests were removed; behavioral School-8 tests remain. Full offline gate results are recorded in docs/STATUS.md.",
         "smoke": "Offline CLI returns invalid_input for a non-supported major and for conflicting `非参数统计` rows; equivalent `健康经济学` duplicates collapse with a warning. No campus request was made.",
         "scope": "School 8 (economics_management) 2020 general-major, 136 courses from the public HoBeedzc/CreditCount catalog; the supported major enum is exactly its non-general major tags.",
+        "school6_reference_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/76",
+          "source": "https://github.com/TrickEye/can_I_Graduate/blob/5e0f0355455d7eb7e69f953a23ca405e5af7ebed/src/App.vue#L450-L461",
+          "source_status": "community_reference_not_official_verification",
+          "licensing_boundary": "No upstream license is declared; only numerical policy facts inform original code. Upstream implementation was not copied or executed.",
+          "implementation": "src/credits/school6.rs",
+          "contract": "Operator-classified courses and explicit pass status; 150 total credits plus every category threshold and eligible single-course English/cross-major/humanities witnesses. Qualifying credits are not added again. Stable course IDs count once if any listed attempt passes; conflicting identity metadata rejects. Exact hundredth-credit arithmetic; 512 courses, 256 KiB input, 100 credits per course representation bound. No network or graduation certification.",
+          "smoke": "Real CLI with an independent Python Decimal oracle: 150 earned credits and all witnesses -> requirements_met but graduation_eligibility=not_verified; 150 total with engineering removed -> engineering deficit 9; failed/repeated attempts remain 150 with two collapsed duplicates; a non-practical exchange English witness in math_modeling qualifies without additional credit; malformed input exits 2 without echo. Legacy School-8 input still counts 2 credits.",
+          "remaining": "Official current/2020 policy approval, complete authoritative catalog, recognized substitution/waiver/retake/overlap rules and verification of passing/classification/qualifying attributes. requirements_met is only a reference check under operator assertions."
+        },
         "review_issues": [
           "https://github.com/cyjin-yl/buaa-cli/issues/23",
           "https://github.com/cyjin-yl/buaa-cli/issues/24"
         ]
       },
-      "blocker": "School 6 cohort 2020 policy and course catalog not yet ported from an authoritative reference; only school 8 implemented. Status partial-offline until school 6 is added."
+      "blocker": "School-6 reference arithmetic is implemented offline, but no authoritative full catalog or official retake/substitution/waiver/overlap contract has been verified. Operator classifications and qualifying attributes are not campus facts; status remains partial-offline, not completed graduation-policy acceptance."
     },
     {
       "id": "shuttle",

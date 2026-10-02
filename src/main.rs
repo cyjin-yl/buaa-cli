@@ -314,11 +314,24 @@ fn run_announcements(args: &[String]) -> CliResult {
     }
 }
 fn run_credits(args: &[String]) -> CliResult {
-    if args.first().map(String::as_str) != Some("calculate") {
-        return Err(("unsupported", 3, "expected credits calculate".into()));
+    if args.len() != 1
+        || !matches!(
+            args.first().map(String::as_str),
+            Some("calculate" | "school6")
+        )
+    {
+        return Err((
+            "unsupported",
+            3,
+            "expected credits calculate or credits school6".into(),
+        ));
     }
     let input = read_input()?;
-    let output = buaa_cli::credits::calculate(&input);
+    let output = if args[0] == "school6" {
+        buaa_cli::credits::school6::calculate(&input)
+    } else {
+        buaa_cli::credits::calculate(&input)
+    };
     if let Some(raw) = output.get("error").and_then(|v| v.as_str()) {
         let code = match raw {
             "invalid_input" => "invalid_input",
@@ -350,7 +363,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate|school6", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
