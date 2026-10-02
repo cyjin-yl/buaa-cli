@@ -140,6 +140,14 @@ fn response_facts(response: &Response) -> Value {
     })
 }
 
+fn media_type(value: &str) -> &str {
+    value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim_matches([' ', '\t'])
+}
+
 /// Describe one fetched public page as sanitized structural facts. The body
 /// itself is never included in the returned value.
 pub fn describe_page(response: &Response, label: &str) -> Result<Value, Error> {
@@ -149,7 +157,7 @@ pub fn describe_page(response: &Response, label: &str) -> Result<Value, Error> {
     if response
         .headers
         .get("content-type")
-        .is_some_and(|value| !value.to_ascii_lowercase().starts_with("text/html"))
+        .is_some_and(|value| !media_type(value).eq_ignore_ascii_case("text/html"))
     {
         return Err(unavailable());
     }
@@ -263,7 +271,7 @@ fn script_url(input: &str) -> Result<Url, Error> {
 
 fn validate_script(response: &Response) -> Result<(), Error> {
     let mime_ok = response.headers.get("content-type").is_some_and(|value| {
-        let mime = value.split(';').next().unwrap_or_default().trim();
+        let mime = media_type(value);
         ["text/javascript", "application/javascript"]
             .iter()
             .any(|allowed| mime.eq_ignore_ascii_case(allowed))
@@ -300,6 +308,11 @@ pub(crate) fn script_with_client(
 ) -> Result<Value, Error> {
     let entry = Url::parse(SPOC_ENTRY_URL).map_err(|_| unavailable())?;
     let (source, declaration) = client.get(&entry, false, |response| {
+        // An untyped surface snapshot may be described, but cannot authorize
+        // a script fetch. Present MIME must also pass exact HTML admission.
+        if !response.headers.contains_key("content-type") {
+            return Err(unavailable());
+        }
         let source = describe_page(response, "entry")?;
         let declaration = source["script_hints"]
             .as_array()
@@ -456,6 +469,7 @@ mod tests {
     fn rejects_non_success_and_non_html() {
         assert!(describe_page(&response(404, "text/html", PAGE), "root").is_err());
         assert!(describe_page(&response(200, "application/json", "{}"), "root").is_err());
+        assert!(describe_page(&response(200, "text/html-not-html", PAGE), "root").is_err());
     }
 
     #[test]

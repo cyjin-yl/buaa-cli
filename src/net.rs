@@ -1401,6 +1401,17 @@ mod tests {
         seed(client, ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
     }
 
+    fn seed_spoc_html(client: &ArchiveClient, body: &[u8]) {
+        seed(client, SPOC_ENTRY_URL, body, false);
+        let url = Url::parse(SPOC_ENTRY_URL).unwrap();
+        let mut entry = client.load(&url).unwrap().unwrap();
+        entry
+            .response
+            .headers
+            .insert("content-type".into(), "text/html; charset=utf-8".into());
+        client.save(&entry).unwrap();
+    }
+
     #[test]
     fn spoc_script_is_entry_bound_private_and_refreshes_only_the_selected_source() {
         const SCRIPT_URL: &str = "https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js";
@@ -1418,7 +1429,7 @@ mod tests {
             );
         });
         let client = fixture.spoc_client(CacheMode::PreferCache, &server);
-        seed(&client, SPOC_ENTRY_URL, ENTRY, false);
+        seed_spoc_html(&client, ENTRY);
         seed(
             &client,
             SPOC_ROBOTS_URL,
@@ -1483,12 +1494,7 @@ mod tests {
             );
         });
         let client = fixture.spoc_client(CacheMode::PreferCache, &server);
-        seed(
-            &client,
-            SPOC_ENTRY_URL,
-            br#"<script src="js/app.12345678.js"></script>"#,
-            false,
-        );
+        seed_spoc_html(&client, br#"<script src="js/app.12345678.js"></script>"#);
         seed(
             &client,
             SPOC_ROBOTS_URL,
@@ -1510,6 +1516,40 @@ mod tests {
             "offline_miss"
         );
         assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn spoc_entry_without_html_mime_cannot_authorize_a_script_fetch() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: application/javascript\r\n",
+                b"synthetic source",
+            );
+        });
+        let client = fixture.spoc_client(CacheMode::PreferCache, &server);
+        seed(
+            &client,
+            SPOC_ENTRY_URL,
+            br#"<script src="js/app.12345678.js"></script>"#,
+            false,
+        );
+        seed(
+            &client,
+            SPOC_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse("https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js").unwrap();
+        assert_eq!(
+            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 0);
     }
 
     #[test]

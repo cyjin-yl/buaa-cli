@@ -43,7 +43,8 @@ offline miss is unavailable, not an empty surface.
 `script` accepts exactly JSON `{ "url": "..." }` on stdin and returns
 `type: spoc_public_script`. `--online` admits a governed cache miss;
 `--refresh` conditionally revalidates only the selected script. Entry discovery
-stays cache-first on the same client; refresh `surface entry` separately to
+requires HTTP 200 with an explicit exact `text/html` media type (parameters
+allowed), then stays cache-first on the same client; refresh `surface entry` separately to
 discover changed declarations. A syntactically allowed but undeclared URL
 returns unsupported before the selected fetch, even if old script bytes exist.
 Script bytes are immutable at their URL: conflicting refresh bytes are refused,
@@ -122,8 +123,18 @@ It also defends explicit empty-type precedence over legacy language attributes.
 The college PDF viewer now uses that same admission helper with unchanged
 classic/module policy, rather than a second convention.
 
+An additional source-authority regression reproduced an untyped cached entry
+authorizing a selected network fetch. The script command now refuses absent
+HTML MIME before selecting any script, and page parsing rejects `text/html-*`
+lookalike media types rather than accepting an HTML prefix. MIME whitespace is
+HTTP space/tab only. Untyped `surface` snapshots remain structural observations,
+not authority for a script request. The missing-MIME loopback case failed before
+the fix and passed afterward, with zero selected requests; all twelve focused
+SPOC cases then passed. Actual corrected native offline use retained the same
+typed entry/script provenance and unchanged governor bytes.
+
 Final locked offline build/full-tests/strict-all-target-clippy/formatter gate
-passed: **204 library + 18 CLI tests**, two ignored, five suites. Actual final
+passed: **205 library + 18 CLI tests**, two ignored, five suites. Earlier actual
 native `script --refresh` returned `cache_status=revalidated`, revalidation
 HTTP 200 at `1790952887461`, preserving original bytes/hash/fetched timestamp;
 entry discovery stayed a cache hit. This is not a 304 receipt. Actual root-only
