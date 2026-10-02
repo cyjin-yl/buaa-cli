@@ -1,6 +1,6 @@
 # buaa-cli
 
-`buaa-cli` is an agent-facing Rust CLI. Implemented slices include offline timed-input, archive lookup/capture, policy-provenanced marks/GPA calculation, scoped credit references, pinned Fengrubei template retrieval, local recording-catalog search, official organization-directory parsing, university news-center/computer-college reads, and a read-only SPOC public-surface contract probe. Governed live observations include CDX pagination/date search and one exact 1997 homepage Memento replay with matching attribution, verified original bytes and offline reuse. Official directory, SPOC public-surface, announcement/article and one original PDF read are separately observed. This does not establish complete history, other colleges, historical announcement coverage or an authenticated SPOC contract. Gateway workflows remain live-unverified; no campus authentication or mutation is claimed verified. Network reads default to cache. Other acceptance items remain partial, pending or explicitly blocked; catalog links are not APIs.
+`buaa-cli` is an agent-facing Rust CLI. Implemented slices include offline timed-input, archive lookup/capture, policy-provenanced marks/GPA calculation, scoped credit references, pinned Fengrubei template retrieval, local recording-catalog search, official organization-directory parsing, university news-center/computer-college reads, and read-only SPOC public-page/source-bound script probes. Governed live observations include CDX pagination/date search and one exact 1997 homepage Memento replay with matching attribution, verified original bytes and offline reuse. Official directory, SPOC public entry and one immutable public app bundle, announcement/article and one original PDF read are separately observed. This does not establish complete history, other colleges, historical announcement coverage or an authenticated SPOC contract. Gateway workflows remain live-unverified; no campus authentication or mutation is claimed verified. Network reads default to cache. Other acceptance items remain partial, pending or explicitly blocked; catalog links are not APIs.
 
 ## Build and discover
 
@@ -134,11 +134,17 @@ printf '%s\n' '{"url":"https://news.buaa.edu.cn/info/1010/69802.htm"}' | ./targe
 
 `announcements history` remains fully offline: base64 UTF-8 HTML with `provenance.source_url` identifying a news-center listing, optional `capture_timestamp` and `asserted_by`. Output is `announcements_history`, with `retrieval.sha256` binding the supplied bytes. Provenance is operator-asserted, not verified archive attribution. Other college-site adapters, broader faculty/college coverage, complete history and attachment retrieval remain unimplemented. [Current proof and limitations](docs/STATUS.md#2026-09-29-announcements-news-center-migration).
 
-## SPOC public surface (contract evidence)
-`buaa spoc surface` is read-only contract tooling for the SPOC acceptance item, not an authenticated adapter. It fetches the two fixed public SPOC pages through the same process-wide governor (robots policy first) and reports only sanitized structural facts: status, content type, byte length, SHA-256, document title and form shape. Bodies, field names and values never enter output, logs or the repository; no authentication is attempted.
+## SPOC public sources (contract evidence)
+`buaa spoc surface [root|entry]` observes fixed public pages. `buaa spoc script` accepts a JSON URL on stdin only if the retained entry actively declares that same-host, query-free `/spocnew/js/<name>.<8hex>.js` source. Both use the same private cache/account-wide governor and report sanitized metadata, not raw HTML/JavaScript, fields, values or source configuration. No script execution, authentication or course/media operation.
+
+```sh
 # Private cache only; no network request.
 ./target/debug/buaa spoc surface
-Use `--online` only for an authorized cache miss, or `--refresh` for conditional revalidation. Egress is limited to `spoc.buaa.edu.cn` robots, `/` and `/spocnew/`. A 2026-09-28 governed observation is recorded in [docs/SPOC.md](docs/SPOC.md) as a **pending-review** contract draft; the SPOC item stays blocked until the owner reviews the contract and supplies a rights-cleared course inventory.
+printf '%s' '{"url":"https://spoc.buaa.edu.cn/spocnew/js/app.a7c0879c.js"}' |
+  ./target/debug/buaa spoc script
+```
+
+Use `--online` only for an authorized cache miss. `surface entry --refresh` updates declarations in one selected request; `script --refresh` revalidates only the selected immutable script, keeping entry discovery cache-first. The filename fingerprint is not a checksum. [docs/SPOC.md](docs/SPOC.md) records the changed entry declaration, prior refused old-script request, actual 2,424,757-byte public app/hash/offline proof and safety limits. The SPOC item stays **blocked** until the authenticated contract, private credential delivery and rights-cleared course inventory exist.
 
 ## Contract drift detection (offline)
 `buaa drift check` compares a pinned baseline contract document against a candidate contract document, both supplied as JSON on stdin. It is fully offline: no network access, no writes. The output is a JSON drift report naming added, removed, type-changed and array-length-changed paths (with type names and lengths) and never applies, guesses or merges a change. Raw document values never enter the report.

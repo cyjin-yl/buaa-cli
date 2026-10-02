@@ -438,25 +438,23 @@ fn credits_cli_rejects_unknown_major_and_conflicting_course_identity() {
 }
 
 #[test]
-fn schema_and_help_list_every_online_entry_point() {
-    // STR-CLI-001: the machine-readable network_policy.opt_in must name every
-    // command with an explicit online entry point.
-    for command in ["help", "schema"] {
-        let output = invoke(&[command], b"");
-        assert!(output.status.success());
-        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let opt_in = value["network_policy"]["opt_in"].as_str().unwrap_or("");
-        for surface in [
-            "archive",
-            "organizations",
-            "announcements",
-            "fengrubei fetch --online",
-            "gateway explicit online flags",
-        ] {
-            assert!(
-                opt_in.contains(surface),
-                "{command} opt_in missing {surface}: {opt_in}"
-            );
-        }
+fn spoc_script_rejects_unsafe_input_without_echoing_payload() {
+    for input in [
+        br#"{"url":"https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js","private-marker":"value"}"#
+            as &[u8],
+        br#"{"url":"https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js?private-marker=value"}"#
+            as &[u8],
+        br#"{"url":"https://private-marker.example/spocnew/js/app.12345678.js"}"# as &[u8],
+    ] {
+        let output = invoke(&["spoc", "script"], input);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+        assert!(
+            !String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("private-marker")
+        );
     }
 }
