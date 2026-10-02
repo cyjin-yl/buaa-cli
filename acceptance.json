@@ -16,7 +16,14 @@
         "implementation": "Linux shared UID governor library, not HTTP transport",
         "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; current full offline suite: 118 passed across five suites (one ignored). The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
-        "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed and require offline operator review; no automatic reset."
+        "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed. Only known pre-reboot history has an explicit offline plan/commit migration; unknown outcomes and missing/corrupt history cannot migrate. No reset or automatic recovery.",
+        "boot_history_review": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/83",
+          "commands": ["buaa governor boot-review-plan", "buaa governor boot-review-commit --offline"],
+          "contract": "Exact old-state SHA-256 and new-boot-bound preview plus typed intent, rechecked under the permanent shared lock. Preserve complete old private bytes before atomic state replacement. Carry full remaining waits with no elapsed-time credit; impose retained request/background policy floors; preserve cooldown saturation, rejection latch and network-failure history; disarm authentication. No remote request or namespace override.",
+          "proof": "Six offline regressions pass: full carryover/raised policy/original history/auth disarm and retained failure backoff; rejection latch after waits cease and unfinished-outcome refusal; tampered/stale preview; saturated cooldown; partial snapshot no-overwrite; exact crash-snapshot reuse and completed replay refusal. Final integrated gate: 215 tests passed across five suites, two ignored; locked offline build, strict all-target clippy and formatter check passed. Actual CLI preview exits 0; online commit, malformed input and incorrect intent are rejected with exits 5/2/5. Production state stayed byte-identical during development checks.",
+          "limits": "No production migration or campus read is claimed by development proof. Pending exact-head source review and merge; normal open/status/auth resume still reject boot mismatch until a deliberate reviewed migration."
+        }
       }
     },
     {
