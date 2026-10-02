@@ -1,6 +1,6 @@
 # Historical archive lookup
 
-The archive adapter targets the documented Internet Archive CDX API and Wayback identity replay. It does not contact the original campus host, authenticate to a campus service, save pages to the archive, or reconstruct missing history. The default is local cache only. Implementation verification uses synthetic protocol data and an isolated loopback HTTP server; live Internet Archive availability is not implied.
+The archive adapter targets the documented Internet Archive CDX API and Wayback identity replay. It does not contact the original campus host, authenticate to a campus service, save pages to the archive, or reconstruct missing history. The default is local cache only. Synthetic/loopback proof remains separate from the bounded live homepage observations recorded below; general service availability and complete history are not implied.
 
 ## Commands
 
@@ -46,6 +46,17 @@ Robots and target requests use the same process-shared governor. Its lease spans
 Cache files are private beneath the effective user's passwd home, not the source tree or a per-worktree directory. Cached bodies are hash-checked before use. Immutable capture bytes are never silently overwritten on conflict. Keep private cache and account governor history out of public Git; never delete governor state to regain throughput.
 
 Public CLI error categories include invalid_input (2), unsupported (3), auth_latched (4), permission (5), unavailable (7), rate_limited (8), conflict (9), and unknown_outcome (9). `unknown_outcome` is specific to a logout request that may have been applied but lacks a reliable receipt; retries and new commits for that account remain blocked until typed offline operator resolution. A transport error is not proof that a historical page never existed.
+
+## Bounded live proof
+
+[Issue #82 operational receipt](https://github.com/cyjin-yl/buaa-cli/issues/82#issuecomment-5952491700) records the actual merged CLI observations on 2026-10-02. The first capture invocation refreshed robots as HTTP 404 and exited 8 before the target because the retained 60-second interval exceeded the 30-second bounded wait. After independently checking fresh robots and the full shared deadline, one deliberate exact replay succeeded; there was no retry loop or policy relaxation.
+
+- Original: `http://www.buaa.edu.cn:80/`; exact timestamp `19970416014726`.
+- Replay: `https://web.archive.org/web/19970416014726id_/http://www.buaa.edu.cn:80/`, HTTP 200 `text/html`, matching `Memento-Datetime: Wed, 16 Apr 1997 01:47:26 GMT` and original Link.
+- Original bytes: 3,758; SHA-256 `4cf418189fb99ac5cf2873673337b3722d7e42e60e38ad633ceb706e7c6fb05d`; fetched at `1790944036626`. Independent base64 decode/size/hash verification and actual cache-only replay matched the bytes and identity.
+- Dated CDX query: `https://www.buaa.edu.cn/`, inclusive `19970101000000`–`19971231235959`, limit 10. Returned timestamps `19970416014726` and `19971210122410`; 327 response bytes, SHA-256 `7d942e8e87eb0864e73697d69b2f368e528343a56b12ec945e53a723573271cc`, fetched at `1790944266753`. Actual offline replay matched hash/captures.
+
+`more_results=false` applies only to that returned index page; `complete_history=false` remains explicit. CDX rows retain null resource hashes: the second capture's resource was not fetched. Publication date stays null/unknown despite origin Date/Last-Modified headers. This proves one exact homepage replay, not archived announcement parsing, all-college coverage, archive authenticity or publisher signatures. No direct original-host request, authentication, mutation, nearest-capture substitution or bypass occurred. Earlier failed-replay evidence is preserved.
 
 ## Contract sources
 
