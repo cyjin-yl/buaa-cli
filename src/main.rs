@@ -215,6 +215,29 @@ fn run_gateway(args: &[String]) -> CliResult {
         )),
     }
 }
+
+fn run_governor(args: &[String]) -> CliResult {
+    match args.first().map(String::as_str) {
+        Some("boot-review-plan") if args.len() == 1 => {
+            emit(&buaa_cli::governor::boot_review_plan().map_err(service_error)?)
+        }
+        Some("boot-review-commit") if args.len() == 2 && args[1] == "--offline" => {
+            let input = read_input()?;
+            emit(&buaa_cli::governor::boot_review_commit(&input).map_err(service_error)?)
+        }
+        Some("boot-review-commit") => Err((
+            "permission",
+            5,
+            "boot review commit requires --offline and exact typed stdin intent".into(),
+        )),
+        _ => Err((
+            "unsupported",
+            3,
+            "expected governor boot-review-plan or boot-review-commit --offline".into(),
+        )),
+    }
+}
+
 fn run_organizations(args: &[String]) -> CliResult {
     use buaa_cli::net::CacheMode;
     if args.first().map(String::as_str) != Some("list") {
@@ -363,7 +386,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "credits calculate|school6", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "governor boot-review-plan", "governor boot-review-commit --offline", "recordings search", "credits calculate|school6", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -379,6 +402,7 @@ fn run() -> CliResult {
                 "marks": buaa_cli::marks::schema(),
                 "fengrubei": buaa_cli::fengrubei::schema(),
                 "gateway": buaa_cli::gateway::schema(),
+                "governor": buaa_cli::governor::boot_review_schema(),
                 "recordings": buaa_cli::recordings::schema(),
                 "organizations": buaa_cli::organizations::schema(),
                 "spoc": buaa_cli::spoc::schema(),
@@ -440,6 +464,7 @@ fn run() -> CliResult {
         "marks" => run_marks(&args[1..]),
         "fengrubei" => run_fengrubei(&args[1..]),
         "gateway" => run_gateway(&args[1..]),
+        "governor" => run_governor(&args[1..]),
         "recordings" if args.len() == 2 && args[1] == "search" => {
             let input = read_input()?;
             let output = buaa_cli::recordings::search(&input).map_err(service_error)?;

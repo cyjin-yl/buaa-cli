@@ -15,6 +15,8 @@
 use chrono::{Datelike, Timelike};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -156,6 +158,157 @@ struct State {
     authentication_armed: bool,
     safety_latched: bool,
     pending: Option<RequestKind>,
+}
+
+/// A local-only preview. Its digest binds the exact retained state and new boot,
+/// not an authorization to send requests or consume authentication permission.
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BootReviewPlan {
+    schema_version: u32,
+    #[serde(rename = "type")]
+    kind: String,
+    plan_hash: String,
+    state_sha256: String,
+    previous_boot_id: String,
+    current_boot_id: String,
+    request_interval_ms: u64,
+    background_interval_ms: u64,
+    request_wait_ms: u64,
+    background_wait_ms: u64,
+    cooldown_wait_ms: u64,
+    safety_latched: bool,
+    authentication_was_armed: bool,
+    authentication_armed_after_commit: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BootReviewCommit {
+    plan: BootReviewPlan,
+    intent: String,
+}
+
+fn retained_wait(until: u64, last_observed: u64) -> u64 {
+    // Saturation means an unrepresentable deadline, not elapsed time. Preserve
+    // that fail-closed sentinel across every boot rather than subtracting it.
+    if until == u64::MAX {
+        u64::MAX
+    } else {
+        until.saturating_sub(last_observed)
+    }
+}
+
+fn rebased_deadline(now: u64, wait: u64) -> Result<u64, String> {
+    if wait == u64::MAX {
+        Ok(u64::MAX)
+    } else {
+        deadline(now, wait)
+    }
+}
+
+fn review_governor() -> Result<Governor, crate::net::Error> {
+    let unavailable = || crate::net::Error::new("unavailable", "governor history is unavailable");
+    let home = identity_home().map_err(|_| unavailable())?;
+    let _home = open_directory(&home, false, false).map_err(|_| unavailable())?;
+    Ok(Governor {
+        // Unlike normal initialization, review never creates missing history.
+        directory: open_directory(&home.join(".buaa-cli-governor"), false, true)
+            .map_err(|_| unavailable())?,
+        boot_id: current_boot_id().map_err(|_| unavailable())?,
+    })
+}
+
+/// Preview a deliberate, offline migration of known pre-reboot history.
+/// Normal initialization/status/resume still reject mismatched boot identities.
+pub fn boot_review_plan() -> Result<Value, crate::net::Error> {
+    let governor = review_governor()?;
+    let (lock, _) = governor
+        .open_lock(false)
+        .map_err(|_| boot_review_safety())?;
+    lock_exclusive(&lock).map_err(|_| boot_review_busy())?;
+    let (state, bytes) = governor.load_record().map_err(|_| boot_review_safety())?;
+    let plan = governor.review_plan(&state, &bytes)?;
+    serde_json::to_value(plan).map_err(|_| boot_review_safety())
+}
+
+/// Commit exactly the reviewed local plan. No HTTP client, automatic recovery,
+/// elapsed-time credit, latch clearing, or authentication grant exists here.
+pub fn boot_review_commit(input: &str) -> Result<Value, crate::net::Error> {
+    if input.len() > MAX_STATE_BYTES as usize {
+        return Err(crate::net::Error::new(
+            "invalid_input",
+            "boot review input exceeds its limit",
+        ));
+    }
+    let commit: BootReviewCommit = serde_json::from_str(input)
+        .map_err(|_| crate::net::Error::new("invalid_input", "invalid boot review input"))?;
+    if commit.intent != format!("MIGRATE GOVERNOR BOOT {}", commit.plan.plan_hash) {
+        return Err(crate::net::Error::new(
+            "permission",
+            "exact boot review intent is required",
+        ));
+    }
+    review_governor()?.commit_review(commit)
+}
+
+fn boot_review_safety() -> crate::net::Error {
+    crate::net::Error::new(
+        "safety_latched",
+        "governor history cannot be safely migrated",
+    )
+}
+
+fn boot_review_busy() -> crate::net::Error {
+    crate::net::Error::new(
+        "conflict",
+        "governor history is locked or the review plan is stale",
+    )
+}
+
+pub fn boot_review_schema() -> Value {
+    let hash = json!({"type":"string","pattern":"^[0-9a-f]{64}$"});
+    let milliseconds = json!({"type":"integer","minimum":0,"maximum":u64::MAX});
+    let plan = json!({
+        "type":"object","additionalProperties":false,
+        "required":["schema_version","type","plan_hash","state_sha256","previous_boot_id","current_boot_id","request_interval_ms","background_interval_ms","request_wait_ms","background_wait_ms","cooldown_wait_ms","safety_latched","authentication_was_armed","authentication_armed_after_commit"],
+        "properties":{
+            "schema_version":{"const":1},"type":{"const":"governor_boot_review_plan"},
+            "plan_hash":hash,"state_sha256":hash,
+            "previous_boot_id":{"type":"string","format":"uuid"},
+            "current_boot_id":{"type":"string","format":"uuid"},
+            "request_interval_ms":{"type":"integer","minimum":MIN_INTERVAL_MS,"maximum":u64::MAX},
+            "background_interval_ms":{"type":"integer","minimum":MIN_BACKGROUND_MS,"maximum":u64::MAX},
+            "request_wait_ms":milliseconds,"background_wait_ms":milliseconds,"cooldown_wait_ms":milliseconds,
+            "safety_latched":{"type":"boolean"},"authentication_was_armed":{"type":"boolean"},
+            "authentication_armed_after_commit":{"const":false}
+        }
+    });
+    json!({
+        "commands":["boot-review-plan","boot-review-commit --offline"],
+        "network_access":false,"max_input_bytes":MAX_STATE_BYTES,
+        "plan_stdout_schema":plan,
+        "commit_stdin_schema":{
+            "type":"object","additionalProperties":false,"required":["plan","intent"],
+            "properties":{"plan":plan,"intent":{"type":"string","pattern":"^MIGRATE GOVERNOR BOOT [0-9a-f]{64}$"}}
+        },
+        "commit_stdout_schema":{
+            "type":"object","additionalProperties":false,
+            "required":["schema_version","type","plan_hash","state_before_sha256","history_preserved","network_access","requests_sent","authentication_armed","safety_latched","request_interval_ms","background_interval_ms","reserved_request_wait_ms","reserved_background_wait_ms","reserved_cooldown_wait_ms"],
+            "properties":{
+                "schema_version":{"const":1},"type":{"const":"governor_boot_review_receipt"},
+                "plan_hash":hash,"state_before_sha256":hash,
+                "history_preserved":{"const":true},"network_access":{"const":false},
+                "requests_sent":{"const":0},"authentication_armed":{"const":false},
+                "safety_latched":{"type":"boolean"},
+                "request_interval_ms":{"type":"integer","minimum":MIN_INTERVAL_MS,"maximum":u64::MAX},
+                "background_interval_ms":{"type":"integer","minimum":MIN_BACKGROUND_MS,"maximum":u64::MAX},
+                "reserved_request_wait_ms":milliseconds,"reserved_background_wait_ms":milliseconds,
+                "reserved_cooldown_wait_ms":milliseconds
+            }
+        },
+        "semantics":"Exact plan and intent are rechecked under the permanent lock. Archive exact old state first; no elapsed-time credit; retain full waits, raised limits and latch; disarm authentication. Unknown outcomes and missing/corrupt history cannot migrate."
+    })
 }
 
 impl State {
@@ -427,6 +580,14 @@ impl Governor {
     }
 
     fn load(&self) -> Result<State, String> {
+        let (state, _) = self.load_record()?;
+        if state.boot_id != self.boot_id {
+            return Err("system boot changed; governor requires offline safety review".into());
+        }
+        Ok(state)
+    }
+
+    fn load_record(&self) -> Result<(State, Vec<u8>), String> {
         let file = open_child(&self.directory, STATE_NAME, libc::O_RDONLY)
             .map_err(|_| "cannot open governor state; refusing requests".to_string())?;
         validate_private_file(&file)?;
@@ -440,10 +601,124 @@ impl Governor {
         let state: State = serde_json::from_slice(&bytes)
             .map_err(|_| "governor state is invalid; refusing requests".to_string())?;
         state.validate()?;
-        if state.boot_id != self.boot_id {
-            return Err("system boot changed; governor requires offline safety review".into());
+        Ok((state, bytes))
+    }
+
+    fn review_plan(
+        &self,
+        state: &State,
+        bytes: &[u8],
+    ) -> Result<BootReviewPlan, crate::net::Error> {
+        state.ensure_outcome_known().map_err(|_| {
+            crate::net::Error::new(
+                "unknown_outcome",
+                "unfinished governor outcome requires separate offline investigation",
+            )
+        })?;
+        if state.boot_id == self.boot_id {
+            return Err(crate::net::Error::new(
+                "conflict",
+                "governor history already belongs to this boot",
+            ));
         }
-        Ok(state)
+        let mut digest = Sha256::new();
+        digest.update(b"buaa-governor-boot-review-v1\0");
+        digest.update(self.boot_id.as_bytes());
+        digest.update(bytes);
+        Ok(BootReviewPlan {
+            schema_version: 1,
+            kind: "governor_boot_review_plan".into(),
+            plan_hash: format!("{:x}", digest.finalize()),
+            state_sha256: format!("{:x}", Sha256::digest(bytes)),
+            previous_boot_id: state.boot_id.clone(),
+            current_boot_id: self.boot_id.clone(),
+            request_interval_ms: state.request_interval_ms,
+            background_interval_ms: state.background_interval_ms,
+            request_wait_ms: retained_wait(state.next_request_ms, state.last_observed_ms)
+                .max(state.request_interval_ms),
+            background_wait_ms: retained_wait(state.next_background_ms, state.last_observed_ms)
+                .max(state.background_interval_ms),
+            cooldown_wait_ms: retained_wait(state.cooldown_until_ms, state.last_observed_ms),
+            safety_latched: state.safety_latched,
+            authentication_was_armed: state.authentication_armed,
+            authentication_armed_after_commit: false,
+        })
+    }
+
+    fn preserve_review_history(
+        &self,
+        plan_hash: &str,
+        bytes: &[u8],
+    ) -> Result<(), crate::net::Error> {
+        let name = format!("boot-review-{plan_hash}.json");
+        let unavailable =
+            || crate::net::Error::new("unavailable", "cannot durably preserve governor history");
+        match open_child(
+            &self.directory,
+            &name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        ) {
+            Ok(mut file) => {
+                validate_private_file(&file).map_err(|_| unavailable())?;
+                file.write_all(bytes).map_err(|_| unavailable())?;
+                file.sync_all().map_err(|_| unavailable())?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let mut file = open_child(&self.directory, &name, libc::O_RDONLY)
+                    .map_err(|_| unavailable())?;
+                validate_private_file(&file).map_err(|_| unavailable())?;
+                let mut retained = Vec::new();
+                (&mut file)
+                    .take(MAX_STATE_BYTES + 1)
+                    .read_to_end(&mut retained)
+                    .map_err(|_| unavailable())?;
+                // A crash before state replacement may leave an exact snapshot.
+                // Reuse only those exact bytes; partial/changed history is never overwritten.
+                if retained != bytes {
+                    return Err(boot_review_safety());
+                }
+                file.sync_all().map_err(|_| unavailable())?;
+            }
+            Err(_) => return Err(unavailable()),
+        }
+        self.directory.sync_all().map_err(|_| unavailable())
+    }
+
+    fn commit_review(&self, commit: BootReviewCommit) -> Result<Value, crate::net::Error> {
+        let (lock, _) = self.open_lock(false).map_err(|_| boot_review_safety())?;
+        lock_exclusive(&lock).map_err(|_| boot_review_busy())?;
+        let (mut state, bytes) = self.load_record().map_err(|_| boot_review_safety())?;
+        let expected = self.review_plan(&state, &bytes)?;
+        if expected != commit.plan {
+            return Err(boot_review_busy());
+        }
+        let now = now_ms().map_err(|_| boot_review_safety())?;
+        // Reserve the *full* old remaining delays from now. UTC, file mtime,
+        // current uptime and time since reboot never reduce these waits.
+        state.next_request_ms =
+            rebased_deadline(now, expected.request_wait_ms).map_err(|_| boot_review_safety())?;
+        state.next_background_ms =
+            rebased_deadline(now, expected.background_wait_ms).map_err(|_| boot_review_safety())?;
+        state.cooldown_until_ms =
+            rebased_deadline(now, expected.cooldown_wait_ms).map_err(|_| boot_review_safety())?;
+        state.last_observed_ms = now;
+        state.boot_id = self.boot_id.clone();
+        state.authentication_armed = false;
+        self.preserve_review_history(&expected.plan_hash, &bytes)?;
+        self.save(&state, false).map_err(|_| {
+            crate::net::Error::new("unavailable", "governor migration persistence is indeterminate; inspect retained history before further action")
+        })?;
+        Ok(json!({
+            "schema_version":1,"type":"governor_boot_review_receipt",
+            "plan_hash":expected.plan_hash,"state_before_sha256":expected.state_sha256,
+            "history_preserved":true,"network_access":false,"requests_sent":0,
+            "authentication_armed":false,"safety_latched":state.safety_latched,
+            "request_interval_ms":state.request_interval_ms,
+            "background_interval_ms":state.background_interval_ms,
+            "reserved_request_wait_ms":expected.request_wait_ms,
+            "reserved_background_wait_ms":expected.background_wait_ms,
+            "reserved_cooldown_wait_ms":expected.cooldown_wait_ms
+        }))
     }
 
     fn save(&self, state: &State, initial: bool) -> Result<(), String> {
@@ -1143,6 +1418,209 @@ fn http_date_ms(value: &str, reference_time: SystemTime) -> Option<u64> {
 mod tests {
     include!("../tests/governor_process.rs");
     governor_process_regressions!();
+
+    fn old_boot_fixture() -> (Fixture, Governor) {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut state = governor.load().unwrap();
+        state.boot_id = if governor.boot_id == "00000000-0000-0000-0000-000000000000" {
+            "11111111-1111-1111-1111-111111111111"
+        } else {
+            "00000000-0000-0000-0000-000000000000"
+        }
+        .into();
+        state.last_observed_ms = 100_000;
+        state.request_interval_ms = 60_000;
+        state.background_interval_ms = 900_000;
+        state.next_request_ms = state.last_observed_ms + 60_001;
+        state.next_background_ms = state.last_observed_ms + 950_000;
+        state.cooldown_until_ms = state.last_observed_ms + 2_500_000;
+        state.network_failures = 3;
+        state.authentication_armed = true;
+        governor.save(&state, false).unwrap();
+        (fixture, governor)
+    }
+
+    fn reviewed_commit(plan: super::BootReviewPlan) -> super::BootReviewCommit {
+        let intent = format!("MIGRATE GOVERNOR BOOT {}", plan.plan_hash);
+        super::BootReviewCommit { plan, intent }
+    }
+
+    fn expire_fixture_waits(governor: &Governor) {
+        // Synthetic clock progression only. Keep permission/latch/failure state
+        // untouched so active waits cannot mask the admission being exercised.
+        let mut state = governor.load().unwrap();
+        state.next_request_ms = 0;
+        state.next_background_ms = 0;
+        state.cooldown_until_ms = 0;
+        governor.save(&state, false).unwrap();
+    }
+
+    #[test]
+    fn boot_review_preserves_full_waits_original_history_and_disarms_authentication() {
+        let (fixture, governor) = old_boot_fixture();
+        assert!(Governor::open_at(fixture.state_dir(), Limits::default()).is_err());
+        let (state, original) = governor.load_record().unwrap();
+        let plan = governor.review_plan(&state, &original).unwrap();
+        let history = fixture
+            .state_dir()
+            .join(format!("boot-review-{}.json", plan.plan_hash));
+        let before = super::now_ms().unwrap();
+        let receipt = governor.commit_review(reviewed_commit(plan)).unwrap();
+        let after = governor.status().unwrap();
+        assert!(after.next_request_boottime_ms >= before + 60_001);
+        assert!(after.next_background_boottime_ms >= before + 950_000);
+        assert!(after.cooldown_until_boottime_ms >= before + 2_500_000);
+        assert_eq!(after.request_interval, Duration::from_millis(60_000));
+        assert_eq!(after.background_interval, Duration::from_millis(900_000));
+        assert!(!after.authentication_armed);
+        assert_eq!(fs::read(history).unwrap(), original);
+        assert_eq!(receipt["history_preserved"], true);
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+        expire_fixture_waits(&governor);
+        assert!(governor.try_acquire(RequestKind::Authentication).is_err());
+        // Retained failures must affect the next real scheduling outcome, not
+        // merely be copied into an internal field or a success response.
+        let before_failure = super::now_ms().unwrap();
+        governor
+            .try_acquire(RequestKind::Interactive)
+            .unwrap()
+            .finish(Outcome::NetworkFailure)
+            .unwrap();
+        assert!(governor.status().unwrap().cooldown_until_boottime_ms >= before_failure + 240_000);
+    }
+
+    #[test]
+    fn boot_review_keeps_rejection_latched_and_refuses_unknown_outcomes() {
+        let (_fixture, governor) = old_boot_fixture();
+        let (mut state, _) = governor.load_record().unwrap();
+        state.authentication_armed = false;
+        state.safety_latched = true;
+        governor.save(&state, false).unwrap();
+        let (state, original) = governor.load_record().unwrap();
+        let plan = governor.review_plan(&state, &original).unwrap();
+        governor.commit_review(reviewed_commit(plan)).unwrap();
+        assert!(governor.status().unwrap().safety_latched);
+        expire_fixture_waits(&governor);
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+
+        let (_pending_fixture, pending_governor) = old_boot_fixture();
+        let (mut state, _) = pending_governor.load_record().unwrap();
+        state.pending = Some(RequestKind::Interactive);
+        pending_governor.save(&state, false).unwrap();
+        let (state, original) = pending_governor.load_record().unwrap();
+        assert_eq!(
+            pending_governor
+                .review_plan(&state, &original)
+                .unwrap_err()
+                .code,
+            "unknown_outcome"
+        );
+        assert_eq!(pending_governor.load_record().unwrap().1, original);
+    }
+
+    #[test]
+    fn boot_review_rejects_tampered_or_stale_preview_without_changing_history() {
+        let (fixture, governor) = old_boot_fixture();
+        let (state, original) = governor.load_record().unwrap();
+        let mut plan = governor.review_plan(&state, &original).unwrap();
+        let history = fixture
+            .state_dir()
+            .join(format!("boot-review-{}.json", plan.plan_hash));
+        plan.cooldown_wait_ms = 0;
+        assert_eq!(
+            governor
+                .commit_review(reviewed_commit(plan))
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(governor.load_record().unwrap().1, original);
+        assert!(!history.exists());
+
+        let plan = governor.review_plan(&state, &original).unwrap();
+        // Even semantically equivalent replacement bytes invalidate the exact preview.
+        let mut replacement = original.clone();
+        replacement.push(b'\n');
+        fs::write(fixture.state_dir().join("state.json"), &replacement).unwrap();
+        assert_eq!(
+            governor
+                .commit_review(reviewed_commit(plan))
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(governor.load_record().unwrap().1, replacement);
+        assert!(!history.exists());
+    }
+
+    #[test]
+    fn boot_review_never_turns_saturated_cooldown_into_a_finite_deadline() {
+        let (_fixture, governor) = old_boot_fixture();
+        let (mut state, _) = governor.load_record().unwrap();
+        state.cooldown_until_ms = u64::MAX;
+        governor.save(&state, false).unwrap();
+        let (state, original) = governor.load_record().unwrap();
+        let plan = governor.review_plan(&state, &original).unwrap();
+        governor.commit_review(reviewed_commit(plan)).unwrap();
+        assert_eq!(
+            governor.status().unwrap().cooldown_until_boottime_ms,
+            u64::MAX
+        );
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+    }
+
+    #[test]
+    fn boot_review_refuses_partial_retained_history_instead_of_overwriting_it() {
+        let (fixture, governor) = old_boot_fixture();
+        let (state, original) = governor.load_record().unwrap();
+        let plan = governor.review_plan(&state, &original).unwrap();
+        let name = format!("boot-review-{}.json", plan.plan_hash);
+        let mut partial = super::open_child(
+            &governor.directory,
+            &name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        )
+        .unwrap();
+        partial.write_all(b"{").unwrap();
+        partial.sync_all().unwrap();
+        assert_eq!(
+            governor
+                .commit_review(reviewed_commit(plan))
+                .unwrap_err()
+                .code,
+            "safety_latched"
+        );
+        assert_eq!(fs::read(fixture.state_dir().join(name)).unwrap(), b"{");
+        assert_eq!(governor.load_record().unwrap().1, original);
+        assert!(Governor::open_at(fixture.state_dir(), Limits::default()).is_err());
+    }
+
+    #[test]
+    fn boot_review_reuses_exact_crash_snapshot_but_completed_replay_cannot_rebase_again() {
+        let (fixture, governor) = old_boot_fixture();
+        let (state, original) = governor.load_record().unwrap();
+        let first = governor.review_plan(&state, &original).unwrap();
+        let repeat = governor.review_plan(&state, &original).unwrap();
+        let history = fixture
+            .state_dir()
+            .join(format!("boot-review-{}.json", first.plan_hash));
+        // Model a crash after snapshot synchronization but before state replacement.
+        governor
+            .preserve_review_history(&first.plan_hash, &original)
+            .unwrap();
+        governor.commit_review(reviewed_commit(first)).unwrap();
+        let committed = governor.load_record().unwrap().1;
+        assert_eq!(
+            governor
+                .commit_review(reviewed_commit(repeat))
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(governor.load_record().unwrap().1, committed);
+        assert_eq!(fs::read(history).unwrap(), original);
+    }
 
     fn reference_time(
         year: i32,
