@@ -1,6 +1,6 @@
 # buaa-cli
 
-`buaa-cli` is an agent-facing Rust CLI. Implemented slices include offline timed-input, archive lookup/capture, policy-provenanced marks/GPA calculation, scoped credit calculation, pinned Fengrubei template retrieval, local recording-catalog search, official organization-directory parsing, university-wide news-center reads, and a read-only SPOC public-surface contract probe. Governed live Internet Archive CDX, official directory, SPOC public-surface, and news-center listing/article reads were manually observed; this does not establish complete history, live Memento replay, per-college coverage, or an authenticated SPOC contract. Gateway workflows remain live-unverified; no campus authentication or mutation is claimed verified. Network reads default to cache. Other acceptance items remain partial, pending or explicitly blocked; catalog links are not APIs.
+`buaa-cli` is an agent-facing Rust CLI. Implemented slices include offline timed-input, archive lookup/capture, policy-provenanced marks/GPA calculation, scoped credit references, pinned Fengrubei template retrieval, local recording-catalog search, official organization-directory parsing, university news-center/computer-college reads, and a read-only SPOC public-surface contract probe. Governed live observations include CDX pagination/date search and one exact 1997 homepage Memento replay with matching attribution, verified original bytes and offline reuse. Official directory, SPOC public-surface, announcement/article and one original PDF read are separately observed. This does not establish complete history, other colleges, historical announcement coverage or an authenticated SPOC contract. Gateway workflows remain live-unverified; no campus authentication or mutation is claimed verified. Network reads default to cache. Other acceptance items remain partial, pending or explicitly blocked; catalog links are not APIs.
 
 ## Build and discover
 
@@ -185,9 +185,7 @@ See [contributor rules](AGENTS.md), [observed blockers and source research](docs
 
 ## Feature acceptance matrix
 
-This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded public source observation. `partial-offline` means the offline engine/contract is complete while a live campus adapter remains blocked. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
-This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies a real adapter against offline HTTP fixtures, while `partial-live-unverified` means code exists but the parent acceptance still lacks authorized live proof. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
-This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures, and `implemented-observed-read` additionally records a bounded authorized source observation. `pending` means not implemented, `blocked` names a missing prerequisite, and `deferred` applies only to VPN.
+This table projects `acceptance.json`; update both together. `implemented-offline` verifies a local feature/library; `implemented-offline-tested` verifies an adapter against offline HTTP fixtures; `implemented-observed-read` additionally records a bounded authorized source observation. `partial-offline` has a working offline slice; `partial-live-verified` has bounded observed reads with named remaining gaps; `partial-live-unverified` lacks authorized live proof. None implies complete parent acceptance. `pending` means not implemented, `blocked` names a prerequisite, and `deferred` applies only to VPN.
 
 | ID | Capability | Status |
 | --- | --- | --- |
@@ -220,8 +218,8 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | fengrubei | Fengrubei template access | implemented-observed-read |
 | crater | Crater allocation/API/SSH | blocked |
 | organizations | Authoritative college/institute directory | implemented-observed-read |
-| announcements | College current/historical announcements | partial-live-verified: university-wide listings/articles; college adapters pending |
-| archive | CDX/Memento historical lookup | implemented-offline-tested |
+| announcements | College current/historical announcements | partial-live-verified: university/computer-college reads and one original PDF; other sources/history pending |
+| archive | CDX/Memento historical lookup | partial-live-verified: dated index and one exact homepage replay; broader history pending |
 | recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |
 | life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |
 | skills-fs | skills-fs HTTP provider | blocked |

@@ -714,7 +714,7 @@
             "response_body_retained": true
           }
         ],
-        "limits": "Partial acceptance: university news center plus independently observed computer-college notices and one source-declared original PDF retrieval path. Other colleges, faculty-wide classification, other attachment types, complete history and live Memento replay remain unimplemented/unverified. HTML paragraph extraction does not reconstruct images/tables; original PDFs are returned as source bytes with a hash, not publisher-signature or document-safety certification.",
+        "limits": "Partial acceptance: university news center plus independently observed computer-college notices and one source-declared original PDF retrieval path. Other colleges, faculty-wide classification, other attachment types, complete history and announcement-source Memento replay remain unimplemented/unverified. The archive adapter's separately verified homepage capture does not establish historical announcement coverage. HTML paragraph extraction does not reconstruct images/tables; original PDFs are returned as source bytes with a hash, not publisher-signature or document-safety certification.",
         "college_slice": {
           "college": "scse",
           "scope": "Computer college only, separately observed CMS; other college adapters remain absent.",
@@ -776,7 +776,7 @@
     {
       "id": "archive",
       "title": "CDX/Memento historical lookup",
-      "status": "implemented-offline-tested",
+      "status": "partial-live-verified",
       "acceptance": "Original URL, capture timestamp, publication-date confidence, hashes, HTTP facts and archived/current distinction; gaps stay missing.",
       "sources": [
         "https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md",
@@ -794,7 +794,7 @@
           "src/governor.rs"
         ],
         "contract": "Exact-URL CDX lookup, opaque continuation bound to the exact query scope (url, from, to, limit) that minted it with cross-scope and never-issued cursors rejected before a request, exact Memento original/date validation, immutable replay bytes/SHA256, HTTP/retrieval facts, unknown publication date, query-scoped missing history. Captured 4xx/5xx preserve archived status only when attribution matches the exact request; unattributed responses retain current-source safety/cooldown/rejection semantics. Default cache-only; fixed HTTPS archive endpoint on explicit opt-in.",
-        "proof": "Full `cargo test --locked --offline`: 112 library tests and 8 CLI tests passed, with one ignored subprocess worker. Strict all-target clippy and formatter checks passed. Real-loopback coverage verifies attributed 403/429/500/503 capture, offline cache replay, and query-scope-bound resume cursors (same-scope continuation, cross-scope and unknown-cursor rejection before any request, binding persistence across client instances, and registry eviction at the 256-entry cap so a full registry records new bindings without entering the corrupt-cache ratchet); the manual live evidence below remains limited to two CDX pages.",
+        "proof": "Historical archive gate: 112 library and 8 CLI tests passed, one ignored; strict all-target clippy and formatter checks passed. Final unchanged merged-source gate: 197 library + 18 CLI passed, two ignored; locked offline build, strict all-target clippy and formatter check passed. Real-loopback coverage verifies attributed 403/429/500/503 capture, offline cache replay, and query-scope-bound resume cursors (same-scope continuation, cross-scope and unknown-cursor rejection before any request, binding persistence across client instances, and registry eviction at the 256-entry cap). Separate live receipts below cover earlier CDX pagination, one exact homepage Memento replay and one bounded dated index search; no complete history is claimed.",
         "regressions": "Loopback regressions preserve archived 4xx/5xx statuses without current-source latch/cooldown, keep true challenge signals and unattributed/wrong-attribution latch/cooldown/rejection behavior, preserve 404/410 gaps, and validate attributed cache round-trips. Earlier Retry-After/body-failure and rejected replay cache-poisoning cases also remain covered.",
         "review": "Independent static review of STR-ARCHIVE-001 at 6f0dcfbe597acfd698d433daeaa75037e0a3fdcd found no remaining findings (https://github.com/cyjin-yl/buaa-cli/issues/21#issuecomment-5807816941). Independent exact-head review of STR-ARCHIVE-002 at faffe2e1fd9892429cc26bd2b723a9047c2d36a7 found no concrete source findings (PR #52); deployed Wayback error-status behavior remains unverified.",
         "manual_observation": {
@@ -827,7 +827,51 @@
           },
           "scope": "Two public CDX pages only; no direct campus-host request, authentication, credential use, or mutation. Both results still report more_results=true; full history is not claimed."
         },
-        "limits": "The manual live CDX pagination read is recorded above; no live Memento replay or direct campus-origin request was performed. General TimeGate/TimeMap crawling, organization discovery, announcement extraction and Life/transcript integration are not implemented by this adapter."
+        "live_exact_replay": {
+          "date": "2026-10-02",
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/82",
+          "operational_receipt": "https://github.com/cyjin-yl/buaa-cli/issues/82#issuecomment-5952491700",
+          "observed_main_sha": "f1da526ebfe4be5f90ad71cc9dacee7013c505ad",
+          "command": "buaa archive capture --online",
+          "input": {"url": "http://www.buaa.edu.cn:80/", "timestamp": "19970416014726"},
+          "robots_prerequisite": {
+            "url": "https://web.archive.org/robots.txt",
+            "http_status": 404,
+            "byte_length": 146,
+            "sha256": "55f7d9e99b8e2d4e0e193b2f0275501e6d9c1ebd29cadbea6a0da48a8587e3e0",
+            "fetched_at_unix_ms": 1790942273506,
+            "first_invocation_exit_code": 8,
+            "first_invocation_target_requested": false
+          },
+          "result": "capture_found",
+          "http_status": 200,
+          "content_type": "text/html",
+          "memento_datetime": "Wed, 16 Apr 1997 01:47:26 GMT",
+          "original_link": "http://www.buaa.edu.cn:80/",
+          "source_url": "https://web.archive.org/web/19970416014726id_/http://www.buaa.edu.cn:80/",
+          "byte_length": 3758,
+          "sha256": "4cf418189fb99ac5cf2873673337b3722d7e42e60e38ad633ceb706e7c6fb05d",
+          "fetched_at_unix_ms": 1790944036626,
+          "independent_base64_decode_hash_size_verified": true,
+          "offline_cache_hit_same_bytes_and_identity": true,
+          "publication_date": {"value": null, "confidence": "unknown"},
+          "safety": "Deliberate target observation only after fresh robots and the full shared deadline, retaining the 60-second request policy. No automatic retry, nearest-capture fallback, original-host request, credentials, authentication, mutation or state reset."
+        },
+        "live_dated_lookup": {
+          "date": "2026-10-02",
+          "command": "buaa archive lookup --online",
+          "input": {"url": "https://www.buaa.edu.cn/", "from": "19970101000000", "to": "19971231235959", "limit": 10},
+          "http_status": 200,
+          "capture_timestamps_returned": ["19970416014726", "19971210122410"],
+          "response_body_byte_length": 327,
+          "response_body_sha256": "7d942e8e87eb0864e73697d69b2f368e528343a56b12ec945e53a723573271cc",
+          "fetched_at_unix_ms": 1790944266753,
+          "offline_cache_hit_same_hash_and_captures": true,
+          "more_results": false,
+          "complete_history": false,
+          "scope": "One exact-URL 1997 index query. CDX capture_body_sha256 remains null; the second capture's resource bytes were not retrieved. No all-college or complete-history inference."
+        },
+        "limits": "Live proof covers one exact homepage replay, one bounded dated CDX search and earlier index pagination; Wayback archived error-status behavior remains offline-tested only. Publication dates remain unknown, and a local byte hash does not authenticate the archive or publisher. No direct campus-origin request. General TimeGate/TimeMap crawling, announcement-source replay/extraction and Life/transcript integration are not implemented by this adapter."
       }
     },
     {
