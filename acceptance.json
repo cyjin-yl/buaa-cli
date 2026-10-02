@@ -14,7 +14,7 @@
       ],
       "evidence": {
         "implementation": "Linux shared UID governor library, not HTTP transport",
-        "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention; current full offline suite: 118 passed across five suites (one ignored). The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
+        "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention. Earlier offline suite: 118 passed across five suites (one ignored). Final merged-source gate: 197 library + 18 CLI passed, two ignored; locked offline build, strict all-target clippy and formatter check passed. The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed. Only known pre-reboot history has an explicit offline plan/commit migration; unknown outcomes and missing/corrupt history cannot migrate. No reset or automatic recovery.",
         "boot_history_review": {
@@ -22,7 +22,34 @@
           "commands": ["buaa governor boot-review-plan", "buaa governor boot-review-commit --offline"],
           "contract": "Exact old-state SHA-256 and new-boot-bound preview plus typed intent, rechecked under the permanent shared lock. Preserve complete old private bytes before atomic state replacement. Carry full remaining waits with no elapsed-time credit; impose retained request/background policy floors; preserve cooldown saturation, rejection latch and network-failure history; disarm authentication. No remote request or namespace override.",
           "proof": "Six offline regressions pass: full carryover/raised policy/original history/auth disarm and retained failure backoff; rejection latch after waits cease and unfinished-outcome refusal; tampered/stale preview; saturated cooldown; partial snapshot no-overwrite; exact crash-snapshot reuse and completed replay refusal. Final integrated gate: 215 tests passed across five suites, two ignored; locked offline build, strict all-target clippy and formatter check passed. Actual CLI preview exits 0; online commit, malformed input and incorrect intent are rejected with exits 5/2/5. Production state stayed byte-identical during development checks.",
-          "limits": "No production migration or campus read is claimed by development proof. Pending exact-head source review and merge; normal open/status/auth resume still reject boot mismatch until a deliberate reviewed migration."
+          "merge_receipt": {
+            "pr": "https://github.com/cyjin-yl/buaa-cli/pull/84",
+            "source_head": "4b18ebfa6c69d504d8ad5aaee991b6545db956a2",
+            "merge_commit": "35e37edd2524785a1a6a88ce436ff64435a9d4f2",
+            "source_qa_and_maintainer_decision": "https://github.com/cyjin-yl/buaa-cli/pull/84#issuecomment-5950136014",
+            "review_limit": "Stateless no-tool source QA, not a formal GitHub self-approval or runtime proof; no subagent started after the stop instruction."
+          },
+          "operational_migration": {
+            "date": "2026-10-02",
+            "receipt": "https://github.com/cyjin-yl/buaa-cli/issues/83#issuecomment-5950488113",
+            "original_state_sha256": "1053b98f11dfcf1ce964eed2d9fec1635f65bbcabf9565b70c2427a231500850",
+            "original_bytes_preserved": true,
+            "snapshot_properties": "Private current-user-owned mode-0600 regular single-link file; complete bytes verified equal to the original.",
+            "retained_request_interval_ms": 60000,
+            "retained_background_interval_ms": 900000,
+            "newly_reserved_full_residual_ms": {
+              "request": 60001,
+              "background": 900000,
+              "cooldown": 31309
+            },
+            "failure_and_latch_history_retained": true,
+            "authentication_disarmed": true,
+            "repeat_commit_exit_code": 9,
+            "repeat_left_current_state_unchanged": true,
+            "network_requests": 0,
+            "authentication_attempts": 0
+          },
+          "limits": "The deliberately committed local history now matches the current boot; this environment blocker is resolved without reset or an alternate account key. Recorded carryover delays are migration-time reservations, not current wait durations. Normal open/status/auth resume still reject any new boot mismatch until a deliberate reviewed migration. Same-UID/local-filesystem boundary; comprehensive power-loss/fsync/rename fault injection and campus capability completion are not claimed."
         }
       }
     },
@@ -538,8 +565,8 @@
         "https://news.buaa.edu.cn/zhxw.htm"
       ],
       "evidence": {
-        "quality_gate": "cargo build --locked --offline; cargo test --locked --offline (172 library + 18 CLI passed, 2 ignored); cargo clippy --locked --offline --all-targets -- -D warnings; cargo fmt --all -- --check: all passed.",
-        "review": "Local source review corrected cache-test assumptions, paged history validation and pagination ordinal routing. Independent exact-head review and explicit maintainer approval for the source contract are pending; no approval or merge is inferred.",
+        "quality_gate": "Final merged-source gate: cargo build --locked --offline; cargo test --locked --offline (197 library + 18 CLI passed, 2 ignored); cargo clippy --locked --offline --all-targets -- -D warnings; cargo fmt --all -- --check: all passed. Earlier slice gates remain historical receipts below.",
+        "review": "Exact-head independent source review and explicit maintainer source-contract approval preceded merged PRs #73/#79/#81. Receipts: https://github.com/cyjin-yl/buaa-cli/pull/73#issuecomment-5934270599 ; https://github.com/cyjin-yl/buaa-cli/pull/79#issuecomment-5941892130 ; https://github.com/cyjin-yl/buaa-cli/pull/81#issuecomment-5942853948 . Inline review comments are empty. Copilot quota-limit comments are not approvals. These reviews predate the instruction to stop subagents; none was revived.",
         "commands": [
           "buaa announcements list [--online|--refresh]",
           "buaa announcements article [--online|--refresh]",
@@ -551,7 +578,7 @@
           "src/main.rs"
         ],
         "contract": "Source drift: the retired www.buaa.edu.cn/xwzx.htm returned HTTP 404 in status diagnostics; the adapter now reads news.buaa.edu.cn. list defaults to tzgg (通知公告), with category/page/since/until/title-substring match filters. Page 1 is the latest listing; later page ordinals must be linked by its pagination widget (observed page 2 -> tzgg/252.htm). No URL inference or automatic traversal. article reads /info/<category>/<id>.htm title, publish date and div.v_news_content paragraphs; attachment links are raw hints and never downloaded. Egress rejects foreign hosts, credentials, custom ports, queries and fragments. history remains offline: base64 UTF-8 HTML plus asserted listing source_url, optional capture_timestamp/asserted_by; output type announcements_history with retrieval.sha256 byte binding, not verified archive provenance.",
-        "additional_slice": "Offline and --online cache hits perform no request. --refresh conditionally revalidates with cached validators and exposes revalidated_at_unix_ms/revalidation_status. All live observations, including robots and pagination selection, retain the same cross-process governor lease through body validation and cache persistence. With the operator-raised 60-second interval and 30-second bounded wait, cold robots or uncached latest-page discovery can prevent a second content request in that invocation. The first observed cold-robots run cached robots HTTP 404 and then exited rate_limited without issuing the listing request. There is no automatic retry or governor-policy relaxation.",
+        "additional_slice": "Offline and --online cache hits perform no request. --refresh conditionally revalidates only the selected target with cached validators and exposes revalidated_at_unix_ms/revalidation_status; latest-page discovery stays cache-first on the same client/profile/cache/governor identity. All live observations, including robots and pagination selection, retain the same cross-process governor lease through body validation and cache persistence. With the operator-raised 60-second interval and 30-second bounded wait, cold robots or uncached latest-page discovery can prevent a second content request in that invocation. The first observed cold-robots run cached robots HTTP 404 and then exited rate_limited without issuing the listing request. There is no automatic retry or governor-policy relaxation.",
         "proof": "Offline focused announcements tests and CLI smoke cover date/title filtering, null/default input, cached article paragraphs, paged operator-asserted history and advertised ordinal routing. history_accepts_paged_sources_without_relaxing_provenance_scope failed before the fix (invalid_input for /tzgg/252.htm) and passes after it; foreign hosts, userinfo, custom ports, fragments and malformed page stems stay rejected. offline_lookup_with_empty_cache_reports_unavailable uses a fixed-offline test constructor and private fixture directory; both listing/article return offline_miss without opening a governor. The adaptive CLI test accepts only offline cache-hit success or exit 7 unavailable and reads neither HOME nor unrelated cache entries; it passes with a deliberately misleading HOME. Full offline gate results are recorded in docs/STATUS.md.",
         "live_verification": [
           {
@@ -605,6 +632,46 @@
             "revalidated_at_unix_ms": 1790724706337,
             "original_fetched_at_unix_ms": 1790713000641,
             "response_body_sha256": "9021f2b387ae3fd2273692e7f7b05936775cea78eec86a5c32d0fd680c3937a1"
+          },
+          {
+            "date": "2026-10-02",
+            "command": "buaa announcements list --refresh",
+            "input": {"category": "tzgg", "page": 2},
+            "target": "https://news.buaa.edu.cn/tzgg/252.htm",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "entries": 5,
+            "response_body_sha256": "15c6f575d4bb0a9a2a1af031a23663b4f588857dc42928b2c132f53f562fd95e",
+            "response_body_bytes": 20663,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1790937766430
+          },
+          {
+            "date": "2026-10-02",
+            "command": "buaa announcements list (offline, cache)",
+            "input": {"category": "tzgg", "page": 2},
+            "target": "https://news.buaa.edu.cn/tzgg/252.htm",
+            "result": "success",
+            "exit_code": 0,
+            "entries": 5,
+            "cache_status": "hit",
+            "response_body_sha256": "15c6f575d4bb0a9a2a1af031a23663b4f588857dc42928b2c132f53f562fd95e",
+            "network_requests": 0
+          },
+          {
+            "date": "2026-10-02",
+            "command": "buaa announcements list --refresh",
+            "input": {"category": "tzgg", "page": 2},
+            "target": "https://news.buaa.edu.cn/tzgg/252.htm",
+            "result": "success",
+            "exit_code": 0,
+            "entries": 5,
+            "cache_status": "revalidated",
+            "revalidation_status": 304,
+            "revalidated_at_unix_ms": 1790938399051,
+            "original_fetched_at_unix_ms": 1790937766430,
+            "response_body_sha256": "15c6f575d4bb0a9a2a1af031a23663b4f588857dc42928b2c132f53f562fd95e"
           }
         ],
         "authorized_attempts": [
