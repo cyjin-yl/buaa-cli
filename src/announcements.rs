@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
 
+pub(crate) mod aviation;
 pub(crate) mod ic;
 mod scse;
 
@@ -126,14 +127,14 @@ fn unavailable() -> Error {
 fn invalid_list() -> Error {
     Error::new(
         "invalid_input",
-        "announcements list input is malformed; expected a JSON object with optional category, page, since, until, match",
+        "announcements list input is malformed; expected a JSON object with optional college, category, page, since, until, match",
     )
 }
 
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a JSON object with url set to a news.buaa.edu.cn /info/<category>/<id>.htm path",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC and aviation source binding",
     )
 }
 
@@ -496,7 +497,7 @@ fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
         })
         .and_then(|raw| parse_iso_date(&raw));
 
-    let (paragraphs, attachment_hints, attachments_found) = article_body(&document)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(document.root_element())?;
     Ok(ArticleDocument {
         title,
         category: article_category_from_url(url),
@@ -507,7 +508,7 @@ fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
     })
 }
 
-fn article_body(document: &Html) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
+fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
     let body_selector = Selector::parse("div.v_news_content p").map_err(|_| unavailable())?;
     let mut paragraphs: Vec<String> = Vec::new();
     for paragraph in document.select(&body_selector) {
@@ -713,6 +714,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
     match query.college.as_deref() {
         Some("scse") => return scse::list(mode, &query),
         Some("ic") => return ic::list(mode, &query),
+        Some("aviation") => return aviation::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -794,6 +796,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
     if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("ic.buaa.edu.cn")) {
         return ic::article(mode, raw_url, query.source_page.unwrap_or(1));
     }
+    if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("aviation.buaa.edu.cn")) {
+        return aviation::article(mode, raw_url, query.source_page.unwrap_or(1));
+    }
     if query.source_page.is_some() {
         return Err(invalid_article());
     }
@@ -822,6 +827,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "ic" {
         return ic::surface(mode, page);
     }
+    if college == "aviation" {
+        return aviation::surface(mode, page);
+    }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
         ("scse", "notices") => SCSE_NOTICES_URL,
@@ -835,6 +843,63 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     })
 }
 
+fn college_html(response: &Response) -> Result<Html, Error> {
+    if response.status != 200
+        || response.body.is_empty()
+        || response.body.len() > MAX_HTML
+        || !response.headers.get("content-type").is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim_matches([' ', '\t'])
+                .eq_ignore_ascii_case("text/html")
+        })
+    {
+        return Err(unavailable());
+    }
+    let document =
+        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?);
+    let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
+    if document.select(&bases).any(|base| {
+        !base.ancestors().any(|node| {
+            node.value()
+                .as_element()
+                .is_some_and(|node| matches!(node.name(), "template" | "noscript"))
+        })
+    }) {
+        return Err(failed_contract(
+            "college source has unreviewed HTML base semantics",
+            file!(),
+            line!(),
+        ));
+    }
+    Ok(document)
+}
+
+fn college_directory_attribution(
+    directory: &Value,
+    name: &str,
+    root: &str,
+) -> Result<Value, Error> {
+    let mut members = directory["entries"]
+        .as_array()
+        .ok_or_else(unavailable)?
+        .iter()
+        .filter(|member| {
+            member["name"] == name
+                && member["resolved_http_url"] == root
+                && member["hidden_in_source"] == false
+        });
+    let member = members.next().ok_or_else(unavailable)?;
+    if members.next().is_some() {
+        return Err(unavailable());
+    }
+    Ok(
+        json!({"member":member,"directory_retrieval":directory["retrieval"],"reference_policy":"retained_authoritative_directory; refresh organizations list separately"}),
+    )
+}
+
 fn describe_college_surface(
     response: &Response,
     college: &str,
@@ -843,8 +908,8 @@ fn describe_college_surface(
     if response.status != 200 || response.body.len() > MAX_HTML {
         return Err(unavailable());
     }
-    let document = if college == "ic" {
-        ic::html(response)?
+    let document = if matches!(college, "ic" | "aviation") {
+        college_html(response)?
     } else {
         Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?)
     };
@@ -898,6 +963,37 @@ fn describe_college_surface(
     });
     output["directory_attribution"] = attribution;
     Ok(output)
+}
+
+fn bind_college_board(
+    client: &ArchiveClient,
+    root: &str,
+    board: &str,
+    attribution: &mut Value,
+) -> Result<(), Error> {
+    let root = Url::parse(root).map_err(|_| unavailable())?;
+    let board = Url::parse(board).map_err(|_| unavailable())?;
+    let root_source = client.get(&root, false, |response| {
+        let document = college_html(response)?;
+        let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
+        if !document.select(&links).any(|node| {
+            !element_text(node).is_empty()
+                && node.value().attr("href").is_some_and(|raw| {
+                    raw.len() <= MAX_HREF
+                        && !raw.chars().any(char::is_control)
+                        && !raw.contains(['%', '\\'])
+                        && root.join(raw).is_ok_and(|url| url == board)
+                })
+        }) {
+            return Err(Error::new(
+                "unsupported",
+                "retained college root does not declare the reviewed notice board",
+            ));
+        }
+        Ok(retrieval(response))
+    })?;
+    attribution["root_retrieval"] = root_source;
+    Ok(())
 }
 
 pub fn history(input: &str) -> Result<Value, Error> {
@@ -985,16 +1081,16 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic [root|notices] [--online|--refresh]; fixed public pages only. ic binds the retained authoritative directory; notices must be declared by its retained root. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic and aviation bind the retained authoritative directory; selected boards must be declared by their retained root. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects directory/root-bound integrated-circuit notices (tzgg). Page defaults to 1; later ordinals must be advertised by the selected source. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred page URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs). IC/aviation boards bind the directory and retained root. Aviation returns desktop rows only and preserves unfetched external links. Page defaults to 1; later ordinals must be source-advertised. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic",null]},
+                    "college": {"enum": ["scse","ic","aviation",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
@@ -1003,7 +1099,7 @@ pub fn schema() -> Value {
                 },
                 "allOf":[{"if":{"required":["college"],"properties":{"college":{"const":"scse"}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
-                    "else":{"properties":{"category":{"enum":news_categories}}}},
+                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}},
                     {"if":{"required":["college"],"properties":{"college":{"const":"ic"}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}}]
             },
             "output": {
@@ -1014,10 +1110,10 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, or canonical IC notice in category 1042 declared by a retained source listing. IC source_page defaults to 1 and selects a source-advertised listing ordinal for binding; other sources reject a non-null source_page. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, or canonical aviation public notice in category 1061. IC/aviation articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. Other sources reject a non-null source_page. External links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://ic[.]buaa[.]edu[.]cn/info/1042/[0-9]{1,10}[.]htm$"}}}}]
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061)/[0-9]{1,10}[.]htm$"}}}}]
             },
             "output": {
                 "type": "object",

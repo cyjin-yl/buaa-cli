@@ -595,6 +595,89 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "aviation_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/93",
+          "commands": [
+            "announcements college-source aviation root|notices|public-notices [--online|--refresh]",
+            "announcements list with college=aviation, category=tzgg (default) or gkgs, source-advertised page and date/title filters",
+            "announcements article with canonical aviation /info/1061/<id>.htm URL declared by the retained public board and optional source_page"
+          ],
+          "authority": "Official directory member7, non-hidden 飞行学院, literal/resolved HTTPS https://aviation.buaa.edu.cn/, directory SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9. Ordinal7 is not an academic school identifier. Root must declare both boards; retained public listing must declare the selected own-site article. Discovery remains cache-first on the same private identity/governor.",
+          "robots": {
+            "url": "https://aviation.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "byte_length": 1693,
+            "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791031419687,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "first_cli_exit": 8,
+            "root_request_sent_in_first_cli": false
+          },
+          "root": {
+            "url": "https://aviation.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 60186,
+            "sha256": "e5da1ed83c3923f6666321b158b1716ac8f6eec76ee5d21feb2625581f19d809",
+            "fetched_at_unix_ms": 1791031681215,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null
+          },
+          "student_notices": {
+            "url": "https://aviation.buaa.edu.cn/xsgz1/tzgg.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 32179,
+            "sha256": "1a0f89b656f45a930abe5c267a329be39b49592a020517eef639204822c51bab",
+            "fetched_at_unix_ms": 1791032300527,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "entries": 4,
+            "dates": [
+              "2025-04-03",
+              "2024-05-06",
+              "2024-04-25",
+              "2024-04-16"
+            ],
+            "external_entries": 4,
+            "external_bodies_fetched": false
+          },
+          "public_notices": {
+            "url": "https://aviation.buaa.edu.cn/gkgs.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 27297,
+            "sha256": "1e6ba65da36d3517ba0300cd94c97785c2a553c9a23a8e06f83935242a7d3ffc",
+            "fetched_at_unix_ms": 1791032899514,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "entries": 1
+          },
+          "article": {
+            "url": "https://aviation.buaa.edu.cn/info/1061/2793.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 61976,
+            "sha256": "94783b96fc0d489fb069c9687b97f1fed9a6e04c4f3fb53911f0379362b2a132",
+            "fetched_at_unix_ms": 1791033900366,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "published_at": "2026-09-22",
+            "desktop_body_paragraphs": 15,
+            "raw_personal_prose_published": false,
+            "proof_mode": "actual source-declared HTML observation, then actual native article extraction from retained original bytes; not a second live article request"
+          },
+          "proof": "Five actual separately governed public requests including cold robots, with original private byte/hash/size checks. Actual cache-only lists return four external student rows and one own-site public row, excluding mobile copies; one inclusive date filter returns one row. Actual article returns source title/date and 15 desktop paragraphs; legacy IC 38/news 26 paragraphs and dates remain intact with explicit common DOM scope. Undeclared article exits 3, unadvertised page 2 exits 7 and off-host article exits 2 without production governor mutation. Four focused synthetic/loopback cases passed for source day/month, responsive exclusion, header-only dates, advertised-page binding and selected-only refresh/offline reuse; body-date promotion reproduced red then passed green after header scope correction.",
+          "quality_gate": "Owned aviation source passed locked offline build, 218 library + 19 CLI tests (two ignored, five suites), strict all-target clippy and formatter check. Four focused synthetic/loopback cases passed; body-date promotion reproduced red then passed after header scope correction. These development runs are not trusted CI or independent approval; source check and exact-head publication/integration decisions remain separate.",
+          "limits": "One college, two selected current board pages and one declared own-site article. No later-page live observation, external WeChat body, aviation archive replay, complete history, faculty/all-college completion, other attachment download/OCR, signatures/security/rights certification or authenticated campus service. Original HTML and personal content stay private; only structural/retrieval facts and synthetic fixtures enter public evidence/review. Current campus transaction intent is none; legitimate write capabilities remain in scope and assignment submission is owner-controlled."
+        },
         "integrated_circuit_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/89",
           "integration": "PR90 exact corrected source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e merged as516a4efc44960c0cd35c2957fde8d359f7526cb7 after narrow fresh-context no-tool source check, finding response and explicit exact-head maintainer source-contract decision/live gates. No formal self-approval or green/trustedCI claim; corrected excerpt check did not independently fetch SHA, run tests or assess omitted helpers/cache/live operations. Actual root ff-only sync/rebuild and offline IC source/page2/policy/capabilities proof passed with same original hashes/Gov unchanged. Aggregate remains partial.",
@@ -760,10 +843,10 @@
             "response_body_retained": true
           }
         ],
-        "limits": "Partial acceptance: university news center plus independently observed computer-college notices and one source-declared original PDF retrieval path. Other colleges, faculty-wide classification, other attachment types, complete history and announcement-source Memento replay remain unimplemented/unverified. The archive adapter's separately verified homepage capture does not establish historical announcement coverage. HTML paragraph extraction does not reconstruct images/tables; original PDFs are returned as source bytes with a hash, not publisher-signature or document-safety certification.",
+        "limits": "Partial acceptance: university news center, separately observed computer-college/integrated-circuit/aviation notice slices and one source-declared original PDF retrieval path. Further colleges, faculty-wide classification, external notice bodies, other attachment types, complete history and announcement-source Memento replay remain unimplemented/unverified. Aviation's four WeChat links are metadata only; personal originals/prose remain private. The archive adapter's separately verified homepage capture does not establish historical announcement coverage. HTML paragraphs do not reconstruct images/table structure; original PDFs are source bytes with an own hash, not publisher-signature or document-safety certification.",
         "college_slice": {
           "college": "scse",
-          "scope": "Computer college only, separately observed CMS; other college adapters remain absent.",
+          "scope": "Computer college only, separately observed CMS; this contract is not generalized to other college boards.",
           "directory_binding": {
             "name": "计算机学院",
             "listed_href": "http://scse.buaa.edu.cn/",
