@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
 
+pub(crate) mod ic;
 mod scse;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -95,6 +96,7 @@ struct ListQuery {
 #[serde(deny_unknown_fields)]
 struct ArticleQuery {
     url: Option<String>,
+    source_page: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -246,7 +248,7 @@ fn advertised_page_url(
     let selector =
         Selector::parse("div.pb_sys_common span.p_no a[href]").map_err(|_| unavailable())?;
     for link in document.select(&selector) {
-        if normalized_text(link.text()).parse::<u32>().ok() != Some(page) {
+        if element_text(link).parse::<u32>().ok() != Some(page) {
             continue;
         }
         let url = base
@@ -485,6 +487,18 @@ fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
         })
         .and_then(|raw| parse_iso_date(&raw));
 
+    let (paragraphs, attachment_hints, attachments_found) = article_body(&document)?;
+    Ok(ArticleDocument {
+        title,
+        category: article_category_from_url(url),
+        published_at,
+        paragraphs,
+        attachment_hints,
+        attachments_found,
+    })
+}
+
+fn article_body(document: &Html) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
     let body_selector = Selector::parse("div.v_news_content p").map_err(|_| unavailable())?;
     let mut paragraphs: Vec<String> = Vec::new();
     for paragraph in document.select(&body_selector) {
@@ -535,14 +549,7 @@ fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
         }
     }
 
-    Ok(ArticleDocument {
-        title,
-        category: article_category_from_url(url),
-        published_at,
-        paragraphs,
-        attachment_hints,
-        attachments_found,
-    })
+    Ok((paragraphs, attachment_hints, attachments_found))
 }
 
 fn article_category_from_url(url: &Url) -> Option<String> {
@@ -647,19 +654,18 @@ fn normalize_listing(
 fn normalize_article(response: &Response) -> Result<Value, Error> {
     let url = Url::parse(&response.url).map_err(|_| unavailable())?;
     let document = parse_article(&response.body, &url)?;
-    Ok(json!({
+    Ok(article_output(response, document))
+}
+
+fn article_output(response: &Response, document: ArticleDocument) -> Value {
+    let mut output = json!({
         "schema_version": 1,
         "type": "announcements_article",
         "result": "full_text",
         "publisher": "北京航空航天大学",
-        "title": document.title,
-        "category": document.category,
-        "published_at": document.published_at,
         "body_paragraph_count": document.paragraphs.len(),
-        "body_paragraphs": document.paragraphs,
         "attachments": {
             "found": document.attachments_found,
-            "hints": document.attachment_hints,
             "note": "attachment links are surfaced as hints and are never downloaded by this command",
         },
         "completeness": {
@@ -667,7 +673,17 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
             "body_source": "div.v_news_content p",
         },
         "retrieval": retrieval(response),
-    }))
+    });
+    output["title"] = Value::String(document.title);
+    output["category"] = document.category.map(Value::String).unwrap_or(Value::Null);
+    output["published_at"] = document
+        .published_at
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    output["body_paragraphs"] =
+        Value::Array(document.paragraphs.into_iter().map(Value::String).collect());
+    output["attachments"]["hints"] = Value::Array(document.attachment_hints);
+    output
 }
 
 fn parse_list_query(input: Option<&str>) -> Result<ListQuery, Error> {
@@ -684,6 +700,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
     let query = parse_list_query(input)?;
     match query.college.as_deref() {
         Some("scse") => return scse::list(mode, &query),
+        Some("ic") => return ic::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -762,6 +779,12 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         .as_deref()
         .filter(|url| !url.trim().is_empty())
         .ok_or_else(invalid_article)?;
+    if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("ic.buaa.edu.cn")) {
+        return ic::article(mode, raw_url, query.source_page.unwrap_or(1));
+    }
+    if query.source_page.is_some() {
+        return Err(invalid_article());
+    }
     if Url::parse(raw_url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
@@ -783,23 +806,36 @@ pub fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
 
 /// Fixed public college pages, not a unified college crawler or a verified
 /// announcement parser. Never follows the returned hints.
-pub fn scse_surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
-    let raw = match page {
-        "root" => SCSE_ROOT_URL,
-        "notices" => SCSE_NOTICES_URL,
+pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Value, Error> {
+    if college == "ic" {
+        return ic::surface(mode, page);
+    }
+    let raw = match (college, page) {
+        ("scse", "root") => SCSE_ROOT_URL,
+        ("scse", "notices") => SCSE_NOTICES_URL,
         _ => return Err(Error::new("invalid_input", "unknown college surface page")),
     };
     let url = Url::parse(raw).map_err(|_| unavailable())?;
     let client = ArchiveClient::open_scse(mode)?;
-    client.get(&url, false, describe_scse_surface)
+    let attribution = json!({"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","note":"the directory href is preserved; this command explicitly observes HTTPS separately"});
+    client.get(&url, false, |response| {
+        describe_college_surface(response, "computer_science", attribution)
+    })
 }
 
-fn describe_scse_surface(response: &Response) -> Result<Value, Error> {
+fn describe_college_surface(
+    response: &Response,
+    college: &str,
+    attribution: Value,
+) -> Result<Value, Error> {
     if response.status != 200 || response.body.len() > MAX_HTML {
         return Err(unavailable());
     }
-    let input = std::str::from_utf8(&response.body).map_err(|_| unavailable())?;
-    let document = Html::parse_document(input);
+    let document = if college == "ic" {
+        ic::html(response)?
+    } else {
+        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?)
+    };
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
@@ -822,7 +858,7 @@ fn describe_scse_surface(response: &Response) -> Result<Value, Error> {
             continue;
         };
         if !is_http(&url)
-            || url.host_str() != Some("scse.buaa.edu.cn")
+            || url.host_str() != base.host_str()
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
@@ -831,7 +867,7 @@ fn describe_scse_surface(response: &Response) -> Result<Value, Error> {
         {
             continue;
         }
-        let label = normalized_text(node.text());
+        let label = element_text(node);
         if label.is_empty() || label.len() > MAX_TEXT {
             continue;
         }
@@ -841,14 +877,15 @@ fn describe_scse_surface(response: &Response) -> Result<Value, Error> {
         }
         hints.push(json!({"path":url.path(),"listed_scheme":url.scheme(),"label":label}));
     }
-    Ok(json!({
+    let mut output = json!({
         "schema_version":1,"type":"college_source_surface","result":"surface_snapshot",
-        "college":"computer_science",
-        "directory_attribution":{"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","note":"the directory href is preserved; this command explicitly observes HTTPS separately"},
+        "college":college,
         "document_title":title,"same_host_path_hints":hints,"hints_truncated":hints_truncated,
         "completeness":{"scope":"single_explicit_public_page","announcement_adapter_verified":false,"links_followed":false,"publication_date":"unknown"},
         "retrieval":retrieval(response),
-    }))
+    });
+    output["directory_attribution"] = attribution;
+    Ok(output)
 }
 
 pub fn history(input: &str) -> Result<Value, Error> {
@@ -936,16 +973,16 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse [root|notices] [--online|--refresh]; fixed public pages only. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic [root|notices] [--online|--refresh]; fixed public pages only. ic binds the retained authoritative directory; notices must be declared by its retained root. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects the separately verified computer-college notices source, category gggs. Page defaults to 1; later ordinals must be advertised by the selected source. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred page URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects directory/root-bound integrated-circuit notices (tzgg). Page defaults to 1; later ordinals must be advertised by the selected source. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred page URLs.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse",null]},
+                    "college": {"enum": ["scse","ic",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
@@ -954,7 +991,8 @@ pub fn schema() -> Value {
                 },
                 "allOf":[{"if":{"required":["college"],"properties":{"college":{"const":"scse"}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
-                    "else":{"properties":{"category":{"enum":news_categories}}}}]
+                    "else":{"properties":{"category":{"enum":news_categories}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"ic"}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}}]
             },
             "output": {
                 "type": "object",
@@ -964,9 +1002,10 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: a news-center article or a reviewed scse.buaa.edu.cn notice article in category 1099/1299. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, or canonical IC notice in category 1042 declared by a retained source listing. IC source_page defaults to 1 and selects a source-advertised listing ordinal for binding; other sources reject a non-null source_page. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
-                "properties": {"url": {"type": "string"}}
+                "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://ic[.]buaa[.]edu[.]cn/info/1042/[0-9]{1,10}[.]htm$"}}}}]
             },
             "output": {
                 "type": "object",
