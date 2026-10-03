@@ -86,6 +86,22 @@ pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
 pub(crate) const SCSE_ROOT_URL: &str = "https://scse.buaa.edu.cn/";
 pub(crate) const SCSE_NOTICES_URL: &str = "https://scse.buaa.edu.cn/xwgg/gggs.htm";
 const SCSE_ROBOTS_URL: &str = "https://scse.buaa.edu.cn/robots.txt";
+pub(crate) const IC_ROOT_URL: &str = "https://ic.buaa.edu.cn/";
+pub(crate) const IC_NOTICES_URL: &str = "https://ic.buaa.edu.cn/tzgg.htm";
+const IC_ROBOTS_URL: &str = "https://ic.buaa.edu.cn/robots.txt";
+
+pub(crate) fn ic_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/tzgg.htm") {
+        return true;
+    }
+    let stem = path
+        .strip_prefix("/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1042/"))
+        .and_then(|stem| stem.strip_suffix(".htm"));
+    stem.is_some_and(|stem| {
+        !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
 
 pub(crate) fn scse_document_path_allowed(path: &str) -> bool {
     let Some(tail) = path.strip_prefix("/__local/") else {
@@ -174,6 +190,7 @@ enum SourceProfile {
     Announcements,
     Spoc,
     Scse,
+    Ic,
 }
 
 impl SourceProfile {
@@ -184,6 +201,7 @@ impl SourceProfile {
             Self::Announcements => ANNOUNCEMENTS_ROBOTS_URL,
             Self::Spoc => SPOC_ROBOTS_URL,
             Self::Scse => SCSE_ROBOTS_URL,
+            Self::Ic => IC_ROBOTS_URL,
         }
     }
 
@@ -194,6 +212,7 @@ impl SourceProfile {
             Self::Announcements => ".buaa-cli-announcements-cache",
             Self::Spoc => ".buaa-cli-spoc-cache",
             Self::Scse => ".buaa-cli-scse-cache",
+            Self::Ic => ".buaa-cli-ic-cache",
         }
     }
 
@@ -230,6 +249,11 @@ impl SourceProfile {
                 url.host_str() == Some("scse.buaa.edu.cn")
                     && url.query().is_none()
                     && scse_path_allowed(url.path())
+            }
+            Self::Ic => {
+                url.host_str() == Some("ic.buaa.edu.cn")
+                    && url.query().is_none()
+                    && ic_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -406,6 +430,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_scse(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Scse)
+    }
+
+    pub(crate) fn open_ic(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Ic)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -1250,6 +1278,12 @@ mod tests {
             }
         }
 
+        fn ic_client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
+            let mut client = self.client(mode, server);
+            client.profile = SourceProfile::Ic;
+            client
+        }
+
         fn governor(&self) -> Governor {
             Governor::isolated_for_test(&self.0.join("governor")).unwrap()
         }
@@ -1366,6 +1400,118 @@ mod tests {
 
     fn seed_robots(client: &ArchiveClient) {
         seed(client, ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+    }
+
+    fn seed_ic_sources(client: &ArchiveClient) {
+        for (url,body) in [
+            (IC_ROOT_URL,br#"<a href="tzgg.htm">Fixture notices</a>"# as &[u8]),
+            (IC_NOTICES_URL,br#"<title>Fixture notices</title><div class="fl1"><ul class="lt18"><li><a class="a" href="info/1042/42.htm"><h4>Fixture policy</h4></a></li></ul></div>"# as &[u8]),
+        ] {
+            seed(client,url,body,false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(),"text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(client, IC_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+    }
+
+    #[test]
+    fn ic_article_selection_and_refresh_do_not_fetch_discovery_sources() {
+        const ARTICLE: &[u8] = br#"<h2>Sidebar</h2><div class="ar_tit"><h3>Fixture policy</h3><div class="con"><p>Fixture date unavailable</p></div></div><div class="v_news_content"><p>Source paragraph.</p></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1042/42.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(socket, 200, "Content-Type: text/html\r\n", ARTICLE);
+        });
+        let client = fixture.ic_client(CacheMode::PreferCache, &server);
+        seed_ic_sources(&client);
+        let undeclared = Url::parse("https://ic.buaa.edu.cn/info/1042/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::ic::article_with_client(
+                client,
+                CacheMode::PreferCache,
+                &undeclared,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://ic.buaa.edu.cn/info/1042/42.htm").unwrap();
+        let client = fixture.ic_client(CacheMode::PreferCache, &server);
+        let first = crate::announcements::ic::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(first["title"], "Fixture policy");
+        assert_eq!(
+            first["body_paragraphs"],
+            serde_json::json!(["Source paragraph."])
+        );
+        assert_eq!(first["source_listing"]["cache_status"], "hit");
+        assert_eq!(server.count(), 1);
+        let client = fixture.ic_client(CacheMode::Offline, &server);
+        let cached = crate::announcements::ic::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(cached["retrieval"]["response_body_sha256"], hash(ARTICLE));
+        assert_eq!(cached["retrieval"]["cache_status"], "hit");
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn ic_layout_drift_remains_an_error_but_reuses_the_retained_html_offline() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1042/42.htm "));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                b"<title>Changed layout</title>",
+            );
+        });
+        let client = fixture.ic_client(CacheMode::PreferCache, &server);
+        seed_ic_sources(&client);
+        let target = Url::parse("https://ic.buaa.edu.cn/info/1042/42.htm").unwrap();
+        assert_eq!(
+            crate::announcements::ic::article_with_client(
+                client,
+                CacheMode::PreferCache,
+                &target,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let client = fixture.ic_client(CacheMode::Offline, &server);
+        assert_eq!(
+            crate::announcements::ic::article_with_client(
+                client,
+                CacheMode::Offline,
+                &target,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
     }
 
     #[test]

@@ -315,12 +315,12 @@ fn run_announcements(args: &[String]) -> CliResult {
             let output = buaa_cli::announcements::document(mode, &input).map_err(service_error)?;
             emit(&output)
         }
-        Some("college-source") if args.get(1).map(String::as_str) == Some("scse") => {
+        Some("college-source") if matches!(args.get(1).map(String::as_str), Some("scse" | "ic")) => {
             let (page, flags) = match args.get(2).map(String::as_str) {
                 Some("root" | "notices") => (args[2].as_str(), &args[2..]),
                 _ => ("root", &args[1..]),
             };
-            let output = buaa_cli::announcements::scse_surface(mode(flags)?, page)
+            let output = buaa_cli::announcements::college_surface(mode(flags)?, &args[1], page)
                 .map_err(service_error)?;
             emit(&output)
         }
@@ -386,7 +386,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "governor boot-review-plan", "governor boot-review-commit --offline", "recordings search", "credits calculate|school6", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "governor boot-review-plan", "governor boot-review-commit --offline", "recordings search", "credits calculate|school6", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
