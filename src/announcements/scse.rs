@@ -209,34 +209,13 @@ fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
         if node.value().attr("src").is_some() {
             continue;
         }
-        let explicit_type = node.value().attr("type");
-        if explicit_type.is_none()
-            && node.value().attr("language").is_some_and(|language| {
-                !language.is_empty() && !language.eq_ignore_ascii_case("javascript")
-            })
-        {
-            continue; // unreviewed legacy language-derived data block
-        }
-        let kind = explicit_type
-            .unwrap_or_default()
-            .trim_matches(|ch| matches!(ch, '\t' | '\n' | '\u{000c}' | '\r' | ' '));
-        if kind.eq_ignore_ascii_case("module") {
+        let Some(kind) = crate::html::script_kind(node) else {
+            continue;
+        };
+        if kind == crate::html::ScriptKind::Module {
             if node.text().any(|text| text.contains("showVsbpdfIframe")) {
                 return Err(unavailable());
             }
-            continue;
-        }
-        if !kind.is_empty()
-            && ![
-                "text/javascript",
-                "application/javascript",
-                "text/ecmascript",
-                "application/ecmascript",
-                "application/x-javascript",
-            ]
-            .iter()
-            .any(|allowed| kind.eq_ignore_ascii_case(allowed))
-        {
             continue;
         }
         for text in node.text() {

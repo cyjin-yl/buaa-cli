@@ -261,13 +261,19 @@ fn run_organizations(args: &[String]) -> CliResult {
 
 fn run_spoc(args: &[String]) -> CliResult {
     use buaa_cli::net::CacheMode;
-    if args.first().map(String::as_str) != Some("surface") {
-        return Err(("unsupported", 3, "expected spoc surface".into()));
-    }
-    let mode = match args.get(1).map(String::as_str) {
+    let operation = match args.first().map(String::as_str) {
+        Some("surface") => "surface",
+        Some("script") => "script",
+        _ => return Err(("unsupported", 3, "expected spoc surface or script".into())),
+    };
+    let (page, flags) = match (operation, args.get(1).map(String::as_str)) {
+        ("surface", Some(page @ ("root" | "entry"))) => (Some(page), &args[1..]),
+        _ => (None, args),
+    };
+    let mode = match flags.get(1).map(String::as_str) {
         None => CacheMode::Offline,
-        Some("--online") if args.len() == 2 => CacheMode::PreferCache,
-        Some("--refresh") if args.len() == 2 => CacheMode::Revalidate,
+        Some("--online") if flags.len() == 2 => CacheMode::PreferCache,
+        Some("--refresh") if flags.len() == 2 => CacheMode::Revalidate,
         _ => {
             return Err((
                 "invalid_input",
@@ -276,7 +282,12 @@ fn run_spoc(args: &[String]) -> CliResult {
             ));
         }
     };
-    let output = buaa_cli::spoc::surface(mode).map_err(service_error)?;
+    let output = if operation == "surface" {
+        buaa_cli::spoc::surface(mode, page)
+    } else {
+        buaa_cli::spoc::script(mode, &read_input()?)
+    }
+    .map_err(service_error)?;
     emit(&output)
 }
 
@@ -386,8 +397,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "governor boot-review-plan", "governor boot-review-commit --offline", "recordings search", "credits calculate|school6", "spoc surface [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
-            "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic [root|notices] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "governor boot-review-plan", "governor boot-review-commit --offline", "recordings search", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements/spoc --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
         "capabilities" if args.len() == 1 => {
@@ -424,7 +435,7 @@ fn run() -> CliResult {
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
                 "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
-            "network_policy":{"default":"offline","opt_in":"archive/organizations/announcements --online or --refresh; fengrubei fetch --online; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
+            "network_policy":{"default":"offline","opt_in":"archive/organizations/announcements/spoc --online or --refresh; fengrubei fetch --online; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
             let mut raw = false;

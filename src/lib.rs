@@ -7,6 +7,7 @@ pub mod drift;
 pub mod fengrubei;
 pub mod gateway;
 pub mod governor;
+mod html;
 pub mod marks;
 pub mod net;
 pub mod organizations;

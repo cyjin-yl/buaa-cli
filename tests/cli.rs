@@ -438,6 +438,28 @@ fn credits_cli_rejects_unknown_major_and_conflicting_course_identity() {
 }
 
 #[test]
+fn spoc_script_rejects_unsafe_input_without_echoing_payload() {
+    for input in [
+        br#"{"url":"https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js","private-marker":"value"}"#
+            as &[u8],
+        br#"{"url":"https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js?private-marker=value"}"#
+            as &[u8],
+        br#"{"url":"https://private-marker.example/spocnew/js/app.12345678.js"}"# as &[u8],
+    ] {
+        let output = invoke(&["spoc", "script"], input);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+        assert!(
+            !String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("private-marker")
+        );
+    }
+}
+
+#[test]
 fn article_source_page_cannot_retarget_sources_or_echo_credentials() {
     for input in [
         br#"{"url":"https://news.buaa.edu.cn/info/1010/1.htm","source_page":2}"# as &[u8],

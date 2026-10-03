@@ -109,19 +109,46 @@
       "id": "spoc",
       "title": "SPOC materials/video/PPT/subtitles",
       "status": "blocked",
-      "acceptance": "Authorized course inventory and byte-verified downloads with provenance; no completion automation.",
+      "acceptance": "Authorized course inventory and byte-verified downloads with provenance; never fabricate attendance or course completion.",
       "sources": [
         "https://github.com/peter-erer/buaa-spoc-helper",
         "https://github.com/aleafofwutong/BBUAA",
         "https://github.com/Tukist/buaa-audio-sync",
         "https://github.com/Micraow/BUAA-SPOC-AutoNotPlay"
       ],
-      "blocker": "Egress to spoc.buaa.edu.cn recovered on 2026-09-28; the read-only governed public-surface probe (buaa spoc surface) was observed once and the sanitized evidence plus a contract draft are in docs/SPOC.md. The owner-reviewed SPOC service contract and a rights-cleared authorized course inventory are still required. Historical catalog links do not establish an API endpoint or download permission.",
+      "blocker": "Governed public entry and source-bound JavaScript observation are verified, including one private immutable app bundle and offline metadata reuse. This is public contract evidence, not an authenticated service. A verified current course/session/material read contract, accessible authorized course inventory and private credential delivery are still required. No course/media endpoint or download permission is inferred from script bytes or historical catalog links.",
       "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/42",
       "evidence": {
-        "command": "buaa spoc surface [--online|--refresh]",
+        "command": "buaa spoc surface [root|entry] [--online|--refresh]; buaa spoc script [--online|--refresh] with source-declared JSON URL on stdin",
         "observation": "2026-09-28 governed public-surface read (one in flight, shared raised 60-second interval, TLS on, no cookies/redirects/proxy/retry): robots.txt HTTP 200 (998 B); root / HTTP 200 (377 B, sha256 373cd4cd521ae2c33d27ce647d416b6a4d44523e100fa8503fd7f984af355243, no title, no server-rendered form); entry /spocnew/ HTTP 200 (2173 B, sha256 5b6709aa5aafd07227e9348c619a5b0e07bff36059fc0ea33e8c1e6c897cdf9f, title 智学北航, no server-rendered form). INCO middleware; newSpoc session cookie.",
-        "contract_draft": "docs/SPOC.md (pending owner review; login is client-rendered, endpoint discovery from the client bundle is the principal open item)",
+        "contract_draft": "docs/SPOC.md (current authenticated course/session/material read contract unverified; one public bundle is retained privately, but source bytes alone do not establish endpoint/session compatibility or material rights)",
+        "public_source_issue": "https://github.com/cyjin-yl/buaa-cli/issues/87",
+        "current_public_source": {
+          "entry_url": "https://spoc.buaa.edu.cn/spocnew/",
+          "entry_sha256": "f728b87eb8579c7e1fa6ce689cbc1b85d30b2cbdda68a07add42bae00c081ba9",
+          "entry_fetched_at_unix_ms": 1790950297351,
+          "script_url": "https://spoc.buaa.edu.cn/spocnew/js/app.a7c0879c.js",
+          "script_status": 200,
+          "script_content_type": "application/javascript; charset=utf-8",
+          "script_byte_length": 2424757,
+          "script_sha256": "5df4a46bb0277e60094ed1f2536a52e28a422558cb525fc28b1945ef8d7fa038",
+          "script_fetched_at_unix_ms": 1790950469253,
+          "script_revalidated_at_unix_ms": 1790952887461,
+          "script_revalidation_status": 200,
+          "proof": "Independent private-cache base64 decode, size and SHA-256 matched the immutable original and actual offline CLI metadata/hash/source identity; governor state bytes unchanged on offline replay. Raw scripts/configuration not published; no script execution, external checksum/signature/syntax verification, authentication, course/media request or vendor bundle fetch.",
+          "prior_attempts": "Stale robots refreshed as HTTP 404 (431 bytes, sha256 270d2fb55aa801662897590a27ec1c152407fa36be1d6678c27fd8c1859239e4), then exit 8 before selected request on retained 60-second gap versus 30-second bounded wait. After full deadline old app.24020f98.js returned unsupported HTTP status/exit 7 without cached bytes or identical retry. Explicit entry-only refresh returned changed declarations; retired URL now fails binding offline/exit 3."
+        },
+        "focused_public_source_tests": "cargo test --locked --offline spoc: nine library plus one CLI tests passed for source binding/selected-only loopback refresh/private output, wrong-MIME cache refusal, inert/base rules, URL/resource bounds and redacted errors. Separate declaration_whitespace regression failed before fixing Unicode normalization and passed after sharing the existing HTML ASCII/type-precedence rules with the PDF viewer and preserving literal src provenance. Historical aggregate test receipt below is unchanged.",
+        "final_public_source_verification": "Locked offline build, full tests (205 library plus 18 CLI passed; two ignored; five suites), strict all-target clippy and formatter check passed after exact HTML MIME authority tightening. Missing-MIME loopback reproduced red and passed green with zero selected requests; all twelve focused SPOC cases passed. Actual corrected native offline use retained typed source/script provenance and unchanged governor. Earlier selected script refresh preserved immutable bytes/hash/original timestamp with revalidation status 200 at 1790952887461 and source entry cache-hit; root-only/entry-only offline, help/schema/capabilities succeeded. spoc remains blocked. Twelve bounded public-file credential-format scan0, not comprehensive security or JSON-Schema validator certification.",
+        "current_base_reconciliation": {
+          "base_sha": "04ec77a06a00283da24bf7f3636c6edf6a6d60c9",
+          "branch": "work/spoc-public-scripts",
+          "native_proof": "Nine actual cache-only native commands passed after retaining both SPOC script/page selection and the integrated-circuit source contract: selected script; root, entry and default two-page surfaces; IC policy article and notice-source metadata; help, schema and capabilities. Script/entry original hashes, byte lengths, timestamps and selected-only revalidation facts matched; IC retained the policy title/date and 38 paragraphs. Shared governor state bytes were unchanged; 60000/900000-ms policy, disarmed auth, no latch/pending outcome. No new campus request/authentication/mutation.",
+          "focused_proof": "Initial twelve focused SPOC cases, both IC transport/cache regressions and the article source-page/credential-redaction CLI case passed after conflict reconciliation. After the fresh-response correction, all thirteen focused SPOC cases passed.",
+          "fresh_200_correction": "An offline consumer regression reproduced identical script bytes with fresh HTTP200 text/html incorrectly succeeding via the original JavaScript MIME and marking the original revalidated. Fresh response MIME/byte facts now pass the same borrowed metadata validator before immutable comparison under the shared lease; cached original facts are checked separately. Green proof retains original output metadata unchanged after rejection, with one selected loopback request and no campus observation.",
+          "quality_gate": "Corrected full locked offline tests: 214 library plus 19 CLI passes, two ignored, five suites. Strict all-target clippy and formatter check passed. Earlier 205+18 and 213+19 proof counts remain dated prior-head evidence, not this corrected gate.",
+          "integration": "PR #88 remains open pending a fresh exact-head source check, finding resolution and live permission/rule/maintainer gates. Prior provider failures remain failures, not approvals; no subagent started or revived. Aggregate authenticated SPOC acceptance remains blocked."
+        },
         "tests": "cargo test --locked --offline: spoc sanitize/reject tests passed (sanitized structural facts with no body/field names; non-200 and non-HTML rejected; oversized title, unsafe action control char, and over-cap form count rejected); 117 library + 8 CLI tests green; strict all-target clippy 0 warnings; fmt clean"
       }
     },
@@ -136,7 +163,7 @@
         "https://github.com/Tukist/buaa-audio-sync",
         "https://github.com/Micraow/BUAA-SPOC-AutoNotPlay"
       ],
-      "blocker": "No owner-reviewed current replay endpoint/session contract, scoped owner-approved read authorization, authorized course recording inventory, or rights-cleared original/derivative sample is available. Historical community helper links do not establish access permission or supported endpoints.",
+      "blocker": "A verified current replay endpoint/session contract, accessible authorized course recording inventory, private credential delivery and an original/derivative sample with rights and provenance bounds remain missing. Historical community helper links do not establish supported endpoints. The owner-closed historical issue does not establish replay retrieval or repair.",
       "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/47"
     },
     {

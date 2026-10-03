@@ -83,6 +83,32 @@ pub(crate) const ORGANIZATIONS_URL: &str = "https://www.buaa.edu.cn/jgsz/jxkyjg0
 const SPOC_ROBOTS_URL: &str = "https://spoc.buaa.edu.cn/robots.txt";
 pub(crate) const SPOC_ROOT_URL: &str = "https://spoc.buaa.edu.cn/";
 pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
+
+fn spoc_script_path_allowed(path: &str) -> bool {
+    let Some(file) = path
+        .strip_prefix("/spocnew/js/")
+        .and_then(|file| file.strip_suffix(".js"))
+    else {
+        return false;
+    };
+    let Some((name, fingerprint)) = file.rsplit_once('.') else {
+        return false;
+    };
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        && fingerprint.len() == 8
+        && fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+pub(crate) fn spoc_script_url_allowed(url: &Url) -> bool {
+    spoc_script_path_allowed(url.path()) && SourceProfile::Spoc.validate_url(url).is_ok()
+}
+
 pub(crate) const SCSE_ROOT_URL: &str = "https://scse.buaa.edu.cn/";
 pub(crate) const SCSE_NOTICES_URL: &str = "https://scse.buaa.edu.cn/xwgg/gggs.htm";
 const SCSE_ROBOTS_URL: &str = "https://scse.buaa.edu.cn/robots.txt";
@@ -243,7 +269,8 @@ impl SourceProfile {
             Self::Spoc => {
                 url.host_str() == Some("spoc.buaa.edu.cn")
                     && url.query().is_none()
-                    && matches!(url.path(), "/" | "/spocnew/" | "/robots.txt")
+                    && (matches!(url.path(), "/" | "/spocnew/" | "/robots.txt")
+                        || spoc_script_path_allowed(url.path()))
             }
             Self::Scse => {
                 url.host_str() == Some("scse.buaa.edu.cn")
@@ -712,6 +739,18 @@ impl ArchiveClient {
                 .map_err(|_| network_error())?;
             if body.len() > MAX_BODY {
                 return Err(body_limit());
+            }
+            // Immutable originals retain their original headers. Validate the
+            // fresh script response before those headers can hide MIME drift.
+            if status == 200
+                && self.profile == SourceProfile::Spoc
+                && spoc_script_path_allowed(url.path())
+            {
+                crate::spoc::validate_script(
+                    status,
+                    headers.get("content-type").map(String::as_str),
+                    body.len(),
+                )?;
             }
             let now = unix_ms()?;
             let mut entry = if status == 304 {
@@ -1278,6 +1317,12 @@ mod tests {
             }
         }
 
+        fn spoc_client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
+            let mut client = self.client(mode, server);
+            client.profile = SourceProfile::Spoc;
+            client
+        }
+
         fn ic_client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
             let mut client = self.client(mode, server);
             client.profile = SourceProfile::Ic;
@@ -1400,6 +1445,196 @@ mod tests {
 
     fn seed_robots(client: &ArchiveClient) {
         seed(client, ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+    }
+
+    fn seed_spoc_html(client: &ArchiveClient, body: &[u8]) {
+        seed(client, SPOC_ENTRY_URL, body, false);
+        let url = Url::parse(SPOC_ENTRY_URL).unwrap();
+        let mut entry = client.load(&url).unwrap().unwrap();
+        entry
+            .response
+            .headers
+            .insert("content-type".into(), "text/html; charset=utf-8".into());
+        client.save(&entry).unwrap();
+    }
+
+    #[test]
+    fn spoc_script_is_entry_bound_private_and_refreshes_only_the_selected_source() {
+        const SCRIPT_URL: &str = "https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js";
+        const ENTRY: &[u8] = br#"<script src="js/app.12345678.js"></script>"#;
+        const SCRIPT: &[u8] = b"globalThis.fixtureValue = 'private synthetic source';";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /spocnew/js/app.12345678.js "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: application/javascript; charset=utf-8\r\n",
+                SCRIPT,
+            );
+        });
+        let client = fixture.spoc_client(CacheMode::PreferCache, &server);
+        seed_spoc_html(&client, ENTRY);
+        seed(
+            &client,
+            SPOC_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let undeclared =
+            Url::parse("https://spoc.buaa.edu.cn/spocnew/js/other.12345678.js").unwrap();
+        assert_eq!(
+            crate::spoc::script_with_client(client, CacheMode::PreferCache, &undeclared)
+                .unwrap_err()
+                .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse(SCRIPT_URL).unwrap();
+        let client = fixture.spoc_client(CacheMode::PreferCache, &server);
+        let first =
+            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target).unwrap();
+        assert_eq!(first["script"]["body_sha256"], hash(SCRIPT));
+        assert_eq!(first["source_entry"]["body_sha256"], hash(ENTRY));
+        assert_eq!(first["declaration"]["listed_src"], "js/app.12345678.js");
+        assert!(!first.to_string().contains("fixtureValue"));
+        let client = fixture.spoc_client(CacheMode::Offline, &server);
+        let replayed =
+            crate::spoc::script_with_client(client, CacheMode::Offline, &target).unwrap();
+        assert_eq!(
+            replayed["script"]["body_sha256"],
+            first["script"]["body_sha256"]
+        );
+        assert_eq!(replayed["script"]["retrieval"]["cache_status"], "hit");
+        assert_eq!(server.count(), 1);
+        let client = fixture.spoc_client(CacheMode::PreferCache, &server);
+        let refreshed =
+            crate::spoc::script_with_client(client, CacheMode::Revalidate, &target).unwrap();
+        assert_eq!(
+            refreshed["script"]["retrieval"]["cache_status"],
+            "revalidated"
+        );
+        assert_eq!(
+            refreshed["source_entry"]["retrieval"]["cache_status"],
+            "hit"
+        );
+        assert_eq!(
+            refreshed["script"]["body_sha256"],
+            first["script"]["body_sha256"]
+        );
+        assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn spoc_non_javascript_response_does_not_poison_the_offline_script_cache() {
+        const SCRIPT_URL: &str = "https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /spocnew/js/app.12345678.js "));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                b"<html>not a script</html>",
+            );
+        });
+        let client = fixture.spoc_client(CacheMode::PreferCache, &server);
+        seed_spoc_html(&client, br#"<script src="js/app.12345678.js"></script>"#);
+        seed(
+            &client,
+            SPOC_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse(SCRIPT_URL).unwrap();
+        assert_eq!(
+            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let client = fixture.spoc_client(CacheMode::Offline, &server);
+        assert_eq!(
+            crate::spoc::script_with_client(client, CacheMode::Offline, &target)
+                .unwrap_err()
+                .code,
+            "offline_miss"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn spoc_refresh_rejects_wrong_mime_without_revalidating_identical_original_bytes() {
+        const SCRIPT_URL: &str = "https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js";
+        const SCRIPT: &[u8] = b"globalThis.syntheticSource = true;";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /spocnew/js/app.12345678.js "));
+            reply(socket, 200, "Content-Type: text/html\r\n", SCRIPT);
+        });
+        let client = fixture.spoc_client(CacheMode::Offline, &server);
+        seed_spoc_html(&client, br#"<script src="js/app.12345678.js"></script>"#);
+        seed(
+            &client,
+            SPOC_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed(&client, SCRIPT_URL, SCRIPT, true);
+        let target = Url::parse(SCRIPT_URL).unwrap();
+        let mut original = client.load(&target).unwrap().unwrap();
+        original
+            .response
+            .headers
+            .insert("content-type".into(), "application/javascript".into());
+        client.save(&original).unwrap();
+        let before = crate::spoc::script_with_client(client, CacheMode::Offline, &target).unwrap();
+        let client = fixture.spoc_client(CacheMode::PreferCache, &server);
+        assert_eq!(
+            crate::spoc::script_with_client(client, CacheMode::Revalidate, &target)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let client = fixture.spoc_client(CacheMode::Offline, &server);
+        let after = crate::spoc::script_with_client(client, CacheMode::Offline, &target).unwrap();
+        assert_eq!(after["script"], before["script"]);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn spoc_entry_without_html_mime_cannot_authorize_a_script_fetch() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: application/javascript\r\n",
+                b"synthetic source",
+            );
+        });
+        let client = fixture.spoc_client(CacheMode::PreferCache, &server);
+        seed(
+            &client,
+            SPOC_ENTRY_URL,
+            br#"<script src="js/app.12345678.js"></script>"#,
+            false,
+        );
+        seed(
+            &client,
+            SPOC_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse("https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js").unwrap();
+        assert_eq!(
+            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 0);
     }
 
     fn seed_ic_sources(client: &ArchiveClient) {
