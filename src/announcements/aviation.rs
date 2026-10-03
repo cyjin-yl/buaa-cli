@@ -35,9 +35,6 @@ fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
     };
     let directory = crate::organizations::list(source_mode)?;
     let attribution = college_directory_attribution(&directory, "飞行学院", AVIATION_ROOT_URL)?;
-    if attribution["member"]["listed_href"] != AVIATION_ROOT_URL {
-        return Err(unavailable());
-    }
     Ok((ArchiveClient::open_aviation(source_mode)?, attribution))
 }
 

@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn hidden_or_ambiguous_directory_members_do_not_grant_egress() {
-        let member = json!({"name":"集成电路科学与工程学院","resolved_http_url":IC_ROOT_URL,"hidden_in_source":false});
+        let member = json!({"name":"集成电路科学与工程学院","listed_href":IC_ROOT_URL,"resolved_http_url":IC_ROOT_URL,"hidden_in_source":false});
         let mut hidden = member.clone();
         hidden["hidden_in_source"] = json!(true);
         for entries in [json!([hidden]), json!([member.clone(), member])] {
@@ -400,5 +400,21 @@ mod tests {
                 "unavailable"
             );
         }
+    }
+
+    #[test]
+    fn nonliteral_directory_root_does_not_authorize_the_source() {
+        let directory = json!({"entries":[{
+            "name":"集成电路科学与工程学院",
+            "listed_href":"https://ic.buaa.edu.cn/./",
+            "resolved_http_url":IC_ROOT_URL,
+            "hidden_in_source":false
+        }]});
+        assert_eq!(
+            college_directory_attribution(&directory, "集成电路科学与工程学院", IC_ROOT_URL)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
     }
 }

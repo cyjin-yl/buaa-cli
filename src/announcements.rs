@@ -892,7 +892,7 @@ fn college_directory_attribution(
                 && member["hidden_in_source"] == false
         });
     let member = members.next().ok_or_else(unavailable)?;
-    if members.next().is_some() {
+    if members.next().is_some() || member["listed_href"] != root {
         return Err(unavailable());
     }
     Ok(
