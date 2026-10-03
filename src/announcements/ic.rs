@@ -1,9 +1,10 @@
 //! Directory-bound integrated-circuit college notices; no inferred routes.
 use super::{
-    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_HTML,
-    MAX_TEXT, advertised_page_url, article_body, article_output, describe_college_surface,
-    element_text, entry_in_scope, failed_contract, invalid_article, invalid_list, is_http,
-    parse_iso_date, retrieval, unavailable,
+    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
+    advertised_page_url, article_body, article_output, bind_college_board,
+    college_directory_attribution, college_html, describe_college_surface, element_text,
+    entry_in_scope, failed_contract, invalid_article, invalid_list, is_http, parse_iso_date,
+    retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, IC_NOTICES_URL, IC_ROOT_URL, Response, ic_path_allowed,
@@ -33,89 +34,11 @@ fn plain_url(url: &Url) -> bool {
         && ic_path_allowed(url.path())
 }
 
-pub(super) fn html(response: &Response) -> Result<Html, Error> {
-    if response.status != 200
-        || response.body.is_empty()
-        || response.body.len() > MAX_HTML
-        || !response.headers.get("content-type").is_some_and(|value| {
-            value
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim_matches([' ', '\t'])
-                .eq_ignore_ascii_case("text/html")
-        })
-    {
-        return Err(unavailable());
-    }
-    let document =
-        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?);
-    let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
-    if document.select(&bases).any(|base| {
-        !base.ancestors().any(|node| {
-            node.value()
-                .as_element()
-                .is_some_and(|node| matches!(node.name(), "template" | "noscript"))
-        })
-    }) {
-        return Err(failed_contract(
-            "IC source has unreviewed HTML base semantics",
-            file!(),
-            line!(),
-        ));
-    }
-    Ok(document)
-}
-
-fn directory_attribution(directory: &Value) -> Result<Value, Error> {
-    let mut members = directory["entries"]
-        .as_array()
-        .ok_or_else(unavailable)?
-        .iter()
-        .filter(|member| {
-            member["name"] == "集成电路科学与工程学院"
-                && member["resolved_http_url"] == IC_ROOT_URL
-                && member["hidden_in_source"] == false
-        });
-    let member = members.next().ok_or_else(unavailable)?;
-    if members.next().is_some() {
-        return Err(unavailable());
-    }
-    Ok(
-        json!({"member":member,"directory_retrieval":directory["retrieval"],"reference_policy":"retained_authoritative_directory; refresh organizations list separately"}),
-    )
-}
-
 fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
     let directory = crate::organizations::list(source_mode(mode))?;
-    let attribution = directory_attribution(&directory)?;
+    let attribution =
+        college_directory_attribution(&directory, "集成电路科学与工程学院", IC_ROOT_URL)?;
     Ok((ArchiveClient::open_ic(source_mode(mode))?, attribution))
-}
-
-fn bind_board(client: &ArchiveClient, attribution: &mut Value) -> Result<(), Error> {
-    let root = Url::parse(IC_ROOT_URL).map_err(|_| unavailable())?;
-    let board = Url::parse(IC_NOTICES_URL).map_err(|_| unavailable())?;
-    let root_source = client.get(&root, false, |response| {
-        let document = html(response)?;
-        let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
-        if !document.select(&links).any(|node| {
-            !element_text(node).is_empty()
-                && node.value().attr("href").is_some_and(|raw| {
-                    raw.len() <= MAX_HREF
-                        && !raw.chars().any(char::is_control)
-                        && !raw.contains(['%', '\\'])
-                        && root.join(raw).is_ok_and(|url| url == board)
-                })
-        }) {
-            return Err(Error::new(
-                "unsupported",
-                "retained college root does not declare the reviewed notice board",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
-    attribution["root_retrieval"] = root_source;
-    Ok(())
 }
 
 pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
@@ -126,7 +49,7 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     };
     let (client, mut attribution) = bound_client(mode)?;
     if page == "notices" {
-        bind_board(&client, &mut attribution)?;
+        bind_college_board(&client, IC_ROOT_URL, IC_NOTICES_URL, &mut attribution)?;
     }
     let url = Url::parse(raw).map_err(|_| unavailable())?;
     client.with_cache_mode(mode).get(&url, false, |response| {
@@ -216,7 +139,7 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        html(response)?;
+        college_html(response)?;
         advertised_page_url(&response.body, &latest, page, |url| {
             plain_url(url) && url.path().starts_with("/tzgg/")
         })
@@ -246,10 +169,10 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         .map(|raw| parse_iso_date(raw).ok_or_else(invalid_list))
         .transpose()?;
     let (client, mut attribution) = bound_client(mode)?;
-    bind_board(&client, &mut attribution)?;
+    bind_college_board(&client, IC_ROOT_URL, IC_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target,false,|response| {
-        let document = parse_listing(&html(response)?,&target)?;
+        let document = parse_listing(&college_html(response)?,&target)?;
         let entries:Vec<&ListingEntry> = document.entries.iter().filter(|entry| entry_in_scope(entry,&since,&until,&query.r#match)).collect();
         Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
             "publisher":PUBLISHER,"college":"ic","category":"tzgg","listing_label":"通知公告","page":page,
@@ -280,10 +203,10 @@ pub(crate) fn article_with_client(
     source_page: u32,
     mut attribution: Value,
 ) -> Result<Value, Error> {
-    bind_board(&client, &mut attribution)?;
+    bind_college_board(&client, IC_ROOT_URL, IC_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&html(response)?, &source)?;
+        let document = parse_listing(&college_html(response)?, &source)?;
         if !document
             .entries
             .iter()
@@ -302,7 +225,7 @@ pub(crate) fn article_with_client(
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
-            let document = html(response)?;
+            let document = college_html(response)?;
             Ok(normalize(response, &document).map(|mut value| {
                 value["publisher"] = json!(PUBLISHER);
                 value["college"] = json!("ic");
@@ -335,7 +258,19 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
             parse_iso_date(text.strip_prefix("发布日期：")?.trim())
         })
         .next();
-    let (paragraphs, attachment_hints, attachments_found) = article_body(document)?;
+    let bodies = Selector::parse("div.v_news_content").map_err(|_| unavailable())?;
+    let mut bodies = document.select(&bodies);
+    let body = bodies.next().ok_or_else(|| {
+        failed_contract(
+            "IC article requires its source body container",
+            file!(),
+            line!(),
+        )
+    })?;
+    if bodies.next().is_some() {
+        return Err(unavailable());
+    }
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
     let article = ArticleDocument {
         title,
         category: Some("1042".into()),
@@ -373,7 +308,7 @@ mod tests {
         let source = response(
             r#"<h2>通知公告</h2><div class="ar_tit"><h3>Fixture published policy</h3><div class="con"><p>发布日期：2026-09-29</p></div></div><div class="v_news_content"><p>Source policy paragraph.</p><p><script>not prose</script></p></div>"#,
         );
-        let value = normalize(&source, &html(&source).unwrap()).unwrap();
+        let value = normalize(&source, &college_html(&source).unwrap()).unwrap();
         assert_eq!(value["title"], "Fixture published policy");
         assert_eq!(value["published_at"], "2026-09-29");
         assert_eq!(
@@ -383,12 +318,25 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_article_bodies_do_not_become_combined_prose() {
+        let source = response(
+            r#"<div class="ar_tit"><h3>Fixture policy</h3></div><div class="v_news_content"><p>Desktop paragraph.</p></div><div class="mbody ph"><div class="v_news_content"><p>Mobile duplicate.</p></div></div>"#,
+        );
+        assert_eq!(
+            normalize(&source, &college_html(&source).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn listing_dates_are_source_dates_and_missing_dates_stay_missing() {
         let source = response(
             r#"<title>Fixture notices</title><div class="fl1"><ul class="lt18"><li><a class="a" href="info/1042/42.htm"><div class="time"><big>09-29</big><small>/ 2026</small></div><h4>Fixture policy</h4></a></li><li><a class="a" href="info/1042/43.htm"><div class="time"><big>02-29</big><small>/ 2026</small></div><h4>Unknown date policy</h4></a></li></ul></div>"#,
         );
         let document = parse_listing(
-            &html(&source).unwrap(),
+            &college_html(&source).unwrap(),
             &Url::parse(IC_NOTICES_URL).unwrap(),
         )
         .unwrap();
@@ -425,28 +373,48 @@ mod tests {
     fn untyped_html_or_active_base_cannot_authorize_a_source() {
         let mut untyped = response("<title>Fixture</title>");
         untyped.headers.clear();
-        assert_eq!(html(&untyped).unwrap_err().code, "unavailable");
+        assert_eq!(college_html(&untyped).unwrap_err().code, "unavailable");
         let mut prefix = response("<title>Fixture</title>");
         prefix
             .headers
             .insert("content-type".into(), "text/html-unknown".into());
-        assert_eq!(html(&prefix).unwrap_err().code, "unavailable");
+        assert_eq!(college_html(&prefix).unwrap_err().code, "unavailable");
         let base = response(r#"<base href="https://foreign.example/"><title>Fixture</title>"#);
-        assert_eq!(html(&base).unwrap_err().code, "unavailable");
+        assert_eq!(college_html(&base).unwrap_err().code, "unavailable");
     }
 
     #[test]
     fn hidden_or_ambiguous_directory_members_do_not_grant_egress() {
-        let member = json!({"name":"集成电路科学与工程学院","resolved_http_url":IC_ROOT_URL,"hidden_in_source":false});
+        let member = json!({"name":"集成电路科学与工程学院","listed_href":IC_ROOT_URL,"resolved_http_url":IC_ROOT_URL,"hidden_in_source":false});
         let mut hidden = member.clone();
         hidden["hidden_in_source"] = json!(true);
         for entries in [json!([hidden]), json!([member.clone(), member])] {
             assert_eq!(
-                directory_attribution(&json!({"entries":entries}))
-                    .unwrap_err()
-                    .code,
+                college_directory_attribution(
+                    &json!({"entries":entries}),
+                    "集成电路科学与工程学院",
+                    IC_ROOT_URL
+                )
+                .unwrap_err()
+                .code,
                 "unavailable"
             );
         }
+    }
+
+    #[test]
+    fn nonliteral_directory_root_does_not_authorize_the_source() {
+        let directory = json!({"entries":[{
+            "name":"集成电路科学与工程学院",
+            "listed_href":"https://ic.buaa.edu.cn/./",
+            "resolved_http_url":IC_ROOT_URL,
+            "hidden_in_source":false
+        }]});
+        assert_eq!(
+            college_directory_attribution(&directory, "集成电路科学与工程学院", IC_ROOT_URL)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
     }
 }
