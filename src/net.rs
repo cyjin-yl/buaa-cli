@@ -125,6 +125,20 @@ const BEIJING_ROBOTS_URL: &str = "https://beijing.buaa.edu.cn/robots.txt";
 pub(crate) const SHENYUAN_ROOT_URL: &str = "https://hc.buaa.edu.cn/";
 pub(crate) const SHENYUAN_NOTICES_URL: &str = "https://hc.buaa.edu.cn/index/tzgg.htm";
 const SHENYUAN_ROBOTS_URL: &str = "https://hc.buaa.edu.cn/robots.txt";
+pub(crate) const H3I_ROOT_URL: &str = "https://h3i.buaa.edu.cn/index.htm";
+pub(crate) const H3I_NOTICES_URL: &str = "https://h3i.buaa.edu.cn/rcpy/cpgg.htm";
+const H3I_ROBOTS_URL: &str = "https://h3i.buaa.edu.cn/robots.txt";
+
+pub(crate) fn h3i_path_allowed(path: &str) -> bool {
+    if matches!(path, "/index.htm" | "/robots.txt" | "/rcpy/cpgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/info/1141/")
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn shenyuan_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") {
@@ -267,6 +281,7 @@ enum SourceProfile {
     Aviation,
     Beijing,
     Shenyuan,
+    H3i,
 }
 
 impl SourceProfile {
@@ -281,6 +296,7 @@ impl SourceProfile {
             Self::Aviation => AVIATION_ROBOTS_URL,
             Self::Beijing => BEIJING_ROBOTS_URL,
             Self::Shenyuan => SHENYUAN_ROBOTS_URL,
+            Self::H3i => H3I_ROBOTS_URL,
         }
     }
 
@@ -295,6 +311,7 @@ impl SourceProfile {
             Self::Aviation => ".buaa-cli-aviation-cache",
             Self::Beijing => ".buaa-cli-beijing-cache",
             Self::Shenyuan => ".buaa-cli-shenyuan-cache",
+            Self::H3i => ".buaa-cli-h3i-cache",
         }
     }
 
@@ -352,6 +369,11 @@ impl SourceProfile {
                 url.host_str() == Some("hc.buaa.edu.cn")
                     && url.query().is_none()
                     && shenyuan_path_allowed(url.path())
+            }
+            Self::H3i => {
+                url.host_str() == Some("h3i.buaa.edu.cn")
+                    && url.query().is_none()
+                    && h3i_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -544,6 +566,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_shenyuan(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Shenyuan)
+    }
+
+    pub(crate) fn open_h3i(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::H3i)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2084,6 +2110,86 @@ mod tests {
             hash(ARTICLE.as_bytes())
         );
         assert_eq!(cached["title"], "Fixture original headline");
+        assert_eq!(
+            cached["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn h3i_article_refreshes_only_declared_original_and_preserves_offline_text() {
+        const ARTICLE: &str = r#"<div class="detail"><div class="fl1"><div class="wp flex"><div class="left"><div><form><div class="ar_tit"><h3>Original source headline</h3><h6><span>Count</span><span>时间：2026-10-01</span></h6></div><div class="ar_article"><div id="vsb_content_1043"><div class="v_news_content"><p>Source policy paragraph.</p></div></div></div></form></div></div></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1141/42.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::H3i;
+        for (url, body) in [
+            (H3I_ROOT_URL, br#"<a href="rcpy/cpgg.htm">Fixture recruitment board</a>"# as &[u8]),
+            (H3I_NOTICES_URL, br#"<div class="news"><div class="fl1"><div class="wp"><ul class="list11 flex"><li><a class="a" href="../info/1141/42.htm"><div class="time"><h3>10-01</h3><h6>2026</h6></div><div class="rr"><h4 class="h4s2">Distinct listing teaser</h4></div></a></li></ul></div></div></div>"# as &[u8]),
+        ] {
+            seed(&client, url, body, false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(&client, H3I_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let undeclared = Url::parse("https://h3i.buaa.edu.cn/info/1141/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::h3i::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://h3i.buaa.edu.cn/info/1141/42.htm").unwrap();
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::H3i;
+        let output = crate::announcements::h3i::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Original source headline");
+        assert_eq!(output["published_at"], "2026-10-01");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::H3i;
+        let cached = crate::announcements::h3i::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
+        assert_eq!(cached["title"], "Original source headline");
         assert_eq!(
             cached["body_paragraphs"],
             serde_json::json!(["Source policy paragraph."])
