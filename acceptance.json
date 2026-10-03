@@ -595,6 +595,70 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "beijing_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/95",
+          "stack_base": "PR94 exact d38441e82fa39f689cb7c9ea92c292e576eea6b7; owned work/beijing-announcements, parent unmerged; no root-main or deployed Beijing claim",
+          "commands": [
+            "announcements college-source beijing root|notices [--online|--refresh]",
+            "announcements list with college=beijing, category=gggs, source-advertised page and inclusive date/title filters",
+            "announcements article with canonical Beijing /info/1014/<id>.htm URL declared by the retained board and optional source_page"
+          ],
+          "authority": "Retained official directory member41, non-hidden 北京学院, exact literal/resolved HTTPS https://beijing.buaa.edu.cn/, directory SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9. Ordinal41 is not an academic school identifier. Actual root declares xwdt/gggs.htm, selected retained listing declares the article. Directory/root/list discovery stays cache-first on the same private identity and permanent shared governor.",
+          "robots": {
+            "url": "https://beijing.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "byte_length": 1693,
+            "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791051384132,
+            "immutable": false,
+            "first_cli_exit": 8,
+            "root_request_sent_in_first_cli": false
+          },
+          "root": {
+            "url": "https://beijing.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 46071,
+            "sha256": "81ed48c09183e073039b0b08a4801f8cfb28b63794897b8754ec5539605b002f",
+            "fetched_at_unix_ms": 1791051615557,
+            "immutable": false,
+            "source_hints": 64,
+            "hints_truncated": true
+          },
+          "notices": {
+            "url": "https://beijing.buaa.edu.cn/xwdt/gggs.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 19680,
+            "sha256": "5e80e54ae1eda74068fe58ec56dfca36bc6fbd1a847974c3c4b33ab5d90a7503",
+            "fetched_at_unix_ms": 1791051991093,
+            "immutable": false,
+            "entries": 3,
+            "dates": ["2026-09-22", "2026-09-22", "2026-09-08"],
+            "inclusive_first_date_filtered_entries": 2,
+            "summaries_omitted": true
+          },
+          "article": {
+            "url": "https://beijing.buaa.edu.cn/info/1014/1188.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 437099,
+            "sha256": "33f1588c5d183fca89893ab6063a486fc99b4ae904156a663ec40ff8ad93f0f8",
+            "fetched_at_unix_ms": 1791052711871,
+            "immutable": false,
+            "published_at": "2026-09-22",
+            "body_paragraphs": 795,
+            "tables": 3,
+            "raw_personal_prose_published": false,
+            "proof_mode": "one actual declared original GET initially returned unavailable at the old paragraph cap; source-specific corrected extraction is actual native cache-only use, not another live article GET"
+          },
+          "proof": "Exactly four governed public GETs including cold robots. Private base64/size/hash and same-UID mode0600 regular single-link originals under mode0700 matched independently. Actual native cached listing returns3, date filter2, corrected article795 with source header/listing title and date/hash matches. Unadvertised page2 exits7, undeclared article exits3, off-host/source-page input exits2 before a selected request; offline production governor bytes stay unchanged. Policy remains60000/900000ms, auth disarmed, no latch/pending outcome; no authentication, campus write, TLS/challenge/robots bypass or automatic retry. No actual 304 or immutable revalidation claim.",
+          "body_bound_correction": "The actual original has one art-main/body and795 nonempty paragraphs, including table cells; the shared512 limit rejected it without dropping text. A synthetic1024-table consumer failed red before raising the shared bound to1024; all ordered paragraphs now survive and1025 is still unavailable. HTML remains bounded to2MiB and each paragraph to8KiB, with no per-source/URL exception or account-safety relaxation. Source header is direct art-tit/h3 with Chinese 日期 caption; ambiguous bodies fail and sidebar/body dates are not promoted.",
+          "focused_proof": "Three source parser cases and one real-loopback transport case passed for dot dates/real-date filtering, scoped headings/header/body/table cells, missing-header and ambiguous-body refusal,1024/1025 boundary, advertised ordinal binding, undeclared target refusal, selected-only refresh and offline original reuse. All exhaustive traffic is offline synthetic/loopback; private originals or prose are not public fixtures/review inputs.",
+          "quality_gate": "Owned Beijing source passed locked offline build and full tests:224library+19CLI passes,2ignored,5suites; strict all-target clippy and formatter check passed. Four focused synthetic/loopback cases passed, with the long-table1024/1025 regression reproduced red before the shared bound correction. Prior aviation220+19 and other dated receipts retain their original source-head scope. This development gate is not independent approval, trusted/privateCI or deployed root-main proof.",
+          "limits": "One college, one current notice board and one declared own-site article. No later-page live observation, complete history/archive extraction, all-college/faculty completion, other attachment retrieval/OCR, publisher signatures/security/rights certification or authenticated campus service. Actual source check, full quality gate and exact-head publication/integration/runtime/Pages evidence remain separate; stacked parent is not inferred approved. Legitimate campus write capabilities remain in scope; current transaction intent none and assignment submission owner-controlled. Aggregate announcements acceptance remains partial."
+        },
         "aviation_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/93",
           "commands": [
