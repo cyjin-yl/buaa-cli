@@ -258,7 +258,19 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
             parse_iso_date(text.strip_prefix("发布日期：")?.trim())
         })
         .next();
-    let (paragraphs, attachment_hints, attachments_found) = article_body(document.root_element())?;
+    let bodies = Selector::parse("div.v_news_content").map_err(|_| unavailable())?;
+    let mut bodies = document.select(&bodies);
+    let body = bodies.next().ok_or_else(|| {
+        failed_contract(
+            "IC article requires its source body container",
+            file!(),
+            line!(),
+        )
+    })?;
+    if bodies.next().is_some() {
+        return Err(unavailable());
+    }
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
     let article = ArticleDocument {
         title,
         category: Some("1042".into()),
@@ -302,6 +314,19 @@ mod tests {
         assert_eq!(
             value["body_paragraphs"],
             json!(["Source policy paragraph."])
+        );
+    }
+
+    #[test]
+    fn ambiguous_article_bodies_do_not_become_combined_prose() {
+        let source = response(
+            r#"<div class="ar_tit"><h3>Fixture policy</h3></div><div class="v_news_content"><p>Desktop paragraph.</p></div><div class="mbody ph"><div class="v_news_content"><p>Mobile duplicate.</p></div></div>"#,
+        );
+        assert_eq!(
+            normalize(&source, &college_html(&source).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
         );
     }
 
