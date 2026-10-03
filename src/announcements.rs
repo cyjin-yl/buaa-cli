@@ -164,16 +164,25 @@ fn normalized_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
         .join(" ")
 }
 
-/// Linear DOM walk with no ancestor rescans or subtree copies. Script/style,
-/// template and noscript payloads are not source prose.
-fn element_text(element: ElementRef<'_>) -> String {
-    if element.ancestors().any(|node| {
+fn inert_element(element: ElementRef<'_>) -> bool {
+    element.ancestors().any(|node| {
         node.value()
             .as_element()
             .is_some_and(|node| matches!(node.name(), "script" | "style" | "template" | "noscript"))
-    }) {
+    })
+}
+
+/// Script/style/template/noscript payloads are not source prose.
+fn element_text(element: ElementRef<'_>) -> String {
+    if inert_element(element) {
         return String::new();
     }
+    active_element_text(element)
+}
+
+/// Linear DOM walk after the caller has checked the outer context; no ancestor
+/// rescans or subtree copies, including for active image-only attachment links.
+fn active_element_text(element: ElementRef<'_>) -> String {
     let root = element.id();
     let mut current = element.first_child();
     let mut output = String::new();
@@ -534,6 +543,9 @@ fn article_body(document: &Html) -> Result<(Vec<String>, Vec<Value>, bool), Erro
     let mut attachment_hints: Vec<Value> = Vec::new();
     let mut attachments_found = false;
     for anchor in document.select(&link_selector) {
+        if inert_element(anchor) {
+            continue;
+        }
         let Some(href) = anchor.value().attr("href") else {
             continue;
         };
@@ -544,7 +556,7 @@ fn article_body(document: &Html) -> Result<(Vec<String>, Vec<Value>, bool), Erro
         if attachment_hints.len() < MAX_ATTACHMENT_HINTS {
             attachment_hints.push(json!({
                 "href": href,
-                "text": normalized_text(anchor.text()),
+                "text": active_element_text(anchor),
             }));
         }
     }
@@ -1214,6 +1226,37 @@ mod tests {
             parse_article(html.as_bytes(), &url).unwrap_err().code,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn inert_attachment_links_and_code_labels_are_not_source_hints() {
+        let input = r#"<h2>Fixture article</h2><div class="v_news_content"><p>Source paragraph.</p><template><a href="/inactive.pdf">Inactive label</a></template><noscript><a href="/fallback.pdf">Fallback label</a></noscript><a href="/active.pdf">Visible label<script>private-code-marker</script><style>private-style-marker</style></a><a href="/image-only.pdf"><img src="/fixture.png"></a></div>"#;
+        let url = Url::parse("https://news.buaa.edu.cn/info/1010/42.htm").unwrap();
+        let response = Response {
+            url: url.to_string(),
+            status: 200,
+            headers: std::collections::BTreeMap::new(),
+            body: input.as_bytes().to_vec(),
+            sha256: format!("{:x}", Sha256::digest(input.as_bytes())),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let output = article_output(&response, parse_article(&response.body, &url).unwrap());
+        assert_eq!(
+            output["attachments"]["hints"],
+            json!([
+                {"href":"/active.pdf","text":"Visible label"},
+                {"href":"/image-only.pdf","text":""}
+            ])
+        );
+        assert_eq!(output["attachments"]["found"], true);
+        assert!(!output.to_string().contains("private-code-marker"));
+        let inactive_only = r#"<h2>Fixture article</h2><div class="v_news_content"><p>Source paragraph.</p><template><a href="/inactive.pdf">Inactive label</a></template></div>"#;
+        let document = parse_article(inactive_only.as_bytes(), &url).unwrap();
+        assert!(!document.attachments_found);
+        assert!(document.attachment_hints.is_empty());
     }
 
     #[test]
