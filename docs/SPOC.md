@@ -1,9 +1,10 @@
 # SPOC public surface — contract draft
 
-**Status: PENDING OWNER REVIEW.** This is contract *evidence and a draft*, not an
-approved service contract. It authorizes no authenticated read, no course
-inventory, and no course/media download. The SPOC acceptance item stays **blocked** until an
-owner reviews this contract and supplies a rights-cleared course inventory.
+**Status: AUTHENTICATED CONTRACT UNVERIFIED.** This is public-source contract
+*evidence and a draft*, not a working authenticated course adapter or a permission
+grant. The SPOC acceptance item stays **blocked** on the verified current
+course/session/material read contract, accessible authorized course inventory
+and private credential delivery. Source declarations do not establish these facts.
 
 `buaa spoc surface` and `buaa spoc script` are read-only contract tooling, not
 authenticated adapters. They observe fixed public pages and one explicitly
@@ -48,7 +49,11 @@ allowed), then stays cache-first on the same client; refresh `surface entry` sep
 discover changed declarations. A syntactically allowed but undeclared URL
 returns unsupported before the selected fetch, even if old script bytes exist.
 Script bytes are immutable at their URL: conflicting refresh bytes are refused,
-not overwritten. The filename fingerprint is opaque, not a publisher checksum.
+not overwritten. Each fresh HTTP 200 script response must pass its own JavaScript
+MIME and byte bounds before comparison with the retained original. Identical bytes
+cannot reuse the original MIME to admit a new wrong- or missing-MIME response;
+failure leaves original retrieval/revalidation metadata unchanged. The filename
+fingerprint is opaque, not a publisher checksum.
 
 Network-enabled modes allow only:
 
@@ -133,7 +138,7 @@ the fix and passed afterward, with zero selected requests; all twelve focused
 SPOC cases then passed. Actual corrected native offline use retained the same
 typed entry/script provenance and unchanged governor bytes.
 
-Final locked offline build/full-tests/strict-all-target-clippy/formatter gate
+Prior-head locked offline build/full-tests/strict-all-target-clippy/formatter gate
 passed: **205 library + 18 CLI tests**, two ignored, five suites. Earlier actual
 native `script --refresh` returned `cache_status=revalidated`, revalidation
 HTTP 200 at `1790952887461`, preserving original bytes/hash/fetched timestamp;
@@ -161,13 +166,13 @@ Middleware is INCO; the root sets a `newSpoc` session cookie.
    `<form>`. The SPOC login and course UI are delivered by client-side
    JavaScript. Any authenticated contract must therefore discover endpoints
    from the client bundle (and any XHR/fetch calls it makes), not by scraping a
-   form. This is the principal open item for the owner.
-2. **Entry path.** The canonical entry is `/spocnew/` (trailing slash); the bare
-   `/spocnew` path HTTP-redirects to it.
+   form. This remains a technical prerequisite for an authenticated adapter.
+2. **Entry path.** The observed fixed entry is `/spocnew/` (trailing slash); the
+   public-source observer does not admit the bare `/spocnew` path.
 3. **Session cookie.** The server issues `newSpoc`; a future authenticated flow
    must treat it as a session token, handle it only via the governed client
    (which currently disables cookie forwarding), and never print it.
-4. **No completion automation.** Consistent with the acceptance item, any
+4. **No fabricated attendance or completion.** Consistent with the acceptance item, any
    future adapter must not fabricate attendance or course completion.
 
 ## Not covered
@@ -177,6 +182,8 @@ Middleware is INCO; the root sets a `newSpoc` session cookie.
 - Any byte-verified download or provenance chain for course content.
 - The `live` (classroom replay) acceptance item, which is separate.
 
-Until the owner reviews this contract and provides a rights-cleared course
-inventory, the SPOC acceptance item remains **blocked** and no authenticated
-SPOC read is attempted.
+The verified current course/session/material read contract, accessible authorized
+inventory and private credential delivery remain unresolved. Public-source
+evidence is not an authenticated service or permission grant. No authenticated
+SPOC read has been attempted by this implementation; any later operation remains
+subject to the shared governor and deliberate one-attempt authentication boundary.

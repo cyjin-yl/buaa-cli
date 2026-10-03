@@ -269,18 +269,18 @@ fn script_url(input: &str) -> Result<Url, Error> {
     Ok(url)
 }
 
-fn validate_script(response: &Response) -> Result<(), Error> {
-    let mime_ok = response.headers.get("content-type").is_some_and(|value| {
+pub(crate) fn validate_script(
+    status: u16,
+    content_type: Option<&str>,
+    byte_length: usize,
+) -> Result<(), Error> {
+    let mime_ok = content_type.is_some_and(|value| {
         let mime = media_type(value);
         ["text/javascript", "application/javascript"]
             .iter()
             .any(|allowed| mime.eq_ignore_ascii_case(allowed))
     });
-    if response.status != 200
-        || !mime_ok
-        || response.body.is_empty()
-        || response.body.len() > MAX_SCRIPT
-    {
+    if status != 200 || !mime_ok || byte_length == 0 || byte_length > MAX_SCRIPT {
         return Err(Error::new(
             "unavailable",
             "source-declared script lacks supported HTTP status, JavaScript MIME or byte bounds",
@@ -333,7 +333,11 @@ pub(crate) fn script_with_client(
     // The entry stays cache-first. Only the selected script may be refreshed;
     // its bytes are retained immutably, even though the filename is not a checksum.
     client.with_cache_mode(mode).get(target, true, |response| {
-        validate_script(response)?;
+        validate_script(
+            response.status,
+            response.headers.get("content-type").map(String::as_str),
+            response.body.len(),
+        )?;
         let mut snapshot = json!({
             "schema_version":1,"type":"spoc_public_script","result":"script_snapshot",
             "reference_policy":"retained_entry_snapshot; refresh spoc surface entry separately to discover changed declarations",
@@ -599,7 +603,9 @@ mod tests {
         let mut missing_mime = response(200, "application/javascript", "synthetic source");
         missing_mime.headers.clear();
         assert_eq!(
-            validate_script(&missing_mime).unwrap_err().code,
+            validate_script(missing_mime.status, None, missing_mime.body.len())
+                .unwrap_err()
+                .code,
             "unavailable"
         );
         for source in [
@@ -608,7 +614,16 @@ mod tests {
             response(200, "application/javascript", ""),
             response(200, "application/javascript", &"x".repeat(MAX_SCRIPT + 1)),
         ] {
-            assert_eq!(validate_script(&source).unwrap_err().code, "unavailable");
+            assert_eq!(
+                validate_script(
+                    source.status,
+                    source.headers.get("content-type").map(String::as_str),
+                    source.body.len(),
+                )
+                .unwrap_err()
+                .code,
+                "unavailable"
+            );
         }
     }
 }
