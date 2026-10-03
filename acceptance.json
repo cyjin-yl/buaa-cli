@@ -595,6 +595,47 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "shenyuan_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/97",
+          "stack_base": "PR96 exact e1a7875d7facc025889063b21cd668b4d374b8f1; owned work/shenyuan-announcements, explicitly dependent on unmerged PR96/PR94; no root-main or deployed claim",
+          "commands": [
+            "announcements college-source shenyuan root|notices [--online|--refresh]",
+            "announcements list with college=shenyuan, category=tzgg, source-advertised page and inclusive date/title filters",
+            "announcements article with a canonical /info/1083/<id>.htm URL declared by its retained listing and optional source_page"
+          ],
+          "authority": "Retained official directory member39, non-hidden 沈元学院, exact literal/resolved HTTPS https://hc.buaa.edu.cn/. Hidden shared-host member40 is not an alias; ordinals are not academic school IDs. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9; derived serialized JSON SHA separately9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. Actual root declares index/tzgg.htm; the selected original is declared by that retained board. Source discovery stays cache-first on the same UID/home and permanent shared governor.",
+          "robots": {
+            "url": "https://hc.buaa.edu.cn/robots.txt", "http_status": 404, "content_type": "text/html", "byte_length": 1693,
+            "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407", "fetched_at_unix_ms": 1791057885447,
+            "immutable": false, "first_cli_exit": 8, "root_request_sent_in_first_cli": false
+          },
+          "root": {
+            "url": "https://hc.buaa.edu.cn/", "http_status": 200, "content_type": "text/html", "byte_length": 93287,
+            "sha256": "65d8edc424822e73954c6f1c9bb2c4357e81d1be4536348e6c312cb65ead6c2c", "fetched_at_unix_ms": 1791058111988,
+            "immutable": false, "source_hints": 56, "hints_truncated": false
+          },
+          "notices": {
+            "url": "https://hc.buaa.edu.cn/index/tzgg.htm", "http_status": 200, "content_type": "text/html", "byte_length": 60789,
+            "sha256": "4a05204f80bf821d43985b4aed4d714cfd7669e50d660a457aa02cea7a9ec8d8", "fetched_at_unix_ms": 1791058428630,
+            "immutable": false, "canonical_rows": 12, "unfetched_dynamic_query_links": 3,
+            "dates": ["2026-09-29", "2026-09-18", "2026-09-17", "2026-09-12", "2026-09-12", "2026-09-12", "2026-09-10", "2026-09-06", "2026-06-17", "2026-06-04", "2026-05-28", "2026-05-18"],
+            "inclusive_selected_date_range_entries": 2, "source_hints": 64, "hints_truncated": true
+          },
+          "article": {
+            "url": "https://hc.buaa.edu.cn/info/1083/5252.htm", "http_status": 200, "content_type": "text/html", "byte_length": 33345,
+            "sha256": "2bc9e64f950b9c28516f5c5a8007317407dfaa0f358152986c01ea5c8c92748c", "fetched_at_unix_ms": 1791060009217,
+            "immutable": false, "published_at": "2026-09-29", "body_paragraphs": 7, "original_title_matches_listing_teaser": false,
+            "raw_personal_prose_published": false,
+            "proof_mode": "One actual declared original GET through a throwaway native production-client/governor observer with text_adapter_verified=false; original cache was privately verified. Observer source removed/factory restored private. Actual text extraction is later cache-only native article use, not another live original GET or live text-parser refresh."
+          },
+          "proof": "Exactly four governed public GETs including cold robots, same60000/900000-ms policy, disarmed auth/no latch/pending outcome/full deadline checks. Independent private base64/size/hash and same-UID mode0600 regular single-link originals under mode0700 matched. Actual native cached list12/filter2/article7; all original headings/ordered paragraphs/hash facts match, with the listing/original title discrepancy preserved. Undeclared/dynamic/off-host/unadvertised-page inputs refuse3/2/2/7 before selected GET; production governor bytes stay unchanged. No authentication, campus write, TLS/robots/challenge bypass, key split or automatic retry. No actual304/immutable revalidation claim.",
+          "inspection_correction": "Initial private source inspection counted only nine static info/ links and asserted nine rows; failure preserved. Including all twelve primary rows found three dynamic JSP links. The inspector, not the already-correct native parser, was corrected. Dynamic URLs remain source facts, not canonical article-fetch permission.",
+          "focused_proof": "Three synthetic parser cases plus one real-loopback case pass for canonical view/date/filter/dynamic-link preservation; direct header/first publication span/body/table scope, missing/invalid dates and ambiguity refusal; actual source-advertised page2 selection, undeclared refusal, selected-only refresh and offline original reuse while preserving a distinct article heading. All exhaustive fixtures are synthetic and sanitized; private originals/prose are not fixtures or review inputs.",
+          "quality_gate": "Owned Shenyuan source passed coherent locked offline build/full tests:228library+19CLI passes,2ignored,5suites; strict all-target clippy and formatter check passed. Build25.16s; fulltest79.13s including lib66.93s; clippy21.81s; fmtcheck0.57s. Four focused synthetic/loopback cases passed. Prior Beijing224+19/aviation220+19 receipts retain their original head scope. Actual native/local-UI proof is separate from fresh source checking and exact-head publication/integration; this is not trusted/privateCI, independent approval or root deployment.",
+          "metadata_native_proof": "After228+19 receipt metadata was recorded, the owned CLI rebuilt offline in a separately measured2.49s; thirteen actual cache-only commands exited0: Shenyuan root/board/list/filter/article; all five existing Beijing/IC/aviation/news/SCSE articles; help/schema/capabilities. Shenyuan counts12/2/7, all legacy original hashes/headings/dates/body/result preserved, SCSE still embedded_document,44 capabilities and announcements still partial. Actual command schema exposes Shenyuan; this is JSON observation, not independent schema-validator certification. Production governor SHA stayed8f91dbd3bb86f7b421cf01f423bf4284da83860c5895f5278047d07d95774fe8. This metadata rebuild is not another full-suite run or additional campus GET.",
+          "local_ui_proof": "Actual local Chromium desktop1365x900/mobile390x844 observation/screenshots confirmed the Shenyuan example, twelve rows/seven paragraphs, distinct original/listing headings, current228+19/prior224+19/220+19 labels and explicit unmerged PR96/PR94 bounds. Evidence navigation works; document widths match1365/390; scripts/external styles/frames/broken fragments0. Four direct-helper WebP captures were exclusively retained under private0700 outside source/tmp, with0600 single-link/hash checks. A raw tab.run/Puppeteer screenshot timed out30s and was preserved, not retried; the verified direct helper succeeded. Tabs released/server stopped. HTML SHA9597537121b9094df8d0fa63bff832c5a715ae29ec8b126cbebec03c0c48abb6; this is local proof, not Pages deployment.",
+          "limits": "One college, one current board and one declared original. No later-page live observation, dynamic-body retrieval, all-college/faculty completion, full history/archive extraction, other attachment download/OCR, publisher/security/rights certification or authenticated campus service. Parent/child exact-head approvals and maintainer source-contract decisions remain separate; no inferred merge/closure/deployment. Legitimate campus writes remain in broad scope, current intent none and assignment submission owner-controlled. Aggregate announcements acceptance remains partial."
+        },
         "beijing_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/95",
           "stack_base": "PR94 exact d38441e82fa39f689cb7c9ea92c292e576eea6b7; owned work/beijing-announcements, parent unmerged; no root-main or deployed Beijing claim",

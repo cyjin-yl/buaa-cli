@@ -23,6 +23,7 @@ pub(crate) mod aviation;
 pub(crate) mod beijing;
 pub(crate) mod ic;
 mod scse;
+pub(crate) mod shenyuan;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
 const MAX_HTML: usize = 2 * 1024 * 1024;
@@ -135,7 +136,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation and Beijing source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing and Shenyuan source binding",
     )
 }
 
@@ -717,6 +718,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("ic") => return ic::list(mode, &query),
         Some("aviation") => return aviation::list(mode, &query),
         Some("beijing") => return beijing::list(mode, &query),
+        Some("shenyuan") => return shenyuan::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -795,24 +797,26 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         .as_deref()
         .filter(|url| !url.trim().is_empty())
         .ok_or_else(invalid_article)?;
-    if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("ic.buaa.edu.cn")) {
-        return ic::article(mode, raw_url, query.source_page.unwrap_or(1));
-    }
-    if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("aviation.buaa.edu.cn")) {
-        return aviation::article(mode, raw_url, query.source_page.unwrap_or(1));
-    }
-    if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("beijing.buaa.edu.cn")) {
-        return beijing::article(mode, raw_url, query.source_page.unwrap_or(1));
+    let parsed = Url::parse(raw_url).map_err(|_| invalid_article())?;
+    match parsed.host_str() {
+        Some("ic.buaa.edu.cn") => {
+            return ic::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("aviation.buaa.edu.cn") => {
+            return aviation::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("beijing.buaa.edu.cn") => {
+            return beijing::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("hc.buaa.edu.cn") => {
+            return shenyuan::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        _ => {}
     }
     if query.source_page.is_some() {
         return Err(invalid_article());
     }
-    if Url::parse(raw_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .as_deref()
-        == Some("scse.buaa.edu.cn")
-    {
+    if parsed.host_str() == Some("scse.buaa.edu.cn") {
         return scse::article(mode, raw_url);
     }
     let url = resolve_article_url(raw_url)?;
@@ -837,6 +841,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "beijing" {
         return beijing::surface(mode, page);
+    }
+    if college == "shenyuan" {
+        return shenyuan::surface(mode, page);
     }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
@@ -916,7 +923,7 @@ fn describe_college_surface(
     if response.status != 200 || response.body.len() > MAX_HTML {
         return Err(unavailable());
     }
-    let document = if matches!(college, "ic" | "aviation" | "beijing") {
+    let document = if matches!(college, "ic" | "aviation" | "beijing" | "shenyuan") {
         college_html(response)?
     } else {
         Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?)
@@ -1089,16 +1096,16 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic, aviation and beijing bind the retained authoritative directory; selected boards must be declared by their retained root. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic, aviation, beijing and shenyuan bind the retained authoritative directory; selected boards must be declared by their retained root. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs). IC/aviation/Beijing boards bind the directory and retained root. Aviation returns desktop rows only and preserves unfetched external links. Page defaults to 1; later ordinals must be source-advertised. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg). IC/aviation/Beijing/Shenyuan boards bind the directory and retained root. Aviation and Shenyuan return their canonical source rows rather than combining alternate views; linked dynamic/external URLs are preserved, not fetch permission. Page defaults to 1; later ordinals must be source-advertised. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic","aviation","beijing",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
@@ -1108,7 +1115,7 @@ pub fn schema() -> Value {
                 "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
                     "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"const":"ic"}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}}]
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}}]
             },
             "output": {
                 "type": "object",
@@ -1118,10 +1125,10 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, or Beijing notice in category 1014. IC/aviation/Beijing articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. Other sources reject a non-null source_page. External links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, or Shenyuan notice in category 1083. IC/aviation/Beijing/Shenyuan articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. Article headings come from the original article, not from listing teasers. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014)/[0-9]{1,10}[.]htm$"}}}}]
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083)/[0-9]{1,10}[.]htm$"}}}}]
             },
             "output": {
                 "type": "object",
