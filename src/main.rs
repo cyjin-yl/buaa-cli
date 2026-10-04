@@ -343,7 +343,7 @@ fn run_announcements(args: &[String]) -> CliResult {
         _ => Err((
             "unsupported",
             3,
-            "expected announcements list, announcements list --online/--refresh, announcements article [--online|--refresh], or announcements history".into(),
+            "expected announcements list|article|document [--online|--refresh], announcements college-source <college> [root|notices|public-notices] [--online|--refresh], or announcements history".into(),
         )),
     }
 }
