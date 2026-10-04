@@ -329,7 +329,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
     let images = Selector::parse("img").map_err(|_| unavailable())?;
     let has_images = body.select(&images).any(|image| !inert_element(image));
     let mut output = article_output(

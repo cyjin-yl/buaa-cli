@@ -327,7 +327,7 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
                 line!(),
             )
         })?;
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
     Ok(article_output(
         response,
         ArticleDocument {

@@ -460,7 +460,8 @@ fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
         })
         .and_then(|raw| parse_iso_date(&raw));
 
-    let (paragraphs, attachment_hints, attachments_found) = article_body(document.root_element())?;
+    let (paragraphs, attachment_hints, attachments_found) =
+        article_body(document.root_element(), false)?;
     Ok(ArticleDocument {
         title,
         category: article_category_from_url(url),
@@ -471,7 +472,10 @@ fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
     })
 }
 
-fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
+fn article_body(
+    document: ElementRef<'_>,
+    has_other_source_text: bool,
+) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
     let body_selector = Selector::parse("div.v_news_content p").map_err(|_| unavailable())?;
     let mut paragraphs: Vec<String> = Vec::new();
     for paragraph in document.select(&body_selector) {
@@ -495,7 +499,7 @@ fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bo
         }
         paragraphs.push(text);
     }
-    if paragraphs.is_empty() {
+    if paragraphs.is_empty() && !has_other_source_text {
         return Err(failed_contract(
             "article must contain at least one v_news_content paragraph",
             file!(),
@@ -1086,7 +1090,7 @@ pub fn schema() -> Value {
         .map(|(slug, _)| json!(slug))
         .chain(std::iter::once(Value::Null))
         .collect();
-    json!({
+    let mut output = json!({
         "document": {
             "input":{"type":"object","additionalProperties":false,"required":["article_url"],"properties":{"article_url":{"type":"string","description":"Reviewed HTTPS SCSE notice article; the viewer must declare exactly one supported original PDF."}}},
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
@@ -1130,7 +1134,7 @@ pub fn schema() -> Value {
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. College unextracted image/PDF/table content explicitly produces embedded_document or partial_text rather than fabricated full text. Mse reports table text outside source paragraphs as missing; table-only/empty bodies remain unavailable. Preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {
@@ -1143,7 +1147,31 @@ pub fn schema() -> Value {
                 "description": "Parsed snapshot with asserted provenance and SHA-256 byte binding.",
             }
         },
-    })
+    });
+    output["article"]["output"]["properties"] = json!({
+        "body_tables": {
+            "type":"array","maxItems":MAX_ENTRIES,
+            "description":"Mse source tables only; normalized text is derived from original HTML whose retrieval hash remains unchanged. Arrays preserve table/row/cell source order. Span attributes are DOM-decoded source strings and omitted when absent, not inferred defaults.",
+            "items": {
+                "type":"object","additionalProperties":false,"required":["source_order","caption","rows"],
+                "properties": {
+                    "source_order":{"type":"integer","minimum":1,"maximum":MAX_ENTRIES},
+                    "caption":{"type":["string","null"],"maxLength":MAX_PARAGRAPH},
+                    "rows":{"type":"array","maxItems":MAX_BODY_PARAGRAPHS,"items":{
+                        "type":"object","additionalProperties":false,"required":["cells"],
+                        "properties":{"cells":{"type":"array","maxItems":MAX_ENTRIES,"items":{
+                            "type":"object","additionalProperties":false,"required":["header","text"],
+                            "properties":{"header":{"type":"boolean","description":"True only for an original th cell."},"text":{"type":"string","maxLength":MAX_PARAGRAPH},"rowspan":{"type":"string","maxLength":MAX_TEXT},"colspan":{"type":"string","maxLength":MAX_TEXT}}
+                        }}}
+                    }}
+                }
+            }
+        },
+        "body_table_count":{"type":"integer","minimum":0,"maximum":MAX_ENTRIES},
+        "body_table_row_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS},
+        "body_table_cell_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS * MAX_ENTRIES}
+    });
+    output
 }
 
 #[cfg(test)]

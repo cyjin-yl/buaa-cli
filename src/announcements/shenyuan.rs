@@ -353,7 +353,7 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     if bodies.next().is_some() {
         return Err(unavailable());
     }
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
     Ok(article_output(
         response,
         ArticleDocument {

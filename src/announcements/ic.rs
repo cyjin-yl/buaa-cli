@@ -274,7 +274,7 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     if bodies.next().is_some() {
         return Err(unavailable());
     }
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
     let article = ArticleDocument {
         title,
         category: Some("1042".into()),

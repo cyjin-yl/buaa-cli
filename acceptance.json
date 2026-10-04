@@ -601,6 +601,59 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "mse_table_text_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/107",
+          "stack_base": "PR106 exact bb2dad9fb359718ed73bc9950c3bd75b804b1350; owned work/mse-table-text, dependent on unmerged PR106 and PR104/PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
+          "command": "announcements article with the same retained-board-declared canonical Mse URL and existing source_page selection; cache-only original reused, no new command or endpoint",
+          "source_original": {
+            "url": "https://mse.buaa.edu.cn/info/1061/2881.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "response_body_byte_length": 522352,
+            "response_body_sha256": "dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3",
+            "fetched_at_unix_ms": 1791096587326,
+            "new_campus_gets": 0,
+            "original_bytes_are_public_fixtures": false
+          },
+          "actual_cached_article": {
+            "result": "full_text",
+            "body_paragraph_count": 1,
+            "body_table_count": 1,
+            "body_table_row_count": 339,
+            "body_table_cell_count": 2331,
+            "all_cells_captions_and_declared_spans_privately_equal": true,
+            "original_heading_date_paragraph_retrieval_and_attribution_unchanged": true,
+            "production_governor_sha256": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "production_governor_byte_unchanged": true
+          },
+          "table_contract": {
+            "representation": "body_tables preserves separate table/row/cell source order, nullable source captions, original th header facts, normalized active cell text and only present DOM-decoded rowspan/colspan strings. Original retrieval hash/timestamp remain original HTML facts, not a checksum or publication time of derived table text.",
+            "budgets": "Existing 2-MiB HTML bound; paragraphs plus table rows share1024 blocks; at most256 tables and256 cells per row,8-KiB normalized text per row/caption,512-byte declared span strings. Overflow fails instead of truncating.",
+            "admission": "Ordinary table-only text is readable. Empty/nontext bodies, nested source tables and unowned nonempty table text fail closed. Inert/code/fallback payloads are excluded. Images and attachment contents remain partial/unfetched.",
+            "not_claimed": "No inferred cells or span defaults, grid expansion, visual-layout or paragraph/table interleaving reconstruction, image/OCR/attachment retrieval, complete college/history coverage or authenticated service. Paragraph-wrapped cells remain in body_paragraphs as well as separate table records. All other article callers retain nonempty-paragraph admission."
+          },
+          "affected_proof": {
+            "announcement_cases_passed": 66,
+            "mse_cases_passed": 10,
+            "new_uncertainty_cases": "Mixed inline source order, inert content and declared spans;1024/1025-row overflow without partial success;source-present entity-decoded newline/tab span strings preserved without numeric interpretation.",
+            "migrated_consumer_contract": "Real isolated Mse-profile loopback now observes full table text and table records on cache reuse, rather than the prior partial-table expectation.",
+            "build_scope": "Fresh owned target/native native build and actual cache-only article; copied artifact mode failure retained, no chmod, parent-target overwrite or host build.",
+            "source_checks": "After the bounded feature finding,10 affected Mse cases pass0/24.31s including compilation (execution1.33s); strict all-target clippy0/8.01s and formatter check0/0.79s. Earlier66-announcement and nine-Mse receipts retain their pre-finding scope. No additional full-suite run.",
+            "typed_schema_proof": "Actual native schema and capabilities exit0/0.02s each; table/cell/caption/span/count types are present,44 capabilities consume this slice and retain announcements partial-live-verified. Actual cache-only article0/0.61s exactly equals its earlier full table output and the private source records. This is not independent full JSON-Schema-validator certification.",
+            "schema_compile_correction": "First typed-schema build101/6.55s reached json! macro recursion limits. Moving the properties Value into a separate existing-style assignment built0/17.56s without raising crate recursion limits or copying derived table records. This mechanical move followed the supplied source-check bytes.",
+            "prior_receipts": "PR106's missing-table/partial-text and250/251/252+19 gates below remain prior-source receipts, not current table capability or current full-suite evidence."
+          },
+          "bounded_feature_check": {
+            "status": "completed_one_concrete_finding_corrected",
+            "main_bound_mse_source_sha256": "7b7bd6a78caad91abcf9c5c053b2f5de8e87cf21ffe7073bf8850070daae3a2c",
+            "main_bound_announcements_source_sha256": "340a259aa737e00cb3f3e7998413bfc339ce4c7b5b694701aada9af25a602c6f",
+            "scope": "One stateless no-tool completion received the complete public Mse module, complete affected shared admission/output/schema functions and active-text helpers;52,755 prompt characters. Not a repeated generic source sweep. Legacy/PDF/network/governor implementations, other modules and private originals/cache were not supplied or reviewed.",
+            "finding": "MSE-TABLE-001: control-character rejection incorrectly rejected source-present entity-decoded newline/tab span strings despite the raw-string preservation contract. These bounded output-only strings are JSON-escaped, not interpreted as numeric spans or executable input.",
+            "response": "Accepted. Exact synthetic reproduction failed101/16.46s with0passed/1failed; removed only the control-character rejection, preserving the512-byte bound and source strings. Corrected10-case Mse suite passes and includes the regression. No new campus observation or generic re-review.",
+            "limits": "Main binds supplied bytes; checker observed no checkout/SHA/runtime/rights/CI/permissions and gives no platform approval. Final code also contains the accepted span correction, its regression and the move-only schema-macro split; no independent final-head approval is inferred."
+          },
+          "safety_and_scope": "No new campus GET, authentication, campus mutation or governor identity/policy/floor/latch/reset change. Legitimate owner-controlled read/write capabilities remain included; current campus-write intent is none, assignment submission remains with the owner. No subagent or peer revival. Exact-head independent approval, trusted CI and explicit maintainer stack decisions are external gates, not an inferred merge or root/Pages deployment."
+        },
         "mse_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/105",
           "stack_base": "PR104 exact a3ce5c8a3a7ea7b8fe84aac45556393a05c5e46f; owned work/mse-announcements, explicitly dependent on unmerged PR104/PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
