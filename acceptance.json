@@ -738,7 +738,8 @@
           "native_proof": "Actual cache-only root/board/list/filter/article and pretransport refusals;6/3/1 partial_text source facts privately equal. Page2offline/page6refresh/categorytzgg refuse7/7/2 without GET or governor byte changes. Undeclared42 temporary observer refuses3 before the single declared original GET. Original-only native build11.04/article0.38; original paragraph/header/date/hash/length unchanged, no live text-parser refresh.",
           "governor": "Same production UID/home/permanent account-wide governor,60,000-ms requests/900,000-ms background floors,one in-flight through validation/cache persistence;4 deliberate GETs,full shared deadline before each,cache-first source discovery,no auth or campus writes. Final observed private state SHA68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab;disarmed/no latch/pendingNone/network_failures0,unchanged on offline/refusal proof. Never reset/delete/split identity/loosen TLS/robots/proxy/cookie/redirect/challenge controls.",
           "focused_proof": "Six new source consumer/parser and real-loopback cases pass0/21.00s,including compilation; execution0.47s. Defend exact excerpt bounds/order/ambiguous dates and filter exclusion, primary view/headings, source header/body scope and table completeness, scoped ordinals, mixed declared categories and only-selected refresh/offline reuse.",
-          "quality_gate": "Renewed coherent locked offline build/full251library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-001 local-cache/no-request correction. Separate formatter0.88/build8.43/fulltest77.67 including library64.93/CLI0.19/clippy8.67/fmtcheck0.70 seconds. Seven focused1.23s and red26.97/green5.44 are separate,not extra full-suite runs. Initial883/250+19/full82.57/native/localUI retain previous head scope. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
+          "quality_gate": "Renewed coherent locked offline build/full252library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-002 shared-page ambiguity correction. Separate nativebuild7.94/formatter0.88/fulltest74.71 including library70.39/CLI0.29/clippy7.79/fmtcheck0.59 seconds. Pagination regression red26.29/green6.31 and seven Mse focused1.07 are separate,not extra full-suite runs. Actual cached list0/0.51,advertised uncachedpage2 refusal7/0.13,originalarticle0/0.36 privately match entire retained outputs. Initial883/250+19 gate/UI and4a03/251+19 gate keep their own scope;no251 local visual proof was performed. Proof-only CLI-suite-index assumption corrected from completed output without replay; empty binary suite precedes CLI. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
+          "prior_quality_gate_4a03": "Renewed coherent locked offline build/full251library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-001 local-cache/no-request correction. Separate formatter0.88/build8.43/fulltest77.67 including library64.93/CLI0.19/clippy8.67/fmtcheck0.70 seconds. Seven focused1.23s and red26.97/green5.44 are separate,not extra full-suite runs. Initial883/250+19/full82.57/native/localUI retain previous head scope. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
           "prior_quality_gate_883": "Coherent locked offline build/full250library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass. Separate command boundaries formatter0.97/build11.43/fulltest82.57 including library71.67/CLI0.19/clippy18.54/fmtcheck0.63 seconds. Six focused21.00s and intermediate native builds are separate,not extra full-suite runs. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab stayed unchanged,0newGETs/noauth/write. Prior244/238/232/228/224/220+19 receipts retain original source-head scope. This is not trustedCI,formal independent approval or deployment.",
           "initial_source_check_failures": [
             {
@@ -777,6 +778,56 @@
             "omitted": "9 separate legacy college/PDF-viewer modules,docs/acceptance,integrationtests,unlistedmodules/externalcrateimplementations",
             "main_bound_bytes_only": true,
             "independent_checkout_sha_runtime_original_cache_rights_ci_or_approval": false
+          },
+          "accepted_pagination_finding_response": {
+            "id": "MSE-002",
+            "decision": "accepted_and_fixed",
+            "checked_source_head": "4a03e282feddc3505a26833beb408f747f62e148",
+            "source_checker_scope": "7 complete public Rust files342641chars,stateless no-tool session-default plaintext;9 legacy college/PDF-viewer modules+docs/acceptance/integrationtests/external implementations omitted",
+            "problem": "shared advertised page discovery selected the first active ordinal despite another scoped declaration of a different destination",
+            "reproduction": "two active ordinal2 anchors declare distinct allowed category pages; old shared helper returns the first instead of unavailable",
+            "code_cutover": "scan all active matching ordinal declarations; retain one allowed URL without copying; reject distinct destinations and deduplicate identical URLs",
+            "shared_callers": "university,scse,ic,aviation,beijing,shenyuan,zfai,iiif,mse keep their existing selectors and URL admission",
+            "red": {
+              "exit": 101,
+              "seconds": 26.29,
+              "observed": "Ok first allowed URL instead of unavailable"
+            },
+            "green": {
+              "exit": 0,
+              "seconds": 6.31,
+              "conflicting_ordinal_rejected": true,
+              "existing_identical_declaration_consumer_assertion_retained": true
+            },
+            "renewed_seven_mse_focused": {
+              "exit": 0,
+              "seconds": 1.07
+            },
+            "actual_native_smoke": {
+              "locked_offline_build": {
+                "exit": 0,
+                "seconds": 7.94
+              },
+              "cached_list": {
+                "exit": 0,
+                "seconds": 0.51
+              },
+              "advertised_uncached_page2": {
+                "exit": 7,
+                "seconds": 0.13
+              },
+              "cached_original_article": {
+                "exit": 0,
+                "seconds": 0.36
+              },
+              "entire_retained_outputs_privately_equal": true
+            },
+            "production_governor_unchanged": true,
+            "production_governor_sha": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "new_campus_gets": 0,
+            "campus_writes": 0,
+            "governor_state_code_identity_policy_floors_latch_or_auth_changed": false,
+            "formal_independent_approval": false
           },
           "accepted_source_finding_response": {
             "id": "MSE-001",

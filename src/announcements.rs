@@ -263,6 +263,7 @@ fn advertised_page_url(
     let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
     let document = Html::parse_document(text);
     let selector = Selector::parse(ordinal_links).map_err(|_| unavailable())?;
+    let mut selected = None;
     for link in document.select(&selector) {
         if element_text(link).parse::<u32>().ok() != Some(page) {
             continue;
@@ -277,12 +278,23 @@ fn advertised_page_url(
                 line!(),
             ));
         }
-        return Ok(url);
+        match selected.as_ref() {
+            Some(previous) if previous != &url => {
+                return Err(Error::new(
+                    "unavailable",
+                    "requested page has conflicting advertised destinations; no URL was selected",
+                ));
+            }
+            None => selected = Some(url),
+            _ => {}
+        }
     }
-    Err(Error::new(
-        "unavailable",
-        "requested page is not advertised by the latest listing; no URL was inferred",
-    ))
+    selected.ok_or_else(|| {
+        Error::new(
+            "unavailable",
+            "requested page is not advertised by the latest listing; no URL was inferred",
+        )
+    })
 }
 
 /// True when an operator-asserted history `source_url` is a news-center listing.
@@ -1292,7 +1304,7 @@ mod tests {
 
     #[test]
     fn pagination_uses_advertised_ordinals_not_filename_numbers() {
-        let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span></div>"#;
+        let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span><span class="p_no"><a href="tzgg/252.htm">2</a></span></div>"#;
         let base = latest_listing_url("tzgg").unwrap();
         let allowed =
             |url: &Url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/");
@@ -1340,6 +1352,24 @@ mod tests {
                 2,
                 "div.pb_sys_common span.p_no a[href]",
                 allowed
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn pagination_rejects_conflicting_ordinal_destinations() {
+        let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/251.htm">2</a></span></div>"#;
+        let base = latest_listing_url("tzgg").unwrap();
+        assert_eq!(
+            advertised_page_url(
+                html,
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                |url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/")
             )
             .unwrap_err()
             .code,
