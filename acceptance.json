@@ -746,6 +746,19 @@
             "mode": "stateless no-tool completion, not an agent/platform reviewer",
             "independent_sha_checkout_runtime_private_originals_permissions_rights_ci_or_approval": false
           },
+          "renewed_source_check": {
+            "source_head": "d42b96564a755a464540624b47655a2209ef0855",
+            "complete_public_rust_files": 15,
+            "prompt_characters": 481747,
+            "result": "no_concrete_findings",
+            "concrete_findings": 0,
+            "rejected_cache_claim_re_evaluated": "Checker confirms nested-Result processing persists validated cacheable source/robots bytes before inner parse/denial propagation.",
+            "mode": "stateless no-tool completion, not an agent/platform reviewer",
+            "main_bound_source_bytes": true,
+            "independent_sha_checkout_runtime_private_originals_permissions_rights_ci_or_approval": false,
+            "limitations": "Governor/organizations/all reviewed college modules/SCSE viewer/html helpers supplied; docs/acceptance/integration-test files/external crates/unlisted dependencies omitted. No actual previous-head checkout/diff, runtime, original pages, cache or rights/approval inference."
+          },
+          "renewed_metadata_native_proof": "After renewed quality/finding metadata, owned native build0/1.69s and actual cached capabilities/article0. Capabilities consume corrected finding decisions; entire original partial_text/title/date/orderedbody/retrieval privately unchanged, governor fab6025a84db0fb84accda1c867989c076fa4a16a5afa44d0e8da7a6539a77cb unchanged,0newGETs/no extra fullsuite. HTML byte-identical to actual visual copy, prior desktop/mobile captures retain exact-surface scope.",
           "metadata_native_proof": "After244+19 quality metadata, owned native build0/6.82s and eight actual cache-only commands0: Iiif root/board/list/filter/article, help/schema/capabilities. Counts15/2/1, partial_text result and entire original source entries/date-filter/article/retrieval privately equal;44-capability output consumes244+19 and keeps announcements partial. Governor fab6025a84db0fb84accda1c867989c076fa4a16a5afa44d0e8da7a6539a77cb unchanged,0newGETs/no extra fullsuite. Unaffected legacy receipts keep exact-parent scope, no legacy body/date contract changed or redundant replay. Native schema is not independent complete-validator certification.",
           "local_ui_proof": "Actual local Chromium desktop1365x900/mobile390x844 observations/direct-helper WebP captures confirm Iiif example/date filter/source15/2/1/partial_text/untranscribedimage/unfollowedlink/64-hint truncation/unmerged102/100/98/96/94/current244+19/prior238/232/228/224/220. Fresh evidence-link clicks within1px of viewport top, document widths1365/390, scripts/externalstyles/frames/brokenfragments0; mobile code local scroller. Four captures exclusively copied/fsynced0600 same-UID singlelink under private0700 outside source/tmp with exact observed HTML copy; HTML SHA b2e6574225275c7268ebec7f9f2a1c7294400e17661eb46daec4bdcb59770b05. Tabs released/localserver stopped; not Pages deployment."
         },
