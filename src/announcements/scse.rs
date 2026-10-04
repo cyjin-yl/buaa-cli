@@ -162,11 +162,17 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         latest
     } else {
         client.get(&latest, false, |response| {
-            advertised_page_url(&response.body, &latest, page, |url| {
-                plain_url(url, false)
-                    && url.path().starts_with("/xwgg/gggs/")
-                    && list_path(url.path())
-            })
+            advertised_page_url(
+                &response.body,
+                &latest,
+                page,
+                "div.pb_sys_common span.p_no a[href]",
+                |url| {
+                    plain_url(url, false)
+                        && url.path().starts_with("/xwgg/gggs/")
+                        && list_path(url.path())
+                },
+            )
         })?
     };
     client.with_cache_mode(mode).get(&target, false, |response| {
@@ -493,14 +499,28 @@ mod tests {
         };
         let body = br#"<div class="pb_sys_common"><span class="p_no"><a href="gggs/1.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(body, &base, 2, allowed).unwrap().path(),
+            advertised_page_url(
+                body,
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                allowed
+            )
+            .unwrap()
+            .path(),
             "/xwgg/gggs/1.htm"
         );
         let wrong_board = br#"<div class="pb_sys_common"><span class="p_no"><a href="xydt/1.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(wrong_board, &base, 2, allowed)
-                .unwrap_err()
-                .code,
+            advertised_page_url(
+                wrong_board,
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                allowed
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
     }

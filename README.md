@@ -158,6 +158,14 @@ The International Innovation college binds visible 国际创新学院 member45 a
 printf '%s\n' '{"college":"h3i","since":"2026-08-24","until":"2026-10-01"}' | ./target/debug/buaa announcements list
 ```
 
+The Sino-French Aviation college binds visible 中法航空学院 member46 and exact literal/resolved `https://zfai.buaa.edu.cn/`; the ordinal is not an academic school code. Its actual root declares `/xxgg1.htm`, labelled 信息公告, rather than a guessed `tzgg` board. `announcements college-source zfai [root|notices]` reports source metadata, and `{"college":"zfai"}` selects that information listing (`xxgg1` only). Nine source-ordered rows retain separate `rr/h4s2` titles and `rr/p.ps3` excerpts; excerpts are not original article text. Dates require one `MM-DD` and one `YYYY` slot; missing, invalid or duplicated slots stay null and cannot satisfy a date filter. The source `pagebar` advertises ordinal2 as `/xxgg1/2.htm` and ordinal3 as `/xxgg1/1.htm`; no address or ordinal is inferred, no automatic traversal occurs, and neither later page was observed live. Canonical `/info/1196/` articles must be declared by the selected retained board. The observed original's direct `left/form/ar_tit/h3` title, second header span's `时间：2026-09-14` and unique `vsb_content_1001/v_news_content` body privately match all five nonempty paragraphs. Click scripts, other dates, sidebar headings and listing excerpts are not substitutes. This owned source depends on unmerged PR100/PR98/PR96/PR94, not root-main or Pages deployment. [Zfai source evidence and limits](docs/STATUS.md#directory-bound-zfai-information-announcements).
+
+```sh
+# Cache-only information source and inclusive date filter; no raw article output.
+./target/debug/buaa announcements college-source zfai notices
+printf '%s\n' '{"college":"zfai","since":"2026-09-12","until":"2026-09-14"}' | ./target/debug/buaa announcements list
+```
+
 Shared text reads retain at most 1,024 nonempty source paragraphs, each at most 8 KiB, from HTML bounded to 2 MiB. Overflow is an error rather than truncation; no URL/source-specific allowance exists. The previous 512-paragraph limit rejected a legitimate 795-paragraph table notice; a synthetic 1,024/1,025 boundary reproduced red before the shared limit correction and passes green. This does not relax request, authentication or account-safety limits.
 
 Some computer-college policies are image/PDF-preview pages. They return `embedded_document` or `partial_text`, not invented plaintext: preview scripts are excluded, OCR is not performed, and attachment/preview paths are unverified hints, never downloads. Historical SCSE listing bytes stay offline and operator-asserted, including original HTTP source URLs. Colleges beyond the individually observed slices and complete historical coverage remain unimplemented.
@@ -176,7 +184,7 @@ printf '%s\n' '{"url":"https://news.buaa.edu.cn/info/1010/69802.htm"}' | ./targe
 
 `article` returns the selected page's `v_news_content` paragraphs, publication date and attachment-link hints; it never downloads attachments. Use `--online` for an authorized cache miss or `--refresh` for conditional revalidation. Robots and content requests each retain the same cross-process governor lease. With the operator's raised 60-second interval, a cold robots fetch can leave the content request beyond the 30-second bounded wait; the CLI reports rate-limited and never retries automatically.
 
-`announcements history` remains fully offline for the news-center and reviewed SCSE listing sources: base64 UTF-8 HTML with asserted `provenance.source_url`, optional `capture_timestamp` and `asserted_by`. Output is `announcements_history`, with `retrieval.sha256` binding the supplied bytes. Provenance is operator-asserted, not verified archive attribution. IC/aviation/Beijing/Shenyuan/H3i archive extraction, further college-site adapters, broader faculty/college coverage, complete history and broader attachment retrieval remain unimplemented. [Current proof and limitations](docs/STATUS.md#2026-09-29-announcements-news-center-migration).
+`announcements history` remains fully offline for the news-center and reviewed SCSE listing sources: base64 UTF-8 HTML with asserted `provenance.source_url`, optional `capture_timestamp` and `asserted_by`. Output is `announcements_history`, with `retrieval.sha256` binding the supplied bytes. Provenance is operator-asserted, not verified archive attribution. IC/aviation/Beijing/Shenyuan/H3i/Zfai archive extraction, further college-site adapters, broader faculty/college coverage, complete history and broader attachment retrieval remain unimplemented. [Current proof and limitations](docs/STATUS.md#2026-09-29-announcements-news-center-migration).
 
 ## SPOC public sources (contract evidence)
 `buaa spoc surface [root|entry]` observes fixed public pages. `buaa spoc script` accepts a JSON URL on stdin only if the retained entry actively declares that same-host, query-free `/spocnew/js/<name>.<8hex>.js` source. Both use the same private cache/account-wide governor and report sanitized metadata, not raw HTML/JavaScript, fields, values or source configuration. No script execution, authentication or course/media operation.
@@ -268,7 +276,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | fengrubei | Fengrubei template access | implemented-observed-read |
 | crater | Crater allocation/API/SSH | blocked |
 | organizations | Authoritative college/institute directory | implemented-observed-read |
-| announcements | College current/historical announcements | partial-live-verified: bounded university/computer/IC/aviation/Beijing/Shenyuan/H3i sources and one original PDF; broader sources/history pending |
+| announcements | College current/historical announcements | partial-live-verified: bounded university/computer/IC/aviation/Beijing/Shenyuan/H3i/Zfai sources and one original PDF; broader sources/history pending |
 | archive | CDX/Memento historical lookup | partial-live-verified: dated index and one exact homepage replay; broader history pending |
 | recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |
 | life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |
