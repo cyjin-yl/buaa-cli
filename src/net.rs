@@ -134,6 +134,22 @@ const ZFAI_ROBOTS_URL: &str = "https://zfai.buaa.edu.cn/robots.txt";
 pub(crate) const IIIF_ROOT_URL: &str = "https://iiif.buaa.edu.cn/";
 pub(crate) const IIIF_NOTICES_URL: &str = "https://iiif.buaa.edu.cn/xwgg/tzgg.htm";
 const IIIF_ROBOTS_URL: &str = "https://iiif.buaa.edu.cn/robots.txt";
+pub(crate) const MSE_ROOT_URL: &str = "https://mse.buaa.edu.cn/";
+pub(crate) const MSE_NOTICES_URL: &str = "https://mse.buaa.edu.cn/xwdt/gggs.htm";
+const MSE_ROBOTS_URL: &str = "https://mse.buaa.edu.cn/robots.txt";
+
+pub(crate) fn mse_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwdt/gggs/")
+        .or_else(|| path.strip_prefix("/info/1061/"))
+        .or_else(|| path.strip_prefix("/info/1058/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn iiif_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwgg/tzgg.htm") {
@@ -314,6 +330,7 @@ enum SourceProfile {
     H3i,
     Zfai,
     Iiif,
+    Mse,
 }
 
 impl SourceProfile {
@@ -331,6 +348,7 @@ impl SourceProfile {
             Self::H3i => H3I_ROBOTS_URL,
             Self::Zfai => ZFAI_ROBOTS_URL,
             Self::Iiif => IIIF_ROBOTS_URL,
+            Self::Mse => MSE_ROBOTS_URL,
         }
     }
 
@@ -348,6 +366,7 @@ impl SourceProfile {
             Self::H3i => ".buaa-cli-h3i-cache",
             Self::Zfai => ".buaa-cli-zfai-cache",
             Self::Iiif => ".buaa-cli-iiif-cache",
+            Self::Mse => ".buaa-cli-mse-cache",
         }
     }
 
@@ -420,6 +439,11 @@ impl SourceProfile {
                 url.host_str() == Some("iiif.buaa.edu.cn")
                     && url.query().is_none()
                     && iiif_path_allowed(url.path())
+            }
+            Self::Mse => {
+                url.host_str() == Some("mse.buaa.edu.cn")
+                    && url.query().is_none()
+                    && mse_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -624,6 +648,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_iiif(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Iiif)
+    }
+
+    pub(crate) fn open_mse(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Mse)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2425,6 +2453,92 @@ mod tests {
             hash(ARTICLE.as_bytes())
         );
         assert_eq!(cached["title"], "Original source title");
+        assert_eq!(
+            cached["body_paragraphs"],
+            serde_json::json!(["Original source paragraph."])
+        );
+        assert_eq!(cached["result"], "partial_text");
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_article_refreshes_only_board_declared_original_from_advertised_page() {
+        const ARTICLE: &str = r#"<div class="nymain"><div class="w16"><div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Original source title</h3><p><span class="date">日期：2026年09月21日</span></p></div><div class="art-body-box"><div class="art-body"><div class="ar_article" id="vsb_content"><div class="v_news_content"><table><tr><td>Unextracted source cell.</td></tr></table><p>Original source paragraph.</p></div></div></div></div></div></form></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1058/42.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Mse;
+        for (url, body) in [
+            (MSE_ROOT_URL, br#"<a href="xwdt/gggs.htm">Fixture notice board</a>"# as &[u8]),
+            (MSE_NOTICES_URL, br#"<div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"# as &[u8]),
+            ("https://mse.buaa.edu.cn/xwdt/gggs/8.htm", br#"<div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul><li><a href="../../info/1061/41.htm"><h3>Different listed category</h3></a></li><li><a href="../../info/1058/42.htm"><span>2026.09.21</span><h3>Distinct listing teaser</h3></a></li></ul></div></div></div></div></div>"# as &[u8]),
+        ] {
+            seed(&client, url, body, false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(&client, MSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let undeclared = Url::parse("https://mse.buaa.edu.cn/info/1058/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::mse::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://mse.buaa.edu.cn/info/1058/42.htm").unwrap();
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Mse;
+        let output = crate::announcements::mse::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Original source title");
+        assert_eq!(output["published_at"], "2026-09-21");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Original source paragraph."])
+        );
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(
+            output["source_listing"]["source_url"],
+            "https://mse.buaa.edu.cn/xwdt/gggs/8.htm"
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Mse;
+        let cached = crate::announcements::mse::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
         assert_eq!(
             cached["body_paragraphs"],
             serde_json::json!(["Original source paragraph."])

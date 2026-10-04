@@ -601,6 +601,147 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "mse_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/105",
+          "stack_base": "PR104 exact a3ce5c8a3a7ea7b8fe84aac45556393a05c5e46f; owned work/mse-announcements, explicitly dependent on unmerged PR104/PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
+          "commands": [
+            "announcements college-source mse root|notices [--online|--refresh]",
+            "announcements list with college=mse, category=gggs, source-advertised ordinal and inclusive date/title filters",
+            "announcements article with canonical /info/1061/<id>.htm or /info/1058/<id>.htm declared by the selected retained board; source_page selects its source-advertised ordinal"
+          ],
+          "authority": "Visible official-directory member1 材料科学与工程学院 under 航空航天学科群, exact literal/resolved http://mse.buaa.edu.cn/; ordinal is not an academic school code. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9; separately derived50-entry JSON SHA9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. HTTPS is deliberately observed separately using the existing explicit SCSE precedent; no directory-declared HTTPS/alias/silent upgrade/protocol-equivalence claim. Actual selected root declares xwdt/gggs.htm labelled 公告公示.",
+          "directory_identity": {
+            "member": {
+              "category": "航空航天学科群",
+              "hidden_in_source": false,
+              "link_kind": "http",
+              "listed_href": "http://mse.buaa.edu.cn/",
+              "name": "材料科学与工程学院",
+              "resolved_http_url": "http://mse.buaa.edu.cn/",
+              "source_order": 1
+            },
+            "selected_https_root": "https://mse.buaa.edu.cn/",
+            "selection_relation": "deliberate separate HTTPS observation; original exact HTTP identity/directory retrieval preserved",
+            "directory_declares_https": false,
+            "protocol_equivalence_verified": false
+          },
+          "claim_preflight": {
+            "claimed_at": "2026-10-04T06:28:07Z",
+            "actual_actor": "cyjin-yl",
+            "actual_admin_maintain_push_permission": true,
+            "all_open_issue_pr_entries": 16,
+            "all_open_prs": 6,
+            "recent_discussion_entries": 100,
+            "matching_claims_or_linked_prs": 0,
+            "issue_comment_bodies_are_authority": false
+          },
+          "robots": {
+            "url": "https://mse.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "response_body_byte_length": 1693,
+            "response_body_sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791095564027
+          },
+          "root": {
+            "url": "https://mse.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html",
+            "response_body_byte_length": 58503,
+            "response_body_sha256": "b91fd89a2b497c8cf7c8b53c959b418e442e5014b4a93b5fc8b9763f65e9cd97",
+            "fetched_at_unix_ms": 1791095656666,
+            "same_host_path_hints": 64,
+            "hints_truncated": true,
+            "discovery_complete": false
+          },
+          "notices": {
+            "url": "https://mse.buaa.edu.cn/xwdt/gggs.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "response_body_byte_length": 27183,
+            "response_body_sha256": "d516618de3c93869e10ccdb91b8cf09006a2017d898222866ff87afdd62daaaa",
+            "fetched_at_unix_ms": 1791095787159,
+            "entry_count": 6,
+            "source_order_dates": [
+              "2026-09-21",
+              "2026-09-15",
+              "2026-09-09",
+              "2026-09-15",
+              "2026-09-14",
+              "2026-07-27"
+            ],
+            "inclusive_filter": {
+              "since": "2026-09-15",
+              "until": "2026-09-21",
+              "entry_count": 3
+            },
+            "titles_dates_links_excerpts_and_order_privately_match_original": true,
+            "source_advertised_pages": {
+              "2": "https://mse.buaa.edu.cn/xwdt/gggs/4.htm",
+              "3": "https://mse.buaa.edu.cn/xwdt/gggs/3.htm",
+              "4": "https://mse.buaa.edu.cn/xwdt/gggs/2.htm",
+              "5": "https://mse.buaa.edu.cn/xwdt/gggs/1.htm"
+            },
+            "live_observed_pages": [
+              1
+            ],
+            "same_host_path_hints": 64,
+            "hints_truncated": true,
+            "declared_article_categories": [
+              "1061",
+              "1058"
+            ],
+            "later_pages_or_other_category_bodies_live_verified": false
+          },
+          "article": {
+            "url": "https://mse.buaa.edu.cn/info/1061/2881.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "response_body_byte_length": 522352,
+            "response_body_sha256": "dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3",
+            "fetched_at_unix_ms": 1791096587326,
+            "published_at": "2026-09-21",
+            "body_paragraph_count": 1,
+            "result": "partial_text",
+            "original_heading_differs_from_listing_teaser": true,
+            "original_heading_date_paragraph_and_retrieval_privately_match": true,
+            "unextracted_table_count": 1,
+            "source_table_rows": 339,
+            "source_table_cells": 2331,
+            "paragraph_wrapped_table_cells": 0,
+            "image_count": 0,
+            "attachment_hint_count": 0,
+            "full_table_text_extracted": false,
+            "source_table_content_or_personal_prose_published": false
+          },
+          "excerpt_correction": {
+            "initial_cached_listing_and_filter_exit": 7,
+            "cause": "512-byte heading budget incorrectly applied to actual source paragraph excerpts",
+            "original_excerpt_utf8_lengths": [
+              534,
+              583,
+              595,
+              440,
+              571,
+              517
+            ],
+            "original_excerpts_reconstructed_or_truncated": false,
+            "correction": "use existing 8-KiB paragraph budget for source a/p excerpts, not a shared budget relaxation",
+            "heading_href_entry_html_and_shared_body_budgets_unchanged": true,
+            "red_test_exit": 101,
+            "red_seconds": 1.45,
+            "green_test_exit": 0,
+            "green_seconds": 10.32,
+            "boundary": "600-byte UTF8 and8192-byte paragraphs retained fully,8193 rejected",
+            "zero_case_unqualified_exact_run": "exit0/19.79s,not proof"
+          },
+          "native_proof": "Actual cache-only root/board/list/filter/article and pretransport refusals;6/3/1 partial_text source facts privately equal. Page2offline/page6refresh/categorytzgg refuse7/7/2 without GET or governor byte changes. Undeclared42 temporary observer refuses3 before the single declared original GET. Original-only native build11.04/article0.38; original paragraph/header/date/hash/length unchanged, no live text-parser refresh.",
+          "governor": "Same production UID/home/permanent account-wide governor,60,000-ms requests/900,000-ms background floors,one in-flight through validation/cache persistence;4 deliberate GETs,full shared deadline before each,cache-first source discovery,no auth or campus writes. Final observed private state SHA68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab;disarmed/no latch/pendingNone/network_failures0,unchanged on offline/refusal proof. Never reset/delete/split identity/loosen TLS/robots/proxy/cookie/redirect/challenge controls.",
+          "focused_proof": "Six new source consumer/parser and real-loopback cases pass0/21.00s,including compilation; execution0.47s. Defend exact excerpt bounds/order/ambiguous dates and filter exclusion, primary view/headings, source header/body scope and table completeness, scoped ordinals, mixed declared categories and only-selected refresh/offline reuse.",
+          "quality_gate": "Coherent locked offline build/full250library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass. Separate command boundaries formatter0.97/build11.43/fulltest82.57 including library71.67/CLI0.19/clippy18.54/fmtcheck0.63 seconds. Six focused21.00s and intermediate native builds are separate,not extra full-suite runs. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab stayed unchanged,0newGETs/noauth/write. Prior244/238/232/228/224/220+19 receipts retain original source-head scope. This is not trustedCI,formal independent approval or deployment.",
+          "retained_failures": "Worktree FICLONE/plaincheckout fallback2.46/freshnative52.67, no artifact copy/chmod/parent overwrite/host build. Initial real cached excerpt rejection retained; wrongly unqualified exact test selected0 cases is not proof. Temporary observer build101/5.97 incorrectly called as_str on already-static str; corrected actual type build0/2.84,source deleted/factory crate-private. Private cache helper wrong output-field assumption corrected to stored body_base64/sha256/status/headers without command replay. No raw source/private headings/prose/table values in diagnostics or external review.",
+          "limits": "One current board/six rows and one declared original with only actual paragraphs retained and a large nonparagraph table explicitly missing. No later-page/body1058 live proof,full table extraction,pure-table success,all-college/faculty/history,attachment bytes,image/OCR,rights/publisher/security certificate,authenticated service or recordings/Life. Legitimate owner-controlled campus writes remain broadly included; none requested/needed here and assignment submission stays with owner. Stateless source check is not independent platform approval or trusted CI; exact-head external source-contract integration gates remain separate."
+        },
         "iiif_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/103",
           "stack_base": "PR102 exact eca2b12dff6d7bd453e7e019aac882bf392ea9c5; owned work/iiif-announcements, explicitly dependent on unmerged PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
