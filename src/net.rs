@@ -841,7 +841,7 @@ impl ArchiveClient {
             Ok(value) => value,
             Err(error) => {
                 lease
-                    .finish(Outcome::Success)
+                    .finish_without_request()
                     .map_err(|_| governor_error())?;
                 return Err(error);
             }
@@ -3016,6 +3016,68 @@ mod tests {
         assert_eq!(status.consecutive_network_failures, 1);
         assert!(status.cooldown_wait > Duration::from_secs(29));
         assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_cache_reload_failure_preserves_shared_network_backoff() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1061/42.htm "));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: 10\r\n\r\nab").unwrap();
+        });
+        let mut client = fixture.client(CacheMode::Revalidate, &server);
+        client.profile = SourceProfile::Mse;
+        seed(&client, MSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let target = Url::parse("https://mse.buaa.edu.cn/info/1061/42.htm").unwrap();
+        assert_eq!(
+            client.snapshot(&target, false).unwrap_err().code,
+            "network_error"
+        );
+        let governor = fixture.governor();
+        assert_eq!(governor.status().unwrap().consecutive_network_failures, 1);
+        assert_eq!(server.count(), 1);
+
+        // Expire only this isolated fixture's timers, never failure history.
+        let expire_synthetic_waits = || {
+            let path = fixture.0.join("governor/state.json");
+            let mut state: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            state["next_request_ms"] = serde_json::json!(0);
+            state["cooldown_until_ms"] = serde_json::json!(0);
+            fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
+        };
+        expire_synthetic_waits();
+        seed(&client, target.as_str(), b"retained source", false);
+        client.load(&target).unwrap().unwrap();
+        let cache_path = fixture.0.join("cache").join(cache_name(&target));
+        fs::write(&cache_path, b"{broken cache").unwrap();
+        // Deterministically simulate a cache change after get's initial load,
+        // before the real fetch's under-lease re-load; no scheduling race.
+        let error = client
+            .fetch(
+                &target,
+                false,
+                &governor,
+                &client.http_client().unwrap(),
+                |_| Ok(()),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "cache_invalid");
+        assert_eq!(server.count(), 1);
+        let retained = governor.status().unwrap();
+        assert_eq!(retained.consecutive_network_failures, 1);
+        assert!(!retained.request_wait.is_zero());
+
+        fs::remove_file(cache_path).unwrap();
+        expire_synthetic_waits();
+        assert_eq!(
+            client.snapshot(&target, false).unwrap_err().code,
+            "network_error"
+        );
+        let next_failure = governor.status().unwrap();
+        assert_eq!(next_failure.consecutive_network_failures, 2);
+        assert!(next_failure.cooldown_wait > Duration::from_secs(59));
+        assert_eq!(server.count(), 2);
     }
 
     #[test]

@@ -738,7 +738,82 @@
           "native_proof": "Actual cache-only root/board/list/filter/article and pretransport refusals;6/3/1 partial_text source facts privately equal. Page2offline/page6refresh/categorytzgg refuse7/7/2 without GET or governor byte changes. Undeclared42 temporary observer refuses3 before the single declared original GET. Original-only native build11.04/article0.38; original paragraph/header/date/hash/length unchanged, no live text-parser refresh.",
           "governor": "Same production UID/home/permanent account-wide governor,60,000-ms requests/900,000-ms background floors,one in-flight through validation/cache persistence;4 deliberate GETs,full shared deadline before each,cache-first source discovery,no auth or campus writes. Final observed private state SHA68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab;disarmed/no latch/pendingNone/network_failures0,unchanged on offline/refusal proof. Never reset/delete/split identity/loosen TLS/robots/proxy/cookie/redirect/challenge controls.",
           "focused_proof": "Six new source consumer/parser and real-loopback cases pass0/21.00s,including compilation; execution0.47s. Defend exact excerpt bounds/order/ambiguous dates and filter exclusion, primary view/headings, source header/body scope and table completeness, scoped ordinals, mixed declared categories and only-selected refresh/offline reuse.",
-          "quality_gate": "Coherent locked offline build/full250library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass. Separate command boundaries formatter0.97/build11.43/fulltest82.57 including library71.67/CLI0.19/clippy18.54/fmtcheck0.63 seconds. Six focused21.00s and intermediate native builds are separate,not extra full-suite runs. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab stayed unchanged,0newGETs/noauth/write. Prior244/238/232/228/224/220+19 receipts retain original source-head scope. This is not trustedCI,formal independent approval or deployment.",
+          "quality_gate": "Renewed coherent locked offline build/full251library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-001 local-cache/no-request correction. Separate formatter0.88/build8.43/fulltest77.67 including library64.93/CLI0.19/clippy8.67/fmtcheck0.70 seconds. Seven focused1.23s and red26.97/green5.44 are separate,not extra full-suite runs. Initial883/250+19/full82.57/native/localUI retain previous head scope. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
+          "prior_quality_gate_883": "Coherent locked offline build/full250library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass. Separate command boundaries formatter0.97/build11.43/fulltest82.57 including library71.67/CLI0.19/clippy18.54/fmtcheck0.63 seconds. Six focused21.00s and intermediate native builds are separate,not extra full-suite runs. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab stayed unchanged,0newGETs/noauth/write. Prior244/238/232/228/224/220+19 receipts retain original source-head scope. This is not trustedCI,formal independent approval or deployment.",
+          "initial_source_check_failures": [
+            {
+              "mode": "stateless slow structured16-file",
+              "complete_public_files": 16,
+              "characters": 506557,
+              "result": "failed_no_structured_response",
+              "findings_or_approval_observed": false
+            },
+            {
+              "mode": "distinct stateless slow schema-free7-file",
+              "complete_public_files": 7,
+              "characters": 339799,
+              "result": "failed_no_text_output",
+              "findings_or_approval_observed": false
+            }
+          ],
+          "initial_source_check": {
+            "source_head_main_bound": "883ddbc355c17e4dd225b747252559356b538ab7",
+            "result": "findings",
+            "public_files": [
+              "src/announcements/mse.rs",
+              "src/announcements.rs",
+              "src/net.rs",
+              "src/main.rs",
+              "src/organizations.rs",
+              "src/governor.rs",
+              "src/html.rs"
+            ],
+            "full_public_file_count": 7,
+            "full_public_characters": 339799,
+            "mode": "stateless no-tool session-default plain-text completion,not an agent/platform reviewer",
+            "findings": [
+              "MSE-001 accepted_and_fixed"
+            ],
+            "omitted": "9 separate legacy college/PDF-viewer modules,docs/acceptance,integrationtests,unlistedmodules/externalcrateimplementations",
+            "main_bound_bytes_only": true,
+            "independent_checkout_sha_runtime_original_cache_rights_ci_or_approval": false
+          },
+          "accepted_source_finding_response": {
+            "id": "MSE-001",
+            "decision": "accepted_and_fixed",
+            "checked_source_head": "883ddbc355c17e4dd225b747252559356b538ab7",
+            "source_checker_scope": "7 complete public Rust files339799chars,stateless no-tool session-default plaintext;9 separate college/PDF-viewer modules+docs/acceptance/integrationtests/externalcrates omitted",
+            "problem": "under-lease cache re-load error reported Outcome::Success without HTTP, resetting shared network-failure streak",
+            "reproduction": "real isolated Mse-profile loopback truncation creates failure1; expire only synthetic timers; valid initial cache then corrupt before direct under-lease fetch re-load; cache_invalid/no additional HTTP erased streak beforefix; next real loopback truncation should escalate",
+            "code_cutover": "existing RequestLease::finish_without_request instead of finish(Outcome::Success) for under-lease local cache-load failure",
+            "existing_precedent": "gateway transport local before_send error already uses the same finish_without_request",
+            "red": {
+              "exit": 101,
+              "seconds": 26.97,
+              "actual_streak": 0,
+              "expected_retained_streak": 1
+            },
+            "green": {
+              "exit": 0,
+              "seconds": 5.44,
+              "retains_first_streak": true,
+              "cache_error_target_requests_added": 0,
+              "next_actual_failure_streak": 2,
+              "next_actual_failure_cooldown_gt_seconds": 59
+            },
+            "renewed_seven_focused": {
+              "exit": 0,
+              "seconds": 1.23
+            },
+            "production_governor_unchanged": true,
+            "production_governor_sha": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "new_campus_gets": 0,
+            "governor_state_code_identity_policy_floors_latch_or_auth_changed": false,
+            "formal_independent_approval": false
+          },
+          "renewed_metadata_native_proof": "After accepted MSE-001/renewed251+19/finding metadata,owned native build0/7.38s and actual cache-only capabilities/article0. Capabilities consume accepted finding and renewed gate while announcements remainspartial; entire original partial_text/title/date/paragraph/retrieval privatelyequal. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newGETs. Earlier8native/250+19 scope preserved; unaffected7otherpaths not replayed. Corrected CLI-only cached article separately0/.56 beforemetadata,not another full suite or live refresh.",
+          "metadata_native_proof": "After actual250+19 gate metadata, owned native build0/5.98s and eight actual cache-only commands0: root/board/list/filter/article/help/schema/capabilities. Source counts6/3/1 partial_text,44-capability output consumes250+19 and keeps announcements partial. All original source rows/filter/article/title/date/paragraph/hash/length privately unchanged; same governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newGETs. New article undeclared-refresh/source-page6-refresh/noncanonical/offhost-with-source-page refusals3/7/2/2 before GET. Proof-script schema envelope KeyError corrected actual commands.announcements using retained output, no command replay or claimed full JSON-Schema validator.",
+          "local_ui_proof": "Actual local managed Chromium desktop1365x900/mobile390x844 observations and4WebP captures verify Mse cached examples,6/3/1 partial_text,exact HTTP identity/separate HTTPS retrieval,unextracted339-row/2331-cell table,64-hint truncation,unmerged104/102/100/98/96/94 and250+19/prior244/238/232/228/224/220 scope. Fresh evidence-link clicks within1px of viewport top;document widths1365/390,scripts/externalstyles/frames/brokenFragments0;mobile code is a local350/681 scroller. Four exclusive/fsynced0600 current-UID single-link captures under0700 plus observed HTML are preserved outside source/tmp. HTML SHAe187b9c428917838324cb5957fac54e73f8137c552d02526f2a073c7a560c9f9. Both managed tabs released; no Pages deployment.",
           "retained_failures": "Worktree FICLONE/plaincheckout fallback2.46/freshnative52.67, no artifact copy/chmod/parent overwrite/host build. Initial real cached excerpt rejection retained; wrongly unqualified exact test selected0 cases is not proof. Temporary observer build101/5.97 incorrectly called as_str on already-static str; corrected actual type build0/2.84,source deleted/factory crate-private. Private cache helper wrong output-field assumption corrected to stored body_base64/sha256/status/headers without command replay. No raw source/private headings/prose/table values in diagnostics or external review.",
           "limits": "One current board/six rows and one declared original with only actual paragraphs retained and a large nonparagraph table explicitly missing. No later-page/body1058 live proof,full table extraction,pure-table success,all-college/faculty/history,attachment bytes,image/OCR,rights/publisher/security certificate,authenticated service or recordings/Life. Legitimate owner-controlled campus writes remain broadly included; none requested/needed here and assignment submission stays with owner. Stateless source check is not independent platform approval or trusted CI; exact-head external source-contract integration gates remain separate."
         },
