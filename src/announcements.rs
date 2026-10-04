@@ -23,6 +23,7 @@ pub(crate) mod aviation;
 pub(crate) mod beijing;
 pub(crate) mod h3i;
 pub(crate) mod ic;
+pub(crate) mod iiif;
 mod scse;
 pub(crate) mod shenyuan;
 pub(crate) mod zfai;
@@ -138,7 +139,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i and Zfai source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai and Iiif source binding",
     )
 }
 
@@ -723,6 +724,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("shenyuan") => return shenyuan::list(mode, &query),
         Some("h3i") => return h3i::list(mode, &query),
         Some("zfai") => return zfai::list(mode, &query),
+        Some("iiif") => return iiif::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -825,6 +827,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("zfai.buaa.edu.cn") => {
             return zfai::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("iiif.buaa.edu.cn") => {
+            return iiif::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -864,6 +869,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "zfai" {
         return zfai::surface(mode, page);
+    }
+    if college == "iiif" {
+        return iiif::surface(mode, page);
     }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
@@ -945,7 +953,7 @@ fn describe_college_surface(
     }
     let document = if matches!(
         college,
-        "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai"
+        "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif"
     ) {
         college_html(response)?
     } else {
@@ -1119,16 +1127,16 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i and zfai bind the retained authoritative directory; selected boards must be declared by their retained root. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai and iiif bind the retained authoritative directory; selected boards must be declared by their retained root. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1). IC/aviation/Beijing/Shenyuan/H3i/Zfai boards bind the directory and retained root. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Page defaults to 1; later ordinals must be source-advertised. H3i has no reviewed later-page declaration and accepts page1 only. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif boards bind the directory and retained root. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date; absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i has no reviewed later-page declaration and accepts page1 only. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
@@ -1138,7 +1146,7 @@ pub fn schema() -> Value {
                 "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
                     "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
                     {"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
             },
             "output": {
@@ -1149,10 +1157,10 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, or Zfai information notice in category 1196. IC/aviation/Beijing/Shenyuan/H3i/Zfai articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, or Iiif notice in category 1186. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Iiif pure-image/empty bodies remain unavailable under the unchanged shared text admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196)/[0-9]{1,10}[.]htm$"}}}},
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186)/[0-9]{1,10}[.]htm$"}}}},
                     {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://h3i[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
             },
             "output": {
