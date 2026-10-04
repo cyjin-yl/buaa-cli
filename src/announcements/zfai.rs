@@ -139,10 +139,14 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
         {
             return Err(unavailable());
         }
-        let date = anchor
-            .select(&monthdays)
+        let mut row_monthdays = anchor.select(&monthdays);
+        let monthday = row_monthdays
             .next()
-            .zip(anchor.select(&years).next())
+            .filter(|_| row_monthdays.next().is_none());
+        let mut row_years = anchor.select(&years);
+        let year = row_years.next().filter(|_| row_years.next().is_none());
+        let date = monthday
+            .zip(year)
             .and_then(|(monthday, year)| source_date(&element_text(monthday), &element_text(year)));
         let (resolved_http_url, link_kind) = match listed_href {
             None => (None, "missing"),
@@ -392,6 +396,37 @@ mod tests {
         format!(
             r#"<h3>Sidebar heading</h3><div class="detail"><div class="fl1"><div class="wp flex"><div class="left"><form><div class="ar_tit"><h3>Original source heading</h3>{header}</div><div class="ar_article"><div id="vsb_content_1001"><div class="v_news_content">{body}</div></div></div></form></div></div></div></div>"#
         )
+    }
+
+    #[test]
+    fn ambiguous_date_slots_stay_unknown_and_cannot_satisfy_date_filters() {
+        let html = r#"<div class="news"><div class="fl1"><div class="wp"><ul class="list11 flex">
+<li><a class="a" href="info/1196/42.htm"><div class="time"><h3>09-14</h3><h3>09-15</h3><h6>2026</h6></div><div class="rr"><h4 class="h4s2">Ambiguous monthday</h4></div></a></li>
+<li><a class="a" href="info/1196/43.htm"><div class="time"><h3>09-14</h3><h6>2026</h6><h6>2025</h6></div><div class="rr"><h4 class="h4s2">Ambiguous year</h4></div></a></li>
+<li><a class="a" href="info/1196/44.htm"><div class="time"><h3>09-14</h3><h6>2026</h6></div><div class="rr"><h4 class="h4s2">Unambiguous source date</h4></div></a></li>
+</ul></div></div></div>"#;
+        let parsed = parse_listing(
+            &Html::parse_document(html),
+            &Url::parse(ZFAI_NOTICES_URL).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed
+                .entries
+                .iter()
+                .map(|entry| entry.date.as_deref())
+                .collect::<Vec<_>>(),
+            vec![None, None, Some("2026-09-14")]
+        );
+        let since = Some("2026-09-14".into());
+        let until = Some("2026-09-14".into());
+        let filtered: Vec<_> = parsed
+            .entries
+            .iter()
+            .filter(|entry| entry_in_scope(entry, &since, &until, &None))
+            .map(|entry| entry.title.as_str())
+            .collect();
+        assert_eq!(filtered, vec!["Unambiguous source date"]);
     }
 
     #[test]
