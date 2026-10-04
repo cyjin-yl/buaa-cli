@@ -298,7 +298,7 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
             parse_iso_date(text.strip_prefix("发布时间：")?.trim())
         })
         .next();
-    let (paragraphs, attachment_hints, attachments_found) = article_body(form)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(form, false)?;
     let mut output = article_output(
         response,
         ArticleDocument {

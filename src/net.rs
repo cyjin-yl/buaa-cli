@@ -2519,7 +2519,11 @@ mod tests {
             output["body_paragraphs"],
             serde_json::json!(["Original source paragraph."])
         );
-        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["result"], "full_text");
+        assert_eq!(
+            output["body_tables"][0]["rows"][0]["cells"],
+            serde_json::json!([{"header":false,"text":"Unextracted source cell."}])
+        );
         assert_eq!(
             output["source_listing"]["source_url"],
             "https://mse.buaa.edu.cn/xwdt/gggs/8.htm"
@@ -2543,7 +2547,8 @@ mod tests {
             cached["body_paragraphs"],
             serde_json::json!(["Original source paragraph."])
         );
-        assert_eq!(cached["result"], "partial_text");
+        assert_eq!(cached["body_tables"], output["body_tables"]);
+        assert_eq!(cached["result"], "full_text");
         assert_eq!(server.count(), 1);
     }
 

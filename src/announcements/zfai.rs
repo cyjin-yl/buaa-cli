@@ -357,7 +357,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
     Ok(article_output(
         response,
         ArticleDocument {
