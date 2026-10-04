@@ -19,7 +19,10 @@
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed. Only known pre-reboot history has an explicit offline plan/commit migration; unknown outcomes and missing/corrupt history cannot migrate. No reset or automatic recovery.",
         "boot_history_review": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/83",
-          "commands": ["buaa governor boot-review-plan", "buaa governor boot-review-commit --offline"],
+          "commands": [
+            "buaa governor boot-review-plan",
+            "buaa governor boot-review-commit --offline"
+          ],
           "contract": "Exact old-state SHA-256 and new-boot-bound preview plus typed intent, rechecked under the permanent shared lock. Preserve complete old private bytes before atomic state replacement. Carry full remaining waits with no elapsed-time credit; impose retained request/background policy floors; preserve cooldown saturation, rejection latch and network-failure history; disarm authentication. No remote request or namespace override.",
           "proof": "Six offline regressions pass: full carryover/raised policy/original history/auth disarm and retained failure backoff; rejection latch after waits cease and unfinished-outcome refusal; tampered/stale preview; saturated cooldown; partial snapshot no-overwrite; exact crash-snapshot reuse and completed replay refusal. Final integrated gate: 215 tests passed across five suites, two ignored; locked offline build, strict all-target clippy and formatter check passed. Actual CLI preview exits 0; online commit, malformed input and incorrect intent are rejected with exits 5/2/5. Production state stayed byte-identical during development checks.",
           "merge_receipt": {
@@ -470,7 +473,10 @@
         "https://github.com/grandchicken/1708SEM_ISIM"
       ],
       "evidence": {
-        "commands": ["buaa credits calculate", "buaa credits school6"],
+        "commands": [
+          "buaa credits calculate",
+          "buaa credits school6"
+        ],
         "tests": "Focused cargo test --locked --offline credits: 17 passed across the selected suites. Six uncertain School-6 edge regressions defend category deficits despite sufficient total, qualification-overlap non-double-counting, failed/repeated attempts with conflicting identity rejection, single-course English witnesses, the separate exchange-English route and exact-credit boundaries. The exchange-route regression failed before the fix and passed after it. Two schema/source-constant plumbing tests were removed; behavioral School-8 tests remain. Full offline gate results are recorded in docs/STATUS.md.",
         "smoke": "Offline CLI returns invalid_input for a non-supported major and for conflicting `非参数统计` rows; equivalent `健康经济学` duplicates collapse with a warning. No campus request was made.",
         "scope": "School 8 (economics_management) 2020 general-major, 136 courses from the public HoBeedzc/CreditCount catalog; the supported major enum is exactly its non-general major tags.",
@@ -595,6 +601,109 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "zfai_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/101",
+          "stack_base": "PR100 exact6d13df1962aca201f210070fbe69094497a4b73f; owned work/zfai-announcements, explicitly dependent on unmerged PR100/PR98/PR96/PR94; no root-main or deployed claim",
+          "commands": [
+            "announcements college-source zfai root|notices [--online|--refresh]",
+            "announcements list with college=zfai, category=xxgg1, source-advertised page ordinal and inclusive date/title filters",
+            "announcements article with canonical /info/1196/<id>.htm declared by the selected retained board; source_page selects only a source-advertised ordinal"
+          ],
+          "authority": "Visible official-directory member46 中法航空学院, exact literal/resolved https://zfai.buaa.edu.cn/; ordinal is not an academic school code. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9; derived50-entry directory JSON SHA separately9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. Actual root declares xxgg1.htm labelled 信息公告, not a guessed tzgg board or root-widget category1141 alias. Discovery remains cache-first on the production UID/home and permanent shared governor.",
+          "robots": {
+            "url": "https://zfai.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "byte_length": 1693,
+            "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791072445678,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "private_uid_regular_singlelink_0600_under_0700": true,
+            "first_cli_exit": 8,
+            "root_request_sent_in_first_cli": false
+          },
+          "root": {
+            "url": "https://zfai.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 35065,
+            "sha256": "ae7379cac5617b59341ff41bd2a1ed8bd45302e182ef8d076750940119850036",
+            "fetched_at_unix_ms": 1791072574190,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "private_uid_regular_singlelink_0600_under_0700": true,
+            "source_hints": 49,
+            "hints_truncated": false,
+            "active_information_board_declarations": 2
+          },
+          "notices": {
+            "url": "https://zfai.buaa.edu.cn/xxgg1.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 22043,
+            "sha256": "0fa841130cdcc39de181e8355027e3a246973e3cda8a1842f93696d38d7d96c0",
+            "fetched_at_unix_ms": 1791072782087,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "private_uid_regular_singlelink_0600_under_0700": true,
+            "canonical_rows": 9,
+            "dates": [
+              "2026-09-14",
+              "2026-09-12",
+              "2026-06-05",
+              "2025-06-27",
+              "2025-06-23",
+              "2025-06-20",
+              "2025-06-16",
+              "2025-06-12",
+              "2025-06-01"
+            ],
+            "inclusive_selected_date_range_rows": 2,
+            "source_order_preserved": true,
+            "source_excerpts_separate_from_title_and_original": true,
+            "source_hints": 28,
+            "hints_truncated": false,
+            "source_advertised_pages": {
+              "2": "https://zfai.buaa.edu.cn/xxgg1/2.htm",
+              "3": "https://zfai.buaa.edu.cn/xxgg1/1.htm"
+            },
+            "live_observed_pages": [
+              1
+            ]
+          },
+          "article": {
+            "url": "https://zfai.buaa.edu.cn/info/1196/4119.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 15446,
+            "sha256": "16ef2316c086ad9abe634608990867e1f24cd2a4884b016d857b06f8b188dcbb",
+            "fetched_at_unix_ms": 1791073924180,
+            "immutable": false,
+            "revalidated_at_unix_ms": null,
+            "revalidation_status": null,
+            "private_uid_regular_singlelink_0600_under_0700": true,
+            "published_at": "2026-09-14",
+            "body_paragraphs": 5,
+            "tables": 0,
+            "attachment_hints": 0,
+            "original_title_matches_listing": true,
+            "raw_personal_prose_published": false,
+            "proof_mode": "One declared original GET via throwaway native production client/governor observer reporting text_adapter_verified=false; source removed/factory restored crate-private after actual cache-only article extraction. No second original GET or live text-parser refresh."
+          },
+          "inspection_correction": "Exact generic-notice label lookup was empty; broader retained-root inspection found two active xxgg1.htm declarations labelled 信息公告. Inspector broadened without repairing source data.",
+          "pagination_contract": "Actual Zfai pagebar has no pb_sys_common. Shared ordinal helper now takes the reviewed selector explicitly; every university/SCSE/IC/aviation/Beijing/Shenyuan caller retains its old pb_sys_common selector. Zfai admits active numeric pagebar labels only, never filename inference or traversal. Actual page2/page3 declarations are not later-page live observations.",
+          "proof": "Exactly four governed public GETs including cold robots, full deadline preflight,60000/900000-ms policy, disarmed auth/no latch/pending outcome. Independent private base64/size/hash and same-UID0600 regular single-link originals under0700 match. Native cached9 rows/filter2/article5; headings/excerpts/dates/links/order/body privately match. Page2 offline miss/page4 refresh/categorytzgg refuse7/7/2; article undeclared refresh/source_page4/source_page2 offline/noncanonical/offhost-with-source-page refuse3/7/7/2/2 before GET. Governor bytes stay41f3d1799ef6f4c0e2ccd991783526592d8234638fd8ba71931c1e02e1e50444. No actual304/immutable revalidation, auth/write, new limiter/key, automatic retry or TLS/robots/challenge/proxy bypass.",
+          "focused_proof": "Four synthetic parser cases and one real-loopback case passed in separately measured23.05s including compilation. Defend title/excerpt separation, source order/real split dates/inclusive filters/unknown-date exclusion, reviewed pagebar ordinal scope including inert/foreign/legacy-container refusal, original direct header/table/body order and second-publication-span precedence, missing dates/ambiguous headings/bodies, selected-only declared refresh and offline same-byte original reuse with a distinct listing teaser. Fixtures synthetic/sanitized, never private originals.",
+          "retained_failures": "Initial copied target lost executable bits after --no-preserve=mode and the build exited101; copy retained under owned ignored target, fresh native target built46.19s without chmod/parent overwrite/host build. Intermediate list build found omitted aviation/SCSE callers, then complete caller migration built13.15s. Throwaway observer initial build used incorrect static-error/Display assumptions; corrected observer built4.35s. Neither failures nor copied artifacts count as successful proof.",
+          "limits": "One college information board and one declared original. No later-page live observation, all-college/faculty completion, complete history/archive extraction, other attachment download/OCR, publisher/security/rights certificate, authenticated service or recording/Life retrieval. Shared1024-paragraph/8KiB/2MiB budgets and governor unchanged. Legitimate campus writes remain in broad scope, current intent none and assignment submission owner-controlled. Parent/child exact-head independent approval and explicit maintainer source-contract decisions not inferred; aggregate announcements stays partial.",
+          "quality_gate": "Coherent locked offline formatter/build/full tests237library+19CLI passes,2ignored,5suites; strict all-target clippy and formatter check pass. Separately measured formatter1.16/build13.52/fulltest75.58 including lib63.81/clippy18.69/fmtcheck0.52 seconds. Focused5-case23.05s and intermediate native builds are not extra full-suite receipts. Prior H3i232+19/Shenyuan228+19/Beijing224+19/aviation220+19 keep prior source-head scope. Source checking, metadata/native/local-UI proof and exact-head publication/integration remain separate; not independent approval, trusted/privateCI or deployed coverage.",
+          "metadata_native_proof": "After237+19 quality metadata, the owned CLI rebuilt offline in separately measured2.96s. Fifteen actual cache-only commands exited0: Zfai root/board/list/filter/article, all seven existing Beijing/IC/aviation/news/SCSE/Shenyuan/H3i articles, help/schema/capabilities. Counts9/2/5; every legacy original hash, heading/date/ordered body/result/byte count/timestamp remains privately equal, SCSE stays embedded_document. No original/prose is printed or republished. Governor stays41f3d1799ef6f4c0e2ccd991783526592d8234638fd8ba71931c1e02e1e50444; no new campus request or full-suite run. Native JSON schema output is not an independent complete validator certificate.",
+          "local_ui_proof": "Actual local Chromium desktop1365x900/mobile390x844 observations and direct-helper screenshots confirm Zfai information source example9/2/5, exactxxgg1/category1196/date-span2/vsb_content_1001, source headings/excerpts, pagebar ordinal2/filename2 and3/filename1, current237+19/prior232+19/228+19/224+19/220+19 and unmerged PR100/PR98/PR96/PR94 bounds. Fresh observed evidence links click to #evidence at viewport topwithin1px; document widths1365/390, scripts/external styles/frames/broken fragments0 and mobile code has a local scroller. Four WebP captures exclusively copied/fsynced under private0700 outside source/tmp, same-UID0600 regular single-link/hash checked. HTML SHA66eec51441e31444fb2f879e72983f316c4b878ca5b58b2f31ec8784caa8860f. Local proof only, not Pages deployment."
+        },
         "h3i_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/99",
           "stack_base": "PR98 exact 1eb39fc789df3192aef7ed303ecf0b0e31b19f30; owned work/h3i-announcements, explicitly dependent on unmerged PR98/PR96/PR94; no root-main or deployed claim",
@@ -700,26 +809,66 @@
           ],
           "authority": "Retained official directory member39, non-hidden 沈元学院, exact literal/resolved HTTPS https://hc.buaa.edu.cn/. Hidden shared-host member40 is not an alias; ordinals are not academic school IDs. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9; derived serialized JSON SHA separately9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. Actual root declares index/tzgg.htm; the selected original is declared by that retained board. Source discovery stays cache-first on the same UID/home and permanent shared governor.",
           "robots": {
-            "url": "https://hc.buaa.edu.cn/robots.txt", "http_status": 404, "content_type": "text/html", "byte_length": 1693,
-            "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407", "fetched_at_unix_ms": 1791057885447,
-            "immutable": false, "first_cli_exit": 8, "root_request_sent_in_first_cli": false
+            "url": "https://hc.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "byte_length": 1693,
+            "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791057885447,
+            "immutable": false,
+            "first_cli_exit": 8,
+            "root_request_sent_in_first_cli": false
           },
           "root": {
-            "url": "https://hc.buaa.edu.cn/", "http_status": 200, "content_type": "text/html", "byte_length": 93287,
-            "sha256": "65d8edc424822e73954c6f1c9bb2c4357e81d1be4536348e6c312cb65ead6c2c", "fetched_at_unix_ms": 1791058111988,
-            "immutable": false, "source_hints": 56, "hints_truncated": false
+            "url": "https://hc.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 93287,
+            "sha256": "65d8edc424822e73954c6f1c9bb2c4357e81d1be4536348e6c312cb65ead6c2c",
+            "fetched_at_unix_ms": 1791058111988,
+            "immutable": false,
+            "source_hints": 56,
+            "hints_truncated": false
           },
           "notices": {
-            "url": "https://hc.buaa.edu.cn/index/tzgg.htm", "http_status": 200, "content_type": "text/html", "byte_length": 60789,
-            "sha256": "4a05204f80bf821d43985b4aed4d714cfd7669e50d660a457aa02cea7a9ec8d8", "fetched_at_unix_ms": 1791058428630,
-            "immutable": false, "canonical_rows": 12, "unfetched_dynamic_query_links": 3,
-            "dates": ["2026-09-29", "2026-09-18", "2026-09-17", "2026-09-12", "2026-09-12", "2026-09-12", "2026-09-10", "2026-09-06", "2026-06-17", "2026-06-04", "2026-05-28", "2026-05-18"],
-            "inclusive_selected_date_range_entries": 2, "source_hints": 64, "hints_truncated": true
+            "url": "https://hc.buaa.edu.cn/index/tzgg.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 60789,
+            "sha256": "4a05204f80bf821d43985b4aed4d714cfd7669e50d660a457aa02cea7a9ec8d8",
+            "fetched_at_unix_ms": 1791058428630,
+            "immutable": false,
+            "canonical_rows": 12,
+            "unfetched_dynamic_query_links": 3,
+            "dates": [
+              "2026-09-29",
+              "2026-09-18",
+              "2026-09-17",
+              "2026-09-12",
+              "2026-09-12",
+              "2026-09-12",
+              "2026-09-10",
+              "2026-09-06",
+              "2026-06-17",
+              "2026-06-04",
+              "2026-05-28",
+              "2026-05-18"
+            ],
+            "inclusive_selected_date_range_entries": 2,
+            "source_hints": 64,
+            "hints_truncated": true
           },
           "article": {
-            "url": "https://hc.buaa.edu.cn/info/1083/5252.htm", "http_status": 200, "content_type": "text/html", "byte_length": 33345,
-            "sha256": "2bc9e64f950b9c28516f5c5a8007317407dfaa0f358152986c01ea5c8c92748c", "fetched_at_unix_ms": 1791060009217,
-            "immutable": false, "published_at": "2026-09-29", "body_paragraphs": 7, "original_title_matches_listing_teaser": false,
+            "url": "https://hc.buaa.edu.cn/info/1083/5252.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "byte_length": 33345,
+            "sha256": "2bc9e64f950b9c28516f5c5a8007317407dfaa0f358152986c01ea5c8c92748c",
+            "fetched_at_unix_ms": 1791060009217,
+            "immutable": false,
+            "published_at": "2026-09-29",
+            "body_paragraphs": 7,
+            "original_title_matches_listing_teaser": false,
             "raw_personal_prose_published": false,
             "proof_mode": "One actual declared original GET through a throwaway native production-client/governor observer with text_adapter_verified=false; original cache was privately verified. Observer source removed/factory restored private. Actual text extraction is later cache-only native article use, not another live original GET or live text-parser refresh."
           },
@@ -771,7 +920,11 @@
             "fetched_at_unix_ms": 1791051991093,
             "immutable": false,
             "entries": 3,
-            "dates": ["2026-09-22", "2026-09-22", "2026-09-08"],
+            "dates": [
+              "2026-09-22",
+              "2026-09-22",
+              "2026-09-08"
+            ],
             "inclusive_first_date_filtered_entries": 2,
             "summaries_omitted": true
           },
@@ -885,13 +1038,54 @@
           "integration": "PR90 exact corrected source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e merged as516a4efc44960c0cd35c2957fde8d359f7526cb7 after narrow fresh-context no-tool source check, finding response and explicit exact-head maintainer source-contract decision/live gates. No formal self-approval or green/trustedCI claim; corrected excerpt check did not independently fetch SHA, run tests or assess omitted helpers/cache/live operations. Actual root ff-only sync/rebuild and offline IC source/page2/policy/capabilities proof passed with same original hashes/Gov unchanged. Aggregate remains partial.",
           "source_review_receipt": "https://github.com/cyjin-yl/buaa-cli/pull/90#issuecomment-5966708966",
           "merged_runtime_receipt": "https://github.com/cyjin-yl/buaa-cli/issues/89#issuecomment-5966775896",
-          "commands": ["announcements college-source ic root|notices [--online|--refresh]", "announcements list with college=ic, category=tzgg, source-advertised page and date/title filters", "announcements article with canonical IC /info/1042/<id>.htm URL and optional source_page bound to its retained listing"],
+          "commands": [
+            "announcements college-source ic root|notices [--online|--refresh]",
+            "announcements list with college=ic, category=tzgg, source-advertised page and date/title filters",
+            "announcements article with canonical IC /info/1042/<id>.htm URL and optional source_page bound to its retained listing"
+          ],
           "authority": "Official directory member19, non-hidden 集成电路科学与工程学院, exact HTTPS https://ic.buaa.edu.cn/, directory SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9. Root must declare /tzgg.htm; listing must declare selected article. Source discovery is cache-first and only selected target refreshes under the same process-shared governor.",
-          "robots": {"http_status":404,"bytes":1693,"sha256":"29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407","fetched_at_unix_ms":1791005337235,"first_cli_exit":8,"target_request_sent_in_first_cli":false},
-          "root": {"url":"https://ic.buaa.edu.cn/","http_status":200,"bytes":154994,"sha256":"d331a57910da181e505cad199c15355baf37606aba7f186035c6905f4dfd8866","fetched_at_unix_ms":1791005451153},
-          "notices": {"url":"https://ic.buaa.edu.cn/tzgg.htm","http_status":200,"entries":12,"bytes":20958,"sha256":"c5f95e8d45f0a9e13c0fc0b2125e4559211b36ebf7e668452af5cc32ca9e572e","fetched_at_unix_ms":1791005714328},
-          "page_two": {"url":"https://ic.buaa.edu.cn/tzgg/22.htm","http_status":200,"entries":12,"bytes":20992,"sha256":"45214f4141f2d553fac22e22b28fb80386c27604e7fce1971fdf4c97a5a37cb3","fetched_at_unix_ms":1791007660830,"routing":"Ordinal2 is source-advertised /tzgg/22.htm, not a generated /tzgg/2.htm."},
-          "article": {"url":"https://ic.buaa.edu.cn/info/1042/4815.htm","http_status":200,"bytes":20338,"sha256":"b6b1353931f013d67ad424b30fd506cbb30f9212a540359442ac497ec914fa32","fetched_at_unix_ms":1791006484430,"published_at":"2026-09-29","body_paragraphs":38,"attachment_hints":0},
+          "robots": {
+            "http_status": 404,
+            "bytes": 1693,
+            "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791005337235,
+            "first_cli_exit": 8,
+            "target_request_sent_in_first_cli": false
+          },
+          "root": {
+            "url": "https://ic.buaa.edu.cn/",
+            "http_status": 200,
+            "bytes": 154994,
+            "sha256": "d331a57910da181e505cad199c15355baf37606aba7f186035c6905f4dfd8866",
+            "fetched_at_unix_ms": 1791005451153
+          },
+          "notices": {
+            "url": "https://ic.buaa.edu.cn/tzgg.htm",
+            "http_status": 200,
+            "entries": 12,
+            "bytes": 20958,
+            "sha256": "c5f95e8d45f0a9e13c0fc0b2125e4559211b36ebf7e668452af5cc32ca9e572e",
+            "fetched_at_unix_ms": 1791005714328
+          },
+          "page_two": {
+            "url": "https://ic.buaa.edu.cn/tzgg/22.htm",
+            "http_status": 200,
+            "entries": 12,
+            "bytes": 20992,
+            "sha256": "45214f4141f2d553fac22e22b28fb80386c27604e7fce1971fdf4c97a5a37cb3",
+            "fetched_at_unix_ms": 1791007660830,
+            "routing": "Ordinal2 is source-advertised /tzgg/22.htm, not a generated /tzgg/2.htm."
+          },
+          "article": {
+            "url": "https://ic.buaa.edu.cn/info/1042/4815.htm",
+            "http_status": 200,
+            "bytes": 20338,
+            "sha256": "b6b1353931f013d67ad424b30fd506cbb30f9212a540359442ac497ec914fa32",
+            "fetched_at_unix_ms": 1791006484430,
+            "published_at": "2026-09-29",
+            "body_paragraphs": 38,
+            "attachment_hints": 0
+          },
           "quality_gate": "Review-corrected locked offline build/full tests passed:205 library+18CLI,2ignored,5suites; strict all-target clippy and formatter check passed. Initial nine actual native offline source/list/article/help/schema/capability commands passed; after the review fix, actual IC38-paragraph/news26-paragraph offline articles retained title/date/hash with unchanged governor. Nine bounded public-file credential-format scan0, not comprehensive security or independent-review certification.",
           "review_correction": "Initial exact head33ad20f89c749dbaf651f859063d520abd0b242a stateless no-tool source check found missing inert attachment-label policy in shared article_body. Consumer-output regression reproduced script/style text leakage in labels red, then passed green after common inert-context/active-text labels while preserving image-only links. Template/noscript leakage was not separately reproduced. New corrected-head no-tool excerpt check returned no concrete findings with explicit limits; it is not inherited platform/runtime/SHA/security approval.",
           "proof": "Actual production-governed root/notice/selected article/advertised page2 and matching offline cache reuse; date/title filter selects the policy only; an undeclared canonical article fails unsupported/exit3 before target request. All live observations retain60000/900000ms policy, authdisarmed/no latch/pendingNone, no retry loop/key split/TLS or robots bypass. Raw official HTML stays private. Initial generic h2 parse incorrectly selected sidebar title 通知公告; retained regression failed before source-specific ar_tit/h3 and publication-header fix, then actual offline same-byte article returned correct policy title/date/38 paragraphs with unchanged governor. Loopback proof covers source-cache selected-only refresh and parser drift remaining an error while reusing retained typed HTML offline.",
@@ -967,7 +1161,10 @@
           {
             "date": "2026-10-02",
             "command": "buaa announcements list --refresh",
-            "input": {"category": "tzgg", "page": 2},
+            "input": {
+              "category": "tzgg",
+              "page": 2
+            },
             "target": "https://news.buaa.edu.cn/tzgg/252.htm",
             "result": "success",
             "exit_code": 0,
@@ -981,7 +1178,10 @@
           {
             "date": "2026-10-02",
             "command": "buaa announcements list (offline, cache)",
-            "input": {"category": "tzgg", "page": 2},
+            "input": {
+              "category": "tzgg",
+              "page": 2
+            },
             "target": "https://news.buaa.edu.cn/tzgg/252.htm",
             "result": "success",
             "exit_code": 0,
@@ -993,7 +1193,10 @@
           {
             "date": "2026-10-02",
             "command": "buaa announcements list --refresh",
-            "input": {"category": "tzgg", "page": 2},
+            "input": {
+              "category": "tzgg",
+              "page": 2
+            },
             "target": "https://news.buaa.edu.cn/tzgg/252.htm",
             "result": "success",
             "exit_code": 0,
@@ -1164,7 +1367,10 @@
           "operational_receipt": "https://github.com/cyjin-yl/buaa-cli/issues/82#issuecomment-5952491700",
           "observed_main_sha": "f1da526ebfe4be5f90ad71cc9dacee7013c505ad",
           "command": "buaa archive capture --online",
-          "input": {"url": "http://www.buaa.edu.cn:80/", "timestamp": "19970416014726"},
+          "input": {
+            "url": "http://www.buaa.edu.cn:80/",
+            "timestamp": "19970416014726"
+          },
           "robots_prerequisite": {
             "url": "https://web.archive.org/robots.txt",
             "http_status": 404,
@@ -1185,15 +1391,26 @@
           "fetched_at_unix_ms": 1790944036626,
           "independent_base64_decode_hash_size_verified": true,
           "offline_cache_hit_same_bytes_and_identity": true,
-          "publication_date": {"value": null, "confidence": "unknown"},
+          "publication_date": {
+            "value": null,
+            "confidence": "unknown"
+          },
           "safety": "Deliberate target observation only after fresh robots and the full shared deadline, retaining the 60-second request policy. No automatic retry, nearest-capture fallback, original-host request, credentials, authentication, mutation or state reset."
         },
         "live_dated_lookup": {
           "date": "2026-10-02",
           "command": "buaa archive lookup --online",
-          "input": {"url": "https://www.buaa.edu.cn/", "from": "19970101000000", "to": "19971231235959", "limit": 10},
+          "input": {
+            "url": "https://www.buaa.edu.cn/",
+            "from": "19970101000000",
+            "to": "19971231235959",
+            "limit": 10
+          },
           "http_status": 200,
-          "capture_timestamps_returned": ["19970416014726", "19971210122410"],
+          "capture_timestamps_returned": [
+            "19970416014726",
+            "19971210122410"
+          ],
           "response_body_byte_length": 327,
           "response_body_sha256": "7d942e8e87eb0864e73697d69b2f368e528343a56b12ec945e53a723573271cc",
           "fetched_at_unix_ms": 1790944266753,
@@ -1228,7 +1445,10 @@
           "upstream_head": "af59427c7f6bac3382b5989b811b69872f4de928",
           "review_issue": "https://github.com/cyjin-yl/buaa-cli/issues/74",
           "proof_kind": "Authenticated repository read plus structural AST inspection; private helpers were not executed and no object-store request occurred.",
-          "read_operations": ["HeadObject(Bucket, Key)", "GetObject(Bucket, Key)"],
+          "read_operations": [
+            "HeadObject(Bucket, Key)",
+            "GetObject(Bucket, Key)"
+          ],
           "digest_facts": "Source digest helper reads Body in 262144-byte chunks, computes SHA-256 and closes the stream in finally. This is source evidence, not runtime remote proof.",
           "excluded": "PutObject and all upstream upload/remote-task execution; endpoint/default/credential configuration, private records and media were not copied.",
           "approval": "pending owner-reviewed read/authentication/immutability contract",

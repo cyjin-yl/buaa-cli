@@ -166,9 +166,13 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
     }
     client.get(&latest, false, |response| {
         college_html(response)?;
-        advertised_page_url(&response.body, &latest, page, |url| {
-            plain_url(url) && url.path().starts_with("/index/tzgg/")
-        })
+        advertised_page_url(
+            &response.body,
+            &latest,
+            page,
+            "div.pb_sys_common span.p_no a[href]",
+            |url| plain_url(url) && url.path().starts_with("/index/tzgg/"),
+        )
     })
 }
 

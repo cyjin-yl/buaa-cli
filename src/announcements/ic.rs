@@ -140,9 +140,13 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
     }
     client.get(&latest, false, |response| {
         college_html(response)?;
-        advertised_page_url(&response.body, &latest, page, |url| {
-            plain_url(url) && url.path().starts_with("/tzgg/")
-        })
+        advertised_page_url(
+            &response.body,
+            &latest,
+            page,
+            "div.pb_sys_common span.p_no a[href]",
+            |url| plain_url(url) && url.path().starts_with("/tzgg/"),
+        )
     })
 }
 
@@ -355,16 +359,26 @@ mod tests {
     fn inert_pagination_cannot_override_the_advertised_board() {
         let base = Url::parse(IC_NOTICES_URL).unwrap();
         let source = br#"<template><div class="pb_sys_common"><span class="p_no"><a href="tzgg/999.htm">2</a></span></div></template><div class="pb_sys_common"><span class="p_no"><a href="tzgg/22.htm">2</a></span></div>"#;
-        let selected = advertised_page_url(source, &base, 2, |url| {
-            plain_url(url) && url.path().starts_with("/tzgg/")
-        })
+        let selected = advertised_page_url(
+            source,
+            &base,
+            2,
+            "div.pb_sys_common span.p_no a[href]",
+            |url| plain_url(url) && url.path().starts_with("/tzgg/"),
+        )
         .unwrap();
         assert_eq!(selected.path(), "/tzgg/22.htm");
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://foreign.example/tzgg/22.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(foreign, &base, 2, plain_url)
-                .unwrap_err()
-                .code,
+            advertised_page_url(
+                foreign,
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                plain_url
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
     }
