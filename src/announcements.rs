@@ -11,10 +11,11 @@
 //! links are surfaced as hints and never downloaded. Historical bytes remain
 //! operator-asserted provenance, bound by SHA-256.
 
+use crate::html::{active_element_text, element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{NaiveDate, NaiveDateTime};
-use scraper::{ElementRef, Html, Node, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -169,62 +170,6 @@ fn normalized_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
         .flat_map(str::split_whitespace)
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn inert_element(element: ElementRef<'_>) -> bool {
-    element.ancestors().any(|node| {
-        node.value()
-            .as_element()
-            .is_some_and(|node| matches!(node.name(), "script" | "style" | "template" | "noscript"))
-    })
-}
-
-/// Script/style/template/noscript payloads are not source prose.
-fn element_text(element: ElementRef<'_>) -> String {
-    if inert_element(element) {
-        return String::new();
-    }
-    active_element_text(element)
-}
-
-/// Linear DOM walk after the caller has checked the outer context; no ancestor
-/// rescans or subtree copies, including for active image-only attachment links.
-fn active_element_text(element: ElementRef<'_>) -> String {
-    let root = element.id();
-    let mut current = element.first_child();
-    let mut output = String::new();
-    while let Some(node) = current {
-        let skip = node.value().as_element().is_some_and(|node| {
-            matches!(node.name(), "script" | "style" | "template" | "noscript")
-        });
-        if let Node::Text(text) = node.value() {
-            for word in text.text.split_whitespace() {
-                if !output.is_empty() {
-                    output.push(' ');
-                }
-                output.push_str(word);
-            }
-        }
-        if !skip && let Some(child) = node.first_child() {
-            current = Some(child);
-            continue;
-        }
-        let mut cursor = node;
-        loop {
-            if let Some(sibling) = cursor.next_sibling() {
-                current = Some(sibling);
-                break;
-            }
-            match cursor.parent() {
-                Some(parent) if parent.id() != root => cursor = parent,
-                _ => {
-                    current = None;
-                    break;
-                }
-            }
-        }
-    }
-    output
 }
 
 fn category_label(slug: &str) -> Option<&'static str> {

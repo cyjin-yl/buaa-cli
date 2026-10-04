@@ -1,4 +1,5 @@
 //! Authoritative organization directory parsing over one fixed official source.
+use crate::html::{element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, ORGANIZATIONS_URL, Response};
 use scraper::{Html, Selector};
 use serde::Serialize;
@@ -37,13 +38,6 @@ fn unavailable() -> Error {
     )
 }
 
-fn normalized_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
-    parts
-        .flat_map(str::split_whitespace)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Parse the official directory document. This is public for offline evidence
 /// validation and library consumers; it performs no network or cache access.
 pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
@@ -58,8 +52,8 @@ pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
     let entry_selector = Selector::parse(".kyjg-bd a").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
-        .next()
-        .map(|element| normalized_text(element.text()))
+        .find(|element| !inert_element(*element))
+        .map(element_text)
         .filter(|value| !value.is_empty() && value.len() <= MAX_TEXT)
         .ok_or_else(unavailable)?;
     let base = Url::parse(ORGANIZATIONS_URL).map_err(|_| unavailable())?;
@@ -67,10 +61,13 @@ pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
     let mut seen_categories = BTreeSet::new();
     let mut entries = Vec::new();
     for group in document.select(&box_selector) {
+        if inert_element(group) {
+            continue;
+        }
         let category = group
             .select(&category_selector)
-            .next()
-            .map(|element| normalized_text(element.text()))
+            .find(|element| !inert_element(*element))
+            .map(element_text)
             .filter(|value| {
                 !value.is_empty() && value.len() <= MAX_TEXT && !value.chars().any(char::is_control)
             })
@@ -81,10 +78,13 @@ pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
         categories.push(category.clone());
         let group_entry_start = entries.len();
         for element in group.select(&entry_selector) {
+            if inert_element(element) {
+                continue;
+            }
             if entries.len() == MAX_ENTRIES {
                 return Err(unavailable());
             }
-            let name = normalized_text(element.text());
+            let name = element_text(element);
             if name.is_empty()
                 || name.len() > MAX_TEXT
                 || name.chars().any(|character| character.is_control())
@@ -264,6 +264,35 @@ mod tests {
             Some("https://www.buaa.edu.cn/relative")
         );
         assert_eq!(parsed.entries[4].source_order, 5);
+    }
+
+    #[test]
+    fn inactive_directory_declarations_cannot_supply_college_identity() {
+        let inert_only = "<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><template><a href='http://mse.buaa.edu.cn/'>材料科学与工程学院</a></template></div></div></html>";
+        assert_eq!(
+            parse_html(inert_only.as_bytes()).unwrap_err().code,
+            "unavailable"
+        );
+
+        let active = "<html><title>Directory</title><template><div class='kyjg-box'><div class='kyjg-tit'><h3>Inactive group</h3></div><div class='kyjg-bd'><a href='https://inactive.example/'>Inactive college</a></div></div></template><div class='kyjg-box'><div class='kyjg-tit'><template><h3>Inactive heading</h3></template><h3>Active Group<noscript>Inactive suffix</noscript></h3></div><div class='kyjg-bd'><template><a href='http://mse.buaa.edu.cn/'>Inactive duplicate</a></template><a href='http://mse.buaa.edu.cn/'>材料科学与工程学院<script>Inactive code</script><template>Inactive label</template></a></div></div></html>";
+        let parsed = parse_html(active.as_bytes()).unwrap();
+        assert_eq!(parsed.categories, ["Active Group"]);
+        assert_eq!(
+            parsed
+                .entries
+                .iter()
+                .map(|entry| (
+                    entry.name.as_str(),
+                    entry.listed_href.as_deref(),
+                    entry.resolved_http_url.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            [(
+                "材料科学与工程学院",
+                Some("http://mse.buaa.edu.cn/"),
+                Some("http://mse.buaa.edu.cn/")
+            )]
+        );
     }
 
     #[test]

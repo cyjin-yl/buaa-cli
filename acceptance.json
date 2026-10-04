@@ -738,7 +738,8 @@
           "native_proof": "Actual cache-only root/board/list/filter/article and pretransport refusals;6/3/1 partial_text source facts privately equal. Page2offline/page6refresh/categorytzgg refuse7/7/2 without GET or governor byte changes. Undeclared42 temporary observer refuses3 before the single declared original GET. Original-only native build11.04/article0.38; original paragraph/header/date/hash/length unchanged, no live text-parser refresh.",
           "governor": "Same production UID/home/permanent account-wide governor,60,000-ms requests/900,000-ms background floors,one in-flight through validation/cache persistence;4 deliberate GETs,full shared deadline before each,cache-first source discovery,no auth or campus writes. Final observed private state SHA68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab;disarmed/no latch/pendingNone/network_failures0,unchanged on offline/refusal proof. Never reset/delete/split identity/loosen TLS/robots/proxy/cookie/redirect/challenge controls.",
           "focused_proof": "Six new source consumer/parser and real-loopback cases pass0/21.00s,including compilation; execution0.47s. Defend exact excerpt bounds/order/ambiguous dates and filter exclusion, primary view/headings, source header/body scope and table completeness, scoped ordinals, mixed declared categories and only-selected refresh/offline reuse.",
-          "quality_gate": "Renewed coherent locked offline build/full252library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-002 shared-page ambiguity correction. Separate nativebuild7.94/formatter0.88/fulltest74.71 including library70.39/CLI0.29/clippy7.79/fmtcheck0.59 seconds. Pagination regression red26.29/green6.31 and seven Mse focused1.07 are separate,not extra full-suite runs. Actual cached list0/0.51,advertised uncachedpage2 refusal7/0.13,originalarticle0/0.36 privately match entire retained outputs. Initial883/250+19 gate/UI and4a03/251+19 gate keep their own scope;no251 local visual proof was performed. Proof-only CLI-suite-index assumption corrected from completed output without replay; empty binary suite precedes CLI. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
+          "quality_gate": "Final affected-source locked offline checks pass as separate commands:4directory0.50s,64announcements0.51s,7Mse0/1.04s;sets overlap and are not a new full-suite count. Inactive-directory case red23.60/green15.34 inclcompilation. Native locked offline build0/15.78,strict all-target clippy0/9.33,fmcheck0/0.70. Actual directory/list/filter/original0/0.09,0/0.17,0/0.11,0/0.39;50directory entries retain originalSHAf491e3a,and entire Mse6/3/1 partial_text outputs privately equal. Prior full252library+19CLI/2ignored/5suites belongs74820;no rerun or253full-suite claim. Completed sourcecheck at74820 reportedMSE003; nested-entry-only recipe wasalreadyunavailable,actual reproduced inactive group/text boundary fixed by common existing active-text helpers. No additional general source sweep;exact-head approval remains external. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGET/auth/write.",
+          "prior_quality_gate_74820": "Renewed coherent locked offline build/full252library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-002 shared-page ambiguity correction. Separate nativebuild7.94/formatter0.88/fulltest74.71 including library70.39/CLI0.29/clippy7.79/fmtcheck0.59 seconds. Pagination regression red26.29/green6.31 and seven Mse focused1.07 are separate,not extra full-suite runs. Actual cached list0/0.51,advertised uncachedpage2 refusal7/0.13,originalarticle0/0.36 privately match entire retained outputs. Initial883/250+19 gate/UI and4a03/251+19 gate keep their own scope;no251 local visual proof was performed. Proof-only CLI-suite-index assumption corrected from completed output without replay; empty binary suite precedes CLI. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
           "prior_quality_gate_4a03": "Renewed coherent locked offline build/full251library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-001 local-cache/no-request correction. Separate formatter0.88/build8.43/fulltest77.67 including library64.93/CLI0.19/clippy8.67/fmtcheck0.70 seconds. Seven focused1.23s and red26.97/green5.44 are separate,not extra full-suite runs. Initial883/250+19/full82.57/native/localUI retain previous head scope. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
           "prior_quality_gate_883": "Coherent locked offline build/full250library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass. Separate command boundaries formatter0.97/build11.43/fulltest82.57 including library71.67/CLI0.19/clippy18.54/fmtcheck0.63 seconds. Six focused21.00s and intermediate native builds are separate,not extra full-suite runs. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab stayed unchanged,0newGETs/noauth/write. Prior244/238/232/228/224/220+19 receipts retain original source-head scope. This is not trustedCI,formal independent approval or deployment.",
           "initial_source_check_failures": [
@@ -778,6 +779,79 @@
             "omitted": "9 separate legacy college/PDF-viewer modules,docs/acceptance,integrationtests,unlistedmodules/externalcrateimplementations",
             "main_bound_bytes_only": true,
             "independent_checkout_sha_runtime_original_cache_rights_ci_or_approval": false
+          },
+          "accepted_directory_finding_response": {
+            "id": "MSE-003",
+            "decision": "inert_group_and_text_boundary_accepted_and_fixed",
+            "checked_source_head": "74820dd7360ae26f56c618f1e03155601a7e2196",
+            "source_checker_scope": "7 complete public Rust files343777chars,stateless no-tool session-default;9 legacy modules,docs/acceptance,integrationtests/external implementations omitted",
+            "reproduction_correction": "checker nested-template-entry-only recipe already returns unavailable beforefix; actual red demonstrates template-contained whole directory groups emitted and inactive noscript text merged into category labels",
+            "code_cutover": "reuse existing active/inert text functions in common html module; exclude inactive groups,headings,members and label payloads in organizations; remove duplicated old definitions and iterator-to-Vec text normalization",
+            "red": {
+              "exit": 101,
+              "seconds": 23.6,
+              "observed": "inactive group and fallback suffix included in directory categories"
+            },
+            "green": {
+              "exit": 0,
+              "seconds": 15.34,
+              "inert_only_refused": true,
+              "only_active_group_and_exact_HTTP_member_retained": true
+            },
+            "affected_commands": {
+              "directory": {
+                "exit": 0,
+                "seconds": 0.5
+              },
+              "announcements": {
+                "exit": 0,
+                "seconds": 0.51
+              },
+              "mse_transport": {
+                "exit": 0,
+                "seconds": 1.04
+              }
+            },
+            "affected_test_counts_by_command": {
+              "directory": 4,
+              "announcements": 64,
+              "mse": 7
+            },
+            "actual_native": {
+              "directory": {
+                "exit": 0,
+                "seconds": 0.09
+              },
+              "mse_list": {
+                "exit": 0,
+                "seconds": 0.17
+              },
+              "mse_filter": {
+                "exit": 0,
+                "seconds": 0.11
+              },
+              "mse_original": {
+                "exit": 0,
+                "seconds": 0.39
+              }
+            },
+            "directory_entries": 50,
+            "original_directory_body_sha256": "f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9",
+            "entire_Mse_outputs_privately_equal": true,
+            "clippy": {
+              "exit": 0,
+              "seconds": 9.33
+            },
+            "formatter_check": {
+              "exit": 0,
+              "seconds": 0.7
+            },
+            "production_governor_sha256": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "new_campus_gets": 0,
+            "campus_writes": 0,
+            "new_general_source_sweeps": 0,
+            "extra_full_suite_runs": 0,
+            "formal_independent_approval": false
           },
           "accepted_pagination_finding_response": {
             "id": "MSE-002",
