@@ -42,7 +42,8 @@ fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
         mode
     };
     let directory = crate::organizations::list(source_mode)?;
-    let attribution = college_directory_attribution(&directory, "国际创新学院", H3I_ROOT_URL)?;
+    let attribution =
+        college_directory_attribution(&directory, "国际创新学院", H3I_ROOT_URL, H3I_ROOT_URL)?;
     Ok((ArchiveClient::open_h3i(source_mode)?, attribution))
 }
 

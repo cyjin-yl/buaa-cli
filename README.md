@@ -184,6 +184,13 @@ printf '%s\n' '{"college":"mse","since":"2026-09-15","until":"2026-09-21"}' | ./
 printf '%s\n' '{"url":"https://mse.buaa.edu.cn/info/1061/2881.htm"}' | ./target/debug/buaa announcements article
 ```
 
+可靠性与系统工程学院 has real fixed root metadata only: `announcements college-source rse root`. Its exact directory literal `http://rse.buaa.edu.cn` differs from resolved `http://rse.buaa.edu.cn/`; strict attribution now requires both explicit strings without normalizing either or weakening hidden/ambiguous/nonliteral admission. The HTTPS root is observed separately, not upgraded/aliased. Two governed GETs retain robots404 and a20069-byte root with one h1, no title or active notice-board declaration; cache reuse preserves original facts and returns `announcement_adapter_verified=false`. No Rse listing/article adapter, guessed path, alias, HTTP fallback or protocol-equivalence claim. Notices/originals remain blocked on a usable root declaration or explicit reviewed current source contract; root metadata success is not a working announcement service. [Rse exact proof and blocker](docs/STATUS.md#rse-strict-identity-and-root-source-frontier).
+
+```sh
+# Cache-only source metadata, not notice listings or article text.
+./target/debug/buaa announcements college-source rse root
+```
+
 Shared text reads retain at most 1,024 nonempty source paragraphs, each at most 8 KiB, from HTML bounded to 2 MiB. Mse counts paragraphs plus table rows against the same1,024-block budget, with at most256 tables/cells per row,8-KiB normalized row/caption text and512-byte declared span strings. Paragraph-wrapped cells remain in `body_paragraphs` as well as the separate table records; there is no inferred paragraph/table interleaving or visual layout. Overflow is an error rather than truncation; no URL/source-specific allowance exists. The previous 512-paragraph limit rejected a legitimate 795-paragraph table notice; a synthetic 1,024/1,025 boundary reproduced red before the shared limit correction and passes green. This does not relax request, authentication or account-safety limits.
 
 Some computer-college policies are image/PDF-preview pages. They return `embedded_document` or `partial_text`, not invented plaintext: preview scripts are excluded, OCR is not performed, and attachment/preview paths are unverified hints, never downloads. Historical SCSE listing bytes stay offline and operator-asserted, including original HTTP source URLs. Colleges beyond the individually observed slices and complete historical coverage remain unimplemented.

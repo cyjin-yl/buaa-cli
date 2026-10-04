@@ -36,8 +36,12 @@ fn plain_url(url: &Url) -> bool {
 
 fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
     let directory = crate::organizations::list(source_mode(mode))?;
-    let attribution =
-        college_directory_attribution(&directory, "集成电路科学与工程学院", IC_ROOT_URL)?;
+    let attribution = college_directory_attribution(
+        &directory,
+        "集成电路科学与工程学院",
+        IC_ROOT_URL,
+        IC_ROOT_URL,
+    )?;
     Ok((ArchiveClient::open_ic(source_mode(mode))?, attribution))
 }
 
@@ -407,6 +411,7 @@ mod tests {
                 college_directory_attribution(
                     &json!({"entries":entries}),
                     "集成电路科学与工程学院",
+                    IC_ROOT_URL,
                     IC_ROOT_URL
                 )
                 .unwrap_err()
@@ -425,9 +430,14 @@ mod tests {
             "hidden_in_source":false
         }]});
         assert_eq!(
-            college_directory_attribution(&directory, "集成电路科学与工程学院", IC_ROOT_URL)
-                .unwrap_err()
-                .code,
+            college_directory_attribution(
+                &directory,
+                "集成电路科学与工程学院",
+                IC_ROOT_URL,
+                IC_ROOT_URL
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
     }

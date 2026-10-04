@@ -44,7 +44,12 @@ fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
         mode
     };
     let directory = crate::organizations::list(source_mode)?;
-    let attribution = college_directory_attribution(&directory, "沈元学院", SHENYUAN_ROOT_URL)?;
+    let attribution = college_directory_attribution(
+        &directory,
+        "沈元学院",
+        SHENYUAN_ROOT_URL,
+        SHENYUAN_ROOT_URL,
+    )?;
     Ok((ArchiveClient::open_shenyuan(source_mode)?, attribution))
 }
 
