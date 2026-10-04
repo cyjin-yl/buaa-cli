@@ -26,6 +26,7 @@ pub(crate) mod h3i;
 pub(crate) mod ic;
 pub(crate) mod iiif;
 pub(crate) mod mse;
+pub(crate) mod rse;
 mod scse;
 pub(crate) mod shenyuan;
 pub(crate) mod zfai;
@@ -842,6 +843,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "mse" {
         return mse::surface(mode, page);
     }
+    if college == "rse" {
+        return rse::surface(mode, page);
+    }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
         ("scse", "notices") => SCSE_NOTICES_URL,
@@ -892,7 +896,8 @@ fn college_html(response: &Response) -> Result<Html, Error> {
 fn college_directory_attribution(
     directory: &Value,
     name: &str,
-    root: &str,
+    listed_root: &str,
+    resolved_root: &str,
 ) -> Result<Value, Error> {
     let mut members = directory["entries"]
         .as_array()
@@ -900,11 +905,11 @@ fn college_directory_attribution(
         .iter()
         .filter(|member| {
             member["name"] == name
-                && member["resolved_http_url"] == root
+                && member["resolved_http_url"] == resolved_root
                 && member["hidden_in_source"] == false
         });
     let member = members.next().ok_or_else(unavailable)?;
-    if members.next().is_some() || member["listed_href"] != root {
+    if members.next().is_some() || member["listed_href"] != listed_root {
         return Err(unavailable());
     }
     Ok(
@@ -922,7 +927,7 @@ fn describe_college_surface(
     }
     let document = if matches!(
         college,
-        "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif" | "mse"
+        "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif" | "mse" | "rse"
     ) {
         college_html(response)?
     } else {
@@ -1096,7 +1101,7 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif and mse bind the retained authoritative directory; selected boards must be declared by their retained root. Mse preserves its exact HTTP directory identity and explicitly observes HTTPS separately, not an upgrade or alias. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse observes its root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse and rse bind the retained authoritative directory; selected boards must be declared by their retained root. Mse and Rse preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse observes its root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
@@ -1177,6 +1182,39 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_identity_preserves_distinct_declared_literal_and_resolved_root() {
+        let mut directory = json!({"entries":[{
+            "name":"Fixture Reliability Institute",
+            "listed_href":"http://rse.buaa.edu.cn",
+            "resolved_http_url":"http://rse.buaa.edu.cn/",
+            "hidden_in_source":false
+        }]});
+        let attribution = college_directory_attribution(
+            &directory,
+            "Fixture Reliability Institute",
+            "http://rse.buaa.edu.cn",
+            "http://rse.buaa.edu.cn/",
+        )
+        .unwrap();
+        assert_eq!(
+            attribution["member"]["listed_href"],
+            "http://rse.buaa.edu.cn"
+        );
+        directory["entries"][0]["listed_href"] = "http://rse.buaa.edu.cn/".into();
+        assert_eq!(
+            college_directory_attribution(
+                &directory,
+                "Fixture Reliability Institute",
+                "http://rse.buaa.edu.cn",
+                "http://rse.buaa.edu.cn/",
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+    }
 
     fn listing_html() -> String {
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>通知公告-新闻网</title></head><body>

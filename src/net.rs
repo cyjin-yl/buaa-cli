@@ -137,6 +137,8 @@ const IIIF_ROBOTS_URL: &str = "https://iiif.buaa.edu.cn/robots.txt";
 pub(crate) const MSE_ROOT_URL: &str = "https://mse.buaa.edu.cn/";
 pub(crate) const MSE_NOTICES_URL: &str = "https://mse.buaa.edu.cn/xwdt/gggs.htm";
 const MSE_ROBOTS_URL: &str = "https://mse.buaa.edu.cn/robots.txt";
+pub(crate) const RSE_ROOT_URL: &str = "https://rse.buaa.edu.cn/";
+const RSE_ROBOTS_URL: &str = "https://rse.buaa.edu.cn/robots.txt";
 
 pub(crate) fn mse_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -331,6 +333,7 @@ enum SourceProfile {
     Zfai,
     Iiif,
     Mse,
+    Rse,
 }
 
 impl SourceProfile {
@@ -349,6 +352,7 @@ impl SourceProfile {
             Self::Zfai => ZFAI_ROBOTS_URL,
             Self::Iiif => IIIF_ROBOTS_URL,
             Self::Mse => MSE_ROBOTS_URL,
+            Self::Rse => RSE_ROBOTS_URL,
         }
     }
 
@@ -367,6 +371,7 @@ impl SourceProfile {
             Self::Zfai => ".buaa-cli-zfai-cache",
             Self::Iiif => ".buaa-cli-iiif-cache",
             Self::Mse => ".buaa-cli-mse-cache",
+            Self::Rse => ".buaa-cli-rse-cache",
         }
     }
 
@@ -444,6 +449,11 @@ impl SourceProfile {
                 url.host_str() == Some("mse.buaa.edu.cn")
                     && url.query().is_none()
                     && mse_path_allowed(url.path())
+            }
+            Self::Rse => {
+                url.host_str() == Some("rse.buaa.edu.cn")
+                    && url.query().is_none()
+                    && matches!(url.path(), "/" | "/robots.txt")
             }
         };
         if common_invalid || !allowed {
@@ -652,6 +662,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_mse(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Mse)
+    }
+
+    pub(crate) fn open_rse(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Rse)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {

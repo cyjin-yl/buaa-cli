@@ -33,8 +33,12 @@ fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
         mode
     };
     let directory = crate::organizations::list(source_mode)?;
-    let attribution =
-        college_directory_attribution(&directory, "国际前沿交叉科学研究院", IIIF_ROOT_URL)?;
+    let attribution = college_directory_attribution(
+        &directory,
+        "国际前沿交叉科学研究院",
+        IIIF_ROOT_URL,
+        IIIF_ROOT_URL,
+    )?;
     Ok((ArchiveClient::open_iiif(source_mode)?, attribution))
 }
 

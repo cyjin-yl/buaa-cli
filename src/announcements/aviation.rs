@@ -34,7 +34,12 @@ fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
         mode
     };
     let directory = crate::organizations::list(source_mode)?;
-    let attribution = college_directory_attribution(&directory, "飞行学院", AVIATION_ROOT_URL)?;
+    let attribution = college_directory_attribution(
+        &directory,
+        "飞行学院",
+        AVIATION_ROOT_URL,
+        AVIATION_ROOT_URL,
+    )?;
     Ok((ArchiveClient::open_aviation(source_mode)?, attribution))
 }
 

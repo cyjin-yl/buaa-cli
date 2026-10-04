@@ -601,6 +601,49 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "rse_root_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/109",
+          "status": "root-metadata-observed-notices-blocked",
+          "stack_base": "PR108 exact e049becd1d655ec2fae0a7194dfe77a27592967d; owned work/rse-announcements, dependent on unmerged108/106/104/102/100/98/96/94; no root-main or deployed claim",
+          "command": "announcements college-source rse [root] [--online|--refresh]; fixed root metadata only, no Rse list/article adapter or notice route",
+          "authority": "Visible official-directory member2 可靠性与系统工程学院 under 航空航天学科群; exact literal http://rse.buaa.edu.cn and resolved http://rse.buaa.edu.cn/. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9 differs from derived50-entry JSON SHA9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. Ordinal is not an academic school code. Selected HTTPS root is an explicit separate observation, not an alias, silent upgrade or verified protocol equivalence.",
+          "strict_identity_change": "Existing shared authority helper now requires both independently declared literal and resolved strings, without normalizing either. Eight existing callers retain their same expected root pair. AST migrated9 parsed calls; three macro-contained test calls were migrated manually. Existing hidden/ambiguous/nonliteral refusals remain intact; no shim or Rse-specific URL normalization.",
+          "robots": {
+            "url": "https://rse.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "response_body_byte_length": 1693,
+            "response_body_sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791132999894
+          },
+          "selected_https_root": {
+            "url": "https://rse.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html;charset=utf-8",
+            "response_body_byte_length": 69,
+            "response_body_sha256": "9212275e4121fd941be9567fbcc2910d70fc0d1ec399a76ad33dc997b4c097e1",
+            "fetched_at_unix_ms": 1791133286158,
+            "document_title": null,
+            "source_anchor_count": 0,
+            "same_host_path_hints": 0,
+            "hints_truncated": false,
+            "announcement_adapter_verified": false,
+            "publication_date": "unknown"
+          },
+          "governed_proof": "Exactly2 deliberate public GETs under the same permanent production governor; first source command exited8 after robots before the absent root. Selected root was read only after a fresh full-deadline preflight. Native cached root0/0.04s preserves the exact literal/resolved member and original69-byte hash/timestamp. Private original cache files independently match hashes and remain0700/0600/currentUID/singlelink. Current governor SHA7bf24425de6d704073141360e0deaac3486333af8eec4d5566dfa7afb077f12f;60,000/900,000-ms floors, disarmed auth, no latch/pending/failures. Earlier68857 Mse delivery proof remains historical, not current governor state.",
+          "affected_proof": "Real root offline refusal reached an actual cache miss, not fabricated metadata. Strict declared-pair regression red101/62.89s then green0/24.07s; separate old IC nonliteral and hidden/ambiguity cases pass0/0.45s and0/0.22s. Actual existing Mse cached article0/0.75s equals its entire339-row/2331-cell output and attribution with unchanged governor bytes. Fresh owned native build0/82.08s; no artifact copy, parent overwrite, chmod, host build or extra full-suite run. Final metadata/source-check/UI proof is recorded separately.",
+          "bounded_feature_check": {
+            "status": "completed_no_concrete_findings",
+            "prompt_characters": 14509,
+            "main_bound_rse_module_sha256": "7a60a339ab895cb19a7af3e7b3ee6ccbff36d94e4355117414eceac8f7bae71a",
+            "main_bound_announcements_sha256": "79438a15965d02c60e3a0a79c6401eaf56a4eb5405f2877f660960a5fbac11eb",
+            "main_bound_net_sha256": "3cdc498923fd3d234b1b6643fe16e76e259b3e1cd91c2e793b27abd53eb3af92",
+            "scope": "One stateless no-tool completion received complete public Rse module and complete changed shared identity/surface/HTML/profile/factory sections. Omitted legacy bodies, caller/test migrations, transport/lease internals, docs/acceptance, external dependencies, actual origins/cache/rights/permissions/CI were not independently inspected. Main supplies bytes and observations; not checkout/SHA/runtime/platform approval.",
+            "input_correction": "Prompt misstated the unchanged common MAX_URL as4096; actual code uses16*1024. Rse still admits only fixed short root/robots paths; no route, URL-policy or authority expansion follows. No generic re-review or independent final-head approval is inferred."
+          },
+          "blocker": "The selected HTTPS root is69-byte HTML with one h1 and no title, source links, navigation or active notice-board declaration. Metadata success is not a working announcement service. Need a usable retained-root-declared current board or an explicit reviewed current source contract before listing or original-text extraction. No guessed index/notice/article route, alias, HTTP fallback or protocol-equivalence assertion; original/history stay missing. Rse notice/original tasks remain blocked, not completed or dropped.",
+          "safety_and_scope": "No auth, campus write, automatic retry, separate governor/account key or cookie/redirect/TLS/robots/challenge/proxy bypass. Root/robots HTTPS only; no Rse notice/list/article capability is advertised. Legitimate owner-controlled read/write scope remains included, current campus-write intent none and assignment submission stays with owner. No subagent/peer revival. Exact-head independent approval, trusted CI and explicit maintainer stack/source-contract decisions remain external; no selfmerge/issue closure, root-main or Pages deployment. Full non-VPN/every-college/attachments/history goal remains active."
+        },
         "mse_table_text_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/107",
           "stack_base": "PR106 exact bb2dad9fb359718ed73bc9950c3bd75b804b1350; owned work/mse-table-text, dependent on unmerged PR106 and PR104/PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",

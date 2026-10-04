@@ -45,8 +45,12 @@ fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
         mode
     };
     let directory = crate::organizations::list(source_mode)?;
-    let mut attribution =
-        college_directory_attribution(&directory, "材料科学与工程学院", LISTED_ROOT_URL)?;
+    let mut attribution = college_directory_attribution(
+        &directory,
+        "材料科学与工程学院",
+        LISTED_ROOT_URL,
+        LISTED_ROOT_URL,
+    )?;
     attribution["selected_https_root"] = MSE_ROOT_URL.into();
     attribution["selection_relation"] = "deliberate separate HTTPS observation; the exact listed HTTP identity and original directory provenance are preserved, not upgraded or aliased".into();
     Ok((ArchiveClient::open_mse(source_mode)?, attribution))
