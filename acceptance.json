@@ -601,6 +601,348 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "mse_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/105",
+          "stack_base": "PR104 exact a3ce5c8a3a7ea7b8fe84aac45556393a05c5e46f; owned work/mse-announcements, explicitly dependent on unmerged PR104/PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
+          "commands": [
+            "announcements college-source mse root|notices [--online|--refresh]",
+            "announcements list with college=mse, category=gggs, source-advertised ordinal and inclusive date/title filters",
+            "announcements article with canonical /info/1061/<id>.htm or /info/1058/<id>.htm declared by the selected retained board; source_page selects its source-advertised ordinal"
+          ],
+          "authority": "Visible official-directory member1 材料科学与工程学院 under 航空航天学科群, exact literal/resolved http://mse.buaa.edu.cn/; ordinal is not an academic school code. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9; separately derived50-entry JSON SHA9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. HTTPS is deliberately observed separately using the existing explicit SCSE precedent; no directory-declared HTTPS/alias/silent upgrade/protocol-equivalence claim. Actual selected root declares xwdt/gggs.htm labelled 公告公示.",
+          "directory_identity": {
+            "member": {
+              "category": "航空航天学科群",
+              "hidden_in_source": false,
+              "link_kind": "http",
+              "listed_href": "http://mse.buaa.edu.cn/",
+              "name": "材料科学与工程学院",
+              "resolved_http_url": "http://mse.buaa.edu.cn/",
+              "source_order": 1
+            },
+            "selected_https_root": "https://mse.buaa.edu.cn/",
+            "selection_relation": "deliberate separate HTTPS observation; original exact HTTP identity/directory retrieval preserved",
+            "directory_declares_https": false,
+            "protocol_equivalence_verified": false
+          },
+          "claim_preflight": {
+            "claimed_at": "2026-10-04T06:28:07Z",
+            "actual_actor": "cyjin-yl",
+            "actual_admin_maintain_push_permission": true,
+            "all_open_issue_pr_entries": 16,
+            "all_open_prs": 6,
+            "recent_discussion_entries": 100,
+            "matching_claims_or_linked_prs": 0,
+            "issue_comment_bodies_are_authority": false
+          },
+          "robots": {
+            "url": "https://mse.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "response_body_byte_length": 1693,
+            "response_body_sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791095564027
+          },
+          "root": {
+            "url": "https://mse.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html",
+            "response_body_byte_length": 58503,
+            "response_body_sha256": "b91fd89a2b497c8cf7c8b53c959b418e442e5014b4a93b5fc8b9763f65e9cd97",
+            "fetched_at_unix_ms": 1791095656666,
+            "same_host_path_hints": 64,
+            "hints_truncated": true,
+            "discovery_complete": false
+          },
+          "notices": {
+            "url": "https://mse.buaa.edu.cn/xwdt/gggs.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "response_body_byte_length": 27183,
+            "response_body_sha256": "d516618de3c93869e10ccdb91b8cf09006a2017d898222866ff87afdd62daaaa",
+            "fetched_at_unix_ms": 1791095787159,
+            "entry_count": 6,
+            "source_order_dates": [
+              "2026-09-21",
+              "2026-09-15",
+              "2026-09-09",
+              "2026-09-15",
+              "2026-09-14",
+              "2026-07-27"
+            ],
+            "inclusive_filter": {
+              "since": "2026-09-15",
+              "until": "2026-09-21",
+              "entry_count": 3
+            },
+            "titles_dates_links_excerpts_and_order_privately_match_original": true,
+            "source_advertised_pages": {
+              "2": "https://mse.buaa.edu.cn/xwdt/gggs/4.htm",
+              "3": "https://mse.buaa.edu.cn/xwdt/gggs/3.htm",
+              "4": "https://mse.buaa.edu.cn/xwdt/gggs/2.htm",
+              "5": "https://mse.buaa.edu.cn/xwdt/gggs/1.htm"
+            },
+            "live_observed_pages": [
+              1
+            ],
+            "same_host_path_hints": 64,
+            "hints_truncated": true,
+            "declared_article_categories": [
+              "1061",
+              "1058"
+            ],
+            "later_pages_or_other_category_bodies_live_verified": false
+          },
+          "article": {
+            "url": "https://mse.buaa.edu.cn/info/1061/2881.htm",
+            "http_status": 200,
+            "content_type": "text/html",
+            "response_body_byte_length": 522352,
+            "response_body_sha256": "dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3",
+            "fetched_at_unix_ms": 1791096587326,
+            "published_at": "2026-09-21",
+            "body_paragraph_count": 1,
+            "result": "partial_text",
+            "original_heading_differs_from_listing_teaser": true,
+            "original_heading_date_paragraph_and_retrieval_privately_match": true,
+            "unextracted_table_count": 1,
+            "source_table_rows": 339,
+            "source_table_cells": 2331,
+            "paragraph_wrapped_table_cells": 0,
+            "image_count": 0,
+            "attachment_hint_count": 0,
+            "full_table_text_extracted": false,
+            "source_table_content_or_personal_prose_published": false
+          },
+          "excerpt_correction": {
+            "initial_cached_listing_and_filter_exit": 7,
+            "cause": "512-byte heading budget incorrectly applied to actual source paragraph excerpts",
+            "original_excerpt_utf8_lengths": [
+              534,
+              583,
+              595,
+              440,
+              571,
+              517
+            ],
+            "original_excerpts_reconstructed_or_truncated": false,
+            "correction": "use existing 8-KiB paragraph budget for source a/p excerpts, not a shared budget relaxation",
+            "heading_href_entry_html_and_shared_body_budgets_unchanged": true,
+            "red_test_exit": 101,
+            "red_seconds": 1.45,
+            "green_test_exit": 0,
+            "green_seconds": 10.32,
+            "boundary": "600-byte UTF8 and8192-byte paragraphs retained fully,8193 rejected",
+            "zero_case_unqualified_exact_run": "exit0/19.79s,not proof"
+          },
+          "native_proof": "Actual cache-only root/board/list/filter/article and pretransport refusals;6/3/1 partial_text source facts privately equal. Page2offline/page6refresh/categorytzgg refuse7/7/2 without GET or governor byte changes. Undeclared42 temporary observer refuses3 before the single declared original GET. Original-only native build11.04/article0.38; original paragraph/header/date/hash/length unchanged, no live text-parser refresh.",
+          "governor": "Same production UID/home/permanent account-wide governor,60,000-ms requests/900,000-ms background floors,one in-flight through validation/cache persistence;4 deliberate GETs,full shared deadline before each,cache-first source discovery,no auth or campus writes. Final observed private state SHA68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab;disarmed/no latch/pendingNone/network_failures0,unchanged on offline/refusal proof. Never reset/delete/split identity/loosen TLS/robots/proxy/cookie/redirect/challenge controls.",
+          "focused_proof": "Six new source consumer/parser and real-loopback cases pass0/21.00s,including compilation; execution0.47s. Defend exact excerpt bounds/order/ambiguous dates and filter exclusion, primary view/headings, source header/body scope and table completeness, scoped ordinals, mixed declared categories and only-selected refresh/offline reuse.",
+          "quality_gate": "Final affected-source locked offline checks pass as separate commands:4directory0.50s,64announcements0.51s,7Mse0/1.04s;sets overlap and are not a new full-suite count. Inactive-directory case red23.60/green15.34 inclcompilation. Native locked offline build0/15.78,strict all-target clippy0/9.33,fmcheck0/0.70. Actual directory/list/filter/original0/0.09,0/0.17,0/0.11,0/0.39;50directory entries retain originalSHAf491e3a,and entire Mse6/3/1 partial_text outputs privately equal. Prior full252library+19CLI/2ignored/5suites belongs74820;no rerun or253full-suite claim. Completed sourcecheck at74820 reportedMSE003; nested-entry-only recipe wasalreadyunavailable,actual reproduced inactive group/text boundary fixed by common existing active-text helpers. No additional general source sweep;exact-head approval remains external. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGET/auth/write.",
+          "prior_quality_gate_74820": "Renewed coherent locked offline build/full252library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-002 shared-page ambiguity correction. Separate nativebuild7.94/formatter0.88/fulltest74.71 including library70.39/CLI0.29/clippy7.79/fmtcheck0.59 seconds. Pagination regression red26.29/green6.31 and seven Mse focused1.07 are separate,not extra full-suite runs. Actual cached list0/0.51,advertised uncachedpage2 refusal7/0.13,originalarticle0/0.36 privately match entire retained outputs. Initial883/250+19 gate/UI and4a03/251+19 gate keep their own scope;no251 local visual proof was performed. Proof-only CLI-suite-index assumption corrected from completed output without replay; empty binary suite precedes CLI. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
+          "prior_quality_gate_4a03": "Renewed coherent locked offline build/full251library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass after accepted MSE-001 local-cache/no-request correction. Separate formatter0.88/build8.43/fulltest77.67 including library64.93/CLI0.19/clippy8.67/fmtcheck0.70 seconds. Seven focused1.23s and red26.97/green5.44 are separate,not extra full-suite runs. Initial883/250+19/full82.57/native/localUI retain previous head scope. Production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newcampusGETs/noauth/write. Not trustedCI,formal approval,deployed or merged-root correction.",
+          "prior_quality_gate_883": "Coherent locked offline build/full250library+19CLI passes,2ignored across5suites,strict all-target clippy and formatter check pass. Separate command boundaries formatter0.97/build11.43/fulltest82.57 including library71.67/CLI0.19/clippy18.54/fmtcheck0.63 seconds. Six focused21.00s and intermediate native builds are separate,not extra full-suite runs. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab stayed unchanged,0newGETs/noauth/write. Prior244/238/232/228/224/220+19 receipts retain original source-head scope. This is not trustedCI,formal independent approval or deployment.",
+          "initial_source_check_failures": [
+            {
+              "mode": "stateless slow structured16-file",
+              "complete_public_files": 16,
+              "characters": 506557,
+              "result": "failed_no_structured_response",
+              "findings_or_approval_observed": false
+            },
+            {
+              "mode": "distinct stateless slow schema-free7-file",
+              "complete_public_files": 7,
+              "characters": 339799,
+              "result": "failed_no_text_output",
+              "findings_or_approval_observed": false
+            }
+          ],
+          "initial_source_check": {
+            "source_head_main_bound": "883ddbc355c17e4dd225b747252559356b538ab7",
+            "result": "findings",
+            "public_files": [
+              "src/announcements/mse.rs",
+              "src/announcements.rs",
+              "src/net.rs",
+              "src/main.rs",
+              "src/organizations.rs",
+              "src/governor.rs",
+              "src/html.rs"
+            ],
+            "full_public_file_count": 7,
+            "full_public_characters": 339799,
+            "mode": "stateless no-tool session-default plain-text completion,not an agent/platform reviewer",
+            "findings": [
+              "MSE-001 accepted_and_fixed"
+            ],
+            "omitted": "9 separate legacy college/PDF-viewer modules,docs/acceptance,integrationtests,unlistedmodules/externalcrateimplementations",
+            "main_bound_bytes_only": true,
+            "independent_checkout_sha_runtime_original_cache_rights_ci_or_approval": false
+          },
+          "current_local_ui_proof": "Actual final-source managed Chromium desktop1365x900/mobile390x844,scale1: four exclusive0600/fsynced WebP captures under0700 independently inspected for Mse examples and evidence. Both served HTML hashes match frozen02adf619ecd16f9dd9eccd788a4e3801a3cb795897b31732dec978f7d5be6f7c. Doc widths1365/390,anchor tops<1px,scripts/iframes/externalstyles/brokenfragments0; mobile code stays local350/681 scroller. Source HTTP/separateHTTPS,6/3/1 partial_text/missing339-row table,current affected proof vs prior252fullgate,owner write scope and own submission are explicit. Earlier R2helper timeout/viewport mismatch created0captures; rawviewport recovery used and frozenattemptHTMLd1 remains. Initial883/e187fourcaptures remain separate. Both managed tabs released and local docs service stopped;no deployment/campusGET/approval.",
+          "accepted_directory_finding_response": {
+            "id": "MSE-003",
+            "decision": "inert_group_and_text_boundary_accepted_and_fixed",
+            "checked_source_head": "74820dd7360ae26f56c618f1e03155601a7e2196",
+            "source_checker_scope": "7 complete public Rust files343777chars,stateless no-tool session-default;9 legacy modules,docs/acceptance,integrationtests/external implementations omitted",
+            "reproduction_correction": "checker nested-template-entry-only recipe already returns unavailable beforefix; actual red demonstrates template-contained whole directory groups emitted and inactive noscript text merged into category labels",
+            "code_cutover": "reuse existing active/inert text functions in common html module; exclude inactive groups,headings,members and label payloads in organizations; remove duplicated old definitions and iterator-to-Vec text normalization",
+            "red": {
+              "exit": 101,
+              "seconds": 23.6,
+              "observed": "inactive group and fallback suffix included in directory categories"
+            },
+            "green": {
+              "exit": 0,
+              "seconds": 15.34,
+              "inert_only_refused": true,
+              "only_active_group_and_exact_HTTP_member_retained": true
+            },
+            "affected_commands": {
+              "directory": {
+                "exit": 0,
+                "seconds": 0.5
+              },
+              "announcements": {
+                "exit": 0,
+                "seconds": 0.51
+              },
+              "mse_transport": {
+                "exit": 0,
+                "seconds": 1.04
+              }
+            },
+            "affected_test_counts_by_command": {
+              "directory": 4,
+              "announcements": 64,
+              "mse": 7
+            },
+            "actual_native": {
+              "directory": {
+                "exit": 0,
+                "seconds": 0.09
+              },
+              "mse_list": {
+                "exit": 0,
+                "seconds": 0.17
+              },
+              "mse_filter": {
+                "exit": 0,
+                "seconds": 0.11
+              },
+              "mse_original": {
+                "exit": 0,
+                "seconds": 0.39
+              }
+            },
+            "directory_entries": 50,
+            "original_directory_body_sha256": "f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9",
+            "entire_Mse_outputs_privately_equal": true,
+            "clippy": {
+              "exit": 0,
+              "seconds": 9.33
+            },
+            "formatter_check": {
+              "exit": 0,
+              "seconds": 0.7
+            },
+            "production_governor_sha256": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "new_campus_gets": 0,
+            "campus_writes": 0,
+            "new_general_source_sweeps": 0,
+            "extra_full_suite_runs": 0,
+            "formal_independent_approval": false
+          },
+          "accepted_pagination_finding_response": {
+            "id": "MSE-002",
+            "decision": "accepted_and_fixed",
+            "checked_source_head": "4a03e282feddc3505a26833beb408f747f62e148",
+            "source_checker_scope": "7 complete public Rust files342641chars,stateless no-tool session-default plaintext;9 legacy college/PDF-viewer modules+docs/acceptance/integrationtests/external implementations omitted",
+            "problem": "shared advertised page discovery selected the first active ordinal despite another scoped declaration of a different destination",
+            "reproduction": "two active ordinal2 anchors declare distinct allowed category pages; old shared helper returns the first instead of unavailable",
+            "code_cutover": "scan all active matching ordinal declarations; retain one allowed URL without copying; reject distinct destinations and deduplicate identical URLs",
+            "shared_callers": "university,scse,ic,aviation,beijing,shenyuan,zfai,iiif,mse keep their existing selectors and URL admission",
+            "red": {
+              "exit": 101,
+              "seconds": 26.29,
+              "observed": "Ok first allowed URL instead of unavailable"
+            },
+            "green": {
+              "exit": 0,
+              "seconds": 6.31,
+              "conflicting_ordinal_rejected": true,
+              "existing_identical_declaration_consumer_assertion_retained": true
+            },
+            "renewed_seven_mse_focused": {
+              "exit": 0,
+              "seconds": 1.07
+            },
+            "actual_native_smoke": {
+              "locked_offline_build": {
+                "exit": 0,
+                "seconds": 7.94
+              },
+              "cached_list": {
+                "exit": 0,
+                "seconds": 0.51
+              },
+              "advertised_uncached_page2": {
+                "exit": 7,
+                "seconds": 0.13
+              },
+              "cached_original_article": {
+                "exit": 0,
+                "seconds": 0.36
+              },
+              "entire_retained_outputs_privately_equal": true
+            },
+            "production_governor_unchanged": true,
+            "production_governor_sha": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "new_campus_gets": 0,
+            "campus_writes": 0,
+            "governor_state_code_identity_policy_floors_latch_or_auth_changed": false,
+            "formal_independent_approval": false
+          },
+          "accepted_source_finding_response": {
+            "id": "MSE-001",
+            "decision": "accepted_and_fixed",
+            "checked_source_head": "883ddbc355c17e4dd225b747252559356b538ab7",
+            "source_checker_scope": "7 complete public Rust files339799chars,stateless no-tool session-default plaintext;9 separate college/PDF-viewer modules+docs/acceptance/integrationtests/externalcrates omitted",
+            "problem": "under-lease cache re-load error reported Outcome::Success without HTTP, resetting shared network-failure streak",
+            "reproduction": "real isolated Mse-profile loopback truncation creates failure1; expire only synthetic timers; valid initial cache then corrupt before direct under-lease fetch re-load; cache_invalid/no additional HTTP erased streak beforefix; next real loopback truncation should escalate",
+            "code_cutover": "existing RequestLease::finish_without_request instead of finish(Outcome::Success) for under-lease local cache-load failure",
+            "existing_precedent": "gateway transport local before_send error already uses the same finish_without_request",
+            "red": {
+              "exit": 101,
+              "seconds": 26.97,
+              "actual_streak": 0,
+              "expected_retained_streak": 1
+            },
+            "green": {
+              "exit": 0,
+              "seconds": 5.44,
+              "retains_first_streak": true,
+              "cache_error_target_requests_added": 0,
+              "next_actual_failure_streak": 2,
+              "next_actual_failure_cooldown_gt_seconds": 59
+            },
+            "renewed_seven_focused": {
+              "exit": 0,
+              "seconds": 1.23
+            },
+            "production_governor_unchanged": true,
+            "production_governor_sha": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "new_campus_gets": 0,
+            "governor_state_code_identity_policy_floors_latch_or_auth_changed": false,
+            "formal_independent_approval": false
+          },
+          "renewed_metadata_native_proof": "After accepted MSE-001/renewed251+19/finding metadata,owned native build0/7.38s and actual cache-only capabilities/article0. Capabilities consume accepted finding and renewed gate while announcements remainspartial; entire original partial_text/title/date/paragraph/retrieval privatelyequal. Same production governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newGETs. Earlier8native/250+19 scope preserved; unaffected7otherpaths not replayed. Corrected CLI-only cached article separately0/.56 beforemetadata,not another full suite or live refresh.",
+          "metadata_native_proof": "After actual250+19 gate metadata, owned native build0/5.98s and eight actual cache-only commands0: root/board/list/filter/article/help/schema/capabilities. Source counts6/3/1 partial_text,44-capability output consumes250+19 and keeps announcements partial. All original source rows/filter/article/title/date/paragraph/hash/length privately unchanged; same governor68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab unchanged,0newGETs. New article undeclared-refresh/source-page6-refresh/noncanonical/offhost-with-source-page refusals3/7/2/2 before GET. Proof-script schema envelope KeyError corrected actual commands.announcements using retained output, no command replay or claimed full JSON-Schema validator.",
+          "local_ui_proof": "Actual local managed Chromium desktop1365x900/mobile390x844 observations and4WebP captures verify Mse cached examples,6/3/1 partial_text,exact HTTP identity/separate HTTPS retrieval,unextracted339-row/2331-cell table,64-hint truncation,unmerged104/102/100/98/96/94 and250+19/prior244/238/232/228/224/220 scope. Fresh evidence-link clicks within1px of viewport top;document widths1365/390,scripts/externalstyles/frames/brokenFragments0;mobile code is a local350/681 scroller. Four exclusive/fsynced0600 current-UID single-link captures under0700 plus observed HTML are preserved outside source/tmp. HTML SHAe187b9c428917838324cb5957fac54e73f8137c552d02526f2a073c7a560c9f9. Both managed tabs released; no Pages deployment.",
+          "retained_failures": "Worktree FICLONE/plaincheckout fallback2.46/freshnative52.67, no artifact copy/chmod/parent overwrite/host build. Initial real cached excerpt rejection retained; wrongly unqualified exact test selected0 cases is not proof. Temporary observer build101/5.97 incorrectly called as_str on already-static str; corrected actual type build0/2.84,source deleted/factory crate-private. Private cache helper wrong output-field assumption corrected to stored body_base64/sha256/status/headers without command replay. No raw source/private headings/prose/table values in diagnostics or external review.",
+          "limits": "One current board/six rows and one declared original with only actual paragraphs retained and a large nonparagraph table explicitly missing. No later-page/body1058 live proof,full table extraction,pure-table success,all-college/faculty/history,attachment bytes,image/OCR,rights/publisher/security certificate,authenticated service or recordings/Life. Legitimate owner-controlled campus writes remain broadly included; none requested/needed here and assignment submission stays with owner. Stateless source check is not independent platform approval or trusted CI; exact-head external source-contract integration gates remain separate."
+        },
         "iiif_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/103",
           "stack_base": "PR102 exact eca2b12dff6d7bd453e7e019aac882bf392ea9c5; owned work/iiif-announcements, explicitly dependent on unmerged PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
