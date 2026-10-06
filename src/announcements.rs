@@ -27,6 +27,7 @@ pub(crate) mod ic;
 pub(crate) mod iiif;
 pub(crate) mod mse;
 pub(crate) mod rse;
+pub(crate) mod sa;
 mod scse;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
@@ -903,6 +904,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "sepe" {
         return sepe::surface(mode, page);
     }
+    if college == "sa" {
+        return sa::surface(mode, page);
+    }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
         ("scse", "notices") => SCSE_NOTICES_URL,
@@ -993,6 +997,7 @@ fn describe_college_surface(
             | "mse"
             | "rse"
             | "sepe"
+            | "sa"
     ) {
         college_html(response)?
     } else {
@@ -1285,7 +1290,7 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse and sepe bind the retained authoritative directory; selected boards must be declared by their retained root. Mse, Rse and Sepe preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse|sa [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse, sepe and sa bind the retained authoritative directory; selected boards must be declared by their retained root. Mse, Rse, Sepe and Sa preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. Sa admits only a fixed root observation; its first governed robots request did not complete and no root/notice original is available, so no Sa listing/article adapter or route is claimed. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {

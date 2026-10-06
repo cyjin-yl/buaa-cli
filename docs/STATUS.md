@@ -1,5 +1,17 @@
 # Development status
 
+## Sa exact-source transport frontier
+
+Local `work/sa-announcements` starts at completed local Sepe `959c6468627ca3bc8f9f38a5e2d55ed9a7e75bc5`, dependent on unmerged PR110 and its parents. Visible official-directory member4 宇航学院 under 航空航天学科群 retains exact literal/resolved `http://www.sa.buaa.edu.cn/`. Source ordinal is not a school code. Separately selected `https://www.sa.buaa.edu.cn/` is explicit, not an upgrade, www-less alias or verified protocol equivalent. `college-source sa root` admits only this fixed HTTPS host's root and robots paths; no notice/list/article route is advertised.
+
+Fresh owned locked offline native build exits0/52.03s without copied artifacts, chmod, parent overwrite or host build. Actual offline root exits7 at a genuine empty-cache miss, with unchanged governor bytes. One deliberate governed source invocation then exits7/0.25s: the first request to `/robots.txt` did not complete, before a root GET. No observed HTTP response status/body/hash and no cached original; the source cache is empty. The generic sanitized transport error does not diagnose TLS, DNS, an outage or permanent unavailability. **No retry, HTTP/host alias, TLS/robots/challenge/proxy fallback or guessed route.**
+
+Same permanent governor retains network_failures1, no pending/latch, disarmed authentication and60000/900000-ms floors. Source receipt SHA-256 `c2a94a39a1d64d1480b20dcc30d04bfa80e80c560a2c45aef5581d4d152cb70f`; request gap/backoff and failure history remain intact. Earlier Sepeaf4 receipt below is historical, not current state. No campus mutation or authentication attempt. Private native/error/frontier receipts are under0700 with exclusive/fsynced0600 files.
+
+Sa notices and original verification remain blocked on usable exact selected-source bytes or an explicit reviewed current source contract; unavailable transport is not working notice coverage. GitHub quota stop remains, no external issue/PR/push/approval/merge or deployed claim. Full goal stays active; advance the Materials/Energy offline-history parsing gap rather than waiting or repeating the failed observation.
+
+Final reachable local proof: locked offline build0/7.83s, actual schema/help/capabilities all0; unsupported Sa notices/list/article refresh commands each refuse2 before transport. Same governor bytes and network_failures1 retained, no new GET. Strict all-target clippy0/16.85s and formatter check0 pass; no additional full-suite run. A single fresh stateless no-tool source check could not return a review: upstream401 `token_revoked` invalidated OAuth token. This is a failed check, not no findings/approval, and not campus authentication rejection; no model retry, credential fallback or governor reset. Supplied pre-format source hashes and failure are private. No HTML UI change or Pages deployment in this probe.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

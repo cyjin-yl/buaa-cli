@@ -601,6 +601,18 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "sa_source_probe": {
+          "issue": null,
+          "pr": null,
+          "status": "local-unclaimed-transport-unavailable-notices-blocked",
+          "stack_base": "Owned work/sa-announcements starts at local Sepe959c6468627ca3bc8f9f38a5e2d55ed9a7e75bc5; unmerged PR110 and its parents. No push/claim/approval/merge/root-main or Pages deployment.",
+          "authority": "Visible official-directory member4 宇航学院 under 航空航天学科群; exact literal/resolved http://www.sa.buaa.edu.cn/. Ordinal is source order, not a school code. Deliberately selected https://www.sa.buaa.edu.cn/ is separate, not a source-declared alias, silent upgrade or verified protocol equivalent. No www-less host or HTTP fallback.",
+          "command": "announcements college-source sa [root] [--online|--refresh]; fixed same-host root/robots admission only. No Sa notice/list/article adapter or invented route.",
+          "native_proof": "Fresh owned locked offline build0/52.03s; no artifact copy, chmod, parent-target overwrite or host build. Actual cache-only root exits7 and reaches a genuine cache miss without governor change. One subsequent deliberate root-source invocation exits7/0.25s: its first request to https://www.sa.buaa.edu.cn/robots.txt did not complete, before a root GET. No observed HTTP status/body/hash or cached original; Sa cache is empty. Generic sanitized transport failure does not establish a TLS/DNS error, outage or permanent unavailability. No retry or substitute request.",
+          "governor_receipt": "After the one failed transport attempt, same permanent governor SHA c2a94a39a1d64d1480b20dcc30d04bfa80e80c560a2c45aef5581d4d152cb70f; network_failures1, pendingNone, disarmed auth/no latch,60000/900000-ms floors. Reserved gap/backoff and failure history retained; earlier Sepeaf4 is historical. No reset, parallel account key/limiter or authentication attempt.",
+          "blocker": "No exact selected-source robots response/root/active board/listing/original was retained. Need a usable selected-source response or explicit reviewed current source contract before notice implementation and original verification. Both Sa notice/original tasks are blocked, not completed/dropped; source-error handling is not working announcement coverage.",
+          "external_scope": "Existing GitHub API quota stop remains; no subsequent API call, readiness retry, anonymous/identity/proxy fallback or external Sepe/Sa claim. Campus write intent none, assignments owner-controlled, no subagent/peer revival. Finish reachable local work and advance another functional gap without approval waiting."
+        },
         "sepe_slice": {
           "issue": null,
           "pr": null,
