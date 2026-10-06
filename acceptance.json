@@ -601,6 +601,24 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "h3i_table_text_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "local-native-verified-source-ordered-table-text-unreviewed",
+          "stack_base": "Owned work/h3i-table-text starts at Ase17de42b582c1e0987c65a42bb6fe2041271c5e7e on the unmerged expanded-history/Sa/Sepe/PR110 stack. Earlier H3i source PR100/6d13 and parent worktrees remain unchanged; no new external claim, parent/root-main overwrite, push, approval, merge or deployment.",
+          "source_original": {
+            "url": "https://h3i.buaa.edu.cn/info/1141/4918.htm",
+            "byte_length": 97764,
+            "sha256": "e2d6ac0af95b25b2ba0303efd02aeddfed71c8da56573e27768dc15a2ba211f9",
+            "new_source_requests": 0
+          },
+          "observed_gap": "The retained original's two flat source tables contain42 rows/84 cells and86 active text events outside paragraph wrappers. Existing paragraph-only output omits those source events. Private structural counts expose no names, prose, full attributes or per-person hashes.",
+          "contract": "Reuse the existing Mse flat-table parser and rendering once in the common parent; both callers retain their own original header/body/source binding. Preserve source captions, ordered rows/cells, th facts and only declared DOM-decoded span strings; no invented paragraphs/cells/default spans, span expansion or visual grid/interleaving. Same2-MiB HTML,1024 combined paragraph/row,256 table/cell,8-KiB row/caption and512-byte span bounds. Nested/unowned/overflow fails; nontext bodies stay unavailable, image/attachment contents partial/unfetched. No body copy, new engine/dependency or network/governor change.",
+          "actual_native_proof": "New owned locked offline build0/9.05s; actual cached H3i article0/0.31s returns181 original paragraphs and2/42/84 source table records. Entire table/paragraph arrays privately equal an event-ordered original oracle; original title/date/hash/timestamp remain unchanged. All active source-body text events are represented by paragraphs/cells/captions. Affected Mse actual cached read0/0.46s privately matches its whole339-row/2331-cell source table array and original paragraph/hash/timestamp, remaining full_text. Previous full old Mse native output was lost; this is a new original comparison, not equality with that lost output.",
+          "focused_proof": "One new H3i consumer regression red101/48.19s then green0/6.75s. Whole synthetic cells/caption/inline order/spans/inert exclusion, no invented paragraphs, table-only text and image-partial boundary are defended. Four H3i and eight affected Mse consumer cases pass0/0.25s and0/0.30s:12 unique focused cases, not265 full-suite tests; exact red/green case overlaps the four.",
+          "governor_receipt": "Zero new GETs, authentication attempts or campus writes. Permanent state SHA7b51bcf1b7cbb6a89ce938ee16b0bc3ffca0694b96ea1fd4ed5a1a1f62beae2e stays byte-identical, retaining Ase network_failures2, pendingNone/disarmed auth/no latch and60000/900000-ms floors/backoff. Never reset/delete/migrate history, use another key/limiter, retry failed source observations or bypass TLS/robots/challenges.",
+          "limits_and_review": "H3i source-body table text only, not full history/all-college/attachment download/OCR, source authenticity/security/rights certification or deployment. Private originals/oracle/native outputs stay outside source under0700/exclusive fsynced0600; no personal text supplied to a model. Fresh independent inspection remains blocked on the previous upstream401 prerequisite; new source packet unreviewed, no retry/provider fallback/subagent or approval claim. GitHub quota stop unchanged; full goal remains active. Final native discovery/gate receipt is separate, no new full suite or HTML UI observation."
+        },
         "ase_source_probe": {
           "issue": null,
           "pr": null,

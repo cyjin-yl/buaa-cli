@@ -1,15 +1,15 @@
 //! Materials college: exact HTTP directory identity, separate HTTPS observation.
 use super::{
-    ArticleDocument, ListQuery, MAX_BODY_PARAGRAPHS, MAX_ENTRIES, MAX_PARAGRAPH, MAX_TEXT,
-    advertised_page_url, article_body, article_category_from_url, article_output,
-    bind_college_board, college_directory_attribution, college_html, describe_college_surface,
-    element_text, entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
-    parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval, unavailable,
+    ListQuery, MAX_TEXT, advertised_page_url, article_category_from_url, bind_college_board,
+    college_directory_attribution, college_html, describe_college_surface, element_text,
+    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
+    parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval,
+    table_article_output, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, MSE_NOTICES_URL, MSE_ROOT_URL, mse_path_allowed,
 };
-use scraper::{ElementRef, Html, Node, Selector};
+use scraper::{Html, Selector};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -166,123 +166,6 @@ pub(crate) fn article_with_client(
         })?
 }
 
-struct SourceTables {
-    values: Vec<Value>,
-    row_count: usize,
-    cell_count: usize,
-    has_text: bool,
-}
-
-fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
-    let tables = Selector::parse("table").map_err(|_| unavailable())?;
-    let rows = Selector::parse("tr").map_err(|_| unavailable())?;
-    let cells = Selector::parse(":scope > th, :scope > td").map_err(|_| unavailable())?;
-    let captions = Selector::parse(":scope > caption").map_err(|_| unavailable())?;
-    let mut result = SourceTables {
-        values: Vec::new(),
-        row_count: 0,
-        cell_count: 0,
-        has_text: false,
-    };
-    for table in body.select(&tables).filter(|node| !inert_element(*node)) {
-        if result.values.len() == MAX_ENTRIES
-            || table.select(&tables).any(|node| !inert_element(node))
-            || table.descendants().any(|node| {
-                matches!(node.value(), Node::Text(text) if !text.trim().is_empty())
-                    && !node.ancestors().any(|ancestor| {
-                        ancestor.value().as_element().is_some_and(|element| {
-                            matches!(
-                                element.name(),
-                                "td" | "th"
-                                    | "caption"
-                                    | "script"
-                                    | "style"
-                                    | "template"
-                                    | "noscript"
-                            )
-                        })
-                    })
-            })
-        {
-            return Err(failed_contract(
-                "Mse source tables require bounded flat rows and cell-owned text",
-                file!(),
-                line!(),
-            ));
-        }
-        let mut caption_nodes = table.select(&captions).filter(|node| !inert_element(*node));
-        let caption = caption_nodes.next().map(element_text);
-        if caption_nodes.next().is_some()
-            || caption
-                .as_ref()
-                .is_some_and(|text| text.len() > MAX_PARAGRAPH)
-        {
-            return Err(failed_contract(
-                "Mse table caption is ambiguous or over budget",
-                file!(),
-                line!(),
-            ));
-        }
-        result.has_text |= caption.as_ref().is_some_and(|text| !text.is_empty());
-        let mut source_rows = Vec::new();
-        for row in table.select(&rows).filter(|node| !inert_element(*node)) {
-            if result.row_count == MAX_BODY_PARAGRAPHS {
-                return Err(failed_contract(
-                    "Mse table rows exceed the reviewed text budget",
-                    file!(),
-                    line!(),
-                ));
-            }
-            let mut source_cells = Vec::new();
-            let mut row_bytes = 0usize;
-            for cell in row.select(&cells).filter(|node| !inert_element(*node)) {
-                if source_cells.len() == MAX_ENTRIES {
-                    return Err(failed_contract(
-                        "Mse table row exceeds the reviewed cell budget",
-                        file!(),
-                        line!(),
-                    ));
-                }
-                let text = element_text(cell);
-                row_bytes += text.len();
-                if row_bytes > MAX_PARAGRAPH {
-                    return Err(failed_contract(
-                        "Mse table row text exceeds the reviewed byte budget",
-                        file!(),
-                        line!(),
-                    ));
-                }
-                result.has_text |= !text.is_empty();
-                let mut value = json!({"header":cell.value().name() == "th"});
-                value["text"] = Value::String(text);
-                for span in ["rowspan", "colspan"] {
-                    if let Some(raw) = cell.value().attr(span) {
-                        if raw.len() > MAX_TEXT {
-                            return Err(failed_contract(
-                                "Mse table span attribute exceeds the reviewed text budget",
-                                file!(),
-                                line!(),
-                            ));
-                        }
-                        value[span] = Value::String(raw.to_owned());
-                    }
-                }
-                source_cells.push(value);
-            }
-            result.row_count += 1;
-            result.cell_count += source_cells.len();
-            let mut value = json!({});
-            value["cells"] = Value::Array(source_cells);
-            source_rows.push(value);
-        }
-        let mut value = json!({"source_order":result.values.len() + 1});
-        value["caption"] = caption.map(Value::String).unwrap_or(Value::Null);
-        value["rows"] = Value::Array(source_rows);
-        result.values.push(value);
-    }
-    Ok(result)
-}
-
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
     let mains = Selector::parse("div.nymain > div.w16 > div.ny-right > form > div.art-main")
         .map_err(|_| unavailable())?;
@@ -331,53 +214,22 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let tables = source_tables(body)?;
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body, tables.has_text)?;
-    if paragraphs.len() + tables.row_count > MAX_BODY_PARAGRAPHS {
-        return Err(failed_contract(
-            "Mse paragraphs and table rows exceed the reviewed text budget",
-            file!(),
-            line!(),
-        ));
-    }
-    let images = Selector::parse("img").map_err(|_| unavailable())?;
-    let has_images = body.select(&images).any(|image| !inert_element(image));
-    let mut output = article_output(
+    table_article_output(
         response,
-        ArticleDocument {
-            title,
-            category: Url::parse(&response.url)
-                .ok()
-                .as_ref()
-                .and_then(article_category_from_url),
-            published_at,
-            paragraphs,
-            attachment_hints,
-            attachments_found,
-        },
-    );
-    output["body_table_count"] = json!(tables.values.len());
-    output["body_table_row_count"] = json!(tables.row_count);
-    output["body_table_cell_count"] = json!(tables.cell_count);
-    output["body_tables"] = Value::Array(tables.values);
-    output["completeness"]["body_source"] = json!(
-        "unique art-main/art-body-box/art-body/ar_article#vsb_content/v_news_content; source paragraphs and separate ordered flat-table captions/rows/cells; code and fallback payloads excluded"
-    );
-    output["completeness"]["table_representation"] = json!(
-        "normalized source cell text and explicitly present span attributes; no inferred cells, span expansion or visual-layout reconstruction; paragraph-wrapped cells remain in body_paragraphs as well"
-    );
-    output["completeness"]["unextracted_table_count"] = json!(0);
-    output["completeness"]["image_content_present"] = json!(has_images);
-    if has_images || attachments_found {
-        output["result"] = json!("partial_text");
-        output["completeness"]["missing_nonparagraph_content"] =
-            json!("image text and attachment contents are not reconstructed or downloaded");
-    }
-    Ok(output)
+        body,
+        title,
+        Url::parse(&response.url)
+            .ok()
+            .as_ref()
+            .and_then(article_category_from_url),
+        published_at,
+        "unique art-main/art-body-box/art-body/ar_article#vsb_content/v_news_content; source paragraphs and separate ordered flat-table captions/rows/cells; code and fallback payloads excluded",
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::MAX_BODY_PARAGRAPHS;
     use super::*;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};

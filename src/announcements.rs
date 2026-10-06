@@ -15,7 +15,7 @@ use crate::html::{active_element_text, element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{NaiveDate, NaiveDateTime};
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -717,6 +717,171 @@ fn article_output(response: &Response, document: ArticleDocument) -> Value {
         Value::Array(document.paragraphs.into_iter().map(Value::String).collect());
     output["attachments"]["hints"] = Value::Array(document.attachment_hints);
     output
+}
+
+struct SourceTables {
+    values: Vec<Value>,
+    row_count: usize,
+    cell_count: usize,
+    has_text: bool,
+}
+
+fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
+    let tables = Selector::parse("table").map_err(|_| unavailable())?;
+    let rows = Selector::parse("tr").map_err(|_| unavailable())?;
+    let cells = Selector::parse(":scope > th, :scope > td").map_err(|_| unavailable())?;
+    let captions = Selector::parse(":scope > caption").map_err(|_| unavailable())?;
+    let mut result = SourceTables {
+        values: Vec::new(),
+        row_count: 0,
+        cell_count: 0,
+        has_text: false,
+    };
+    for table in body.select(&tables).filter(|node| !inert_element(*node)) {
+        if result.values.len() == MAX_ENTRIES
+            || table.select(&tables).any(|node| !inert_element(node))
+            || table.descendants().any(|node| {
+                matches!(node.value(), Node::Text(text) if !text.trim().is_empty())
+                    && !node.ancestors().any(|ancestor| {
+                        ancestor.value().as_element().is_some_and(|element| {
+                            matches!(
+                                element.name(),
+                                "td" | "th"
+                                    | "caption"
+                                    | "script"
+                                    | "style"
+                                    | "template"
+                                    | "noscript"
+                            )
+                        })
+                    })
+            })
+        {
+            return Err(failed_contract(
+                "source tables require bounded flat rows and cell-owned text",
+                file!(),
+                line!(),
+            ));
+        }
+        let mut caption_nodes = table.select(&captions).filter(|node| !inert_element(*node));
+        let caption = caption_nodes.next().map(element_text);
+        if caption_nodes.next().is_some()
+            || caption
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_PARAGRAPH)
+        {
+            return Err(failed_contract(
+                "table caption is ambiguous or over budget",
+                file!(),
+                line!(),
+            ));
+        }
+        result.has_text |= caption.as_ref().is_some_and(|text| !text.is_empty());
+        let mut source_rows = Vec::new();
+        for row in table.select(&rows).filter(|node| !inert_element(*node)) {
+            if result.row_count == MAX_BODY_PARAGRAPHS {
+                return Err(failed_contract(
+                    "table rows exceed the reviewed text budget",
+                    file!(),
+                    line!(),
+                ));
+            }
+            let mut source_cells = Vec::new();
+            let mut row_bytes = 0usize;
+            for cell in row.select(&cells).filter(|node| !inert_element(*node)) {
+                if source_cells.len() == MAX_ENTRIES {
+                    return Err(failed_contract(
+                        "table row exceeds the reviewed cell budget",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                let text = element_text(cell);
+                row_bytes += text.len();
+                if row_bytes > MAX_PARAGRAPH {
+                    return Err(failed_contract(
+                        "table row text exceeds the reviewed byte budget",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                result.has_text |= !text.is_empty();
+                let mut value = json!({"header":cell.value().name() == "th"});
+                value["text"] = Value::String(text);
+                for span in ["rowspan", "colspan"] {
+                    if let Some(raw) = cell.value().attr(span) {
+                        if raw.len() > MAX_TEXT {
+                            return Err(failed_contract(
+                                "table span attribute exceeds the reviewed text budget",
+                                file!(),
+                                line!(),
+                            ));
+                        }
+                        value[span] = Value::String(raw.to_owned());
+                    }
+                }
+                source_cells.push(value);
+            }
+            result.row_count += 1;
+            result.cell_count += source_cells.len();
+            let mut value = json!({});
+            value["cells"] = Value::Array(source_cells);
+            source_rows.push(value);
+        }
+        let mut value = json!({"source_order":result.values.len() + 1});
+        value["caption"] = caption.map(Value::String).unwrap_or(Value::Null);
+        value["rows"] = Value::Array(source_rows);
+        result.values.push(value);
+    }
+    Ok(result)
+}
+
+fn table_article_output(
+    response: &Response,
+    body: ElementRef<'_>,
+    title: String,
+    category: Option<String>,
+    published_at: Option<String>,
+    body_source: &str,
+) -> Result<Value, Error> {
+    let tables = source_tables(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, tables.has_text)?;
+    if paragraphs.len() + tables.row_count > MAX_BODY_PARAGRAPHS {
+        return Err(failed_contract(
+            "paragraphs and table rows exceed the reviewed text budget",
+            file!(),
+            line!(),
+        ));
+    }
+    let images = Selector::parse("img").map_err(|_| unavailable())?;
+    let has_images = body.select(&images).any(|image| !inert_element(image));
+    let mut output = article_output(
+        response,
+        ArticleDocument {
+            title,
+            category,
+            published_at,
+            paragraphs,
+            attachment_hints,
+            attachments_found,
+        },
+    );
+    output["body_table_count"] = json!(tables.values.len());
+    output["body_table_row_count"] = json!(tables.row_count);
+    output["body_table_cell_count"] = json!(tables.cell_count);
+    output["body_tables"] = Value::Array(tables.values);
+    output["completeness"]["body_source"] = json!(body_source);
+    output["completeness"]["table_representation"] = json!(
+        "normalized source cell text and explicitly present span attributes; no inferred cells, span expansion or visual-layout reconstruction; paragraph-wrapped cells remain in body_paragraphs as well"
+    );
+    output["completeness"]["unextracted_table_count"] = json!(0);
+    output["completeness"]["image_content_present"] = json!(has_images);
+    if has_images || attachments_found {
+        output["result"] = json!("partial_text");
+        output["completeness"]["missing_nonparagraph_content"] =
+            json!("image text and attachment contents are not reconstructed or downloaded");
+    }
+    Ok(output)
 }
 
 fn parse_list_query(input: Option<&str>) -> Result<ListQuery, Error> {
@@ -1487,7 +1652,7 @@ pub fn schema() -> Value {
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Sepe retains active source-declared JSP file hints within art-main, including siblings outside its text body; the observed55-paragraph original has three unfetched file hints and remains partial_text. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse and H3i additionally return separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Both use one shared extraction and count paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. The retained H3i original preserves181 paragraphs plus two source tables with42 rows/84 cells, without inventing paragraphs or changing original retrieval facts. Sepe retains active source-declared JSP file hints within art-main, including siblings outside its text body; the observed55-paragraph original has three unfetched file hints and remains partial_text. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {
@@ -1504,7 +1669,7 @@ pub fn schema() -> Value {
     output["article"]["output"]["properties"] = json!({
         "body_tables": {
             "type":"array","maxItems":MAX_ENTRIES,
-            "description":"Mse source tables only; normalized text is derived from original HTML whose retrieval hash remains unchanged. Arrays preserve table/row/cell source order. Span attributes are DOM-decoded source strings and omitted when absent, not inferred defaults.",
+            "description":"Mse and H3i source tables only; normalized text is derived from original HTML whose retrieval hash remains unchanged. Arrays preserve table/row/cell source order. Span attributes are DOM-decoded source strings and omitted when absent, not inferred defaults.",
             "items": {
                 "type":"object","additionalProperties":false,"required":["source_order","caption","rows"],
                 "properties": {

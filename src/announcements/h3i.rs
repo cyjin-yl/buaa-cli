@@ -1,9 +1,9 @@
 //! Official-directory-bound International Innovation college observations.
 use super::{
-    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
-    article_body, article_output, bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, invalid_article,
-    invalid_list, is_http, parse_iso_date, retrieval, unavailable,
+    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, bind_college_board,
+    college_directory_attribution, college_html, describe_college_surface, element_text,
+    entry_in_scope, failed_contract, invalid_article, invalid_list, is_http, parse_iso_date,
+    retrieval, table_article_output, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, H3I_NOTICES_URL, H3I_ROOT_URL, Response, h3i_path_allowed,
@@ -328,18 +328,14 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
                 line!(),
             )
         })?;
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
-    Ok(article_output(
+    table_article_output(
         response,
-        ArticleDocument {
-            title,
-            category: Some("1141".into()),
-            published_at,
-            paragraphs,
-            attachment_hints,
-            attachments_found,
-        },
-    ))
+        body,
+        title,
+        Some("1141".into()),
+        published_at,
+        "unique detail/left form/ar_article/vsb_content_1043/v_news_content; source paragraphs and separate ordered flat-table captions/rows/cells; code and fallback payloads excluded",
+    )
 }
 
 #[cfg(test)]
@@ -433,6 +429,53 @@ mod tests {
             normalize(&missing, &college_html(&missing).unwrap()).unwrap()["published_at"]
                 .is_null()
         );
+    }
+
+    #[test]
+    fn article_preserves_unwrapped_table_text_without_inventing_paragraphs() {
+        let header = "<h6><span>Count</span><span>时间：2026-10-01</span></h6>";
+        let table = "<table><caption>Declared caption</caption><tr><th rowspan=\"2\">Before <b>inline</b> after<template>Excluded caption</template></th><td>Only cell text</td></tr><tr><td colspan=\"2\"><p>Wrapped cell text</p></td></tr></table>";
+        let source = response(&article_html(
+            header,
+            &format!(
+                "<p>Existing paragraph.</p>{table}<template><table><tr><td>Excluded table</td></tr></table></template>"
+            ),
+        ));
+        let output = normalize(&source, &college_html(&source).unwrap()).unwrap();
+        assert_eq!(
+            output["body_tables"],
+            json!([{
+                "source_order":1,"caption":"Declared caption","rows":[
+                    {"cells":[{"header":true,"text":"Before inline after","rowspan":"2"},{"header":false,"text":"Only cell text"}]},
+                    {"cells":[{"header":false,"text":"Wrapped cell text","colspan":"2"}]}
+                ]
+            }])
+        );
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["Existing paragraph.", "Wrapped cell text"])
+        );
+        assert_eq!(output["result"], "full_text");
+
+        let table_only = response(&article_html(
+            header,
+            "<table><tr><td>Only source table text</td></tr></table>",
+        ));
+        let table_output = normalize(&table_only, &college_html(&table_only).unwrap()).unwrap();
+        assert_eq!(table_output["body_paragraphs"], json!([]));
+        assert_eq!(
+            table_output["body_tables"][0]["rows"][0]["cells"],
+            json!([{"header":false,"text":"Only source table text"}])
+        );
+        assert_eq!(table_output["result"], "full_text");
+
+        let image_source = response(&article_html(
+            header,
+            &format!("{table}<img src=\"unfetched.png\">"),
+        ));
+        let partial = normalize(&image_source, &college_html(&image_source).unwrap()).unwrap();
+        assert_eq!(partial["result"], "partial_text");
+        assert_eq!(partial["completeness"]["image_content_present"], true);
     }
 
     #[test]
