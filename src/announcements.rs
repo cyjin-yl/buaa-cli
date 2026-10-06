@@ -151,7 +151,7 @@ fn invalid_article() -> Error {
 fn invalid_history() -> Error {
     Error::new(
         "invalid_input",
-        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be a news.buaa.edu.cn listing URL",
+        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be a reviewed news-center, SCSE, Mse or Sepe listing URL",
     )
 }
 
@@ -922,8 +922,6 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
 
 fn college_html(response: &Response) -> Result<Html, Error> {
     if response.status != 200
-        || response.body.is_empty()
-        || response.body.len() > MAX_HTML
         || !response.headers.get("content-type").is_some_and(|value| {
             value
                 .split(';')
@@ -935,8 +933,14 @@ fn college_html(response: &Response) -> Result<Html, Error> {
     {
         return Err(unavailable());
     }
-    let document =
-        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?);
+    college_document(&response.body)
+}
+
+fn college_document(bytes: &[u8]) -> Result<Html, Error> {
+    if bytes.is_empty() || bytes.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let document = Html::parse_document(std::str::from_utf8(bytes).map_err(|_| unavailable())?);
     let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
     if document.select(&bases).any(|base| {
         !base.ancestors().any(|node| {
@@ -1205,13 +1209,37 @@ fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Err
     Ok(ListingDocument { title, entries })
 }
 
+fn notice_history_college(raw: &str, url: &Url) -> Option<&'static str> {
+    if raw != url.as_str()
+        || !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || (url.path() != "/xwdt/gggs.htm" && !url.path().starts_with("/xwdt/gggs/"))
+    {
+        return None;
+    }
+    match url.host_str() {
+        Some("mse.buaa.edu.cn") if crate::net::mse_path_allowed(url.path()) => Some("mse"),
+        Some("sepe.buaa.edu.cn") if crate::net::sepe_path_allowed(url.path()) => Some("sepe"),
+        _ => None,
+    }
+}
+
 pub fn history(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
         return Err(invalid_history());
     }
     let query: HistoryInput = serde_json::from_str(input).map_err(|_| invalid_history())?;
-    let college_snapshot = scse::is_history_source(&query.provenance.source_url);
-    if !college_snapshot && !is_list_source_url(&query.provenance.source_url) {
+    let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
+    let scse_snapshot = scse::is_history_source(&query.provenance.source_url);
+    let notice_college = notice_history_college(&query.provenance.source_url, &base);
+    if !scse_snapshot
+        && notice_college.is_none()
+        && !is_list_source_url(&query.provenance.source_url)
+    {
         return Err(invalid_history());
     }
     let timestamp = match &query.provenance.capture_timestamp {
@@ -1229,21 +1257,33 @@ pub fn history(input: &str) -> Result<Value, Error> {
     if bytes.len() > MAX_HTML {
         return Err(invalid_history());
     }
-    let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
-    let document = if college_snapshot {
-        scse::parse_listing(&bytes, &base)
+    let (document, publisher, college) = if scse_snapshot {
+        (
+            scse::parse_listing(&bytes, &base),
+            scse::PUBLISHER,
+            Some("scse"),
+        )
+    } else if let Some(college) = notice_college {
+        let document =
+            college_document(&bytes).and_then(|document| parse_notice_list(&document, &base));
+        let publisher = if college == "mse" {
+            mse::PUBLISHER
+        } else {
+            sepe::PUBLISHER
+        };
+        (document, publisher, Some(college))
     } else {
-        parse_listing(&bytes, &base)
-    }
-    .map_err(|_| invalid_history())?;
+        (parse_listing(&bytes, &base), "北京航空航天大学", None)
+    };
+    let document = document.map_err(|_| invalid_history())?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
-    Ok(json!({
+    let mut output = json!({
         "schema_version": 1,
         "type": "announcements_history",
         "result": "listing_snapshot",
-        "publisher": if college_snapshot {scse::PUBLISHER} else {"北京航空航天大学"},
-        "college": if college_snapshot {Some("scse")} else {None},
-        "listing_label": if college_snapshot {"公告公示（历史快照）"} else {"新闻中心（历史快照）"},
+        "publisher": publisher,
+        "college": college,
+        "listing_label": if college.is_some() {"公告公示（历史快照）"} else {"新闻中心（历史快照）"},
         "document_title": document.title,
         "entries": document.entries,
         "provenance": {
@@ -1263,7 +1303,16 @@ pub fn history(input: &str) -> Result<Value, Error> {
             "supplied_bytes": bytes.len(),
             "provenance_status": "operator_asserted",
         },
-    }))
+    });
+    if notice_college.is_some() {
+        output["completeness"]["source_layout"] = json!(
+            "observed nymain/notice-list contract; historical era applicability is operator_asserted, not verified"
+        );
+        output["completeness"]["source_identity"] = json!(
+            "operator_asserted source URL only; historical directory/root/list attribution and archive response headers are not verified"
+        );
+    }
+    Ok(output)
 }
 
 fn capture_timestamp(value: &str) -> Result<NaiveDateTime, ()> {
@@ -1334,11 +1383,11 @@ pub fn schema() -> Value {
         "history": {
             "input": {
                 "type": "object",
-                "description": "Offline operator-asserted snapshot: base64 html, provenance.source_url (a reviewed news-center or SCSE notices listing), optional capture_timestamp and asserted_by. Historical SCSE HTTP originals are preserved; no request or archive-attribution verification occurs.",
+                "description": "Offline operator-asserted snapshot: base64 UTF-8 html, provenance.source_url (a reviewed news-center/SCSE listing or canonical HTTP/HTTPS Mse/Sepe xwdt/gggs.htm or xwdt/gggs/<digits>.htm listing), optional capture_timestamp and asserted_by. Reuse the observed source-specific listing layout; historical era applicability, directory/root identity and archive headers are not verified. Preserve literal HTTP provenance and relative links without upgrade, do not infer page ordinals, reject active HTML base changes. No request, cache update or archive-attribution verification occurs.",
             },
             "output": {
                 "type": "object",
-                "description": "Parsed snapshot with asserted provenance and SHA-256 byte binding.",
+                "description": "Source-ordered snapshot entries with asserted provenance and SHA-256 binding to exactly supplied bytes. Mse/Sepe retain separate source headings/excerpts/dotted publication dates and explicit unverified historical source/layout limits. Missing publication or capture dates remain unknown; neither substitutes for the other. Operator assertions are not official-directory or verified archive attribution, complete history or article/attachment retrieval.",
             }
         },
     });
@@ -1698,8 +1747,10 @@ mod tests {
             output["provenance"]["capture_timestamp"],
             "2026-09-20T12:00:00Z"
         );
-        assert_eq!(output["entries"].as_array().unwrap().len(), 3);
-        assert_eq!(output["retrieval"]["sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(
+            output["retrieval"]["sha256"],
+            format!("{:x}", Sha256::digest(html.as_bytes()))
+        );
 
         let foreign = json!({
             "html": encoded,
@@ -1723,7 +1774,6 @@ mod tests {
         let input = json!({"html":STANDARD.encode(body),"provenance":{"source_url":"http://scse.buaa.edu.cn/xwgg/gggs.htm"}});
         let out = history(&input.to_string()).unwrap();
         assert_eq!(out["college"], "scse");
-        assert_eq!(out["listing_label"], "公告公示（历史快照）");
         assert_eq!(
             out["provenance"]["source_url"],
             "http://scse.buaa.edu.cn/xwgg/gggs.htm"
@@ -1756,6 +1806,75 @@ mod tests {
             "https://news.buaa.edu.cn/tzgg/252.htm#fragment",
             "https://operator:secret@news.buaa.edu.cn/tzgg.htm",
             "https://news.buaa.edu.cn:8443/tzgg.htm",
+        ] {
+            input["provenance"]["source_url"] = json!(source);
+            assert_eq!(
+                history(&input.to_string()).unwrap_err().code,
+                "invalid_input"
+            );
+        }
+    }
+
+    fn notice_history_html() -> &'static str {
+        "<title>Fixture historical notices</title><div class=\"nymain\"><div class=\"w16\"><div class=\"ny-right\"><div class=\"notice-list\"><div><ul><li><a href=\"../../info/1061/42.htm\"><h3>Source notice</h3><p>Retained source excerpt.</p><span>1997.10.06</span></a></li><li><a href=\"../../info/1058/43.htm\"><h3>Undated source notice</h3><span>not a publication date</span></a></li></ul></div></div></div></div></div>"
+    }
+
+    #[test]
+    fn history_notice_snapshot_keeps_http_links_and_distinct_source_dates() {
+        let body = notice_history_html();
+        let input = json!({"html":STANDARD.encode(body),"provenance":{
+            "source_url":"http://mse.buaa.edu.cn/xwdt/gggs/4.htm",
+            "capture_timestamp":"20000101120000"
+        }});
+        let output = history(&input.to_string()).unwrap();
+        assert_eq!(output["college"], "mse");
+        assert_eq!(output["entries"][0]["date"], "1997-10-06");
+        assert_eq!(output["entries"][1]["date"], Value::Null);
+        assert_eq!(
+            output["entries"][0]["resolved_http_url"],
+            "http://mse.buaa.edu.cn/info/1061/42.htm"
+        );
+        assert_eq!(
+            output["provenance"]["source_url"],
+            input["provenance"]["source_url"]
+        );
+        assert_eq!(
+            output["provenance"]["capture_timestamp"],
+            "2000-01-01T12:00:00Z"
+        );
+        assert_eq!(output["provenance"]["status"], "operator_asserted");
+        assert_eq!(
+            output["retrieval"]["sha256"],
+            format!("{:x}", Sha256::digest(body.as_bytes()))
+        );
+    }
+
+    #[test]
+    fn history_notice_snapshot_rejects_base_changes_and_nonlisting_identity() {
+        let body = notice_history_html();
+        let mut input = json!({"html":STANDARD.encode(body),"provenance":{
+            "source_url":"https://sepe.buaa.edu.cn/xwdt/gggs/4.htm"
+        }});
+        input["html"] =
+            json!(STANDARD.encode(format!("<base href=\"https://foreign.test/\">{body}")));
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+
+        input["html"] = json!(STANDARD.encode(format!(
+            "<template><base href=\"https://foreign.test/\"></template>{body}"
+        )));
+        let retained = history(&input.to_string()).unwrap();
+        assert_eq!(
+            retained["entries"][0]["resolved_http_url"],
+            "https://sepe.buaa.edu.cn/info/1061/42.htm"
+        );
+        for source in [
+            "https://www.sepe.buaa.edu.cn/xwdt/gggs.htm",
+            "https://sepe.buaa.edu.cn/info/1078/42.htm",
+            "https://sepe.buaa.edu.cn/xwdt/gggs/4.htm?source=fixture",
+            "https://sepe.buaa.edu.cn/xwdt/gggs/.htm",
         ] {
             input["provenance"]["source_url"] = json!(source);
             assert_eq!(

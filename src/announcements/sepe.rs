@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 const LISTED_ROOT_URL: &str = "http://sepe.buaa.edu.cn/";
-const PUBLISHER: &str = "北京航空航天大学能源与动力工程学院";
+pub(super) const PUBLISHER: &str = "北京航空航天大学能源与动力工程学院";
 
 fn plain_url(url: &Url) -> bool {
     url.scheme() == "https"
