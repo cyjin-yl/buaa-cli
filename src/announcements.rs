@@ -28,6 +28,7 @@ pub(crate) mod iiif;
 pub(crate) mod mse;
 pub(crate) mod rse;
 mod scse;
+pub(crate) mod sepe;
 pub(crate) mod shenyuan;
 pub(crate) mod zfai;
 
@@ -310,6 +311,23 @@ fn parse_iso_date(raw: &str) -> Option<String> {
     Some(date.format("%Y-%m-%d").to_string())
 }
 
+fn parse_chinese_publication_date(raw: &str) -> Option<String> {
+    let raw = raw.strip_prefix("日期：")?.trim().strip_suffix('日')?;
+    let (year, tail) = raw.split_once('年')?;
+    let (month, day) = tail.split_once('月')?;
+    if year.len() != 4
+        || !(1..=2).contains(&month.len())
+        || !(1..=2).contains(&day.len())
+        || ![year, month, day]
+            .into_iter()
+            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return None;
+    }
+    let date = NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, day.parse().ok()?)?;
+    Some(date.format("%Y-%m-%d").to_string())
+}
+
 /// Parse one news-center category listing. Public for offline evidence
 /// validation; performs no network or cache access.
 pub fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error> {
@@ -477,6 +495,35 @@ fn article_body(
     document: ElementRef<'_>,
     has_other_source_text: bool,
 ) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
+    let paragraphs = article_paragraphs(document, has_other_source_text)?;
+    let link_selector = Selector::parse("div.v_news_content a[href]").map_err(|_| unavailable())?;
+    let mut attachment_hints: Vec<Value> = Vec::new();
+    let mut attachments_found = false;
+    for anchor in document.select(&link_selector) {
+        if inert_element(anchor) {
+            continue;
+        }
+        let Some(href) = anchor.value().attr("href") else {
+            continue;
+        };
+        if !is_document_href(href) {
+            continue;
+        }
+        attachments_found = true;
+        if attachment_hints.len() < MAX_ATTACHMENT_HINTS {
+            attachment_hints.push(json!({
+                "href": href,
+                "text": active_element_text(anchor),
+            }));
+        }
+    }
+    Ok((paragraphs, attachment_hints, attachments_found))
+}
+
+fn article_paragraphs(
+    document: ElementRef<'_>,
+    has_other_source_text: bool,
+) -> Result<Vec<String>, Error> {
     let body_selector = Selector::parse("div.v_news_content p").map_err(|_| unavailable())?;
     let mut paragraphs: Vec<String> = Vec::new();
     for paragraph in document.select(&body_selector) {
@@ -508,29 +555,32 @@ fn article_body(
         ));
     }
 
-    let link_selector = Selector::parse("div.v_news_content a[href]").map_err(|_| unavailable())?;
-    let mut attachment_hints: Vec<Value> = Vec::new();
-    let mut attachments_found = false;
-    for anchor in document.select(&link_selector) {
+    Ok(paragraphs)
+}
+
+fn declared_jsp_attachment_hints(scope: ElementRef<'_>) -> Result<(Vec<Value>, bool), Error> {
+    let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
+    let mut hints = Vec::new();
+    let mut hints_truncated = false;
+    for anchor in scope.select(&links) {
         if inert_element(anchor) {
             continue;
         }
-        let Some(href) = anchor.value().attr("href") else {
-            continue;
-        };
-        if !is_document_href(href) {
+        let href = anchor.value().attr("href").unwrap_or_default();
+        let name = element_text(anchor);
+        if !href.starts_with("/system/_content/download.jsp?") || !is_document_href(&name) {
             continue;
         }
-        attachments_found = true;
-        if attachment_hints.len() < MAX_ATTACHMENT_HINTS {
-            attachment_hints.push(json!({
-                "href": href,
-                "text": active_element_text(anchor),
-            }));
+        if href.len() > MAX_HREF || name.len() > MAX_TEXT {
+            return Err(unavailable());
         }
+        if hints.len() == MAX_ATTACHMENT_HINTS {
+            hints_truncated = true;
+            break;
+        }
+        hints.push(json!({"href":href,"text":name,"fetched":false}));
     }
-
-    Ok((paragraphs, attachment_hints, attachments_found))
+    Ok((hints, hints_truncated))
 }
 
 fn article_category_from_url(url: &Url) -> Option<String> {
@@ -689,6 +739,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("zfai") => return zfai::list(mode, &query),
         Some("iiif") => return iiif::list(mode, &query),
         Some("mse") => return mse::list(mode, &query),
+        Some("sepe") => return sepe::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -797,6 +848,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("mse.buaa.edu.cn") => {
             return mse::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("sepe.buaa.edu.cn") => {
+            return sepe::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -845,6 +899,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "rse" {
         return rse::surface(mode, page);
+    }
+    if college == "sepe" {
+        return sepe::surface(mode, page);
     }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
@@ -927,7 +984,15 @@ fn describe_college_surface(
     }
     let document = if matches!(
         college,
-        "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif" | "mse" | "rse"
+        "ic" | "aviation"
+            | "beijing"
+            | "shenyuan"
+            | "h3i"
+            | "zfai"
+            | "iiif"
+            | "mse"
+            | "rse"
+            | "sepe"
     ) {
         college_html(response)?
     } else {
@@ -1016,6 +1081,125 @@ fn bind_college_board(
     Ok(())
 }
 
+/// Source-ordered `nymain/notice-list` layout observed at Mse and Sepe.
+fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
+    let titles = Selector::parse("title").map_err(|_| unavailable())?;
+    let title = document
+        .select(&titles)
+        .next()
+        .map(element_text)
+        .unwrap_or_default();
+    if title.len() > MAX_TEXT {
+        return Err(unavailable());
+    }
+    let views = Selector::parse("div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul")
+        .map_err(|_| unavailable())?;
+    let mut views = document.select(&views).filter(|node| !inert_element(*node));
+    let primary = views
+        .next()
+        .filter(|_| views.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "college notices require one nymain/notice-list view",
+                file!(),
+                line!(),
+            )
+        })?;
+    let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
+    let anchors = Selector::parse(":scope > a").map_err(|_| unavailable())?;
+    let headings = Selector::parse(":scope > h3").map_err(|_| unavailable())?;
+    let summaries = Selector::parse(":scope > p").map_err(|_| unavailable())?;
+    let dates = Selector::parse(":scope > span").map_err(|_| unavailable())?;
+    let mut entries = Vec::new();
+    for row in primary.select(&rows) {
+        if entries.len() == MAX_ENTRIES {
+            return Err(unavailable());
+        }
+        let mut links = row.select(&anchors);
+        let anchor = links
+            .next()
+            .filter(|_| links.next().is_none())
+            .ok_or_else(|| {
+                failed_contract(
+                    "college notice row requires one direct a link",
+                    file!(),
+                    line!(),
+                )
+            })?;
+        let mut row_headings = anchor.select(&headings);
+        let title = row_headings
+            .next()
+            .filter(|_| row_headings.next().is_none())
+            .map(element_text)
+            .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
+            .ok_or_else(|| {
+                failed_contract(
+                    "college notice row requires one direct h3 heading",
+                    file!(),
+                    line!(),
+                )
+            })?;
+        let listed_href = anchor.value().attr("href");
+        if listed_href
+            .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
+        {
+            return Err(unavailable());
+        }
+        let mut row_summaries = anchor.select(&summaries);
+        let summary = row_summaries
+            .next()
+            .map(element_text)
+            .filter(|text| !text.is_empty());
+        if row_summaries.next().is_some()
+            || summary
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_PARAGRAPH)
+        {
+            return Err(unavailable());
+        }
+        let mut row_dates = anchor.select(&dates);
+        let date = row_dates
+            .next()
+            .filter(|_| row_dates.next().is_none())
+            .and_then(|node| {
+                let raw = element_text(node);
+                let mut bytes: [u8; 10] = raw.trim().as_bytes().try_into().ok()?;
+                if bytes[4] != b'.' || bytes[7] != b'.' {
+                    return None;
+                }
+                bytes[4] = b'-';
+                bytes[7] = b'-';
+                parse_iso_date(std::str::from_utf8(&bytes).ok()?)
+            });
+        let (resolved_http_url, link_kind) = match listed_href {
+            None => (None, "missing"),
+            Some(raw) => match base.join(raw) {
+                Ok(url) if is_http(&url) => (Some(url.to_string()), "http"),
+                Ok(_) => (None, "non_http"),
+                Err(_) => (None, "invalid"),
+            },
+        };
+        entries.push(ListingEntry {
+            source_order: entries.len() + 1,
+            title,
+            date,
+            category_label: Some("公告公示".into()),
+            summary,
+            listed_href: listed_href.map(str::to_owned),
+            resolved_http_url,
+            link_kind,
+        });
+    }
+    if entries.is_empty() {
+        return Err(failed_contract(
+            "college notice view has no source rows",
+            file!(),
+            line!(),
+        ));
+    }
+    Ok(ListingDocument { title, entries })
+}
+
 pub fn history(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
         return Err(invalid_history());
@@ -1101,23 +1285,23 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse and rse bind the retained authoritative directory; selected boards must be declared by their retained root. Mse and Rse preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse observes its root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse and sepe bind the retained authoritative directory; selected boards must be declared by their retained root. Mse, Rse and Sepe preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg); college=mse selects Materials-college public notices (gggs). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse boards bind the directory and retained root. Mse keeps its exact HTTP member and explicit separate HTTPS observation. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date. Mse uses one scoped nymain/notice-list view, direct a/h3 headings, a/p excerpts bounded by the existing 8-KiB paragraph limit, and direct a/span YYYY.MM.DD dates. Absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i has no reviewed later-page declaration and accepts page1 only. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg); college=mse selects Materials-college public notices (gggs); college=sepe selects Energy-college public notices (gggs). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe boards bind the directory and retained root. Mse and Sepe keep their exact HTTP member and explicit separate HTTPS observation. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date. Mse and Sepe reuse one scoped nymain/notice-list view, direct a/h3 headings, a/p excerpts bounded by the existing 8-KiB paragraph limit, and direct a/span YYYY.MM.DD dates. Absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i accepts page1 only; retained Sepe page1 declares no later ordinal, so page2 is unavailable, not inferred. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse","sepe",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "until": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "match": {"type": ["string","null"]}
                 },
-                "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse"]}}},
+                "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse","sepe"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
                     "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}}},
                     {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
@@ -1131,15 +1315,15 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, or Mse board-declared notice in category 1061/1058. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse publication requires one direct art-tit/p/span.date 日期：YYYY年MM月DD日; unextracted table text outside paragraphs, images or attachment contents produce partial_text. Pure-image/table-only/empty bodies remain unavailable under the unchanged shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, Mse board-declared notice in category 1061/1058, or Sepe board-declared notice in category 1078/1093/1080. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i accepts source_page1 only; retained Sepe page1 declares no later ordinal. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse and Sepe publication require one direct art-tit/p/span.date 日期：YYYY年MM月DD日. Mse includes supported flat-table text separately. Sepe retains scoped source paragraphs and reports nonparagraph table text, images or unfetched sibling-file contents as partial_text; pure-image/table-only/empty Sepe bodies remain unavailable under shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058))/[0-9]{1,10}[.]htm$"}}}},
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080))/[0-9]{1,10}[.]htm$"}}}},
                     {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://h3i[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Sepe retains active source-declared JSP file hints within art-main, including siblings outside its text body; the observed55-paragraph original has three unfetched file hints and remains partial_text. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {

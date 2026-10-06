@@ -1,15 +1,14 @@
 //! Materials college: exact HTTP directory identity, separate HTTPS observation.
 use super::{
-    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_BODY_PARAGRAPHS, MAX_ENTRIES,
-    MAX_HREF, MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, article_body,
-    article_category_from_url, article_output, bind_college_board, college_directory_attribution,
-    college_html, describe_college_surface, element_text, entry_in_scope, failed_contract,
-    inert_element, invalid_article, invalid_list, is_http, parse_iso_date, retrieval, unavailable,
+    ArticleDocument, ListQuery, MAX_BODY_PARAGRAPHS, MAX_ENTRIES, MAX_PARAGRAPH, MAX_TEXT,
+    advertised_page_url, article_body, article_category_from_url, article_output,
+    bind_college_board, college_directory_attribution, college_html, describe_college_surface,
+    element_text, entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
+    parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, MSE_NOTICES_URL, MSE_ROOT_URL, mse_path_allowed,
 };
-use chrono::NaiveDate;
 use scraper::{ElementRef, Html, Node, Selector};
 use serde_json::{Value, json};
 use url::Url;
@@ -26,16 +25,6 @@ fn plain_url(url: &Url) -> bool {
         && url.query().is_none()
         && url.fragment().is_none()
         && mse_path_allowed(url.path())
-}
-
-fn source_date(raw: &str) -> Option<String> {
-    let mut bytes: [u8; 10] = raw.trim().as_bytes().try_into().ok()?;
-    if bytes[4] != b'.' || bytes[7] != b'.' {
-        return None;
-    }
-    bytes[4] = b'-';
-    bytes[7] = b'-';
-    parse_iso_date(std::str::from_utf8(&bytes).ok()?)
 }
 
 fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
@@ -72,115 +61,6 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         .get(&target, false, |response| {
             describe_college_surface(response, "mse", attribution)
         })
-}
-
-fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
-    let titles = Selector::parse("title").map_err(|_| unavailable())?;
-    let title = document
-        .select(&titles)
-        .next()
-        .map(element_text)
-        .unwrap_or_default();
-    if title.len() > MAX_TEXT {
-        return Err(unavailable());
-    }
-    let views = Selector::parse("div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul")
-        .map_err(|_| unavailable())?;
-    let mut views = document.select(&views).filter(|node| !inert_element(*node));
-    let primary = views
-        .next()
-        .filter(|_| views.next().is_none())
-        .ok_or_else(|| {
-            failed_contract(
-                "Mse notices require one nymain/notice-list view",
-                file!(),
-                line!(),
-            )
-        })?;
-    let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
-    let anchors = Selector::parse(":scope > a").map_err(|_| unavailable())?;
-    let headings = Selector::parse(":scope > h3").map_err(|_| unavailable())?;
-    let summaries = Selector::parse(":scope > p").map_err(|_| unavailable())?;
-    let dates = Selector::parse(":scope > span").map_err(|_| unavailable())?;
-    let mut entries = Vec::new();
-    for row in primary.select(&rows) {
-        if entries.len() == MAX_ENTRIES {
-            return Err(unavailable());
-        }
-        let mut links = row.select(&anchors);
-        let anchor = links
-            .next()
-            .filter(|_| links.next().is_none())
-            .ok_or_else(|| {
-                failed_contract(
-                    "Mse notice row requires one direct a link",
-                    file!(),
-                    line!(),
-                )
-            })?;
-        let mut row_headings = anchor.select(&headings);
-        let title = row_headings
-            .next()
-            .filter(|_| row_headings.next().is_none())
-            .map(element_text)
-            .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
-            .ok_or_else(|| {
-                failed_contract(
-                    "Mse notice row requires one direct h3 heading",
-                    file!(),
-                    line!(),
-                )
-            })?;
-        let listed_href = anchor.value().attr("href");
-        if listed_href
-            .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
-        {
-            return Err(unavailable());
-        }
-        let mut row_summaries = anchor.select(&summaries);
-        let summary = row_summaries
-            .next()
-            .map(element_text)
-            .filter(|text| !text.is_empty());
-        if row_summaries.next().is_some()
-            || summary
-                .as_ref()
-                .is_some_and(|text| text.len() > MAX_PARAGRAPH)
-        {
-            return Err(unavailable());
-        }
-        let mut row_dates = anchor.select(&dates);
-        let date = row_dates
-            .next()
-            .filter(|_| row_dates.next().is_none())
-            .and_then(|node| source_date(&element_text(node)));
-        let (resolved_http_url, link_kind) = match listed_href {
-            None => (None, "missing"),
-            Some(raw) => match base.join(raw) {
-                Ok(url) if is_http(&url) => (Some(url.to_string()), "http"),
-                Ok(_) => (None, "non_http"),
-                Err(_) => (None, "invalid"),
-            },
-        };
-        entries.push(ListingEntry {
-            source_order: entries.len() + 1,
-            title,
-            date,
-            category_label: Some("公告公示".into()),
-            summary,
-            listed_href: listed_href.map(str::to_owned),
-            resolved_http_url,
-            link_kind,
-        });
-    }
-    if entries.is_empty() {
-        return Err(failed_contract(
-            "Mse notice view has no source rows",
-            file!(),
-            line!(),
-        ));
-    }
-    Ok(ListingDocument { title, entries })
 }
 
 fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
@@ -224,8 +104,8 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, MSE_ROOT_URL, MSE_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
-        let entries: Vec<&ListingEntry> = document.entries.iter()
+        let document = parse_notice_list(&college_html(response)?, &target)?;
+        let entries: Vec<_> = document.entries.iter()
             .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
         Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
             "publisher":PUBLISHER,"college":"mse","category":"gggs","listing_label":"公告公示","page":page,
@@ -259,7 +139,7 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, MSE_ROOT_URL, MSE_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let document = parse_notice_list(&college_html(response)?, &source)?;
         if !document
             .entries
             .iter()
@@ -284,23 +164,6 @@ pub(crate) fn article_with_client(
                 value
             }))
         })?
-}
-
-fn publication_date(raw: &str) -> Option<String> {
-    let raw = raw.strip_prefix("日期：")?.trim().strip_suffix('日')?;
-    let (year, tail) = raw.split_once('年')?;
-    let (month, day) = tail.split_once('月')?;
-    if year.len() != 4
-        || !(1..=2).contains(&month.len())
-        || !(1..=2).contains(&day.len())
-        || ![year, month, day]
-            .into_iter()
-            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
-    {
-        return None;
-    }
-    let date = NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, day.parse().ok()?)?;
-    Some(date.format("%Y-%m-%d").to_string())
 }
 
 struct SourceTables {
@@ -454,7 +317,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     let published_at = dates
         .next()
         .filter(|_| dates.next().is_none())
-        .and_then(|node| publication_date(&element_text(node)));
+        .and_then(|node| parse_chinese_publication_date(&element_text(node)));
     let bodies = Selector::parse(":scope > div.art-body-box > div.art-body > div#vsb_content.ar_article > div.v_news_content")
         .map_err(|_| unavailable())?;
     let mut bodies = main.select(&bodies);
@@ -550,7 +413,7 @@ mod tests {
             <li><a href="../info/1058/43.htm"><span>2026.09.15</span><span>2026.09.16</span><h3>Ambiguous publication</h3></a></li>
             <li><a href="../info/1058/44.htm"><span>2026.09.21</span><h3>Later visible heading</h3></a></li>"#,
         );
-        let parsed = parse_listing(&document, &Url::parse(MSE_NOTICES_URL).unwrap()).unwrap();
+        let parsed = parse_notice_list(&document, &Url::parse(MSE_NOTICES_URL).unwrap()).unwrap();
         assert_eq!(
             parsed
                 .entries
@@ -591,14 +454,16 @@ mod tests {
         let duplicate = Html::parse_document(&format!("{}{}", original.html(), original.html()));
         let base = Url::parse(MSE_NOTICES_URL).unwrap();
         assert_eq!(
-            parse_listing(&duplicate, &base).unwrap_err().code,
+            parse_notice_list(&duplicate, &base).unwrap_err().code,
             "unavailable"
         );
         let duplicate_headings = listing(
             "<li><a href=\"../info/1061/42.htm\"><h3>First heading</h3><h3>Second heading</h3></a></li>",
         );
         assert_eq!(
-            parse_listing(&duplicate_headings, &base).unwrap_err().code,
+            parse_notice_list(&duplicate_headings, &base)
+                .unwrap_err()
+                .code,
             "unavailable"
         );
     }
@@ -750,7 +615,7 @@ mod tests {
             let document = listing(&format!(
                 "<li><a href=\"../info/1061/42.htm\"><span>2026.09.21</span><h3>Source heading</h3><p>{excerpt}</p></a></li>"
             ));
-            let parsed = parse_listing(&document, &base).unwrap();
+            let parsed = parse_notice_list(&document, &base).unwrap();
             assert_eq!(parsed.entries[0].summary.as_deref(), Some(excerpt.as_str()));
         }
         let document = listing(&format!(
@@ -758,7 +623,7 @@ mod tests {
             "x".repeat(super::super::MAX_PARAGRAPH + 1)
         ));
         assert_eq!(
-            parse_listing(&document, &base).unwrap_err().code,
+            parse_notice_list(&document, &base).unwrap_err().code,
             "unavailable"
         );
     }

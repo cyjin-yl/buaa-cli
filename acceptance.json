@@ -601,6 +601,64 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "sepe_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "local-unclaimed-live-observed-partial-text",
+          "stack_base": "Owned work/sepe-announcements starts at unmerged PR110 source30f07060a2be4fc6a13f39c4207195776f60d9e9; no push, external claim, approval, merge, root-main or Pages deployment.",
+          "external_blocker": "GitHub API quota stopped on the first PR110 reviews request at2026-10-04T18:16:08Z with403 API rate limit exceeded. No subsequent GitHub call, polling, identity/proxy/anonymous fallback or Sepe issue/PR claim. Local status persists privately; PR110 gates/comments were not observed.",
+          "commands": "announcements college-source sepe [root|notices]; announcements list with college=sepe/category=gggs; announcements article for a selected retained-board-declared canonical1078/1093/1080 original. Default offline; explicit online/refresh uses the same production governor, cache-first authority discovery and selected-only refresh.",
+          "authority": "Visible official-directory member3 能源与动力工程学院 under 航空航天学科群; exact literal and resolved http://sepe.buaa.edu.cn/. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9 differs from derived50-entry JSON SHA9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. Ordinal is not a school code. Selected https://sepe.buaa.edu.cn/ is explicitly separate, not an upgrade, alias or verified protocol equivalent. Four active root declarations select xwdt/gggs.htm; inactive javascript labels do not authorize a board.",
+          "observations": [
+            {
+              "url": "https://sepe.buaa.edu.cn/robots.txt",
+              "http_status": 404,
+              "byte_length": 1693,
+              "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+              "fetched_at_unix_ms": 1791139617317
+            },
+            {
+              "url": "https://sepe.buaa.edu.cn/",
+              "http_status": 200,
+              "byte_length": 56065,
+              "sha256": "97c7fdc00efd21bf090ced686ea1ca91b644a3ed720041f00f565169e71a6551",
+              "fetched_at_unix_ms": 1791139720141
+            },
+            {
+              "url": "https://sepe.buaa.edu.cn/xwdt/gggs.htm",
+              "http_status": 200,
+              "byte_length": 29721,
+              "sha256": "9b9b8ec8c3ae8221b6a44e750f63e813d5fd8d92e0820bb9a7a9d7394ac1043b",
+              "fetched_at_unix_ms": 1791139952342
+            },
+            {
+              "url": "https://sepe.buaa.edu.cn/info/1078/2634.htm",
+              "http_status": 200,
+              "byte_length": 32799,
+              "sha256": "7e566e3777abefafdf12a135393fe996a33957f73ee4c8b9ed48937c7ff1c3b1",
+              "fetched_at_unix_ms": 1791140925142
+            }
+          ],
+          "native_original_proof": "Exactly4 deliberate governed public GETs; full fresh-deadline preflight before each. First source exited8 after robots before absent root, not automatic retry. All4 private original files independently match base64/hash/length and0700/0600/currentUID/singlelink. Cached native list9 rows/filter3 rows/original55 ordered paragraphs and3 unfetched sibling-file hints entirely match retained originals, including source heading/date/excerpts/links and retrieval facts. Inclusive2026-09-09 through09-30 selects3; original publication2026-09-30,0 body tables/images, result partial_text because file contents are missing. No personal source text or file names published.",
+          "shared_code": "Reuse one scoped source-ordered nymain/notice-list parser for Mse and Sepe, the existing Chinese publication-date parser and paragraph walk; no aliases or duplicate parser convention. Extract existing SCSE active JSP file-hint admission as a shared helper: SCSE retains document scope; Sepe uses art-main so the three source-declared sibling files are visible without downloading them. Existing body budgets and nine article_body callers remain unchanged.",
+          "affected_offline_proof": "Two new Sepe source-boundary/partial-content cases, eight existing Mse-module cases, ten existing SCSE/viewer cases and one exact parent active-attachment case pass:21 focused cases, not a full-suite run or renewed older-head approval. Real owned native builds and all first failures remain privately retained; no artifact copy, chmod, parent-target overwrite or host build.",
+          "native_refusals": "Actual refresh refusals before any GET: unadvertised list page2 exit7; wrong category exit2; undeclared original42 exit3; original source_page2 exit7; noncanonical uppercase host exit2; foreign host with source_page1 exit2. Governor bytes unchanged.",
+          "governor_receipt": "SHAaf4daa13f11071fe2caa3364e759d3a9148996896613b2085a7f9c12db753010 after the4 observations; same permanent account/home/UID governor,60000/900000-ms floors, disarmed auth, no latch/pending/failures. Cached reads and native refusals retain those bytes; earlier Rse7bf/Mse68857 receipts remain historical.",
+          "bounded_feature_check": {
+            "status": "completed_no_concrete_findings",
+            "prompt_characters": 165815,
+            "main_bound_source_sha256": {
+              "src/announcements/sepe.rs": "d1cf0c29aee2e826c410c0544cc8a56bbab8e105ee3a020eea3dc22441bfd544",
+              "src/announcements/mse.rs": "f3cb9dc441d31cb6c0225f56223a4495eba76a766959b9ea57a58f86acbdbfcb",
+              "src/announcements/scse.rs": "1f65f09eaee2af94b26813d0ee03d006a1def72aa11276949a179e6d9d42a930",
+              "src/announcements.rs": "6fd20091d45bf33b0dff314f690968ee4953a4e77c49881ec1bc6b93e4df6238",
+              "src/net.rs": "d13972a3049ab11011fb1785912c644e1c659a8ddf7b6ac2f75525cda720cf74",
+              "src/main.rs": "71d23d088f50ca4ee20aa77a1671a24dbb7bf5a1e81e94b00b37337720aec759"
+            },
+            "scope": "One fresh stateless no-tool completion received complete Sepe/Mse/SCSE/announcements modules, including migrated callers/tests and changed shared helpers/schema; supplied net source-profile/path/factory and main route/discovery sections. Main binds supplied full-file hashes, not independently observed checkout/SHA/runtime/rights/platform approval or CI. Other college/PDF-viewer modules, html active-text implementation, transport/lease internals, organizations parser, external dependencies, docs/acceptance and integration tests were omitted. Private originals/cache/personal text/auth configuration were not supplied. No generic re-review or exact-head independent approval claim."
+          },
+          "limits": "Root and board64 hints/truncated=true are not exhaustive discovery. Retained board advertises no later ordinal; page2/source_page2 stay unavailable, never guessed. JSP links are unfetched hints, not downloaded documents. No table/image reconstruction, OCR, complete current/history/all-college or campus-write claim. Missing history remains missing; full non-VPN goal stays active. Final discovery/source-check/local-UI proof is recorded separately from platform approval."
+        },
         "rse_root_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/109",
           "status": "root-metadata-observed-notices-blocked",

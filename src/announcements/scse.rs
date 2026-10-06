@@ -3,10 +3,10 @@
 //! document previews instead of text. Never executes scripts or fetches hints.
 
 use super::{
-    ListQuery, ListingDocument, ListingEntry, MAX_ATTACHMENT_HINTS, MAX_BODY_PARAGRAPHS,
-    MAX_ENTRIES, MAX_HREF, MAX_HTML, MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, element_text,
-    entry_in_scope, failed_contract, invalid_article, invalid_list, is_document_href, is_http,
-    parse_iso_date, retrieval, unavailable,
+    ListQuery, ListingDocument, ListingEntry, MAX_BODY_PARAGRAPHS, MAX_ENTRIES, MAX_HREF, MAX_HTML,
+    MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, declared_jsp_attachment_hints, element_text,
+    entry_in_scope, failed_contract, invalid_article, invalid_list, is_http, parse_iso_date,
+    retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, scse_document_path_allowed,
@@ -393,24 +393,7 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
         &Url::parse(&response.url).map_err(|_| unavailable())?,
     )?;
     let has_document = has_previews || original_pdf.is_some();
-    let attachment_selector = Selector::parse("a[href]").map_err(|_| unavailable())?;
-    let mut hints = Vec::new();
-    let mut hints_truncated = false;
-    for anchor in document.select(&attachment_selector) {
-        let href = anchor.value().attr("href").unwrap_or_default();
-        let name = element_text(anchor);
-        if !href.starts_with("/system/_content/download.jsp?") || !is_document_href(&name) {
-            continue;
-        }
-        if href.len() > MAX_HREF || name.len() > MAX_TEXT {
-            return Err(unavailable());
-        }
-        if hints.len() == MAX_ATTACHMENT_HINTS {
-            hints_truncated = true;
-            break;
-        }
-        hints.push(json!({"href":href,"text":name,"fetched":false}));
-    }
+    let (hints, hints_truncated) = declared_jsp_attachment_hints(document.root_element())?;
     if paragraphs.is_empty() && !has_document && hints.is_empty() {
         return Err(failed_contract(
             "SCSE article requires text or declared document/attachment content",
