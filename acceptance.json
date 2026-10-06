@@ -601,6 +601,77 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "observed_college_operator_history_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "local-native-verified-offline-compatible-unreviewed",
+          "stack_base": "Owned work/observed-college-history starts at Materials/Energy history2411726a573de06785e9f4fb6c23b45a068b163b on the unmerged Sa/Sepe/PR110 stack; no external claim, parent/root-main overwrite, push, approval, merge or Pages deployment.",
+          "command": "announcements history; unchanged fully offline typed stdin: base64 UTF-8 html plus explicit provenance.source_url, optional capture_timestamp/asserted_by. Newly admits exact canonical HTTP/HTTPS IC tzgg, aviation xsgz1/tzgg and gkgs, Beijing xwdt/gggs, Shenyuan index/tzgg, Zfai xxgg1 and Iiif xwgg/tzgg stems (.htm or bounded numeric /<filename>.htm); H3i rcpy/cpgg.htm only. No roots, articles, aliases, unreviewed boards or live-fetch permission.",
+          "semantics": "Reuse seven unchanged source-specific listing parsers and publisher constants through parent-only visibility. Aviation student/public labels remain distinct, mobile copies excluded, dates/excerpts/source order/relative links follow their existing contracts. Preserve supplied original-byte SHA-256, literal HTTP assertions and unknown dates. Historical layout-era/directory/root/list/archive-header applicability stays explicitly operator_asserted/unverified; no current directory substituted as historical authority or filenames inferred as advertised ordinals. Existing news-center/SCSE/Mse/Sepe output remains supported.",
+          "compatibility_scope": "Eight actual retained CURRENT originals produce65 records. Every whole record array, title, publisher and college equals the same new binary current-list cache hit; byte hashes/URLs agree. This is cross-interface current-original compatibility, not an independent content oracle, historical archive observation or attribution approval. Raw HTML/rows/personal prose remain private.",
+          "retained_originals": {
+            "ic": {
+              "source_url": "https://ic.buaa.edu.cn/tzgg.htm",
+              "supplied_bytes": 20958,
+              "sha256": "c5f95e8d45f0a9e13c0fc0b2125e4559211b36ebf7e668452af5cc32ca9e572e",
+              "records": 12,
+              "entire_current_history_record_parity": true
+            },
+            "aviation-student": {
+              "source_url": "https://aviation.buaa.edu.cn/xsgz1/tzgg.htm",
+              "supplied_bytes": 32179,
+              "sha256": "1a0f89b656f45a930abe5c267a329be39b49592a020517eef639204822c51bab",
+              "records": 4,
+              "entire_current_history_record_parity": true
+            },
+            "aviation-public": {
+              "source_url": "https://aviation.buaa.edu.cn/gkgs.htm",
+              "supplied_bytes": 27297,
+              "sha256": "1e6ba65da36d3517ba0300cd94c97785c2a553c9a23a8e06f83935242a7d3ffc",
+              "records": 1,
+              "entire_current_history_record_parity": true
+            },
+            "beijing": {
+              "source_url": "https://beijing.buaa.edu.cn/xwdt/gggs.htm",
+              "supplied_bytes": 19680,
+              "sha256": "5e80e54ae1eda74068fe58ec56dfca36bc6fbd1a847974c3c4b33ab5d90a7503",
+              "records": 3,
+              "entire_current_history_record_parity": true
+            },
+            "shenyuan": {
+              "source_url": "https://hc.buaa.edu.cn/index/tzgg.htm",
+              "supplied_bytes": 60789,
+              "sha256": "4a05204f80bf821d43985b4aed4d714cfd7669e50d660a457aa02cea7a9ec8d8",
+              "records": 12,
+              "entire_current_history_record_parity": true
+            },
+            "h3i": {
+              "source_url": "https://h3i.buaa.edu.cn/rcpy/cpgg.htm",
+              "supplied_bytes": 24686,
+              "sha256": "bf62c83ec3458d7cdf78de5b9375b2a56a418361128c06ca268b62e68d43592f",
+              "records": 9,
+              "entire_current_history_record_parity": true
+            },
+            "zfai": {
+              "source_url": "https://zfai.buaa.edu.cn/xxgg1.htm",
+              "supplied_bytes": 22043,
+              "sha256": "0fa841130cdcc39de181e8355027e3a246973e3cda8a1842f93696d38d7d96c0",
+              "records": 9,
+              "entire_current_history_record_parity": true
+            },
+            "iiif": {
+              "source_url": "https://iiif.buaa.edu.cn/xwgg/tzgg.htm",
+              "supplied_bytes": 17137,
+              "sha256": "13ad5b00f7d8230dd8e15b5ee8f2992e0b9c2dd2358826c88b07abd8744532f8",
+              "records": 15,
+              "entire_current_history_record_parity": true
+            }
+          },
+          "native_and_focused_proof": "Fresh owned locked offline binary build0/41.60s, all eight original imports and corresponding new-binary cache-only current lists0. Eight actual new native boundary refusals each2: root, article, foreign board, host alias, H3i paging, >10-digit filename, query, active HTML base. Five affected history cases0/4.16s plus one exact existing SCSE case0/0.20s. New aviation consumer case defends full source records, board labels, desktop-only order, HTTP-relative/external links and wrong-layout/nonlisting refusal. No additional full-suite run.",
+          "retained_operator_mistakes": "Initial focused run101/11.08s passed4/failed1 because the new fixture wrongly expected an aviation summary; unchanged existing parser returns null, so correct only the expectation. One helper invocation double-encoded an IC typed input and refused2 before the correctly typed import succeeded. Initial governor helper lookup used the wrong hash key; consume retained state_sha256 instead of repeating the snapshot. These are operator-side evidence mistakes, not pre-feature regression or successful source proof.",
+          "governor_receipt": "Zero campus/archive requests or cache/account mutations; same permanent state SHA c2a94a39a1d64d1480b20dcc30d04bfa80e80c560a2c45aef5581d4d152cb70f, network_failures1, pendingNone, auth disarmed and pacing/backoff/latches retained. No separate account key/governor, auth attempt, TLS/robots/challenge bypass or source alias.",
+          "limits_and_review": "No live archive fetch/verified historical identity, complete college/current/history or article/attachment retrieval claim. Full non-VPN goal remains active. GitHub quota and prior source-check upstream401 blocker retained, no retry/provider-credential workaround or banned subagent. No fresh independent inspection/approval inferred from compilation or native proof; source packet and final discovery/gate receipt retained separately."
+        },
         "mse_sepe_operator_history_slice": {
           "issue": null,
           "pr": null,

@@ -151,7 +151,7 @@ fn invalid_article() -> Error {
 fn invalid_history() -> Error {
     Error::new(
         "invalid_input",
-        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be a reviewed news-center, SCSE, Mse or Sepe listing URL",
+        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be an admitted news-center or observed college listing URL",
     )
 }
 
@@ -1217,13 +1217,62 @@ fn notice_history_college(raw: &str, url: &Url) -> Option<&'static str> {
         || url.port().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
-        || (url.path() != "/xwdt/gggs.htm" && !url.path().starts_with("/xwdt/gggs/"))
     {
         return None;
     }
+    let path = url.path();
     match url.host_str() {
-        Some("mse.buaa.edu.cn") if crate::net::mse_path_allowed(url.path()) => Some("mse"),
-        Some("sepe.buaa.edu.cn") if crate::net::sepe_path_allowed(url.path()) => Some("sepe"),
+        Some("ic.buaa.edu.cn")
+            if (path == "/tzgg.htm" || path.starts_with("/tzgg/"))
+                && crate::net::ic_path_allowed(path) =>
+        {
+            Some("ic")
+        }
+        Some("aviation.buaa.edu.cn")
+            if (matches!(path, "/xsgz1/tzgg.htm" | "/gkgs.htm")
+                || path.starts_with("/xsgz1/tzgg/")
+                || path.starts_with("/gkgs/"))
+                && crate::net::aviation_path_allowed(path) =>
+        {
+            Some("aviation")
+        }
+        Some("beijing.buaa.edu.cn")
+            if (path == "/xwdt/gggs.htm" || path.starts_with("/xwdt/gggs/"))
+                && crate::net::beijing_path_allowed(path) =>
+        {
+            Some("beijing")
+        }
+        Some("hc.buaa.edu.cn")
+            if (path == "/index/tzgg.htm" || path.starts_with("/index/tzgg/"))
+                && crate::net::shenyuan_path_allowed(path) =>
+        {
+            Some("shenyuan")
+        }
+        Some("h3i.buaa.edu.cn") if path == "/rcpy/cpgg.htm" => Some("h3i"),
+        Some("zfai.buaa.edu.cn")
+            if (path == "/xxgg1.htm" || path.starts_with("/xxgg1/"))
+                && crate::net::zfai_path_allowed(path) =>
+        {
+            Some("zfai")
+        }
+        Some("iiif.buaa.edu.cn")
+            if (path == "/xwgg/tzgg.htm" || path.starts_with("/xwgg/tzgg/"))
+                && crate::net::iiif_path_allowed(path) =>
+        {
+            Some("iiif")
+        }
+        Some("mse.buaa.edu.cn")
+            if (path == "/xwdt/gggs.htm" || path.starts_with("/xwdt/gggs/"))
+                && crate::net::mse_path_allowed(path) =>
+        {
+            Some("mse")
+        }
+        Some("sepe.buaa.edu.cn")
+            if (path == "/xwdt/gggs.htm" || path.starts_with("/xwdt/gggs/"))
+                && crate::net::sepe_path_allowed(path) =>
+        {
+            Some("sepe")
+        }
         _ => None,
     }
 }
@@ -1257,23 +1306,76 @@ pub fn history(input: &str) -> Result<Value, Error> {
     if bytes.len() > MAX_HTML {
         return Err(invalid_history());
     }
-    let (document, publisher, college) = if scse_snapshot {
+    let (document, publisher, college, listing_label) = if scse_snapshot {
         (
             scse::parse_listing(&bytes, &base),
             scse::PUBLISHER,
             Some("scse"),
+            "公告公示（历史快照）",
         )
     } else if let Some(college) = notice_college {
-        let document =
-            college_document(&bytes).and_then(|document| parse_notice_list(&document, &base));
-        let publisher = if college == "mse" {
-            mse::PUBLISHER
-        } else {
-            sepe::PUBLISHER
+        let source = college_document(&bytes).map_err(|_| invalid_history())?;
+        let (document, publisher, label) = match college {
+            "ic" => (
+                ic::parse_listing(&source, &base),
+                ic::PUBLISHER,
+                "通知公告（历史快照）",
+            ),
+            "aviation" if base.path() == "/gkgs.htm" || base.path().starts_with("/gkgs/") => (
+                aviation::parse_listing(&source, &base, "公开公示"),
+                aviation::PUBLISHER,
+                "公开公示（历史快照）",
+            ),
+            "aviation" => (
+                aviation::parse_listing(&source, &base, "通知公告（学生工作）"),
+                aviation::PUBLISHER,
+                "通知公告（学生工作，历史快照）",
+            ),
+            "beijing" => (
+                beijing::parse_listing(&source, &base),
+                beijing::PUBLISHER,
+                "通知公告（历史快照）",
+            ),
+            "shenyuan" => (
+                shenyuan::parse_listing(&source, &base),
+                shenyuan::PUBLISHER,
+                "通知公告（历史快照）",
+            ),
+            "h3i" => (
+                h3i::parse_listing(&source, &base),
+                h3i::PUBLISHER,
+                "招聘公告（历史快照）",
+            ),
+            "zfai" => (
+                zfai::parse_listing(&source, &base),
+                zfai::PUBLISHER,
+                "信息公告（历史快照）",
+            ),
+            "iiif" => (
+                iiif::parse_listing(&source, &base),
+                iiif::PUBLISHER,
+                "通知公告（历史快照）",
+            ),
+            "mse" => (
+                parse_notice_list(&source, &base),
+                mse::PUBLISHER,
+                "公告公示（历史快照）",
+            ),
+            "sepe" => (
+                parse_notice_list(&source, &base),
+                sepe::PUBLISHER,
+                "公告公示（历史快照）",
+            ),
+            _ => return Err(invalid_history()),
         };
-        (document, publisher, Some(college))
+        (document, publisher, Some(college), label)
     } else {
-        (parse_listing(&bytes, &base), "北京航空航天大学", None)
+        (
+            parse_listing(&bytes, &base),
+            "北京航空航天大学",
+            None,
+            "新闻中心（历史快照）",
+        )
     };
     let document = document.map_err(|_| invalid_history())?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
@@ -1283,7 +1385,7 @@ pub fn history(input: &str) -> Result<Value, Error> {
         "result": "listing_snapshot",
         "publisher": publisher,
         "college": college,
-        "listing_label": if college.is_some() {"公告公示（历史快照）"} else {"新闻中心（历史快照）"},
+        "listing_label": listing_label,
         "document_title": document.title,
         "entries": document.entries,
         "provenance": {
@@ -1305,9 +1407,12 @@ pub fn history(input: &str) -> Result<Value, Error> {
         },
     });
     if notice_college.is_some() {
-        output["completeness"]["source_layout"] = json!(
-            "observed nymain/notice-list contract; historical era applicability is operator_asserted, not verified"
-        );
+        output["completeness"]["source_layout"] = json!(match notice_college {
+            Some("mse" | "sepe") =>
+                "observed nymain/notice-list contract; historical era applicability is operator_asserted, not verified",
+            _ =>
+                "observed source-specific listing contract; historical era applicability is operator_asserted, not verified",
+        });
         output["completeness"]["source_identity"] = json!(
             "operator_asserted source URL only; historical directory/root/list attribution and archive response headers are not verified"
         );
@@ -1383,11 +1488,11 @@ pub fn schema() -> Value {
         "history": {
             "input": {
                 "type": "object",
-                "description": "Offline operator-asserted snapshot: base64 UTF-8 html, provenance.source_url (a reviewed news-center/SCSE listing or canonical HTTP/HTTPS Mse/Sepe xwdt/gggs.htm or xwdt/gggs/<digits>.htm listing), optional capture_timestamp and asserted_by. Reuse the observed source-specific listing layout; historical era applicability, directory/root identity and archive headers are not verified. Preserve literal HTTP provenance and relative links without upgrade, do not infer page ordinals, reject active HTML base changes. No request, cache update or archive-attribution verification occurs.",
+                "description": "Offline operator-asserted snapshot: base64 UTF-8 html, provenance.source_url, optional capture_timestamp and asserted_by. Admit reviewed news-center/SCSE listings or exact canonical HTTP/HTTPS observed college boards: IC tzgg; aviation xsgz1/tzgg or gkgs; Beijing/Mse/Sepe xwdt/gggs; Shenyuan index/tzgg; Zfai xxgg1; Iiif xwgg/tzgg. These college stems admit .htm or /<digits>.htm filenames; H3i admits only rcpy/cpgg.htm. No other board/root/article/host is inferred. Reuse the source-specific listing parser; historical era, directory/root identity and archive headers remain unverified. Preserve literal HTTP provenance and relative links; filenames are not page ordinals. Reject active HTML base changes. No request, cache update or archive-attribution verification occurs.",
             },
             "output": {
                 "type": "object",
-                "description": "Source-ordered snapshot entries with asserted provenance and SHA-256 binding to exactly supplied bytes. Mse/Sepe retain separate source headings/excerpts/dotted publication dates and explicit unverified historical source/layout limits. Missing publication or capture dates remain unknown; neither substitutes for the other. Operator assertions are not official-directory or verified archive attribution, complete history or article/attachment retrieval.",
+                "description": "Source-ordered snapshot entries, source-specific headings/excerpts/publication dates and board labels, asserted provenance and SHA-256 binding to exactly supplied bytes. Aviation student/public boards remain distinct; mobile copies are not extra rows. Observed college layouts have explicit unverified historical source/layout limits. Missing publication or capture dates remain unknown; neither substitutes for the other. Operator assertions are not official-directory or verified archive attribution, complete history or article/attachment retrieval.",
             }
         },
     });
@@ -1882,6 +1987,51 @@ mod tests {
                 "invalid_input"
             );
         }
+    }
+
+    #[test]
+    fn history_aviation_snapshot_preserves_board_scope_and_source_records() {
+        let body = r#"<title>Fixture historical notices</title><div class="body mh"><div class="moudle"><div class="right"><div class="items"><div class="item"><div class="l"><div class="year">1997</div><div class="mouth"><span>06</span><span>/10</span></div></div><div class="r"><a href="../../info/1061/42.htm"><div class="title">Historical policy</div><div class="des">Original excerpt.</div></a></div></div><div class="item"><div class="r"><a href="https://external.test/retained"><div class="title">External source hint</div></a></div></div></div></div></div></div><div class="mbody ph"><div class="items"><div class="item"><div class="r"><a href="../../info/1061/42.htm"><div class="title">Mobile copy is not another row</div></a></div></div></div></div>"#;
+        let mut input = json!({"html":STANDARD.encode(body),"provenance":{
+            "source_url":"http://aviation.buaa.edu.cn/gkgs/4.htm"
+        }});
+        let public = history(&input.to_string()).unwrap();
+        let mut expected = json!([
+            {
+                "source_order":1,"title":"Historical policy","date":"1997-10-06",
+                "category_label":"公开公示","summary":null,
+                "listed_href":"../../info/1061/42.htm",
+                "resolved_http_url":"http://aviation.buaa.edu.cn/info/1061/42.htm",
+                "link_kind":"http"
+            },
+            {
+                "source_order":2,"title":"External source hint","date":null,
+                "category_label":"公开公示","summary":null,
+                "listed_href":"https://external.test/retained",
+                "resolved_http_url":"https://external.test/retained","link_kind":"http"
+            }
+        ]);
+        assert_eq!(public["entries"], expected);
+        assert_eq!(public["college"], "aviation");
+
+        input["provenance"]["source_url"] = json!("http://aviation.buaa.edu.cn/xsgz1/tzgg/4.htm");
+        let student = history(&input.to_string()).unwrap();
+        for entry in expected.as_array_mut().unwrap() {
+            entry["category_label"] = json!("通知公告（学生工作）");
+        }
+        assert_eq!(student["entries"], expected);
+
+        input["provenance"]["source_url"] = json!("https://h3i.buaa.edu.cn/rcpy/cpgg.htm");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["provenance"]["source_url"] =
+            json!("http://aviation.buaa.edu.cn/xsgz1/unobserved.htm");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
     }
 
     use std::sync::atomic::{AtomicU64, Ordering};

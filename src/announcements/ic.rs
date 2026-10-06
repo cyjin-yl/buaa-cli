@@ -13,7 +13,7 @@ use scraper::{Html, Selector};
 use serde_json::{Value, json};
 use url::Url;
 
-const PUBLISHER: &str = "北京航空航天大学集成电路科学与工程学院";
+pub(super) const PUBLISHER: &str = "北京航空航天大学集成电路科学与工程学院";
 
 fn source_mode(mode: CacheMode) -> CacheMode {
     if mode == CacheMode::Revalidate {
@@ -61,7 +61,7 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     })
 }
 
-fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
+pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)

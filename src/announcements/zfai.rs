@@ -13,7 +13,7 @@ use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
 use url::Url;
 
-const PUBLISHER: &str = "北京航空航天大学中法航空学院";
+pub(super) const PUBLISHER: &str = "北京航空航天大学中法航空学院";
 
 fn plain_url(url: &Url) -> bool {
     url.scheme() == "https"
@@ -66,7 +66,7 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         })
 }
 
-fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
+pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let titles = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&titles)
