@@ -601,6 +601,24 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "beijing_table_records_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "local-native-verified-source-ordered-table-records-unreviewed",
+          "stack_base": "Owned work/beijing-table-records starts at H3i55f8a56c42f3a9ffb035d999a033457fec226290 on the unmerged Ase/history/Sa/Sepe/PR110 stack. Earlier Beijing PR96 and all parent worktrees/binaries remain unchanged; no external claim, root-main overwrite, push, approval, merge or deployment.",
+          "source_original": {
+            "url": "https://beijing.buaa.edu.cn/info/1014/1188.htm",
+            "byte_length": 437099,
+            "sha256": "33f1588c5d183fca89893ab6063a486fc99b4ae904156a663ec40ff8ad93f0f8",
+            "new_source_requests": 0
+          },
+          "observed_structure": "Three flat source tables contain161 rows/793 cells and three declared span attributes. All802 active body text events were already paragraph-wrapped: this is structured table/row/cell/span preservation, not a missing-text bug or a second live observation. The795 existing paragraphs remain unchanged;795 plus161 rows is956 combined blocks, below the existing1024 bound.",
+          "contract": "Call unchanged common table_article_output with Beijing's own original header/body/source guards. Preserve source captions, table/row/cell order, th facts and only present DOM-decoded span strings; no invented paragraphs/cells/defaults, expanded spans or inferred grid/interleaving. Same2-MiB HTML,1024 combined paragraph/row,256 table/cell,8-KiB row/caption and512-byte span limits. Nested/unowned/overflow fails; nontext stays unavailable and image/attachment contents stay partial/unfetched. No new parser, engine, dependency, body copy, route, transport or governor change.",
+          "actual_native_proof": "New owned locked offline native build0/10.92s; actual cached new-path article0/0.42s returns full_text,795 paragraphs and3/161/793 source table records. Entire paragraph and table arrays including all three declared spans privately equal an event-ordered original oracle. Original heading, direct-header publication2026-09-22, byte hash/length/source URL and fetched timestamp remain equal; every active body text event is represented. Original personal text is not published or supplied to a model.",
+          "focused_proof": "Migrate existing Beijing consumer tests, not a new test count: before cutover three cases produce red101/60.55s with two absent-table contract failures and one unchanged listing pass; after cutover all three pass0/5.25s. Whole synthetic scoped caption/header/cells/decoded spans and paragraph preservation are checked; the long-table case now defends1022 paragraphs plus2 rows=1024 success and1023 plus2=1025 refusal instead of the old paragraph-only budget. Existing source-advertised refresh/offline-reuse loopback passes0/0.75s: four unique focused cases, not265 full-suite tests.",
+          "governor_receipt": "Zero new GETs, authentication attempts or campus writes. Permanent state SHA7b51bcf1b7cbb6a89ce938ee16b0bc3ffca0694b96ea1fd4ed5a1a1f62beae2e stays byte-identical, retaining Ase network_failures2, pendingNone/disarmed auth/no latch and60000/900000-ms floors/backoff. No reset/delete/migration, alternate account key/limiter, failed-source retry or TLS/robots/challenge workaround.",
+          "limits_and_review": "Source-bound current Beijing flat-table records only, not missing-text recovery, complete college/history/attachment coverage, OCR or source authenticity/security/rights certification. Private originals/oracle/native outputs remain outside source under0700/exclusive fsynced0600. Independent inspection remains blocked on the prior upstream401 prerequisite; this local source is unreviewed, no retry/provider fallback/subagent or platform approval. GitHub quota stop unchanged; no UI edit/new observation, source GET or deployment. Final metadata/discovery gate is separate from the first new-path original proof; full goal stays active."
+        },
         "h3i_table_text_slice": {
           "issue": null,
           "pr": null,

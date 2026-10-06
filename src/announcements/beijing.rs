@@ -1,10 +1,9 @@
 //! Official-directory-bound Beijing college source observations.
 use super::{
-    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
-    advertised_page_url, article_body, article_output, bind_college_board,
-    college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, invalid_article, invalid_list, is_http, parse_iso_date,
-    retrieval, unavailable,
+    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, advertised_page_url,
+    bind_college_board, college_directory_attribution, college_html, describe_college_surface,
+    element_text, entry_in_scope, failed_contract, invalid_article, invalid_list, is_http,
+    parse_iso_date, retrieval, table_article_output, unavailable,
 };
 use crate::net::{
     ArchiveClient, BEIJING_NOTICES_URL, BEIJING_ROOT_URL, CacheMode, Error, Response,
@@ -331,22 +330,14 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     if bodies.next().is_some() {
         return Err(unavailable());
     }
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
-    let mut value = article_output(
+    table_article_output(
         response,
-        ArticleDocument {
-            title,
-            category: Some("1014".into()),
-            published_at,
-            paragraphs,
-            attachment_hints,
-            attachments_found,
-        },
-    );
-    value["completeness"]["body_source"] = json!(
-        "unique art-main art-body-box/vsb_content/v_news_content; source table-cell paragraphs retained in document order"
-    );
-    Ok(value)
+        body,
+        title,
+        Some("1014".into()),
+        published_at,
+        "unique art-main art-body-box/vsb_content/v_news_content; source-ordered paragraphs and flat source tables; code/fallback markup excluded",
+    )
 }
 
 #[cfg(test)]
@@ -413,7 +404,7 @@ mod tests {
     #[test]
     fn article_uses_source_header_and_scoped_body_without_promoting_body_dates() {
         let source = response(
-            r#"<h2>Sidebar heading</h2><div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Fixture policy</h3><p><span class="date">日期：2026年9月22日</span></p></div><div class="art-body-box"><div id="vsb_content"><div class="v_news_content"><p>Source paragraph.</p><table><tr><td><p>Table cell.</p></td></tr></table><p><script>not prose</script></p></div></div></div></div></form></div><div class="v_news_content"><p>Unrelated prose.</p></div>"#,
+            r#"<h2>Sidebar heading</h2><div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Fixture policy</h3><p><span class="date">日期：2026年9月22日</span></p></div><div class="art-body-box"><div id="vsb_content"><div class="v_news_content"><p>Source paragraph.</p><table><caption>Fixture table.</caption><tr><th>Header.</th><td rowspan="02" colspan="&#50;"><p>Table cell.</p></td></tr></table><p><script>not prose</script></p></div></div></div></div></form></div><div class="v_news_content"><p>Unrelated prose.</p><table><tr><td>Unrelated cell.</td></tr></table></div>"#,
         );
         let output = normalize(&source, &college_html(&source).unwrap()).unwrap();
         assert_eq!(output["title"], "Fixture policy");
@@ -421,6 +412,17 @@ mod tests {
         assert_eq!(
             output["body_paragraphs"],
             json!(["Source paragraph.", "Table cell."])
+        );
+        assert_eq!(
+            output["body_tables"],
+            json!([{
+                "source_order":1,
+                "caption":"Fixture table.",
+                "rows":[{"cells":[
+                    {"header":true,"text":"Header."},
+                    {"header":false,"text":"Table cell.","rowspan":"02","colspan":"2"}
+                ]}]
+            }])
         );
         let missing_header = response(
             r#"<div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Fixture policy</h3></div><div class="art-body-box"><div id="vsb_content"><div class="v_news_content"><div class="art-tit"><p><span class="date">日期：2026年9月22日</span></p></div><p>Source paragraph.</p></div></div></div></div></form></div>"#,
@@ -443,24 +445,31 @@ mod tests {
     #[test]
     fn large_table_notice_retains_all_paragraphs_and_rejects_overflow() {
         let make_source = |count: usize| {
-            let cells = (0..count)
-                .map(|index| format!("<tr><td><p>Synthetic cell {index}</p></td></tr>"))
+            let rows = [0..count / 2, count / 2..count]
+                .into_iter()
+                .map(|range| {
+                    let paragraphs = range
+                        .map(|index| format!("<p>P{index}</p>"))
+                        .collect::<String>();
+                    format!("<tr><td>{paragraphs}</td></tr>")
+                })
                 .collect::<String>();
             response(&format!(
-                "<div class=\"ny-right\"><form><div class=\"art-main\"><div class=\"art-tit\"><h3>Fixture table notice</h3></div><div class=\"art-body-box\"><div id=\"vsb_content\"><div class=\"v_news_content\"><table>{cells}</table></div></div></div></div></form></div>"
+                "<div class=\"ny-right\"><form><div class=\"art-main\"><div class=\"art-tit\"><h3>Fixture table notice</h3></div><div class=\"art-body-box\"><div id=\"vsb_content\"><div class=\"v_news_content\"><table>{rows}</table></div></div></div></div></form></div>"
             ))
         };
-        let source = make_source(1024);
+        let source = make_source(1022);
         let output = normalize(&source, &college_html(&source).unwrap()).unwrap();
         assert_eq!(
             output["body_paragraphs"],
             json!(
-                (0..1024)
-                    .map(|index| format!("Synthetic cell {index}"))
+                (0..1022)
+                    .map(|index| format!("P{index}"))
                     .collect::<Vec<_>>()
             )
         );
-        let overflow = make_source(1025);
+        assert_eq!(output["body_table_row_count"], 2);
+        let overflow = make_source(1023);
         assert_eq!(
             normalize(&overflow, &college_html(&overflow).unwrap())
                 .unwrap_err()
