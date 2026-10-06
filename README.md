@@ -229,7 +229,7 @@ printf '%s\n' '{"url":"https://news.buaa.edu.cn/info/1010/69802.htm"}' | ./targe
 
 `article` returns the selected page's `v_news_content` paragraphs, publication date and attachment-link hints; it never downloads attachments. Use `--online` for an authorized cache miss or `--refresh` for conditional revalidation. Robots and content requests each retain the same cross-process governor lease. With the operator's raised 60-second interval, a cold robots fetch can leave the content request beyond the 30-second bounded wait; the CLI reports rate-limited and never retries automatically.
 
-`announcements history` is fully offline for the news-center, reviewed SCSE listings and the observed college boards below. Supply base64 UTF-8 HTML with explicit `provenance.source_url`, optional `capture_timestamp` and `asserted_by`. College assertions must be exact canonical HTTP/HTTPS URLs on the named host, without credentials, port, query, fragment or host alias. A stem admits its `.htm` listing and numeric `/<filename>.htm` paths; H3i admits only its fixed listing.
+`announcements history` is fully offline. Absent `kind` or explicit `kind:"listing"` retains the news-center, reviewed SCSE listings and observed college boards below. Supply base64 UTF-8 HTML with explicit `provenance.source_url`, optional `capture_timestamp` and `asserted_by`. College assertions must be exact canonical HTTP/HTTPS URLs on the named host, without credentials, port, query, fragment or host alias. A stem admits its `.htm` listing and numeric `/<filename>.htm` paths; H3i admits only its fixed listing.
 
 | College | Exact source host | Admitted listing stem/path |
 | --- | --- | --- |
@@ -243,6 +243,16 @@ printf '%s\n' '{"url":"https://news.buaa.edu.cn/info/1010/69802.htm"}' | ./targe
 | Materials/Energy | `mse.buaa.edu.cn`, `sepe.buaa.edu.cn` | `/xwdt/gggs` |
 
 Output is `announcements_history`; `retrieval.sha256` binds exactly supplied bytes. Reuse each existing source-specific parser and preserve its headings, available excerpts, publication-date rules and source order. Aviation student/public labels remain distinct and mobile copies are not extra records. Literal HTTP provenance and relative links are not upgraded; numeric filenames are not page ordinals or authority to fetch. Active HTML base changes fail closed. Missing publication or capture dates stay unknown; capture time never substitutes for publication. Historical era/layout, directory/root/list identity and archive response headers remain operator-asserted/unverified, without consulting today's directory as historical authority. Eight retained-current-original imports produce65 records equal to the same new binary's cache-only current listings; these prove compatibility, not historical captures. [Expanded observed-source evidence](docs/STATUS.md#observed-college-operator-asserted-historical-snapshots); [earlier Materials/Energy proof](docs/STATUS.md#materials-and-energy-operator-asserted-historical-snapshots).
+
+Explicit `kind:"article"` imports source original bytes using the same provenance fields and source-specific header/body/table guards. Only these canonical HTTP/HTTPS assertions are admitted; filenames contain1..10 decimal digits:
+
+| College | Exact source host | Admitted article path |
+| --- | --- | --- |
+| Materials | `mse.buaa.edu.cn` | `/info/1061/<filename>.htm`, `/info/1058/<filename>.htm` |
+| H3i | `h3i.buaa.edu.cn` | `/info/1141/<filename>.htm` |
+| Beijing | `beijing.buaa.edu.cn` | `/info/1014/<filename>.htm` |
+
+Article output remains `announcements_history`, with `full_text` or `partial_text`, source title/publication facts, paragraphs and separate source-ordered table captions/rows/cells/declared spans. Original2-MiB HTML and1024 combined paragraph/row limits apply; images and file contents remain unfetched. Borrowed extraction never constructs a fake HTTP response. Retrieval contains only supplied-byte SHA-256, byte length and `operator_asserted` status—no fetched/cache/revalidation metadata, current directory attribution or source-listing receipt. Three retained **current** originals preserve all previously verified source content; this is cross-interface compatibility, not a historical capture or source-authenticity verification. [Article import evidence and boundaries](docs/STATUS.md#operator-asserted-college-article-originals).
 
 Verified historical WebArchive retrieval for these college boards, other source eras/layouts, further college adapters, broader faculty/college coverage, complete history and broader attachment retrieval remain unfinished. This local feature is unreviewed, not root-main integration or Pages deployment. [Earlier history contract and limits](docs/STATUS.md#2026-09-29-announcements-news-center-migration).
 

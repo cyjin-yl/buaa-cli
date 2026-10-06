@@ -274,6 +274,12 @@ fn publication_date(raw: &str) -> Option<String> {
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
+    let mut output = parse_article(document)?;
+    output["retrieval"] = retrieval(response);
+    Ok(output)
+}
+
+pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
     let mains = Selector::parse("div.ny-right form > div.art-main").map_err(|_| unavailable())?;
     let mut mains = document.select(&mains);
     let main = mains.next().ok_or_else(|| {
@@ -331,7 +337,6 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         return Err(unavailable());
     }
     table_article_output(
-        response,
         body,
         title,
         Some("1014".into()),

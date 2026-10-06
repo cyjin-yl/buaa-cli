@@ -1,5 +1,31 @@
 # Development status
 
+## Operator-asserted college article originals
+
+Local `work/college-article-history` starts at Beijing `da16c9a14b9efe14669fb9337c85fc2c524e4e72` on the unmerged H3i/Ase/history/Sa/Sepe/PR110 stack. Parent worktrees/binaries and root-main remain untouched. No external issue/PR/claim, push, approval, merge or Pages deployment.
+
+`announcements history` now requires explicit `kind:"article"` for supplied Mse `/info/1061/` or `/info/1058/`, H3i `/info/1141/` and Beijing `/info/1014/` original bytes, with1..10-digit `.htm` filenames. Exact canonical HTTP/HTTPS assertions only; no root/board/foreign host, query, credentials, port, fragment or alias. Absent kind and explicit listing retain the old listing admission. Shared borrowed HTML admission and the original source-specific title/date/body/table guards are reused; no fabricated HTTP response, supplied-body copy, source selector replacement or network/cache/governor change. Current parsers attach only real retrieval facts after content extraction and retain their unchanged directory/root/list binding and request lease.
+
+Source paragraphs and separate flat-table captions/rows/cells/declared spans use the existing2-MiB HTML,1024 combined paragraph/row,256 table/cell,8-KiB row/caption and512-byte span budgets. No inferred cells, spans, grid or interleaving. Empty/nontext, nested/unowned and overflow fail; images and attachment contents stay partial/unfetched. Publication remains a source-header fact, never capture-time substitution. Historical era/layout, directory/root/list identity, source authenticity and archive response headers remain operator-asserted/unverified. Article results contain only supplied-byte hash/length/assertion retrieval metadata, not fetch/cache/revalidation timestamps, current directory attribution or a source-listing receipt.
+
+**Actual new native proof:** the previous binary rejects a synthetic Mse HTTP article import2/0.09s; owned locked offline build0/46.56s admits the same input0/0.04s, preserving mixed-inline text, a decoded declared span, unfetched file hint and distinct1997 publication/2000 asserted capture. Synthetic1997 content is not a real archive observation. Three retained **current** originals import successfully, with the entire source-content and extraction-limit objects equal to already privately source-verified current output:
+
+| Source | Original bytes / SHA-256 | Paragraphs | Tables / rows / cells | Native result |
+| --- | --- | --- | --- | --- |
+| Mse `/info/1061/2881.htm` |522,352 / `dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3` |1 |1 /339 /2331 |0 /0.35s, `full_text` |
+| H3i `/info/1141/4918.htm` |97,764 / `e2d6ac0af95b25b2ba0303efd02aeddfed71c8da56573e27768dc15a2ba211f9` |181 |2 /42 /84 |0 /0.05s, `full_text` |
+| Beijing `/info/1014/1188.htm` |437,099 / `33f1588c5d183fca89893ab6063a486fc99b4ae904156a663ec40ff8ad93f0f8` |795 |3 /161 /793 |0 /0.17s, `full_text` |
+
+All original hashes/lengths and literal source assertions match, all capture dates stay unknown, and no live/verified-archive metadata is emitted. These are cross-interface current-original compatibility observations, not newly acquired historical originals or fresh independent content review. Raw originals, names, personal prose and full attributes stay outside source in private0700 directories with exclusive, no-follow, fsynced0600 receipts.
+
+**Affected proof:**24 distinct focused cases pass: seven history cases (two new uncertain article structure/identity cases), one existing SCSE history case, eight Mse, four H3i, three Beijing and one shared inert-file-hint case. No whole library/CLI suite. Eight actual native refusals exit2 for implicit article mode, listing source used as an article, foreign source, mismatched source layout, query, active HTML base, non-UTF8 and unknown kind. A1024 combined-block article imports0;1025 fails2 without truncation. Three actual new-binary cache-only article reads exit0 in1.30/0.30/0.36s; each **whole current output**, including unchanged real retrieval/directory/list facts, equals its prior private receipt and remains a cache hit.
+
+Zero new campus/archive GETs, authentication attempts or campus writes in this slice. Permanent governor SHA `7b51bcf1b7cbb6a89ce938ee16b0bc3ffca0694b96ea1fd4ed5a1a1f62beae2e` stays byte-identical, retaining Ase network_failures2, pendingNone/disarmed auth/no latch and60000/900000-ms floors/backoff. No reset/delete/migration, account-key/limiter split, failed-source retry, alias or TLS/robots/challenge workaround. Earlier Ase failures remain real; zero GET is not an overall-workflow claim.
+
+Independent inspection remains blocked on the earlier single upstream401 prerequisite; this local feature is unreviewed. No retry, provider/credential fallback, banned subagent/peer revival or compiler/runtime-as-approval claim. GitHub quota stop is unchanged. Verified college archive acquisition/attribution, other source families/eras, full current/history/attachment coverage and the complete non-VPN goal remain unfinished. Final discovery/gate and exact local source packet are recorded separately.
+
+**Final actual gate:** initial formatter0/1.12s, strict locked offline all-target clippy0/27.25s, formatter check0/1.06s and final native build0/12.36s. Actual schema0/0.02s exposes the typed listing/article selector, required original/provenance fields, article-source condition and table records; capabilities0/0.02s carries the compiled article evidence while keeping44 records and announcements `partial-live-verified`. Native SHA-256 `96135dcc983d57f4a1176802268a4ed1cc7cd39fafee9688d001479db57e2236`. These gates do not substitute for independent inspection or platform approval; no additional full suite or completed-source replay.
+
 ## Source-ordered Beijing table records
 
 Local `work/beijing-table-records` starts at H3i `55f8a56c42f3a9ffb035d999a033457fec226290` on the unmerged Ase/history/Sa/Sepe/PR110 stack. Earlier Beijing PR96 and all parent worktrees/binaries stay unchanged. No external issue/PR/claim, root-main overwrite, push, approval, merge or Pages deployment.

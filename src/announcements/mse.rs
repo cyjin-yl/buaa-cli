@@ -167,6 +167,13 @@ pub(crate) fn article_with_client(
 }
 
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
+    let base = Url::parse(&response.url).map_err(|_| unavailable())?;
+    let mut output = parse_article(document, &base)?;
+    output["retrieval"] = retrieval(response);
+    Ok(output)
+}
+
+pub(super) fn parse_article(document: &Html, base: &Url) -> Result<Value, Error> {
     let mains = Selector::parse("div.nymain > div.w16 > div.ny-right > form > div.art-main")
         .map_err(|_| unavailable())?;
     let mut mains = document.select(&mains).filter(|node| !inert_element(*node));
@@ -215,13 +222,9 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             )
         })?;
     table_article_output(
-        response,
         body,
         title,
-        Url::parse(&response.url)
-            .ok()
-            .as_ref()
-            .and_then(article_category_from_url),
+        article_category_from_url(base),
         published_at,
         "unique art-main/art-body-box/art-body/ar_article#vsb_content/v_news_content; source paragraphs and separate ordered flat-table captions/rows/cells; code and fallback payloads excluded",
     )

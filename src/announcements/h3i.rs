@@ -252,6 +252,12 @@ pub(crate) fn article_with_client(
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
+    let mut output = parse_article(document)?;
+    output["retrieval"] = retrieval(response);
+    Ok(output)
+}
+
+pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
     let forms = Selector::parse("div.detail div.fl1 > div.wp.flex > div.left > div > form")
         .map_err(|_| unavailable())?;
     let mut forms = document.select(&forms);
@@ -329,7 +335,6 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
             )
         })?;
     table_article_output(
-        response,
         body,
         title,
         Some("1141".into()),

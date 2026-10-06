@@ -601,6 +601,48 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "college_article_operator_history_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "local-native-verified-current-original-compatible-unreviewed",
+          "stack_base": "Owned work/college-article-history starts at Beijing da16c9a14b9efe14669fb9337c85fc2c524e4e72 on the unmerged H3i/Ase/history/Sa/Sepe/PR110 stack. Parent worktrees/binaries and root-main remain untouched; no external claim, push, approval, merge or Pages deployment.",
+          "command": "announcements history; fully offline typed stdin with explicit kind:article, base64 UTF-8 html, provenance.source_url and optional capture_timestamp/asserted_by. Absent kind or kind:listing keeps existing listing behavior. Article assertions admit exact canonical HTTP/HTTPS Mse info/1061 or info/1058, H3i info/1141 and Beijing info/1014 with1..10-digit .htm filenames; no roots/boards, other source, credentials/ports/queries/fragments/aliases or live-fetch permission.",
+          "semantics": "Reuse borrowed shared HTML admission and original source-specific header/date/body/table guards, never a fake HTTP response or supplied-body copy. Separate source content from real current retrieval metadata; current wrappers keep directory/root/list binding and their existing request lease. Retain original2-MiB HTML,1024 combined paragraph/row,256 table/cell,8-KiB row/caption and512-byte span budgets. Paragraphs and separate source captions/rows/cells/declared spans stay ordered without invented cells/defaults/grid. Images/files stay partial/unfetched; unsupported layouts/overflow fail.",
+          "provenance_limits": "Literal source URL, unknown capture dates and source publication remain distinct. Historical era/layout, directory/root/list identity, authenticity and archive response headers are operator_asserted/unverified. Article retrieval includes only exact supplied-byte SHA-256, length and assertion status, never fetch/cache/revalidation metadata, current directory attribution or a source-listing receipt.",
+          "retained_current_originals": {
+            "mse": {
+              "source_url": "https://mse.buaa.edu.cn/info/1061/2881.htm",
+              "supplied_bytes": 522352,
+              "sha256": "dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3",
+              "paragraphs": 1,
+              "tables": 1,
+              "rows": 339,
+              "cells": 2331
+            },
+            "h3i": {
+              "source_url": "https://h3i.buaa.edu.cn/info/1141/4918.htm",
+              "supplied_bytes": 97764,
+              "sha256": "e2d6ac0af95b25b2ba0303efd02aeddfed71c8da56573e27768dc15a2ba211f9",
+              "paragraphs": 181,
+              "tables": 2,
+              "rows": 42,
+              "cells": 84
+            },
+            "beijing": {
+              "source_url": "https://beijing.buaa.edu.cn/info/1014/1188.htm",
+              "supplied_bytes": 437099,
+              "sha256": "33f1588c5d183fca89893ab6063a486fc99b4ae904156a663ec40ff8ad93f0f8",
+              "paragraphs": 795,
+              "tables": 3,
+              "rows": 161,
+              "cells": 793
+            }
+          },
+          "actual_native_proof": "Previous binary rejects the new synthetic HTTP article input2/0.09s; owned locked offline build0/46.56s admits the same input0/0.04s with mixed-inline text/decoded declared span/unfetched file and distinct publication/capture. Synthetic1997 is not a real archive observation. Three retained CURRENT originals import0 in0.35/0.05/0.17s with entire source-content/extraction-limit objects equal to previously privately verified current output, original hashes/lengths/URLs equal and unknown capture dates. This is compatibility, not fresh historical acquisition, independent inspection or authenticity approval.",
+          "focused_and_boundary_proof": "24 distinct focused consumers pass: seven history(two new uncertain article cases), one SCSE history, eight Mse, four H3i, three Beijing and one shared inert-file-hint case; no full library/CLI suite. Eight actual native refusals2 cover missing explicit mode, board-as-article, foreign source, mismatched layout, query, active HTML base, non-UTF8 and unknown kind. Combined1024 imports0 and1025 fails2 without truncation. Three new-binary current cache-only article reads0/1.30s,0/0.30s,0/0.36s retain whole prior output and all real retrieval/directory/list facts unchanged.",
+          "governor_receipt": "Zero new campus/archive GETs, auth attempts or campus writes in this slice. Permanent state SHA7b51bcf1b7cbb6a89ce938ee16b0bc3ffca0694b96ea1fd4ed5a1a1f62beae2e remains byte-identical, retaining Ase network_failures2, pendingNone, disarmed auth/no latch and60000/900000-ms floors/backoff. No reset/delete/migration, alternate account key/limiter, failed-source retry, alias or TLS/robots/challenge bypass. Earlier failed requests remain real.",
+          "review_and_remaining_scope": "Local source remains unreviewed while earlier upstream401 independent-inspection prerequisite and GitHub quota stop remain. No retry/provider credential fallback/subagent/peer revival, new issue/PR/push/approval/merge/deployment or compiler/runtime-as-approval claim. Original/private receipts stay outside source under0700/exclusive no-follow fsynced0600. Verified college archive acquisition/identity, other families/eras, full current/history/attachment coverage and complete non-VPN goal remain unfinished. Final discovery/gate and exact-head source packet retained separately."
+        },
         "beijing_table_records_slice": {
           "issue": null,
           "pr": null,

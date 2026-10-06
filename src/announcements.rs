@@ -114,8 +114,18 @@ struct ArticleQuery {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HistoryInput {
+    #[serde(default)]
+    kind: HistoryKind,
     html: String,
     provenance: HistoryProvenance,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum HistoryKind {
+    #[default]
+    Listing,
+    Article,
 }
 
 #[derive(serde::Deserialize)]
@@ -152,7 +162,7 @@ fn invalid_article() -> Error {
 fn invalid_history() -> Error {
     Error::new(
         "invalid_input",
-        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be an admitted news-center or observed college listing URL",
+        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must match an admitted listing or an explicit kind:article Mse, H3i or Beijing source",
     )
 }
 
@@ -691,6 +701,12 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
 }
 
 fn article_output(response: &Response, document: ArticleDocument) -> Value {
+    let mut output = article_content(document);
+    output["retrieval"] = retrieval(response);
+    output
+}
+
+fn article_content(document: ArticleDocument) -> Value {
     let mut output = json!({
         "schema_version": 1,
         "type": "announcements_article",
@@ -705,7 +721,6 @@ fn article_output(response: &Response, document: ArticleDocument) -> Value {
             "scope": "single_article_page",
             "body_source": "div.v_news_content p",
         },
-        "retrieval": retrieval(response),
     });
     output["title"] = Value::String(document.title);
     output["category"] = document.category.map(Value::String).unwrap_or(Value::Null);
@@ -837,7 +852,6 @@ fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
 }
 
 fn table_article_output(
-    response: &Response,
     body: ElementRef<'_>,
     title: String,
     category: Option<String>,
@@ -855,17 +869,14 @@ fn table_article_output(
     }
     let images = Selector::parse("img").map_err(|_| unavailable())?;
     let has_images = body.select(&images).any(|image| !inert_element(image));
-    let mut output = article_output(
-        response,
-        ArticleDocument {
-            title,
-            category,
-            published_at,
-            paragraphs,
-            attachment_hints,
-            attachments_found,
-        },
-    );
+    let mut output = article_content(ArticleDocument {
+        title,
+        category,
+        published_at,
+        paragraphs,
+        attachment_hints,
+        attachments_found,
+    });
     output["body_table_count"] = json!(tables.values.len());
     output["body_table_row_count"] = json!(tables.row_count);
     output["body_table_cell_count"] = json!(tables.cell_count);
@@ -1379,15 +1390,18 @@ fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Err
     Ok(ListingDocument { title, entries })
 }
 
+fn plain_history_source(raw: &str, url: &Url) -> bool {
+    raw == url.as_str()
+        && matches!(url.scheme(), "http" | "https")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
 fn notice_history_college(raw: &str, url: &Url) -> Option<&'static str> {
-    if raw != url.as_str()
-        || !matches!(url.scheme(), "http" | "https")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
+    if !plain_history_source(raw, url) {
         return None;
     }
     let path = url.path();
@@ -1447,15 +1461,49 @@ fn notice_history_college(raw: &str, url: &Url) -> Option<&'static str> {
     }
 }
 
+fn article_history_college(raw: &str, url: &Url) -> Option<&'static str> {
+    if !plain_history_source(raw, url) {
+        return None;
+    }
+    let path = url.path();
+    match url.host_str() {
+        Some("mse.buaa.edu.cn")
+            if (path.starts_with("/info/1061/") || path.starts_with("/info/1058/"))
+                && crate::net::mse_path_allowed(path) =>
+        {
+            Some("mse")
+        }
+        Some("h3i.buaa.edu.cn")
+            if path.starts_with("/info/1141/") && crate::net::h3i_path_allowed(path) =>
+        {
+            Some("h3i")
+        }
+        Some("beijing.buaa.edu.cn")
+            if path.starts_with("/info/1014/") && crate::net::beijing_path_allowed(path) =>
+        {
+            Some("beijing")
+        }
+        _ => None,
+    }
+}
+
 pub fn history(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
         return Err(invalid_history());
     }
     let query: HistoryInput = serde_json::from_str(input).map_err(|_| invalid_history())?;
     let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
+    let article_college = match query.kind {
+        HistoryKind::Listing => None,
+        HistoryKind::Article => Some(
+            article_history_college(&query.provenance.source_url, &base)
+                .ok_or_else(invalid_history)?,
+        ),
+    };
     let scse_snapshot = scse::is_history_source(&query.provenance.source_url);
     let notice_college = notice_history_college(&query.provenance.source_url, &base);
-    if !scse_snapshot
+    if article_college.is_none()
+        && !scse_snapshot
         && notice_college.is_none()
         && !is_list_source_url(&query.provenance.source_url)
     {
@@ -1476,117 +1524,139 @@ pub fn history(input: &str) -> Result<Value, Error> {
     if bytes.len() > MAX_HTML {
         return Err(invalid_history());
     }
-    let (document, publisher, college, listing_label) = if scse_snapshot {
-        (
-            scse::parse_listing(&bytes, &base),
-            scse::PUBLISHER,
-            Some("scse"),
-            "公告公示（历史快照）",
-        )
-    } else if let Some(college) = notice_college {
+    let mut output = if let Some(college) = article_college {
         let source = college_document(&bytes).map_err(|_| invalid_history())?;
-        let (document, publisher, label) = match college {
-            "ic" => (
-                ic::parse_listing(&source, &base),
-                ic::PUBLISHER,
-                "通知公告（历史快照）",
-            ),
-            "aviation" if base.path() == "/gkgs.htm" || base.path().starts_with("/gkgs/") => (
-                aviation::parse_listing(&source, &base, "公开公示"),
-                aviation::PUBLISHER,
-                "公开公示（历史快照）",
-            ),
-            "aviation" => (
-                aviation::parse_listing(&source, &base, "通知公告（学生工作）"),
-                aviation::PUBLISHER,
-                "通知公告（学生工作，历史快照）",
-            ),
-            "beijing" => (
-                beijing::parse_listing(&source, &base),
-                beijing::PUBLISHER,
-                "通知公告（历史快照）",
-            ),
-            "shenyuan" => (
-                shenyuan::parse_listing(&source, &base),
-                shenyuan::PUBLISHER,
-                "通知公告（历史快照）",
-            ),
-            "h3i" => (
-                h3i::parse_listing(&source, &base),
-                h3i::PUBLISHER,
-                "招聘公告（历史快照）",
-            ),
-            "zfai" => (
-                zfai::parse_listing(&source, &base),
-                zfai::PUBLISHER,
-                "信息公告（历史快照）",
-            ),
-            "iiif" => (
-                iiif::parse_listing(&source, &base),
-                iiif::PUBLISHER,
-                "通知公告（历史快照）",
-            ),
-            "mse" => (
-                parse_notice_list(&source, &base),
-                mse::PUBLISHER,
-                "公告公示（历史快照）",
-            ),
-            "sepe" => (
-                parse_notice_list(&source, &base),
-                sepe::PUBLISHER,
-                "公告公示（历史快照）",
-            ),
+        let (document, publisher) = match college {
+            "mse" => (mse::parse_article(&source, &base), mse::PUBLISHER),
+            "h3i" => (h3i::parse_article(&source), h3i::PUBLISHER),
+            "beijing" => (beijing::parse_article(&source), beijing::PUBLISHER),
             _ => return Err(invalid_history()),
         };
-        (document, publisher, Some(college), label)
+        let mut output = document.map_err(|_| invalid_history())?;
+        output["type"] = json!("announcements_history");
+        output["publisher"] = json!(publisher);
+        output["college"] = json!(college);
+        output["completeness"]["scope"] = json!("single_supplied_archive_article");
+        output["completeness"]["freshness"] = json!("archived_bytes");
+        output["completeness"]["source_layout"] = json!(
+            "observed source-specific article header/body/table contract; historical era applicability is operator_asserted, not verified"
+        );
+        output
     } else {
-        (
-            parse_listing(&bytes, &base),
-            "北京航空航天大学",
-            None,
-            "新闻中心（历史快照）",
-        )
-    };
-    let document = document.map_err(|_| invalid_history())?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
-    let mut output = json!({
-        "schema_version": 1,
-        "type": "announcements_history",
-        "result": "listing_snapshot",
-        "publisher": publisher,
-        "college": college,
-        "listing_label": listing_label,
-        "document_title": document.title,
-        "entries": document.entries,
-        "provenance": {
-            "status": "operator_asserted",
-            "source_url": query.provenance.source_url,
-            "capture_timestamp": timestamp,
-            "asserted_by": query.provenance.asserted_by,
-            "verification": "asserted_only; archive response headers were not supplied with the bytes",
-        },
-        "completeness": {
-            "scope": "single_supplied_archive_snapshot",
-            "pagination": "not_applicable",
-            "freshness": "archived_bytes",
-        },
-        "retrieval": {
-            "sha256": hash,
-            "supplied_bytes": bytes.len(),
-            "provenance_status": "operator_asserted",
-        },
-    });
-    if notice_college.is_some() {
-        output["completeness"]["source_layout"] = json!(match notice_college {
-            Some("mse" | "sepe") =>
-                "observed nymain/notice-list contract; historical era applicability is operator_asserted, not verified",
-            _ =>
-                "observed source-specific listing contract; historical era applicability is operator_asserted, not verified",
+        let (document, publisher, college, listing_label) = if scse_snapshot {
+            (
+                scse::parse_listing(&bytes, &base),
+                scse::PUBLISHER,
+                Some("scse"),
+                "公告公示（历史快照）",
+            )
+        } else if let Some(college) = notice_college {
+            let source = college_document(&bytes).map_err(|_| invalid_history())?;
+            let (document, publisher, label) = match college {
+                "ic" => (
+                    ic::parse_listing(&source, &base),
+                    ic::PUBLISHER,
+                    "通知公告（历史快照）",
+                ),
+                "aviation" if base.path() == "/gkgs.htm" || base.path().starts_with("/gkgs/") => (
+                    aviation::parse_listing(&source, &base, "公开公示"),
+                    aviation::PUBLISHER,
+                    "公开公示（历史快照）",
+                ),
+                "aviation" => (
+                    aviation::parse_listing(&source, &base, "通知公告（学生工作）"),
+                    aviation::PUBLISHER,
+                    "通知公告（学生工作，历史快照）",
+                ),
+                "beijing" => (
+                    beijing::parse_listing(&source, &base),
+                    beijing::PUBLISHER,
+                    "通知公告（历史快照）",
+                ),
+                "shenyuan" => (
+                    shenyuan::parse_listing(&source, &base),
+                    shenyuan::PUBLISHER,
+                    "通知公告（历史快照）",
+                ),
+                "h3i" => (
+                    h3i::parse_listing(&source, &base),
+                    h3i::PUBLISHER,
+                    "招聘公告（历史快照）",
+                ),
+                "zfai" => (
+                    zfai::parse_listing(&source, &base),
+                    zfai::PUBLISHER,
+                    "信息公告（历史快照）",
+                ),
+                "iiif" => (
+                    iiif::parse_listing(&source, &base),
+                    iiif::PUBLISHER,
+                    "通知公告（历史快照）",
+                ),
+                "mse" => (
+                    parse_notice_list(&source, &base),
+                    mse::PUBLISHER,
+                    "公告公示（历史快照）",
+                ),
+                "sepe" => (
+                    parse_notice_list(&source, &base),
+                    sepe::PUBLISHER,
+                    "公告公示（历史快照）",
+                ),
+                _ => return Err(invalid_history()),
+            };
+            (document, publisher, Some(college), label)
+        } else {
+            (
+                parse_listing(&bytes, &base),
+                "北京航空航天大学",
+                None,
+                "新闻中心（历史快照）",
+            )
+        };
+        let document = document.map_err(|_| invalid_history())?;
+        let mut output = json!({
+            "schema_version": 1,
+            "type": "announcements_history",
+            "result": "listing_snapshot",
+            "publisher": publisher,
+            "college": college,
+            "listing_label": listing_label,
+            "document_title": document.title,
+            "entries": document.entries,
+            "completeness": {
+                "scope": "single_supplied_archive_snapshot",
+                "pagination": "not_applicable",
+                "freshness": "archived_bytes",
+            },
         });
+        if notice_college.is_some() {
+            output["completeness"]["source_layout"] = json!(match notice_college {
+                Some("mse" | "sepe") =>
+                    "observed nymain/notice-list contract; historical era applicability is operator_asserted, not verified",
+                _ =>
+                    "observed source-specific listing contract; historical era applicability is operator_asserted, not verified",
+            });
+        }
+        output
+    };
+    if notice_college.is_some() || article_college.is_some() {
         output["completeness"]["source_identity"] = json!(
             "operator_asserted source URL only; historical directory/root/list attribution and archive response headers are not verified"
         );
     }
+    output["provenance"] = json!({
+        "status": "operator_asserted",
+        "source_url": query.provenance.source_url,
+        "capture_timestamp": timestamp,
+        "asserted_by": query.provenance.asserted_by,
+        "verification": "asserted_only; archive response headers were not supplied with the bytes",
+    });
+    output["retrieval"] = json!({
+        "sha256": format!("{:x}", Sha256::digest(&bytes)),
+        "supplied_bytes": bytes.len(),
+        "provenance_status": "operator_asserted",
+    });
     Ok(output)
 }
 
@@ -1658,11 +1728,26 @@ pub fn schema() -> Value {
         "history": {
             "input": {
                 "type": "object",
-                "description": "Offline operator-asserted snapshot: base64 UTF-8 html, provenance.source_url, optional capture_timestamp and asserted_by. Admit reviewed news-center/SCSE listings or exact canonical HTTP/HTTPS observed college boards: IC tzgg; aviation xsgz1/tzgg or gkgs; Beijing/Mse/Sepe xwdt/gggs; Shenyuan index/tzgg; Zfai xxgg1; Iiif xwgg/tzgg. These college stems admit .htm or /<digits>.htm filenames; H3i admits only rcpy/cpgg.htm. No other board/root/article/host is inferred. Reuse the source-specific listing parser; historical era, directory/root identity and archive headers remain unverified. Preserve literal HTTP provenance and relative links; filenames are not page ordinals. Reject active HTML base changes. No request, cache update or archive-attribution verification occurs.",
+                "additionalProperties": false,
+                "required": ["html", "provenance"],
+                "properties": {
+                    "kind": {"type":"string","enum":["listing","article"],"default":"listing"},
+                    "html": {"type":"string","maxLength":MAX_HTML.div_ceil(3) * 4,"description":"Base64 UTF-8 original bytes, bounded to 2 MiB after decoding."},
+                    "provenance": {
+                        "type":"object","additionalProperties":false,"required":["source_url"],
+                        "properties": {
+                            "source_url":{"type":"string"},
+                            "capture_timestamp":{"type":["string","null"],"pattern":"^[0-9]{14}$","description":"Optional asserted YYYYMMDDhhmmss UTC capture; not publication time or verified archive attribution."},
+                            "asserted_by":{"type":["string","null"],"description":"Optional operator assertion, not an authenticated identity."}
+                        }
+                    }
+                },
+                "allOf":[{"if":{"required":["kind"],"properties":{"kind":{"const":"article"}}},"then":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^https?://(mse[.]buaa[.]edu[.]cn/info/(1061|1058)|h3i[.]buaa[.]edu[.]cn/info/1141|beijing[.]buaa[.]edu[.]cn/info/1014)/[0-9]{1,10}[.]htm$"}}}}}}],
+                "description": "Fully offline operator-asserted original: base64 UTF-8 html, provenance.source_url, optional capture_timestamp/asserted_by. Absent kind or kind:listing retains reviewed news-center/SCSE and exact canonical HTTP/HTTPS observed college board admissions: IC tzgg; aviation xsgz1/tzgg or gkgs; Beijing/Mse/Sepe xwdt/gggs; Shenyuan index/tzgg; Zfai xxgg1; Iiif xwgg/tzgg, with .htm or bounded numeric filenames; H3i only rcpy/cpgg.htm. Explicit kind:article admits only Mse info/1061 or info/1058, H3i info/1141 and Beijing info/1014 with 1..10-digit .htm filenames. Reuse original source header/body/table guards with borrowed bytes, never a fabricated HTTP response. No other source/root/board/article/host or live-fetch permission is inferred. Historical era, directory/root/list identity and archive headers remain unverified. Literal HTTP assertions and missing dates stay unchanged. Active HTML base changes fail; no request, cache update or attribution verification occurs.",
             },
             "output": {
                 "type": "object",
-                "description": "Source-ordered snapshot entries, source-specific headings/excerpts/publication dates and board labels, asserted provenance and SHA-256 binding to exactly supplied bytes. Aviation student/public boards remain distinct; mobile copies are not extra rows. Observed college layouts have explicit unverified historical source/layout limits. Missing publication or capture dates remain unknown; neither substitutes for the other. Operator assertions are not official-directory or verified archive attribution, complete history or article/attachment retrieval.",
+                "description": "Listing snapshots keep source-ordered entries, headings/excerpts/publication dates and distinct board labels. Explicit article imports return source title/publication facts, paragraphs and separate source-ordered table captions/rows/cells/declared spans under unchanged article budgets and partial-text rules. Both bind exactly supplied bytes by SHA-256 and preserve operator_asserted provenance. Missing publication/capture dates stay unknown and separate. Article imports never emit fetched/cache/revalidation metadata, current directory attribution or a source-listing receipt. Original files/images are not retrieved, OCR is not performed, source authenticity/era/archive attribution is not verified and complete history is not claimed.",
             }
         },
     });
@@ -1689,6 +1774,7 @@ pub fn schema() -> Value {
         "body_table_row_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS},
         "body_table_cell_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS * MAX_ENTRIES}
     });
+    output["history"]["output"]["properties"] = output["article"]["output"]["properties"].clone();
     output
 }
 
@@ -2041,6 +2127,135 @@ mod tests {
         })
         .to_string();
         assert!(history(&article_url).is_err());
+    }
+
+    fn history_article_html() -> &'static str {
+        r#"<div class="nymain"><div class="w16"><div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Synthetic archived policy</h3><p><span class="date">日期：1997年6月10日</span></p></div><div class="art-body-box"><div class="art-body"><div id="vsb_content" class="ar_article"><div class="v_news_content"><p>Before <strong>inline</strong> after.</p><table><caption>Source caption</caption><tr><th rowspan="2&amp;1">Heading</th><td>First <em>cell</em> tail.</td></tr></table><p><a href="/file.doc">Original file</a></p><script>not body text</script></div></div></div></div></div></form></div></div></div>"#
+    }
+
+    #[test]
+    fn history_article_preserves_source_structure_without_http_claims() {
+        let body = history_article_html();
+        let mut input = json!({"kind":"article","html":STANDARD.encode(body),"provenance":{
+            "source_url":"http://mse.buaa.edu.cn/info/1061/42.htm",
+            "capture_timestamp":"20000101120000"
+        }});
+        let output = history(&input.to_string()).unwrap();
+        assert_eq!(output["college"], "mse");
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["title"], "Synthetic archived policy");
+        assert_eq!(output["published_at"], "1997-06-10");
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["Before inline after.", "Original file"])
+        );
+        assert_eq!(
+            output["body_tables"],
+            json!([{
+                "source_order":1,"caption":"Source caption","rows":[{"cells":[
+                    {"header":true,"text":"Heading","rowspan":"2&1"},
+                    {"header":false,"text":"First cell tail."}
+                ]}]
+            }])
+        );
+        assert_eq!(
+            output["attachments"]["hints"],
+            json!([{"href":"/file.doc","text":"Original file"}])
+        );
+        assert_eq!(output["provenance"]["status"], "operator_asserted");
+        assert_eq!(
+            output["provenance"]["source_url"],
+            "http://mse.buaa.edu.cn/info/1061/42.htm"
+        );
+        assert_eq!(
+            output["provenance"]["capture_timestamp"],
+            "2000-01-01T12:00:00Z"
+        );
+        assert_eq!(
+            output["retrieval"],
+            json!({
+                "sha256":format!("{:x}", Sha256::digest(body.as_bytes())),
+                "supplied_bytes":body.len(),"provenance_status":"operator_asserted"
+            })
+        );
+        assert!(output.get("directory_attribution").is_none());
+        assert!(output.get("source_listing").is_none());
+        input["provenance"]
+            .as_object_mut()
+            .unwrap()
+            .remove("capture_timestamp");
+        let unknown_capture = history(&input.to_string()).unwrap();
+        assert_eq!(unknown_capture["published_at"], "1997-06-10");
+        assert!(unknown_capture["provenance"]["capture_timestamp"].is_null());
+    }
+
+    #[test]
+    fn history_article_requires_explicit_mode_source_and_original_layout() {
+        let body = history_article_html();
+        let mut input = json!({"html":STANDARD.encode(body),"provenance":{
+            "source_url":"https://mse.buaa.edu.cn/info/1061/42.htm"
+        }});
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["kind"] = json!("listing");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["kind"] = json!("article");
+        for source in [
+            "https://mse.buaa.edu.cn/",
+            "https://mse.buaa.edu.cn/xwdt/gggs.htm",
+            "https://news.buaa.edu.cn/info/1010/42.htm",
+            "https://mse.buaa.edu.cn/info/1061/42.htm?query=1",
+            "https://mse.buaa.edu.cn/info/1061/42.htm#fragment",
+            "https://operator:fixture@mse.buaa.edu.cn/info/1061/42.htm",
+            "https://mse.buaa.edu.cn:443/info/1061/42.htm",
+            "https://MSE.buaa.edu.cn/info/1061/42.htm",
+            "https://www.mse.buaa.edu.cn/info/1061/42.htm",
+            "https://mse.buaa.edu.cn/info/1061/12345678901.htm",
+            "https://mse.buaa.edu.cn/info/1061/%34%32.htm",
+            "https://mse.buaa.edu.cn/info/1061/../1061/42.htm",
+            "https://h3i.buaa.edu.cn/info/9999/42.htm",
+        ] {
+            input["provenance"]["source_url"] = json!(source);
+            assert_eq!(
+                history(&input.to_string()).unwrap_err().code,
+                "invalid_input"
+            );
+        }
+        input["provenance"]["source_url"] = json!("https://h3i.buaa.edu.cn/info/1141/42.htm");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["provenance"]["source_url"] = json!("https://mse.buaa.edu.cn/info/1061/42.htm");
+        input["html"] =
+            json!(STANDARD.encode(format!("<base href='https://foreign.test/'>{body}")));
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["html"] = json!(STANDARD.encode(format!(
+            "<template><base href='https://foreign.test/'></template>{body}"
+        )));
+        assert_eq!(
+            history(&input.to_string()).unwrap()["title"],
+            "Synthetic archived policy"
+        );
+        input["html"] = json!(STANDARD.encode([0xff]));
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["html"] = json!(STANDARD.encode(body));
+        input["kind"] = json!("document");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
     }
 
     #[test]
