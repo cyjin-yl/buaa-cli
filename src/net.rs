@@ -144,6 +144,8 @@ pub(crate) const SEPE_NOTICES_URL: &str = "https://sepe.buaa.edu.cn/xwdt/gggs.ht
 const SEPE_ROBOTS_URL: &str = "https://sepe.buaa.edu.cn/robots.txt";
 pub(crate) const SA_ROOT_URL: &str = "https://www.sa.buaa.edu.cn/";
 const SA_ROBOTS_URL: &str = "https://www.sa.buaa.edu.cn/robots.txt";
+pub(crate) const ASE_ROOT_URL: &str = "https://www.ase.buaa.edu.cn/";
+const ASE_ROBOTS_URL: &str = "https://www.ase.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -355,6 +357,7 @@ enum SourceProfile {
     Rse,
     Sepe,
     Sa,
+    Ase,
 }
 
 impl SourceProfile {
@@ -376,6 +379,7 @@ impl SourceProfile {
             Self::Rse => RSE_ROBOTS_URL,
             Self::Sepe => SEPE_ROBOTS_URL,
             Self::Sa => SA_ROBOTS_URL,
+            Self::Ase => ASE_ROBOTS_URL,
         }
     }
 
@@ -397,6 +401,7 @@ impl SourceProfile {
             Self::Rse => ".buaa-cli-rse-cache",
             Self::Sepe => ".buaa-cli-sepe-cache",
             Self::Sa => ".buaa-cli-sa-cache",
+            Self::Ase => ".buaa-cli-ase-cache",
         }
     }
 
@@ -487,6 +492,11 @@ impl SourceProfile {
             }
             Self::Sa => {
                 url.host_str() == Some("www.sa.buaa.edu.cn")
+                    && url.query().is_none()
+                    && matches!(url.path(), "/" | "/robots.txt")
+            }
+            Self::Ase => {
+                url.host_str() == Some("www.ase.buaa.edu.cn")
                     && url.query().is_none()
                     && matches!(url.path(), "/" | "/robots.txt")
             }
@@ -709,6 +719,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_sa(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sa)
+    }
+
+    pub(crate) fn open_ase(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Ase)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
