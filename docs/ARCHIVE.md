@@ -97,6 +97,14 @@ Only the first exact attributedHTML200 replay was retrieved:49,916 bytes, SHA-25
 
 Private ordered inspection retains all124 non-inert href anchors without JS execution or a rendered-visibility assertion. Five declarations at source ordinals29,30,91,121,122 preserve literal `rcpy/cpgg.htm` and the same resolved HTTPS recruitment-board URI. This binds a source destination, not a fetched listing, notice original, authentication permission or complete-history witness. No board/second capture/cursor/other resource was followed; two new archive GETs, same governor/floors/history and zero campus/auth/write. No Rust/new build/test/review/compiled-discovery or root-main integration claim. [Complete scoped evidence and remaining gaps](STATUS.md#h3i-attributed-archived-root-and-source-declarations).
 
+## Source-declared H3i historical board and exact replay refusal
+
+A subsequent distinct exact query uses the archived root's five literal `rcpy/cpgg.htm` declarations, resolving to `https://h3i.buaa.edu.cn/rcpy/cpgg.htm`. Limit2/no date bounds returned20240920035133 and20241108091656 plus an unfollowed cursor: native exit0/9.47s, HTTP200 JSON465 bytes, SHA-256 `6b64b26a7405889de716e6f14c4a0f2876015e8e2f9d85450c5b53664bf085b3`, fetched at1791411659081. Whole private-cache/base64/size/hash facts agree. Archive-record lengths6,909/5,728 are not resource lengths; resource hashes remain null/unverified and `complete_history:false`.
+
+The first and only exact replay20240920035133 exited3/1.79s: `unsupported`, `public source content encoding is not supported`. No original body or actual encoding-header value was retained. A real subsequent cache-only replay exited7/0.01s without a cached original; governor bytes stayed unchanged. Do not guess gzip, weaken encoding admission, replay the same target, choose another timestamp/nearest capture, or treat current/synthetic listing compatibility as actual historical text proof. RootOct4 and boardSep20 are different epochs, not an asserted same-time source/publisher/publication witness.
+
+Two new archive GETs/four in this H3i root+board chain, zero direct campus/auth/write, same permanent governor/floors/history. Exact original and native listing interpretation remain blocked pending an admissible original with response/provenance facts or a genuinely changed authorized source prerequisite. No Rust/build/test/review/compiled-discovery/root-main integration claim; existing failed-source and missing-history scopes remain intact. [Exact original frontier and retained offline proof](STATUS.md#h3i-source-declared-historical-board-index-and-encoding-refusal).
+
 ## Contract sources
 
 - [Internet Archive CDX API](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md): named JSON columns, exact URL scope, inclusive date ranges and resume keys. No API key cookie or restricted field is requested.

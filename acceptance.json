@@ -601,6 +601,100 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "h3i_source_declared_board_archive_frontier": {
+          "issue": null,
+          "pr": null,
+          "status": "exact-source-board-index-verified-first-original-encoding-refused-unreviewed",
+          "base_head": "d761ecb754f863c1c9407c288be7a2cc971ccdd0",
+          "owned_worktree": ".worktrees/h3i-archived-notices",
+          "rust_code_changed": false,
+          "native_source_head": "74ca5d2645f93f90c888ed7578384ddabeb07ca8",
+          "native_binary_sha256": "46f909431fcb6a19420ccac9fe96763d1351b1b39425925ae35664f4dc227985",
+          "source_binding": {
+            "root_uri": "https://h3i.buaa.edu.cn/index.htm",
+            "root_capture_timestamp": "20241004152255",
+            "root_raw_sha256": "8b3d6f9f9f741db5ee648c357dfd8a9492eb8560df7fa0f44820d8ab97779d96",
+            "literal_declared_href": "rcpy/cpgg.htm",
+            "source_orders": [
+              29,
+              30,
+              91,
+              121,
+              122
+            ],
+            "all_five_same_resolved_uri": true,
+            "current_directory_not_era_authority": true
+          },
+          "index": {
+            "exit": 0,
+            "seconds": 9.47,
+            "exact_original_uri": "https://h3i.buaa.edu.cn/rcpy/cpgg.htm",
+            "limit": 2,
+            "index_http_status": 200,
+            "index_bytes": 465,
+            "index_sha256": "6b64b26a7405889de716e6f14c4a0f2876015e8e2f9d85450c5b53664bf085b3",
+            "fetched_at_unix_ms": 1791411659081,
+            "capture_timestamps": [
+              "20240920035133",
+              "20241108091656"
+            ],
+            "record_lengths": [
+              6909,
+              5728
+            ],
+            "resource_hashes_still_null": true,
+            "cursor_present": true,
+            "cursor_followed": false,
+            "complete_history": false,
+            "independent_cache_base64_hash_size_equal": true,
+            "governor_sha256": "76a2826c5cd6562d3d7d8475834aae335e17f1ad433605b9f112248eb63e0511",
+            "new_archive_gets": 1,
+            "direct_campus_auth_writes": 0
+          },
+          "exact_original_frontier": {
+            "exact_original_url": "https://h3i.buaa.edu.cn/rcpy/cpgg.htm",
+            "exact_selected_capture": "20240920035133",
+            "root_declaring_capture": "20241004152255",
+            "same_epoch_claim": false,
+            "native_first_capture_exit": 3,
+            "native_first_capture_seconds": 1.79,
+            "diagnostic": {
+              "error": "unsupported",
+              "message": "public source content encoding is not supported",
+              "schema_version": 1
+            },
+            "actual_http_content_encoding_value": null,
+            "original_body_retained": false,
+            "original_byte_length": null,
+            "original_sha256": null,
+            "publication_date": null,
+            "actual_cache_only_exit": 7,
+            "actual_cache_only_seconds": 0.01,
+            "first_target_attempts": 1,
+            "target_retries": 0,
+            "second_capture_or_cursor_followed": false,
+            "native_history_original_interpretation_performed": false,
+            "new_archive_gets": 2,
+            "root_plus_board_chain_archive_gets": 4,
+            "direct_campus_auth_writes": 0,
+            "same_permanent_governor_and_policy_floors": true,
+            "governor_after_capture_sha256": "78e1dc07f9cbd94876dff9d53100b4fcb9840be9f8dd15566a402dba4b7351a1",
+            "governor_offline_bytes_unchanged": true,
+            "remaining_prerequisite": "Admissible exact original/response attribution facts or genuinely changed authorized source prerequisite. No same-target retry/encoding whitelist change, alternate source/time/protocol/nearest substitution, transport/auth/outage diagnosis or fabricated content."
+          },
+          "account_safety": {
+            "new_archive_gets": 2,
+            "root_plus_board_chain_archive_gets": 4,
+            "direct_campus_requests": 0,
+            "auth_attempts": 0,
+            "campus_writes": 0,
+            "same_permanent_process_shared_governor": true,
+            "governor_after_first_capture_sha256": "78e1dc07f9cbd94876dff9d53100b4fcb9840be9f8dd15566a402dba4b7351a1",
+            "later_offline_bytes_unchanged": true,
+            "policy": "Existing archive robots policy retained;60-second/15-minute floors/history/latches unchanged. No source retry, alternate timestamp/nearest capture/cursor traversal, encoding whitelist relaxation, state reset/migration/account split or TLS/proxy/challenge/auth bypass. Materials8archiveGETs and Sepe2campus-publicGETs retain distinct scopes."
+          },
+          "remaining": "Exact board original/listing interpretation blocked: no bytes or actual HTTP content-encoding value retained. Requires an admissible exact original with independent response/provenance facts or a genuinely changed authorized source prerequisite; never replay the failed target or infer gzip/status/auth/outage. Later root20241004152255 and earlier board20240920035133 are not one capture epoch or publication/publisher proof. Other captures/cursors/articles/attachments/colleges/eras and complete history remain unfinished. Current/synthetic H3i template compatibility is not actual2024 content proof. Source-only evidence projection, no new build/test/review/compiled-discovery or external claim/PR/push/merge/Pages/root-main integration; review401/GitHub quota stops remain."
+        },
         "h3i_attributed_archive_root_evidence": {
           "issue": null,
           "pr": null,
