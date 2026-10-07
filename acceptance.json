@@ -601,6 +601,88 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "mse_legacy_sibling_original_evidence": {
+          "issue": null,
+          "pr": null,
+          "status": "second-source-bound-actual-original-verified-unreviewed",
+          "base_head": "22eadcdb03e08f95a247e818c063fc9858f16729",
+          "owned_worktree": ".worktrees/mse-sibling-notice",
+          "rust_code_changed": false,
+          "source_binding": {
+            "root_capture_timestamp": "20040326165604",
+            "active_original_anchor_ordinal": 32,
+            "literal_declared_target": "http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=6",
+            "basis": "Previously retained root declaration and complete seven-entry listing; distinct exact URI, not guessed ID or current-directory era authority."
+          },
+          "index": {
+            "query_limit": 2,
+            "http_status": 200,
+            "response_bytes": 585,
+            "response_sha256": "f9afb5ba4bd2c35beb6ad5cb6d45048a4ab9db46b305c9530faade22e93505b0",
+            "fetched_at_unix_ms": 1791404747539,
+            "capture_timestamps": [
+              "20040409113345",
+              "20040606225745"
+            ],
+            "next_cursor_present": true,
+            "cursor_followed": false,
+            "second_resource_fetched": false,
+            "complete_history": false
+          },
+          "original": {
+            "source_url": "http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=6",
+            "capture_timestamp": "20040409113345",
+            "http_status": 200,
+            "memento_datetime": "Fri, 09 Apr 2004 11:33:45 GMT",
+            "raw_bytes": 1878,
+            "sha256": "d4e75b9e5b711a96ec3c3f3ef509e142ad69fcfe5f1a5138f954bfeae54226c7",
+            "fetched_at_unix_ms": 1791404993458,
+            "whole_base64_cache_size_hash_identity_and_original_fetch_time_equal": true,
+            "cdx_record_length_not_resource_bytes": 1060,
+            "cdx_resource_hash_verified": false
+          },
+          "interpretation": {
+            "result": "full_text",
+            "whole_ordered_title_body_footer_equal": true,
+            "source_title_utf8_bytes": 94,
+            "source_body_text_utf8_bytes": 500,
+            "source_footer_utf8_bytes": 10,
+            "source_footer_date": "2004-02-19",
+            "source_footer_role": "unverified; no publication label",
+            "published_at": null,
+            "publisher": null,
+            "derived_utf8_bytes": 2108,
+            "derived_utf8_sha256": "2448561cce981b6bc7b37de1e99c118d96164af0d9e7eb1f2162723801838385",
+            "whole_declared_root_headline_equal": true,
+            "invented_paragraphs": 0,
+            "invented_table_grid": false
+          },
+          "native_proof": {
+            "binary_source_head": "22eadcdb03e08f95a247e818c063fc9858f16729",
+            "index_exit": 0,
+            "index_seconds": 1.74,
+            "capture_exit": 0,
+            "capture_seconds": 2.57,
+            "offline_reuse_exit": 0,
+            "offline_reuse_seconds": 0.0,
+            "article_import_exit": 0,
+            "article_import_seconds": 0.01,
+            "scope": "Existing native archive client and family parser; no new Rust feature/build/test/full-suite/review or compiled discovery claim. Raw GB2312 original supplied explicitly; import provenance operator_asserted, separately from observed Memento identity."
+          },
+          "account_safety": {
+            "new_sibling_archive_gets": 2,
+            "all_materials_archive_gets": 8,
+            "new_gets_from_interpretation": 0,
+            "direct_campus_requests": 0,
+            "auth_attempts": 0,
+            "campus_writes": 0,
+            "governor_before_sha256": "31a9c82e1e83967fde555a7384ac18da9efe2902f62e12a762c9e4e88610f22c",
+            "governor_after_capture_sha256": "d2d3ac78c3312c657bd4439e6e7557dc6b6fe432e40161117dd77cd316f744df",
+            "governor_bytes_unchanged_during_offline_proof": true,
+            "policy": "Same permanent process-shared governor; retained60-second/15-minute floors, normal successful HTTP outcomes, no history reset, new account key, retry or bypass."
+          },
+          "remaining": "Exact modern-board empty-index gap unchanged; five other root-declared notice resources, all second captures/cursors/eras/history/attachments remain unobserved. RootMarch26 and articleApril9 are different epochs; footer2004-02-19 has unverified role, not publication. Independent-inspection401 and GitHub quota stop remain; no external claim/PR/approval/push/merge/parent-main/Pages integration. Private originals/prose/attributes/oracles stay outside source."
+        },
         "mse_legacy_root_history_slice": {
           "issue": null,
           "pr": null,
