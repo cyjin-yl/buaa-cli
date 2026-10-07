@@ -105,6 +105,12 @@ The first and only exact replay20240920035133 exited3/1.79s: `unsupported`, `pub
 
 Two new archive GETs/four in this H3i root+board chain, zero direct campus/auth/write, same permanent governor/floors/history. Exact original and native listing interpretation remain blocked pending an admissible original with response/provenance facts or a genuinely changed authorized source prerequisite. No Rust/build/test/review/compiled-discovery/root-main integration claim; existing failed-source and missing-history scopes remain intact. [Exact original frontier and retained offline proof](STATUS.md#h3i-source-declared-historical-board-index-and-encoding-refusal).
 
+## Direct root-declared H3i notice original frontier
+
+The retained root separately declares `info/1141/1391.htm` at non-inert anchor ordinal81, resolving to `https://h3i.buaa.edu.cn/info/1141/1391.htm`. This is one of ten exact direct bindings in the existing article family; only this first declared target was queried. Its limit2 exact index returned20240920035146 and20241108091543 plus an unfollowed cursor: native exit0/6.27s, HTTP200 JSON494 bytes, SHA-256 `24bf4516e5eff61cbf06bc3d4b6d51559e377b681ff496c8f91fbb635d065796`, fetched at1791412557943. Whole private-cache/base64/size/hash facts match. Record lengths13,918/11,912 are not body lengths; resource hashes stay null/unverified, `complete_history:false`.
+
+Only the first exact replay was attempted: exit3/1.06s, `unsupported`, `public source content encoding is not supported`; no original bytes or actual encoding header retained. Actual subsequent cache-only replay exited7/0.00s (hundredth-second measurement), no original, governor bytes unchanged. No native history content proof, guessed gzip/header/date, second timestamp/cursor/ID traversal or retry/transport relaxation. RootOct4/articleSep20 are separate epochs; this index does not fill the distinct failed-board gap. Two new GETs/six in the H3i root+board+selected-article chain, zero campus/auth/write, same governor/floors/history. [Exact original prerequisite and retained evidence](STATUS.md#h3i-root-declared-historical-notice-and-separate-original-refusal).
+
 ## Contract sources
 
 - [Internet Archive CDX API](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md): named JSON columns, exact URL scope, inclusive date ranges and resume keys. No API key cookie or restricted field is requested.
