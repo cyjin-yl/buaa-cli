@@ -1,5 +1,21 @@
 # Development status
 
+## Exact Materials archive-index scope
+
+Local `work/mse-archive-scope` starts at article-history `ebda21a6a8048d2a07b0b8442f2df538f93eb639`. This is an observation/evidence projection; Rust code, parent worktrees/binaries and root-main remain unchanged. No external issue/PR/claim, push, approval, merge or Pages deployment.
+
+Actual native `archive lookup` selected exactly `http://mse.buaa.edu.cn/xwdt/gggs.htm`, limit2, no date bounds/cursor/wildcard. This is the already observed Materials listing stem on its declared HTTP source; the archive client never contacts that campus HTTP URL, upgrades it, switches aliases or substitutes a nearest replay.
+
+The initial cache-only lookup exits7/0.37s at an ordinary miss. One governed online invocation refreshes expired archive robots as404,146 bytes, SHA-256 `55f7d9e99b8e2d4e0e193b2f0275501e6d9c1ebd29cadbea6a0da48a8587e3e0`, fetched at1791389752092; no conditional validators were available. It then exits8/2.27s **before index HTTP** because the unchanged60-second request interval exceeds the30-second bounded wait. That is correct pacing, not a failed index request, stale-policy reuse, source outage or a reason to lower the interval. The robots original fetch time really changed despite equal bytes and unchanged null revalidation time; no source fix or fake freshness was applied.
+
+After normal shared pacing, one first exact index observation exits0/13.08s, HTTP200 `application/json`, fetched at1791390335997. The3-byte response has SHA-256 `37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570` and reports `missing_in_query_scope`: **zero captures, no next cursor, `complete_history:false`**. This does not establish that other Materials URLs, eras or history never existed. No dated original is available to capture or interpret in this exact observed scope; do not invent a timestamp/layout or replace missing history with the current-original/synthetic1997 parser proof.
+
+One actual new-cache offline reuse exits0/0.00s with the same empty capture array, original body hash/fetch time and a cache hit. Independent retained-byte/hash verification matches all3 bytes; governor bytes remain unchanged through that offline proof. Exactly one archive-robots and one index GET occurred, zero replay/campus-original requests, authentication attempts or campus writes. No network retry loop, protocol/host fallback, governor reset/delete/migration or parallel account key/limiter.
+
+Current permanent governor SHA-256 is `8db53da5172cb7f997509a0bc83b40f90cb49de40c333257d2822cb18c53b612`, with pendingNone, disarmed auth/no latch,60000/900000-ms floors and consecutive network_failures0 after the successful index outcome. Earlier Sa/Ase failure receipts remain preserved; this is normal governor outcome processing, not a manual history reset. The preceding guard reservation was `6b63ac70392df03fda263e5ae7be2bc1fdf17210c2c6f0ca9eeadc7b501af5e1`; earlier `7b51...` zero-GET feature proofs retain their original times/scopes, not current-state or overall-zero-network claims.
+
+Exact-board capture and historical interpretation tasks remain blocked on an actual dated original. Full all-college/current/history/attachment and non-VPN goals remain active. GitHub quota stop and independent-source-inspection upstream401 prerequisite are unchanged; no new inspection/approval or banned subagent/peer revival. Private scope/native/cache/correction receipts remain outside source under0700/exclusive no-follow fsynced0600. No extra tests, formatter or source-review loop was needed for this unmodified-code observation.
+
 ## Operator-asserted college article originals
 
 Local `work/college-article-history` starts at Beijing `da16c9a14b9efe14669fb9337c85fc2c524e4e72` on the unmerged H3i/Ase/history/Sa/Sepe/PR110 stack. Parent worktrees/binaries and root-main remain untouched. No external issue/PR/claim, push, approval, merge or Pages deployment.

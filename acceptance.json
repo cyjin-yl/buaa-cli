@@ -601,6 +601,39 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "mse_exact_archive_index_scope": {
+          "issue": null,
+          "pr": null,
+          "status": "observed-exact-index-gap-capture-and-history-blocked",
+          "source_head": "ebda21a6a8048d2a07b0b8442f2df538f93eb639",
+          "stack_base": "Owned work/mse-archive-scope records existing-native observations from article-history ebda21a; Rust code, parent binaries and root-main stay unchanged. No external claim/push/approval/merge/Pages deployment.",
+          "query": {
+            "original_url": "http://mse.buaa.edu.cn/xwdt/gggs.htm",
+            "match_type": "exact",
+            "limit": 2,
+            "from": null,
+            "to": null,
+            "cursor": null
+          },
+          "guard_observation": "Initial cache-only miss7/0.37s. One online invocation refreshes expired robots404/146bytes/SHA55f7d9e99b8e2d4e0e193b2f0275501e6d9c1ebd29cadbea6a0da48a8587e3e0 at1791389752092, with no available conditional validators; then correctly exits8/2.27s before index HTTP because retained60000-ms interval exceeds30000-ms bounded wait. Equal robots bytes/null revalidation time do not mean no HTTP: original fetch time changed. No stale-policy bypass, source fix, fake freshness or interval reduction.",
+          "index_observation": {
+            "native_exit": 0,
+            "elapsed_seconds": 13.08,
+            "http_status": 200,
+            "media_type": "application/json",
+            "fetched_at_unix_ms": 1791390335997,
+            "response_body_bytes": 3,
+            "response_body_sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+            "result": "missing_in_query_scope",
+            "capture_count": 0,
+            "next_cursor": null,
+            "complete_history": false
+          },
+          "offline_proof": "Actual newly cached index reuse0/0.00s returns the same empty array, hash/fetch facts and a cache hit, with independently verified retained3-byte body and byte-unchanged governor; no tests, generic full suite or source-review loop for unchanged Rust.",
+          "blocker": "No dated original is returned by this exact observed board index, so capture and historical interpretation remain blocked. Do not invent a timestamp/body/layout, substitute an alias/nearest replay or present current originals/synthetic1997 fixtures as historical content. This does not prove absence of other URLs/eras/Materials history or complete coverage.",
+          "governor_receipt": "Exactly one archive-robots and one first exact-index GET, zero capture/direct-campus requests, auth attempts or campus writes. Current SHA8db53da5172cb7f997509a0bc83b40f90cb49de40c333257d2822cb18c53b612 retains pendingNone, disarmed auth/no latch and60000/900000-ms floors. Successful index outcome sets consecutive network_failures0; earlier Sa/Ase receipts remain preserved, no manual reset/migration or alternate account key/limiter. Earlier guard SHA6b63ac70392df03fda263e5ae7be2bc1fdf17210c2c6f0ca9eeadc7b501af5e1 and prior7b51 zero-GET feature proofs retain their original times/scopes. No retry loop, protocol/host fallback or TLS/robots/challenge workaround.",
+          "remaining_scope": "All-college/current/history/attachment and full non-VPN goal remain active. GitHub quota and earlier upstream401 independent-inspection stop unchanged; no new source inspection/approval, subagent/peer revival, external claim/push/merge/deployment. Private original/native/correction receipts stay outside source under0700/exclusive no-follow fsynced0600."
+        },
         "college_article_operator_history_slice": {
           "issue": null,
           "pr": null,

@@ -58,6 +58,12 @@ Public CLI error categories include invalid_input (2), unsupported (3), auth_lat
 
 `more_results=false` applies only to that returned index page; `complete_history=false` remains explicit. CDX rows retain null resource hashes: the second capture's resource was not fetched. Publication date stays null/unknown despite origin Date/Last-Modified headers. This proves one exact homepage replay, not archived announcement parsing, all-college coverage, archive authenticity or publisher signatures. No direct original-host request, authentication, mutation, nearest-capture substitution or bypass occurred. Earlier failed-replay evidence is preserved.
 
+## Exact Materials-board index observation
+
+The existing native client separately queried only `http://mse.buaa.edu.cn/xwdt/gggs.htm`, exact match, limit2 and no date bounds/cursor. Its first online invocation refreshed expired robots as404, then correctly exited8 before index HTTP under the retained60-second gap/30-second bounded wait. After normal shared pacing, the first actual index request returned HTTP200 JSON:3 original bytes, SHA-256 `37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570`, fetched at1791390335997, zero captures/no cursor and `missing_in_query_scope`. Actual offline reuse retained the same hash/fetch facts and empty records without another request. [Detailed scoped evidence](STATUS.md#exact-materials-archive-index-scope).
+
+This is a real exact-query gap, not a guessed historical page, all-URL/era absence or archive outage. No capture timestamp/original can be produced from an empty index; capture and historical interpretation remain blocked for this source scope. No direct campus-HTTP access, protocol/host/nearest-capture substitution, network retry loop or governor relaxation occurred. Current-original parser compatibility and synthetic1997 fixtures remain distinct from this archive observation.
+
 ## Contract sources
 
 - [Internet Archive CDX API](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md): named JSON columns, exact URL scope, inclusive date ranges and resume keys. No API key cookie or restricted field is requested.
