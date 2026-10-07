@@ -601,6 +601,67 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "mse_legacy_root_history_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "implemented-offline-on-real-archived-root-unreviewed",
+          "base_head": "1fec9ef031167afb1912f51f6bbdc79b682b7a1c",
+          "owned_worktree": ".worktrees/mse-legacy-listing",
+          "source_files": ["src/announcements.rs", "src/announcements/mse.rs", "src/announcements/scse/viewer.rs", "src/html.rs"],
+          "command": "buaa announcements history",
+          "admission": "Literal HTTP mse.buaa.edu.cn root / with optional :80; explicit GB2312 and one matching source charset, default/explicit listing kind. Existing no-replacement WHATWG GBK web-label decoder, raw/decoded2-MiB and8-KiB serialized metadata bounds. No live query/profile, HTTPS/host/port alias or fetch permission.",
+          "original": {
+            "source_url": "http://mse.buaa.edu.cn:80/",
+            "capture_timestamp": "20040326165604",
+            "raw_bytes": 20018,
+            "sha256": "de230099e658ed1e28af08be00676bed86a99aa166f31189c6e2e50567d68a0f",
+            "derived_utf8_bytes": 20956,
+            "historical_import_provenance": "operator_asserted; archive headers not supplied to import"
+          },
+          "interpretation": {
+            "active_original_anchors": 35,
+            "complete_original_notice_declarations": 7,
+            "source_orders": [27, 28, 29, 30, 31, 32, 33],
+            "whole_ordered_entries_and_document_title_equal_private_oracle": true,
+            "earlier_selected_bindings": 2,
+            "comparison_correction": "Earlier bindings were selected examples. Preserve the mismatch receipt and reuse native output against the complete original; do not truncate the consumer.",
+            "link_facts": "Literal href:#, separate unescaped declared_popup_target and normalized resolved_http_url. PHP notice namespace only, not other popups.",
+            "binding": "One bounded top-level inline classic helper; three distinct unchanged arguments to window.open, shared SCSE lexical rules. No JS execution/general parser/runtime navigation verification.",
+            "notice_dates": null,
+            "publisher": null,
+            "complete_history": false,
+            "fetched_notice_resources": "none in this slice; preceding selected PHP capture has a different epoch"
+          },
+          "native_proof": {
+            "previous_article_binary_root_import_exit": 2,
+            "first_owned_build_exit": 0,
+            "first_owned_build_seconds": 47.2,
+            "source_scoped_build_exit": 0,
+            "source_scoped_build_seconds": 13.16,
+            "actual_original_import_exit": 0,
+            "actual_original_import_seconds": 0.05,
+            "original_raw_identity_equal": true,
+            "initial_refusals": "Whole-script-singleton and all-popups-as-notices guards refused the actual source; fixed top-level recognition and declared PHP namespace, not an ID/label exception."
+          },
+          "focused_offline_proof": {
+            "announcement_history_tests": 19,
+            "announcement_history_seconds": 37.76,
+            "announcement_history_execution_seconds": 23.12,
+            "new_uncertain_root_cases": 6,
+            "affected_existing_viewer_tests": 4,
+            "affected_viewer_seconds": 3.41,
+            "scope": "Separate focused commands, not full279 tests or renewed governor proof; throwaway native DOM probe removed."
+          },
+          "account_safety": {
+            "new_gets": 0,
+            "preceding_materials_archive_gets": 6,
+            "new_auth_attempts": 0,
+            "campus_writes": 0,
+            "governor_bytes_unchanged": true,
+            "governor_sha256": "31a9c82e1e83967fde555a7384ac18da9efe2902f62e12a762c9e4e88610f22c"
+          },
+          "remaining": "Prior independent-inspection upstream401 and GitHub quota stop unchanged; no retries/workarounds/subagents or new review/approval/external contribution/parent-main/Pages integration. Other resources/captures/cursors/eras/colleges/history/attachments unfinished; exact modern-board empty-index gap unchanged. Private original/prose/attributes/oracles stay outside source."
+        },
         "mse_legacy_article_history_slice": {
           "issue": null,
           "pr": null,

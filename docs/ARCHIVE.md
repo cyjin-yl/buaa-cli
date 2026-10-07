@@ -79,6 +79,8 @@ The local offline `announcements history` article path now interprets the retain
 
 The preceding source-acquisition chain used six governed archive GETs, including robots and the empty modern-board query; this new interpretation issues none. Existing governor floors/history/latches remain intact. Unreviewed local stack, not root-main/Pages integration, all-college history or an authenticity certificate. [Exact source/native proof and boundaries](STATUS.md#materials-archived-php-notice-text).
 
+The supplied GB2312 **root** now has an offline `announcements history` listing interpreter: exact HTTP root with optional literal `:80`, explicit encoding and default/explicit listing kind. All seven original PHP notice declarations at active-anchor ordinals27–33 and the document title privately match the complete original. Earlier two bindings were selected examples only. Keep `href:#` separate from declared target/resolved URL; a bounded source helper is not JS execution, runtime navigation or fetch permission. Other popup namespaces are excluded, dates/publisher remain unknown, raw/derived hashes stay separate and `complete_history:false`. March26 root does not establish the separately captured April9 notice state or fill missing modern-board history. No new GET. [Complete original/native comparison](STATUS.md#materials-archived-root-notice-listing).
+
 ## Contract sources
 
 - [Internet Archive CDX API](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md): named JSON columns, exact URL scope, inclusive date ranges and resume keys. No API key cookie or restricted field is requested.
