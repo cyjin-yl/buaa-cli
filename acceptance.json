@@ -601,6 +601,121 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "h3i_attributed_archive_root_evidence": {
+          "issue": null,
+          "pr": null,
+          "status": "actual-2024-attributed-root-verified-private-declarations-unreviewed",
+          "base_head": "74ca5d2645f93f90c888ed7578384ddabeb07ca8",
+          "owned_worktree": ".worktrees/h3i-archive-root",
+          "rust_code_changed": false,
+          "native_source_head": "74ca5d2645f93f90c888ed7578384ddabeb07ca8",
+          "native_binary_sha256": "46f909431fcb6a19420ccac9fe96763d1351b1b39425925ae35664f4dc227985",
+          "source_seed": {
+            "directory_date": "2026-09-20",
+            "source_order": 45,
+            "hidden_in_source": false,
+            "listed_href": "https://h3i.buaa.edu.cn/index.htm",
+            "resolved_http_url": "https://h3i.buaa.edu.cn/index.htm",
+            "current_directory_is_era_authority": false
+          },
+          "index": {
+            "native_exit": 0,
+            "native_seconds": 3.16,
+            "query_url": "https://h3i.buaa.edu.cn/index.htm",
+            "limit": 2,
+            "http_status": 200,
+            "index_bytes": 446,
+            "index_sha256": "35f877c4bf3b6488d07469ea379bee2448902039a0ae180b9a13d04d9bc057de",
+            "fetched_at_unix_ms": 1791410390350,
+            "captures": [
+              {
+                "timestamp": "20241004152255",
+                "original_url": "https://h3i.buaa.edu.cn/index.htm",
+                "archive_record_length": 10843,
+                "resource_body_sha256": null
+              },
+              {
+                "timestamp": "20241105000144",
+                "original_url": "https://h3i.buaa.edu.cn/index.htm",
+                "archive_record_length": 10024,
+                "resource_body_sha256": null
+              }
+            ],
+            "complete_history": false,
+            "cursor_present": true,
+            "cursor_followed": false,
+            "original_resources_fetched": false,
+            "cached_original_body_hash_length_fetch_time_equal": true,
+            "source_governor_sha256": "2f4f994d4d2e9b59acf1d8b8e3161d645c1a821f27b9397c4654dd64dea57af6",
+            "new_archive_gets": 1,
+            "new_campus_auth_writes": 0
+          },
+          "original": {
+            "exact_original_url": "https://h3i.buaa.edu.cn/index.htm",
+            "capture_timestamp": "20241004152255",
+            "native_capture_exit": 0,
+            "native_capture_seconds": 1.5,
+            "http_status": 200,
+            "memento_datetime": "Fri, 04 Oct 2024 15:22:55 GMT",
+            "matching_original_link": true,
+            "raw_bytes": 49916,
+            "sha256": "8b3d6f9f9f741db5ee648c357dfd8a9492eb8560df7fa0f44820d8ab97779d96",
+            "fetched_at_unix_ms": 1791410570880,
+            "native_base64_and_private_cache_full_original_equal": true,
+            "offline_reuse_exit": 0,
+            "offline_reuse_seconds": 0.01,
+            "whole_immutable_original_identity_headers_fetch_time_equal": true,
+            "archive_index_record_length_not_resource_bytes": 10843,
+            "reported_cdx_resource_digest_verified": false,
+            "publication_date": null,
+            "second_capture_or_cursor_fetched": false,
+            "new_archive_gets": 2,
+            "direct_campus_requests": 0,
+            "auth_attempts": 0,
+            "campus_writes": 0,
+            "governor_after_capture_sha256": "4d9ebdcfec37235d5d6b4d846d2c75fef3a64b251b0903a7a00945dd6dcb341d",
+            "offline_governor_unchanged": true,
+            "source_authenticity_certified": false
+          },
+          "independent_original_interpretation": {
+            "declared_encoding": "utf-8",
+            "strict_whole_byte_roundtrip": true,
+            "noninert_active_base_declarations": 0,
+            "source_title_utf8_bytes": 45,
+            "complete_original_noninert_href_bindings": 124,
+            "notice_label_candidates": 15,
+            "known_recruitment_board_declarations": 5,
+            "known_recruitment_board_source_orders": [
+              29,
+              30,
+              91,
+              121,
+              122
+            ],
+            "literal_declared_hrefs": [
+              "rcpy/cpgg.htm",
+              "rcpy/cpgg.htm",
+              "rcpy/cpgg.htm",
+              "rcpy/cpgg.htm",
+              "rcpy/cpgg.htm"
+            ],
+            "resolved_declared_uri": "https://h3i.buaa.edu.cn/rcpy/cpgg.htm",
+            "raw_href_and_resolved_uri_separate": true,
+            "scope": "Whole ordered original binding records privately retained, script/style/template/noscript excluded. Non-inert is not CSS/rendered visibility; labels are candidates, no JS execution/navigation/fetch permission. No native historical root/listing parser claim.",
+            "source_names_prose_full_attributes_published": false
+          },
+          "account_safety": {
+            "new_archive_gets": 2,
+            "direct_campus_requests": 0,
+            "auth_attempts": 0,
+            "campus_writes": 0,
+            "same_permanent_process_shared_governor": true,
+            "governor_after_capture_sha256": "4d9ebdcfec37235d5d6b4d846d2c75fef3a64b251b0903a7a00945dd6dcb341d",
+            "later_offline_bytes_unchanged": true,
+            "policy": "Existing archive robots retained;60-second/15-minute floors/history/latches unchanged, no source retry/cursor/other-resource traversal/reset/migration/split account or TLS/proxy/challenge/auth bypass. Prior Materials8archiveGETs and Sepe2campus-publicGETs retain distinct scope."
+          },
+          "remaining": "Second root capture/cursor, the newly source-bound board index/original/listing interpretation, article bodies/attachments, other eras/colleges/complete history unfinished. Source bindings are not a working historical listing or era/publisher certificate. Exact Materials modern-board gap and Sepe original refusal unchanged/no replay. Independent-inspection401/GitHub quota stop remain; no new review/approval/claim/PR/push/merge/root-main/Pages integration or new build/test/compiled-discovery claim. Private originals/labels/ordered bindings stay outside source."
+        },
         "sepe_docx_original_read_path": {
           "issue": null,
           "pr": null,

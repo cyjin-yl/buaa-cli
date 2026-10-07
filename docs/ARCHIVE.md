@@ -89,6 +89,14 @@ Only the first exact capture was retrieved: matching Memento date/original Link,
 
 Two new GETs/eight total in this Materials chain; same permanent governor, no retry/policy relaxation/direct campus request/authentication/write. Offline proof left its post-capture bytes unchanged. This evidence does not replace the empty exact modern-board query, follow other root declarations/cursors, certify authenticity or establish complete history. No Rust change/new build/test/review/approval/root-main integration or compiled-discovery claim. [Complete bounded native proof and remaining gaps](STATUS.md#materials-second-source-declared-archived-notice).
 
+## Exact directory-declared H3i historical root
+
+A new distinct exact query uses the current directory's literal/resolved `https://h3i.buaa.edu.cn/index.htm`, not an inferred HTTP or `/` alias. Limit2 returned20241004152255 and20241105000144 plus an unfollowed cursor: HTTP200 JSON446 bytes, SHA-256 `35f877c4bf3b6488d07469ea379bee2448902039a0ae180b9a13d04d9bc057de`, fetched at1791410390350. Row lengths10,843/10,024 are archive-record facts, not raw bytes or verified resource digests.
+
+Only the first exact attributedHTML200 replay was retrieved:49,916 bytes, SHA-256 `8b3d6f9f9f741db5ee648c357dfd8a9492eb8560df7fa0f44820d8ab97779d96`, fetched at1791410570880, matching Fri04Oct2024 15:22:55GMT/original Link. Independent native-base64/private-cache/size/hash checks and actual offline reuse preserve the whole immutable resource/header/identity/fetch-time facts. One declared UTF-8 charset matches the strict roundtrip; original publication date remains unknown and the2026 directory is not2024 source authority.
+
+Private ordered inspection retains all124 non-inert href anchors without JS execution or a rendered-visibility assertion. Five declarations at source ordinals29,30,91,121,122 preserve literal `rcpy/cpgg.htm` and the same resolved HTTPS recruitment-board URI. This binds a source destination, not a fetched listing, notice original, authentication permission or complete-history witness. No board/second capture/cursor/other resource was followed; two new archive GETs, same governor/floors/history and zero campus/auth/write. No Rust/new build/test/review/compiled-discovery or root-main integration claim. [Complete scoped evidence and remaining gaps](STATUS.md#h3i-attributed-archived-root-and-source-declarations).
+
 ## Contract sources
 
 - [Internet Archive CDX API](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md): named JSON columns, exact URL scope, inclusive date ranges and resume keys. No API key cookie or restricted field is requested.
