@@ -1,15 +1,15 @@
 //! Materials college: exact HTTP directory identity, separate HTTPS observation.
 use super::{
-    ListQuery, MAX_TEXT, advertised_page_url, article_category_from_url, bind_college_board,
-    college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
-    parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval,
-    table_article_output, unavailable,
+    ArticleDocument, ListQuery, MAX_ATTACHMENT_HINTS, MAX_PARAGRAPH, MAX_TEXT, advertised_page_url,
+    article_category_from_url, article_content, bind_college_board, college_directory_attribution,
+    college_html, describe_college_surface, element_text, entry_in_scope, failed_contract,
+    inert_element, invalid_article, invalid_list, is_document_href, parse_chinese_publication_date,
+    parse_iso_date, parse_notice_list, retrieval, table_article_output, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, MSE_NOTICES_URL, MSE_ROOT_URL, mse_path_allowed,
 };
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -228,6 +228,196 @@ pub(super) fn parse_article(document: &Html, base: &Url) -> Result<Value, Error>
         published_at,
         "unique art-main/art-body-box/art-body/ar_article#vsb_content/v_news_content; source paragraphs and separate ordered flat-table captions/rows/cells; code and fallback payloads excluded",
     )
+}
+
+/// Offline identity only. The archived declaration includes the explicit default
+/// port, which Url normalizes away; preserve that literal spelling in provenance.
+pub(super) fn legacy_history_source(raw: &str) -> bool {
+    let Some(path) = raw
+        .strip_prefix("http://mse.buaa.edu.cn/")
+        .or_else(|| raw.strip_prefix("http://mse.buaa.edu.cn:80/"))
+    else {
+        return false;
+    };
+    path.strip_prefix("call_board_detail.php?call_board_id=")
+        .is_some_and(|id| (1..=10).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn legacy_charset_declared(document: &Html) -> Result<(), Error> {
+    let metas = Selector::parse("meta[charset], meta[http-equiv]").map_err(|_| unavailable())?;
+    let mut declarations = 0;
+    for meta in document.select(&metas).filter(|node| !inert_element(*node)) {
+        let charset = meta.value().attr("charset");
+        let content_type = meta
+            .value()
+            .attr("http-equiv")
+            .is_some_and(|value| value.eq_ignore_ascii_case("content-type"));
+        let label = if let Some(label) = charset {
+            if content_type {
+                return Err(unavailable());
+            }
+            label
+        } else if content_type {
+            let (mime, parameter) = meta
+                .value()
+                .attr("content")
+                .and_then(|value| value.split_once(';'))
+                .ok_or_else(unavailable)?;
+            let (name, label) = parameter.trim().split_once('=').ok_or_else(unavailable)?;
+            if !mime.trim().eq_ignore_ascii_case("text/html")
+                || !name.trim().eq_ignore_ascii_case("charset")
+            {
+                return Err(unavailable());
+            }
+            label
+        } else {
+            continue;
+        };
+        declarations += 1;
+        if !label.trim().eq_ignore_ascii_case("gb2312") || declarations != 1 {
+            return Err(unavailable());
+        }
+    }
+    if declarations != 1 {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+/// As in shared table admission, reject active text outside its retained owner;
+/// inert payloads do not establish source prose or an alternate content scope.
+fn legacy_unowned_text(scope: ElementRef<'_>, owners: &[ElementRef<'_>]) -> bool {
+    scope.descendants().any(|node| {
+        matches!(node.value(), Node::Text(text) if !text.trim().is_empty())
+            && !node.ancestors().any(|ancestor| {
+                owners.iter().any(|owner| owner.id() == ancestor.id())
+                    || ancestor.value().as_element().is_some_and(|element| {
+                        matches!(element.name(), "script" | "style" | "template" | "noscript")
+                    })
+            })
+    })
+}
+
+/// Observed PHP notice template: layout tables, not source data tables. The
+/// unlabelled footer date is retained separately and never becomes publication.
+pub(super) fn parse_legacy_article(document: &Html) -> Result<Value, Error> {
+    legacy_charset_declared(document)?;
+    let shells = Selector::parse("body > table > tbody").map_err(|_| unavailable())?;
+    let mut shells = document
+        .select(&shells)
+        .filter(|node| !inert_element(*node));
+    let shell = shells
+        .next()
+        .filter(|_| shells.next().is_none())
+        .ok_or_else(unavailable)?;
+    let rows = Selector::parse(":scope > tr").map_err(|_| unavailable())?;
+    let mut rows = shell.select(&rows);
+    let _banner = rows.next().ok_or_else(unavailable)?;
+    let main = rows.next().ok_or_else(unavailable)?;
+    let footer = rows
+        .next()
+        .filter(|_| rows.next().is_none())
+        .ok_or_else(unavailable)?;
+    let containers = Selector::parse(":scope > td > div").map_err(|_| unavailable())?;
+    let mut containers = main.select(&containers);
+    let container = containers
+        .next()
+        .filter(|_| containers.next().is_none())
+        .ok_or_else(unavailable)?;
+    let tables = Selector::parse(":scope > table").map_err(|_| unavailable())?;
+    let mut tables = container.select(&tables);
+    let header = tables
+        .next()
+        .filter(|table| {
+            table
+                .value()
+                .has_class("underline", scraper::CaseSensitivity::CaseSensitive)
+        })
+        .ok_or_else(unavailable)?;
+    let body_table = tables
+        .next()
+        .filter(|_| tables.next().is_none())
+        .ok_or_else(unavailable)?;
+    let titles =
+        Selector::parse(":scope > tbody > tr > td.p20blue > div").map_err(|_| unavailable())?;
+    let mut titles = header.select(&titles);
+    let heading = titles
+        .next()
+        .filter(|_| titles.next().is_none())
+        .ok_or_else(unavailable)?;
+    let bodies = Selector::parse(":scope > tbody > tr > td.p20blue").map_err(|_| unavailable())?;
+    let mut bodies = body_table.select(&bodies);
+    let body = bodies
+        .next()
+        .filter(|_| bodies.next().is_none())
+        .ok_or_else(unavailable)?;
+    if legacy_unowned_text(main, &[header, body_table])
+        || legacy_unowned_text(header, &[heading])
+        || legacy_unowned_text(body_table, &[body])
+    {
+        return Err(unavailable());
+    }
+    let nested_tables = Selector::parse("table").map_err(|_| unavailable())?;
+    if body
+        .select(&nested_tables)
+        .filter(|node| !inert_element(*node))
+        .any(|table| legacy_unowned_text(table, &[]))
+    {
+        return Err(failed_contract(
+            "legacy notice contains an unreviewed nonempty nested table",
+            file!(),
+            line!(),
+        ));
+    }
+    let title = element_text(heading);
+    let body_text = element_text(body);
+    let footer_text = element_text(footer);
+    if title.is_empty()
+        || title.len() > MAX_TEXT
+        || body_text.is_empty()
+        || body_text.len() > MAX_PARAGRAPH
+        || footer_text.len() > MAX_TEXT
+    {
+        return Err(unavailable());
+    }
+    let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
+    let mut attachment_hints = Vec::new();
+    let mut attachments_found = false;
+    for link in body.select(&links).filter(|node| !inert_element(*node)) {
+        let href = link.value().attr("href").ok_or_else(unavailable)?;
+        if is_document_href(href) {
+            attachments_found = true;
+            if attachment_hints.len() < MAX_ATTACHMENT_HINTS {
+                attachment_hints.push(json!({"href":href,"text":element_text(link)}));
+            }
+        }
+    }
+    let media = Selector::parse("img, iframe, object, embed, audio, video, svg, canvas")
+        .map_err(|_| unavailable())?;
+    let nontext_present = body.select(&media).any(|node| !inert_element(node));
+    let mut output = article_content(ArticleDocument {
+        title,
+        category: None,
+        published_at: None,
+        paragraphs: Vec::new(),
+        attachment_hints,
+        attachments_found,
+    });
+    output["body_text"] = Value::String(body_text);
+    output["source_footer_date"] = json!(parse_iso_date(&footer_text));
+    output["source_footer_text"] = Value::String(footer_text);
+    output["completeness"]["body_source"] = json!(
+        "legacy PHP notice: second outer layout row, direct header table.underline and separate td.p20blue body; source-ordered active text, no invented paragraphs or data-table grid"
+    );
+    output["completeness"]["footer_date_role"] =
+        json!("unverified; source footer has no publication label and is not published_at");
+    output["completeness"]["nontext_content_present"] = json!(nontext_present);
+    if nontext_present || attachments_found {
+        output["result"] = json!("partial_text");
+        output["completeness"]["missing_nonparagraph_content"] =
+            json!("image/embedded content and attachment bytes are not transcribed or fetched");
+    }
+    Ok(output)
 }
 
 #[cfg(test)]

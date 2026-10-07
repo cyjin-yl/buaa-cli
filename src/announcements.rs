@@ -36,6 +36,7 @@ pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
 const MAX_HTML: usize = 2 * 1024 * 1024;
+const MAX_HISTORY_METADATA: usize = 8 * 1024;
 const MAX_ENTRIES: usize = 256;
 const MAX_TEXT: usize = 512;
 const MAX_HREF: usize = 4096;
@@ -116,6 +117,8 @@ struct ArticleQuery {
 struct HistoryInput {
     #[serde(default)]
     kind: HistoryKind,
+    #[serde(default)]
+    encoding: HistoryEncoding,
     html: String,
     provenance: HistoryProvenance,
 }
@@ -126,6 +129,14 @@ enum HistoryKind {
     #[default]
     Listing,
     Article,
+}
+
+#[derive(Default, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum HistoryEncoding {
+    #[default]
+    Utf8,
+    Gb2312,
 }
 
 #[derive(serde::Deserialize)]
@@ -162,7 +173,7 @@ fn invalid_article() -> Error {
 fn invalid_history() -> Error {
     Error::new(
         "invalid_input",
-        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must match an admitted listing or an explicit kind:article Mse, H3i or Beijing source",
+        "announcements history input is malformed; original bytes, explicit encoding and provenance must match an admitted offline source contract",
     )
 }
 
@@ -1120,7 +1131,14 @@ fn college_document(bytes: &[u8]) -> Result<Html, Error> {
     if bytes.is_empty() || bytes.len() > MAX_HTML {
         return Err(unavailable());
     }
-    let document = Html::parse_document(std::str::from_utf8(bytes).map_err(|_| unavailable())?);
+    college_text_document(std::str::from_utf8(bytes).map_err(|_| unavailable())?)
+}
+
+fn college_text_document(text: &str) -> Result<Html, Error> {
+    if text.is_empty() || text.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let document = Html::parse_document(text);
     let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
     if document.select(&bases).any(|base| {
         !base.ancestors().any(|node| {
@@ -1462,6 +1480,9 @@ fn notice_history_college(raw: &str, url: &Url) -> Option<&'static str> {
 }
 
 fn article_history_college(raw: &str, url: &Url) -> Option<&'static str> {
+    if mse::legacy_history_source(raw) {
+        return Some("mse");
+    }
     if !plain_history_source(raw, url) {
         return None;
     }
@@ -1488,7 +1509,7 @@ fn article_history_college(raw: &str, url: &Url) -> Option<&'static str> {
 }
 
 pub fn history(input: &str) -> Result<Value, Error> {
-    if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
+    if input.len() > MAX_HTML.div_ceil(3) * 4 + MAX_HISTORY_METADATA {
         return Err(invalid_history());
     }
     let query: HistoryInput = serde_json::from_str(input).map_err(|_| invalid_history())?;
@@ -1500,6 +1521,14 @@ pub fn history(input: &str) -> Result<Value, Error> {
                 .ok_or_else(invalid_history)?,
         ),
     };
+    let legacy_mse =
+        article_college == Some("mse") && mse::legacy_history_source(&query.provenance.source_url);
+    if (legacy_mse && query.encoding != HistoryEncoding::Gb2312)
+        || (!legacy_mse && query.encoding != HistoryEncoding::Utf8)
+        || query.html.len() > MAX_HTML.div_ceil(3) * 4
+    {
+        return Err(invalid_history());
+    }
     let scse_snapshot = scse::is_history_source(&query.provenance.source_url);
     let notice_college = notice_history_college(&query.provenance.source_url, &base);
     if article_college.is_none()
@@ -1525,8 +1554,22 @@ pub fn history(input: &str) -> Result<Value, Error> {
         return Err(invalid_history());
     }
     let mut output = if let Some(college) = article_college {
-        let source = college_document(&bytes).map_err(|_| invalid_history())?;
+        let legacy_text = if legacy_mse {
+            Some(
+                encoding_rs::GBK
+                    .decode_without_bom_handling_and_without_replacement(&bytes)
+                    .ok_or_else(invalid_history)?,
+            )
+        } else {
+            None
+        };
+        let source = match &legacy_text {
+            Some(text) => college_text_document(text),
+            None => college_document(&bytes),
+        }
+        .map_err(|_| invalid_history())?;
         let (document, publisher) = match college {
+            "mse" if legacy_mse => (mse::parse_legacy_article(&source), mse::PUBLISHER),
             "mse" => (mse::parse_article(&source, &base), mse::PUBLISHER),
             "h3i" => (h3i::parse_article(&source), h3i::PUBLISHER),
             "beijing" => (beijing::parse_article(&source), beijing::PUBLISHER),
@@ -1534,13 +1577,27 @@ pub fn history(input: &str) -> Result<Value, Error> {
         };
         let mut output = document.map_err(|_| invalid_history())?;
         output["type"] = json!("announcements_history");
-        output["publisher"] = json!(publisher);
+        output["publisher"] = if legacy_mse {
+            Value::Null
+        } else {
+            json!(publisher)
+        };
         output["college"] = json!(college);
         output["completeness"]["scope"] = json!("single_supplied_archive_article");
         output["completeness"]["freshness"] = json!("archived_bytes");
         output["completeness"]["source_layout"] = json!(
             "observed source-specific article header/body/table contract; historical era applicability is operator_asserted, not verified"
         );
+        if let Some(text) = legacy_text {
+            output["interpretation"] = json!({
+                "source_encoding":"gb2312",
+                "encoding_status":"source_declared_only",
+                "decoder":"WHATWG GBK (GB2312 web label), no replacement or BOM sniffing",
+                "derived_utf8_sha256":format!("{:x}", Sha256::digest(text.as_bytes())),
+                "derived_utf8_bytes":text.len(),
+                "note":"decoded UTF-8 is derived content; retrieval binds the original supplied bytes",
+            });
+        }
         output
     } else {
         let (document, publisher, college, listing_label) = if scse_snapshot {
@@ -1732,7 +1789,8 @@ pub fn schema() -> Value {
                 "required": ["html", "provenance"],
                 "properties": {
                     "kind": {"type":"string","enum":["listing","article"],"default":"listing"},
-                    "html": {"type":"string","maxLength":MAX_HTML.div_ceil(3) * 4,"description":"Base64 UTF-8 original bytes, bounded to 2 MiB after decoding."},
+                    "encoding": {"type":"string","enum":["utf8","gb2312"],"default":"utf8","description":"UTF-8 for existing sources. gb2312 is explicit and available only for the admitted offline Materials PHP article with one matching source charset declaration. WHATWG GBK decoding uses no replacement or BOM sniffing; no guessing or fallback."},
+                    "html": {"type":"string","maxLength":MAX_HTML.div_ceil(3) * 4,"description":"Base64 original bytes, at most 2 MiB raw and 2 MiB decoded UTF-8 HTML. The serialized input allows an additional 8 KiB for metadata, not more source bytes."},
                     "provenance": {
                         "type":"object","additionalProperties":false,"required":["source_url"],
                         "properties": {
@@ -1742,12 +1800,16 @@ pub fn schema() -> Value {
                         }
                     }
                 },
-                "allOf":[{"if":{"required":["kind"],"properties":{"kind":{"const":"article"}}},"then":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^https?://(mse[.]buaa[.]edu[.]cn/info/(1061|1058)|h3i[.]buaa[.]edu[.]cn/info/1141|beijing[.]buaa[.]edu[.]cn/info/1014)/[0-9]{1,10}[.]htm$"}}}}}}],
-                "description": "Fully offline operator-asserted original: base64 UTF-8 html, provenance.source_url, optional capture_timestamp/asserted_by. Absent kind or kind:listing retains reviewed news-center/SCSE and exact canonical HTTP/HTTPS observed college board admissions: IC tzgg; aviation xsgz1/tzgg or gkgs; Beijing/Mse/Sepe xwdt/gggs; Shenyuan index/tzgg; Zfai xxgg1; Iiif xwgg/tzgg, with .htm or bounded numeric filenames; H3i only rcpy/cpgg.htm. Explicit kind:article admits only Mse info/1061 or info/1058, H3i info/1141 and Beijing info/1014 with 1..10-digit .htm filenames. Reuse original source header/body/table guards with borrowed bytes, never a fabricated HTTP response. No other source/root/board/article/host or live-fetch permission is inferred. Historical era, directory/root/list identity and archive headers remain unverified. Literal HTTP assertions and missing dates stay unchanged. Active HTML base changes fail; no request, cache update or attribution verification occurs.",
+                "allOf":[
+                    {"if":{"required":["kind"],"properties":{"kind":{"const":"article"}}},"then":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^(https?://(mse[.]buaa[.]edu[.]cn/info/(1061|1058)|h3i[.]buaa[.]edu[.]cn/info/1141|beijing[.]buaa[.]edu[.]cn/info/1014)/[0-9]{1,10}[.]htm|http://mse[.]buaa[.]edu[.]cn(:80)?/call_board_detail[.]php[?]call_board_id=[0-9]{1,10})$"}}}}}},
+                    {"if":{"required":["encoding"],"properties":{"encoding":{"const":"gb2312"}}},"then":{"required":["kind"],"properties":{"kind":{"const":"article"},"provenance":{"properties":{"source_url":{"pattern":"^http://mse[.]buaa[.]edu[.]cn(:80)?/call_board_detail[.]php[?]call_board_id=[0-9]{1,10}$"}}}}}},
+                    {"if":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^http://mse[.]buaa[.]edu[.]cn(:80)?/call_board_detail[.]php[?]call_board_id=[0-9]{1,10}$"}}}}},"then":{"required":["kind","encoding"],"properties":{"kind":{"const":"article"},"encoding":{"const":"gb2312"}}}}
+                ],
+                "description": "Fully offline operator-asserted original: base64 original html, provenance.source_url, optional capture_timestamp/asserted_by. Default encoding:utf8 and absent kind or kind:listing retain reviewed news-center/SCSE and exact canonical HTTP/HTTPS observed college board admissions: IC tzgg; aviation xsgz1/tzgg or gkgs; Beijing/Mse/Sepe xwdt/gggs; Shenyuan index/tzgg; Zfai xxgg1; Iiif xwgg/tzgg, with .htm or bounded numeric filenames; H3i only rcpy/cpgg.htm. Explicit kind:article admits Mse info/1061 or info/1058, H3i info/1141 and Beijing info/1014 with 1..10-digit .htm filenames. The separate observed legacy Materials template admits only literal HTTP mse.buaa.edu.cn, optional explicit :80, exact call_board_detail.php and sole unescaped 1..10-digit call_board_id, with explicit encoding:gb2312 and one matching source charset declaration. Legacy layout-table body text and unlabelled footer are separate, never invented paragraphs, data-table grids or publication dates. Reuse borrowed decoded HTML, never a fabricated HTTP response. No live profile/query route, source/root/board/host or fetch permission is widened. Historical era, directory/root/list identity and archive headers remain unverified. Literal HTTP assertions and missing dates stay unchanged. Active HTML base changes fail; no request, cache update or attribution verification occurs.",
             },
             "output": {
                 "type": "object",
-                "description": "Listing snapshots keep source-ordered entries, headings/excerpts/publication dates and distinct board labels. Explicit article imports return source title/publication facts, paragraphs and separate source-ordered table captions/rows/cells/declared spans under unchanged article budgets and partial-text rules. Both bind exactly supplied bytes by SHA-256 and preserve operator_asserted provenance. Missing publication/capture dates stay unknown and separate. Article imports never emit fetched/cache/revalidation metadata, current directory attribution or a source-listing receipt. Original files/images are not retrieved, OCR is not performed, source authenticity/era/archive attribution is not verified and complete history is not claimed.",
+                "description": "Listing snapshots keep source-ordered entries, headings/excerpts/publication dates and distinct board labels. Modern article imports return source title/publication facts, paragraphs and separate source-ordered table captions/rows/cells/declared spans under unchanged budgets. Legacy Materials articles return ordered body_text (at most 8 KiB), no invented paragraphs or grid, and separate source_footer_text/date whose role is unverified; published_at and publisher stay null rather than substituting capture dates or today's college identity. interpretation distinguishes decoded UTF-8 hash/bytes and source-declared GB2312 from retrieval's original raw hash/bytes. Both preserve operator_asserted provenance; missing publication/capture dates stay unknown and separate. Article imports never emit fetched/cache/revalidation metadata, current directory attribution or a source-listing receipt. Original files/images are not retrieved and make text partial; OCR, source authenticity/era/archive attribution and complete history are not claimed.",
             }
         },
     });
@@ -1775,6 +1837,27 @@ pub fn schema() -> Value {
         "body_table_cell_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS * MAX_ENTRIES}
     });
     output["history"]["output"]["properties"] = output["article"]["output"]["properties"].clone();
+    output["history"]["output"]["properties"]["body_text"] = json!({
+        "type":"string","maxLength":MAX_PARAGRAPH,
+        "description":"Legacy Materials body only: derived normalized text in active DOM order, not a fabricated paragraph or table cell.",
+    });
+    output["history"]["output"]["properties"]["source_footer_text"] =
+        json!({"type":"string","maxLength":MAX_TEXT});
+    output["history"]["output"]["properties"]["source_footer_date"] = json!({
+        "type":["string","null"],"description":"Standalone parseable footer date only. Unverified role, explicitly not published_at or archive capture time.",
+    });
+    output["history"]["output"]["properties"]["interpretation"] = json!({
+        "type":"object","additionalProperties":false,
+        "required":["source_encoding","encoding_status","decoder","derived_utf8_sha256","derived_utf8_bytes","note"],
+        "properties":{
+            "source_encoding":{"const":"gb2312"},
+            "encoding_status":{"const":"source_declared_only"},
+            "decoder":{"type":"string"},
+            "derived_utf8_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+            "derived_utf8_bytes":{"type":"integer","minimum":1,"maximum":MAX_HTML},
+            "note":{"type":"string"}
+        }
+    });
     output
 }
 
@@ -2127,6 +2210,251 @@ mod tests {
         })
         .to_string();
         assert!(history(&article_url).is_err());
+    }
+
+    fn history_legacy_html(body: &str) -> String {
+        format!(
+            r#"<html><head><meta http-equiv="Content-Type" content="text/html; charset=gb2312"><title>Not the article heading</title></head><body><table><tr><td><div>Banner, not prose</div></td></tr><tr><td><div><table class="underline"><tr><td class="p20blue"><div>Synthetic <strong>notice</strong></div></td></tr></table><table><tr><td class="p20blue"><table><tr><td></td></tr></table>{body}</td></tr></table></div></td></tr><tr><td><div>2004-03-23</div></td></tr></table></body></html>"#
+        )
+    }
+
+    fn history_legacy_input(html: &str) -> Value {
+        let (bytes, _, had_errors) = encoding_rs::GBK.encode(html);
+        assert!(
+            !had_errors,
+            "synthetic legacy fixture must encode without replacement"
+        );
+        json!({"kind":"article","encoding":"gb2312","html":STANDARD.encode(bytes),
+            "provenance":{"source_url":"http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=42",
+                "capture_timestamp":"20040409111518"}})
+    }
+
+    #[test]
+    fn history_legacy_mse_separates_original_decoding_and_date_roles() {
+        let html =
+            history_legacy_html("前文<em>中间</em>后文 2004-05-15.<script>not prose</script>");
+        let input = history_legacy_input(&html);
+        let raw = STANDARD.decode(input["html"].as_str().unwrap()).unwrap();
+        let output = history(&input.to_string()).unwrap();
+        assert_eq!(output["title"], "Synthetic notice");
+        assert!(output["publisher"].is_null());
+        assert_eq!(output["body_text"], "前文 中间 后文 2004-05-15.");
+        assert_eq!(output["source_footer_text"], "2004-03-23");
+        assert_eq!(output["source_footer_date"], "2004-03-23");
+        assert!(output["published_at"].is_null());
+        assert_eq!(
+            output["provenance"]["capture_timestamp"],
+            "2004-04-09T11:15:18Z"
+        );
+        assert_eq!(
+            output["provenance"]["source_url"],
+            "http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=42"
+        );
+        assert_eq!(
+            output["retrieval"],
+            json!({
+            "sha256":format!("{:x}", Sha256::digest(&raw)),
+            "supplied_bytes":raw.len(),"provenance_status":"operator_asserted"})
+        );
+        assert_eq!(
+            output["interpretation"]["derived_utf8_sha256"],
+            format!("{:x}", Sha256::digest(html.as_bytes()))
+        );
+        assert_eq!(output["interpretation"]["derived_utf8_bytes"], html.len());
+        assert_ne!(
+            output["retrieval"]["sha256"],
+            output["interpretation"]["derived_utf8_sha256"]
+        );
+        assert_eq!(output["body_paragraphs"], json!([]));
+        assert!(output.get("body_tables").is_none());
+        assert!(output.get("directory_attribution").is_none());
+        assert!(output.get("source_listing").is_none());
+        let unknown =
+            history(&history_legacy_input(&html.replace("2004-03-23", "2004-02-30")).to_string())
+                .unwrap();
+        assert_eq!(unknown["source_footer_text"], "2004-02-30");
+        assert!(unknown["source_footer_date"].is_null());
+        assert!(unknown["published_at"].is_null());
+    }
+
+    #[test]
+    fn history_legacy_mse_requires_explicit_encoding_and_exact_offline_uri() {
+        let mut input = history_legacy_input(&history_legacy_html("Source body."));
+        input["provenance"]["source_url"] =
+            json!("http://mse.buaa.edu.cn/call_board_detail.php?call_board_id=1234567890");
+        assert_eq!(
+            history(&input.to_string()).unwrap()["body_text"],
+            "Source body."
+        );
+        for source in [
+            "https://mse.buaa.edu.cn/call_board_detail.php?call_board_id=42",
+            "http://operator:fixture@mse.buaa.edu.cn/call_board_detail.php?call_board_id=42",
+            "http://mse.buaa.edu.cn:81/call_board_detail.php?call_board_id=42",
+            "http://MSE.buaa.edu.cn/call_board_detail.php?call_board_id=42",
+            "http://mse.buaa.edu.cn/call_board_detail.php?call_board_id=42&other=1",
+            "http://mse.buaa.edu.cn/call_board_detail.php?call_board_id=42&call_board_id=43",
+            "http://mse.buaa.edu.cn/call_board_detail.php?call_board_id=%34%32",
+            "http://mse.buaa.edu.cn/call_board_detail.php?call_board_id=12345678901",
+            "http://mse.buaa.edu.cn/call_board_detail.php?call_board_id=42#fragment",
+            "http://mse.buaa.edu.cn/other.php?call_board_id=42",
+        ] {
+            input["provenance"]["source_url"] = json!(source);
+            assert_eq!(
+                history(&input.to_string()).unwrap_err().code,
+                "invalid_input"
+            );
+        }
+        input["provenance"]["source_url"] =
+            json!("http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=42");
+        input.as_object_mut().unwrap().remove("encoding");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["encoding"] = json!("gb2312");
+        input.as_object_mut().unwrap().remove("kind");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+    }
+
+    #[test]
+    fn history_legacy_mse_rejects_malformed_or_unmatched_charset() {
+        let html = history_legacy_html("合成内容");
+        for rejected in [
+            html.replace("charset=gb2312", "charset=utf-8"),
+            html.replace(
+                "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=gb2312\">",
+                "",
+            ),
+            html.replace("<title>", "<meta charset='gb2312'><title>"),
+            html.replace(
+                "text/html; charset=gb2312",
+                "text/html; charset=gb2312; charset=utf-8",
+            ),
+        ] {
+            assert_eq!(
+                history(&history_legacy_input(&rejected).to_string())
+                    .unwrap_err()
+                    .code,
+                "invalid_input"
+            );
+        }
+        let mut input = history_legacy_input(&html);
+        let mut bytes = STANDARD.decode(input["html"].as_str().unwrap()).unwrap();
+        bytes.push(0xff);
+        input["html"] = json!(STANDARD.encode(bytes));
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input = history_legacy_input(&html);
+        input["encoding"] = json!("gbk");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        input["encoding"] = json!("gb2312");
+        input["provenance"]["source_url"] = json!("http://mse.buaa.edu.cn/info/1061/42.htm");
+        assert_eq!(
+            history(&input.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+    }
+
+    #[test]
+    fn history_legacy_mse_rejects_unowned_or_ambiguous_layout_text() {
+        let html = history_legacy_html("Ordered body.");
+        for rejected in [
+            html.replace(
+                "<table class=\"underline\">",
+                "Unowned text<table class=\"underline\">",
+            ),
+            html.replace(
+                "Synthetic <strong>notice</strong>",
+                "Synthetic notice</div><div>Other heading",
+            ),
+            html.replace("<td></td>", "<td>Nested source data</td>"),
+            html.replace("Ordered body.", ""),
+        ] {
+            assert_eq!(
+                history(&history_legacy_input(&rejected).to_string())
+                    .unwrap_err()
+                    .code,
+                "invalid_input"
+            );
+        }
+        let inert = html.replace("Ordered body.", "Before<template><table><tr><td>Not source data</td></tr></table></template><noscript>Fallback</noscript><style>css</style><script>js</script>After");
+        assert_eq!(
+            history(&history_legacy_input(&inert).to_string()).unwrap()["body_text"],
+            "Before After"
+        );
+        let base = html.replace("<title>", "<base href='http://different.test/'><title>");
+        assert_eq!(
+            history(&history_legacy_input(&base).to_string())
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
+    }
+
+    #[test]
+    fn history_legacy_mse_unfetched_media_and_files_keep_text_partial() {
+        let html = history_legacy_html(
+            "Before<img src='original.png'><a href='original.pdf'>Source <strong>file</strong></a><template><a href='inactive.doc'>Not a hint</a></template>After",
+        );
+        let output = history(&history_legacy_input(&html).to_string()).unwrap();
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["body_text"], "Before Source file After");
+        assert_eq!(
+            output["attachments"]["hints"],
+            json!([{"href":"original.pdf","text":"Source file"}])
+        );
+        assert_eq!(output["body_paragraphs"], json!([]));
+        assert!(output["published_at"].is_null());
+    }
+
+    #[test]
+    fn history_legacy_mse_bounds_raw_html_decoded_html_and_body_text() {
+        let body_at_limit = history_legacy_html(&"x".repeat(MAX_PARAGRAPH));
+        assert_eq!(
+            history(&history_legacy_input(&body_at_limit).to_string()).unwrap()["body_text"],
+            "x".repeat(MAX_PARAGRAPH)
+        );
+        let body_over_limit = history_legacy_html(&"x".repeat(MAX_PARAGRAPH + 1));
+        assert_eq!(
+            history(&history_legacy_input(&body_over_limit).to_string())
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
+        let html = history_legacy_html("Bounded body.");
+        let filler = "x".repeat(MAX_HTML - html.len() - "<!---->".len());
+        let mut at_limit =
+            history_legacy_input(&html.replace("<head>", &format!("<head><!--{filler}-->")));
+        at_limit["provenance"]["asserted_by"] = json!("Synthetic operator assertion".repeat(20));
+        assert_eq!(
+            history(&at_limit.to_string()).unwrap()["body_text"],
+            "Bounded body."
+        );
+        let mut raw = STANDARD.decode(at_limit["html"].as_str().unwrap()).unwrap();
+        raw.push(b' ');
+        at_limit["html"] = json!(STANDARD.encode(raw));
+        assert_eq!(
+            history(&at_limit.to_string()).unwrap_err().code,
+            "invalid_input"
+        );
+        let expanded = html.replace(
+            "<head>",
+            &format!("<head><!--{}-->", "中".repeat(MAX_HTML / 2 - 1024)),
+        );
+        assert_eq!(
+            history(&history_legacy_input(&expanded).to_string())
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
     }
 
     fn history_article_html() -> &'static str {

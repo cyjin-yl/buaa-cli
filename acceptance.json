@@ -601,6 +601,185 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "mse_legacy_article_history_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "implemented-offline-on-real-archived-original-unreviewed",
+          "stack_base": "2abb00fb2cd8890a9b33def373527bdbc58d33a2",
+          "implementation": [
+            "src/announcements.rs",
+            "src/announcements/mse.rs",
+            "Cargo.toml",
+            "Cargo.lock"
+          ],
+          "command": "buaa announcements history",
+          "admission": "Explicit kind:article and encoding:gb2312; literal HTTP mse.buaa.edu.cn, optional explicit :80, exact /call_board_detail.php and sole unescaped1..10-digit call_board_id. Preserve literal provenance; no hard-coded id11, alias, HTTPS/custom port, extra query, live profile expansion or implied fetch permission. Existing UTF-8/listing contracts unchanged.",
+          "original": {
+            "source_url": "http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=11",
+            "capture_timestamp": "20040409111518",
+            "raw_bytes": 3684,
+            "sha256": "8677e0934e149e6dee81c0b3e28268eb97a5bc656b02445d206c182fba7180d1",
+            "matching_memento_datetime": "Fri, 09 Apr 2004 11:15:18 GMT",
+            "exact_native_capture_exit": 0,
+            "exact_native_capture_seconds": 2.63,
+            "actual_offline_reuse_exit": 0,
+            "actual_offline_reuse_seconds": 0.03,
+            "whole_immutable_original_identity_and_fetch_time_equal": true,
+            "archive_record_length_not_resource_bytes": true
+          },
+          "interpretation": {
+            "source_encoding": "gb2312",
+            "decoder": "Pinned encoding_rs0.8.35 WHATWG GBK web-label decoding, no replacement/BOM sniffing/guessing/fallback; one matching source declaration. Not a strict GB2312-repertoire claim. Raw and decoded HTML separately <=2 MiB;8-KiB metadata allowance does not enlarge either source budget.",
+            "derived_utf8_bytes": 4663,
+            "derived_utf8_sha256": "bfc7ce631e5b8a4a3011d6b69fd9c9be18f0f0dabc8d51e64d9256e4bf712838",
+            "title_utf8_bytes": 64,
+            "body_text_utf8_bytes": 3024,
+            "source_footer_utf8_bytes": 10,
+            "source_footer_date": "2004-03-23",
+            "source_footer_role": "unverified; unlabelled footer, not publication",
+            "published_at": null,
+            "publisher": null,
+            "publisher_identity": "unknown historical identity; do not substitute current directory college label",
+            "raw_and_derived_hashes_distinct": true,
+            "whole_ordered_title_body_footer_equal": true,
+            "invented_paragraphs_or_data_table_grid": false,
+            "body_text_limit_bytes": 8192,
+            "empty_ambiguous_unowned_nonempty_nested_and_overflow": "fail closed; no truncation",
+            "nontext_or_unfetched_file_content": "partial_text; no bytes fetched or OCR",
+            "provenance_status": "operator_asserted; imported bytes supply no Memento headers or current directory/list/fresh HTTP/cache metadata"
+          },
+          "retained_archive_chain": {
+            "modern_exact_board_gap_retained": true,
+            "root_query": {
+              "url": "http://mse.buaa.edu.cn/",
+              "limit": 2
+            },
+            "root_index_bytes": 397,
+            "root_index_sha256": "bfd0f6b92788dbd0363719b869b785ab01ecb6139308dd2c6c1662cc0bd1366d",
+            "root_index_captures": [
+              "20040326165604",
+              "20040606020824"
+            ],
+            "root_selected_capture": {
+              "url": "http://mse.buaa.edu.cn:80/",
+              "timestamp": "20040326165604"
+            },
+            "root_original_bytes": 20018,
+            "root_original_sha256": "de230099e658ed1e28af08be00676bed86a99aa166f31189c6e2e50567d68a0f",
+            "php_index_bytes": 590,
+            "php_index_sha256": "0bd90047f589f20e9de19856cb691765dc3fe06480d10df05b84f1461985b031",
+            "php_index_captures": [
+              "20040409111518",
+              "20040811030013"
+            ],
+            "second_resources_and_both_cursors_unfollowed": true,
+            "root_and_notice_same_capture_epoch": false,
+            "source_binding": "Private non-executing root/popup-helper inspection binds declared id11; separate id6 remains unfetched. Root headline equals notice heading privately. Not JS execution, a shipped root-listing adapter, historical directory authority or authenticity certificate.",
+            "total_preceding_governed_archive_gets": 6,
+            "direct_campus_original_gets": 0,
+            "complete_history": false
+          },
+          "proof": {
+            "baseline_exact_import_exit": 2,
+            "initial_native_build_exit": 0,
+            "initial_native_build_seconds": 14.3,
+            "initial_real_original_import_exit": 0,
+            "initial_real_original_import_seconds": 0.01,
+            "initial_selected_tests": 21,
+            "initial_selected_test_seconds": 31.6,
+            "initial_selection_scope": "15 announcement/history,1 archive and5 governor-history cases; includes six new legacy boundaries. Incidental governor selection, not renewed governor feature proof.",
+            "final_announcements_history_tests": 13,
+            "final_focused_test_exit": 0,
+            "final_focused_test_seconds": 25.97,
+            "new_uncertain_legacy_edge_cases": 6,
+            "new_binary_modern_current_original_parity": {
+              "mse": {
+                "exit": 0,
+                "elapsed_seconds": 0.32,
+                "whole_previous_current_original_import_equal": true,
+                "original_sha256": "dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3",
+                "original_bytes": 522352,
+                "paragraphs": 1,
+                "tables": 1,
+                "rows": 339,
+                "cells": 2331
+              },
+              "h3i": {
+                "exit": 0,
+                "elapsed_seconds": 0.05,
+                "whole_previous_current_original_import_equal": true,
+                "original_sha256": "e2d6ac0af95b25b2ba0303efd02aeddfed71c8da56573e27768dc15a2ba211f9",
+                "original_bytes": 97764,
+                "paragraphs": 181,
+                "tables": 2,
+                "rows": 42,
+                "cells": 84
+              },
+              "beijing": {
+                "exit": 0,
+                "elapsed_seconds": 0.18,
+                "whole_previous_current_original_import_equal": true,
+                "original_sha256": "33f1588c5d183fca89893ab6063a486fc99b4ae904156a663ec40ff8ad93f0f8",
+                "original_bytes": 437099,
+                "paragraphs": 795,
+                "tables": 3,
+                "rows": 161,
+                "cells": 793
+              }
+            },
+            "actual_native_refusals": [
+              {
+                "case": "missing-encoding",
+                "exit": 2,
+                "elapsed_seconds": 0.0
+              },
+              {
+                "case": "wrong-encoding",
+                "exit": 2,
+                "elapsed_seconds": 0.0
+              },
+              {
+                "case": "unknown-encoding",
+                "exit": 2,
+                "elapsed_seconds": 0.0
+              },
+              {
+                "case": "implicit-listing-kind",
+                "exit": 2,
+                "elapsed_seconds": 0.0
+              },
+              {
+                "case": "foreign-source",
+                "exit": 2,
+                "elapsed_seconds": 0.0
+              },
+              {
+                "case": "duplicate-id-query",
+                "exit": 2,
+                "elapsed_seconds": 0.0
+              },
+              {
+                "case": "no-history-network-opt-in",
+                "exit": 3,
+                "elapsed_seconds": 0.0
+              },
+              {
+                "case": "legacy-url-not-live-article-permission",
+                "exit": 2,
+                "elapsed_seconds": 0.0
+              }
+            ],
+            "formatter_exit": 0,
+            "formatter_seconds": 0.47,
+            "strict_all_target_clippy_exit": 0,
+            "strict_all_target_clippy_seconds": 2.6,
+            "full_suite_run": false,
+            "operator_envelope_correction": "Bytes-bearing retained-source envelope failed JSON serialization before native execution; construct typed base64/provenance instead. No consumer change or completed command replay."
+          },
+          "safety": "Zero new campus/archive GETs, authentication attempts or writes in decoding/native/test slice. Same post-PHP governor SHA31a9c82e1e83967fde555a7384ac18da9efe2902f62e12a762c9e4e88610f22c byte-identical, pendingNone/auth disarmed/no latch,60000/900000-ms floors. Six earlier archive GETs are not overall-zero-network history; successful outcomes normally produce failure0, not a manual reset. No separate identity, retry or TLS/robots/challenge workaround.",
+          "limits_and_review": "One actual2004 original, not complete college history, publisher authenticity or root-main/Pages integration. Modern-board exact zero-capture gap, unfetched second resources/cursors/id6 and archived-root listing integration remain open. Prior upstream401 review prerequisite and GitHub quota stop unchanged; no retry/provider-credential workaround or banned subagent/peer revival. Local packet unreviewed; compiler/native/tests not independent approval.",
+          "redistribution_notices": "docs/REFERENCES.md#encoding-dependency-redistribution-notices"
+        },
         "mse_exact_archive_index_scope": {
           "issue": null,
           "pr": null,
@@ -2001,7 +2180,7 @@
           "src/net.rs",
           "src/main.rs"
         ],
-        "contract": "Source drift: the retired www.buaa.edu.cn/xwzx.htm returned HTTP 404 in status diagnostics; the adapter now reads news.buaa.edu.cn. list defaults to tzgg (通知公告), with category/page/since/until/title-substring match filters. Page 1 is the latest listing; later page ordinals must be linked by its pagination widget (observed page 2 -> tzgg/252.htm). No URL inference or automatic traversal. article reads /info/<category>/<id>.htm title, publish date and div.v_news_content paragraphs; attachment links are raw hints and never downloaded. Egress rejects foreign hosts, credentials, custom ports, queries and fragments. history remains offline: base64 UTF-8 HTML plus asserted listing source_url, optional capture_timestamp/asserted_by; output type announcements_history with retrieval.sha256 byte binding, not verified archive provenance.",
+        "contract": "News-center and each observed college keep separate source-bound listing/article guards, advertised ordinal routing and selected-only refresh; no inferred URL or automatic traversal. Attachment hints are not downloads. Live source profiles reject unreviewed query/host/credential/port/fragment routes. history is fully offline: base64 original bytes with source_url and optional asserted capture/operator; default UTF-8 listing, explicit admitted modern article imports, and separate explicit GB2312 Materials PHP article interpretation. Preserve raw-versus-derived hashes, missing publication/publisher facts and operator_asserted provenance; never create a fake response, current-directory historical authority or live PHP permission.",
         "additional_slice": "Offline and --online cache hits perform no request. --refresh conditionally revalidates only the selected target with cached validators and exposes revalidated_at_unix_ms/revalidation_status; latest-page discovery stays cache-first on the same client/profile/cache/governor identity. All live observations, including robots and pagination selection, retain the same cross-process governor lease through body validation and cache persistence. With the operator-raised 60-second interval and 30-second bounded wait, cold robots or uncached latest-page discovery can prevent a second content request in that invocation. The first observed cold-robots run cached robots HTTP 404 and then exited rate_limited without issuing the listing request. There is no automatic retry or governor-policy relaxation.",
         "proof": "Offline focused announcements tests and CLI smoke cover date/title filtering, null/default input, cached article paragraphs, paged operator-asserted history and advertised ordinal routing. history_accepts_paged_sources_without_relaxing_provenance_scope failed before the fix (invalid_input for /tzgg/252.htm) and passes after it; foreign hosts, userinfo, custom ports, fragments and malformed page stems stay rejected. offline_lookup_with_empty_cache_reports_unavailable uses a fixed-offline test constructor and private fixture directory; both listing/article return offline_miss without opening a governor. The adaptive CLI test accepts only offline cache-hit success or exit 7 unavailable and reads neither HOME nor unrelated cache entries; it passes with a deliberately misleading HOME. Full offline gate results are recorded in docs/STATUS.md.",
         "live_verification": [
@@ -2147,7 +2326,7 @@
             "response_body_retained": true
           }
         ],
-        "limits": "Partial acceptance: university news center, separately observed computer-college/integrated-circuit/aviation notice slices and one source-declared original PDF retrieval path. Further colleges, faculty-wide classification, external notice bodies, other attachment types, complete history and announcement-source Memento replay remain unimplemented/unverified. Aviation's four WeChat links are metadata only; personal originals/prose remain private. The archive adapter's separately verified homepage capture does not establish historical announcement coverage. HTML paragraphs do not reconstruct images/table structure; original PDFs are source bytes with an own hash, not publisher-signature or document-safety certification.",
+        "limits": "Partial acceptance: bounded news-center/selected-college notices, one source-declared original PDF, source-specific paragraphs/flat tables and supplied offline listing/article imports. One real Materials2004 PHP notice now has attributed archive acquisition and private whole ordered text proof, with unknown historical publisher/publication. Further colleges/faculty classification, external bodies, other attachment types, other eras and complete current/history coverage remain unfinished. Distinct modern-board zero-capture gap stays missing. Originals/prose remain private; no OCR, inferred grid, publisher-signature or document-safety certification. Local unreviewed stack is not main/Pages integration.",
         "college_slice": {
           "college": "scse",
           "scope": "Computer college only, separately observed CMS; this contract is not generalized to other college boards.",
@@ -2296,6 +2475,36 @@
           },
           "safety": "Deliberate target observation only after fresh robots and the full shared deadline, retaining the 60-second request policy. No automatic retry, nearest-capture fallback, original-host request, credentials, authentication, mutation or state reset."
         },
+        "materials_source_declared_replays": {
+          "status": "bounded-real-exact-replays-partial-unreviewed",
+          "source_archive_runtime": "ebda21a6a8048d2a07b0b8442f2df538f93eb639",
+          "root": {
+            "original": {
+              "url": "http://mse.buaa.edu.cn:80/",
+              "timestamp": "20040326165604"
+            },
+            "bytes": 20018,
+            "sha256": "de230099e658ed1e28af08be00676bed86a99aa166f31189c6e2e50567d68a0f",
+            "memento_datetime": "Fri, 26 Mar 2004 16:56:04 GMT",
+            "actual_capture_exit": 0,
+            "whole_offline_original_and_identity_equal": true
+          },
+          "notice": {
+            "original": {
+              "url": "http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=11",
+              "timestamp": "20040409111518"
+            },
+            "bytes": 3684,
+            "sha256": "8677e0934e149e6dee81c0b3e28268eb97a5bc656b02445d206c182fba7180d1",
+            "memento_datetime": "Fri, 09 Apr 2004 11:15:18 GMT",
+            "actual_capture_exit": 0,
+            "whole_offline_original_and_identity_equal": true
+          },
+          "scope": "Distinct exact root/PHP queries, each limit2 with unfollowed cursor/second resource. RootMarch26/noticeApril9 differ; source-declared URI is not same-epoch attribution, publication or publisher authenticity. Exact modern-board zero-capture gap is retained. Six preceding archive GETs including robots/empty board, zero direct campus GET/auth/writes; no repeated acquisition for this projection.",
+          "interpretation": "Separate offline announcements history explicitly decodes the supplied GB2312 PHP template with original/derived hashes and unknown publisher/publication. The archive adapter does not extract text or grant a live PHP route.",
+          "complete_history": false,
+          "evidence": "docs/ARCHIVE.md#source-declared-materials-root-and-php-notice"
+        },
         "live_dated_lookup": {
           "date": "2026-10-02",
           "command": "buaa archive lookup --online",
@@ -2318,7 +2527,7 @@
           "complete_history": false,
           "scope": "One exact-URL 1997 index query. CDX capture_body_sha256 remains null; the second capture's resource bytes were not retrieved. No all-college or complete-history inference."
         },
-        "limits": "Live proof covers one exact homepage replay, one bounded dated CDX search and earlier index pagination; Wayback archived error-status behavior remains offline-tested only. Publication dates remain unknown, and a local byte hash does not authenticate the archive or publisher. No direct campus-origin request. General TimeGate/TimeMap crawling, announcement-source replay/extraction and Life/transcript integration are not implemented by this adapter."
+        "limits": "Bounded live proof includes the1997 homepage replay/date query, earlier index pagination and distinct Materials2004 root/source-declared PHP exact replays. Both Materials indices have unfollowed cursors/second resources; modern-board exact gap remains missing. Archived error-status behavior remains offline-tested only. Publication/publisher authenticity remain unknown and local hashes verify bytes, not archive/publisher identity. No direct campus-origin request. Text interpretation is a separate offline announcements history contract; no general TimeGate/TimeMap crawl, complete college history, Life/transcript integration or live PHP permission."
       }
     },
     {

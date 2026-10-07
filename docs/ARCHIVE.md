@@ -64,6 +64,21 @@ The existing native client separately queried only `http://mse.buaa.edu.cn/xwdt/
 
 This is a real exact-query gap, not a guessed historical page, all-URL/era absence or archive outage. No capture timestamp/original can be produced from an empty index; capture and historical interpretation remain blocked for this source scope. No direct campus-HTTP access, protocol/host/nearest-capture substitution, network retry loop or governor relaxation occurred. Current-original parser compatibility and synthetic1997 fixtures remain distinct from this archive observation.
 
+## Source-declared Materials root and PHP notice
+
+Separate exact root and source-declared PHP queries now have real bounded observations. They **do not replace** the zero-capture modern-board gap above. Each index returned two rows plus an unfollowed cursor; second resources remain unfetched and `complete_history:false` remains authoritative.
+
+| Exact original / selected capture | Verified original bytes / SHA-256 | Index facts |
+| --- | --- | --- |
+| `http://mse.buaa.edu.cn:80/` / `20040326165604` |20,018 / `de230099e658ed1e28af08be00676bed86a99aa166f31189c6e2e50567d68a0f` | Query `http://mse.buaa.edu.cn/`, limit2;397 bytes, SHA-256 `bfd0f6b92788dbd0363719b869b785ab01ecb6139308dd2c6c1662cc0bd1366d`; second20040606020824 |
+| `http://mse.buaa.edu.cn:80/call_board_detail.php?call_board_id=11` / `20040409111518` |3,684 / `8677e0934e149e6dee81c0b3e28268eb97a5bc656b02445d206c182fba7180d1` | Exact PHP URL, limit2;590 bytes, SHA-256 `0bd90047f589f20e9de19856cb691765dc3fe06480d10df05b84f1461985b031`; second20040811030013 |
+
+Both exact replays returned HTTP200 with matching Memento date/original identity. Independent base64/private-cache/size/hash checks and actual offline replays preserve the entire immutable original, exact URL/capture and original fetch time. Index record lengths5183/1941 are not resource byte lengths; CDX resource hashes remain null/unverified. The root and notice are different capture epochs, not proof of a same-epoch board, publication date or source authenticity. A private non-executing root/helper inspection bound the selected notice URI; no direct campus PHP request, inferred ID, JavaScript execution, alias or nearest-capture substitution.
+
+The local offline `announcements history` article path now interprets the retained PHP template only with explicit `encoding:"gb2312"` and its matching source charset declaration. **Supply the raw original base64, not transcoded UTF-8**: retrieval binds raw bytes; interpretation separately hashes decoded UTF-8. Its ordered title/body/footer privately match the source, without invented paragraphs/grid. The unlabelled footer date is retained with unverified role and `published_at:null`; capture time cannot substitute. Supplied provenance remains operator-asserted because this import receives no Memento headers. The archive adapter itself does not extract announcement text or grant live PHP fetch permission.
+
+The preceding source-acquisition chain used six governed archive GETs, including robots and the empty modern-board query; this new interpretation issues none. Existing governor floors/history/latches remain intact. Unreviewed local stack, not root-main/Pages integration, all-college history or an authenticity certificate. [Exact source/native proof and boundaries](STATUS.md#materials-archived-php-notice-text).
+
 ## Contract sources
 
 - [Internet Archive CDX API](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md): named JSON columns, exact URL scope, inclusive date ranges and resume keys. No API key cookie or restricted field is requested.
