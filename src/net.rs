@@ -1052,6 +1052,9 @@ impl ArchiveClient {
                     SourceProfile::Spoc if spoc_script_path_allowed(url.path()) => {
                         crate::spoc::validate_script(status, content_type, body.len())?;
                     }
+                    SourceProfile::Scse if scse_document_path_allowed(url.path()) => {
+                        crate::announcements::scse::validate_document_mime(content_type)?;
+                    }
                     SourceProfile::Sepe if sepe_document_url_allowed(url) => {
                         crate::announcements::sepe::validate_document_metadata(
                             status,
@@ -1911,6 +1914,72 @@ mod tests {
         let after = crate::spoc::script_with_client(client, CacheMode::Offline, &target).unwrap();
         assert_eq!(after["script"], before["script"]);
         assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn scse_document_refresh_rejects_wrong_mime_without_revalidating_identical_original_bytes() {
+        const TARGET: &str =
+            "https://scse.buaa.edu.cn/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+        const ORIGINAL: &[u8] = b"%PDF-1.7\nSynthetic retained document.\n%%EOF\n";
+        let fixture = Fixture::new();
+        let mut refresh_number = 0;
+        let server = Server::new(move |socket, request| {
+            assert!(request.starts_with("GET /__local/C/C7/70/"));
+            refresh_number += 1;
+            let headers = if refresh_number == 1 {
+                "Content-Type: text/html\r\n"
+            } else {
+                "Content-Type: application/pdf\r\n"
+            };
+            reply(socket, 200, headers, ORIGINAL);
+        });
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Scse;
+        seed(
+            &client,
+            SCSE_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed(&client, TARGET, ORIGINAL, true);
+        let target = Url::parse(TARGET).unwrap();
+        let mut original = client.load(&target).unwrap().unwrap();
+        original
+            .response
+            .headers
+            .insert("content-type".into(), "application/pdf".into());
+        client.save(&original).unwrap();
+        let observe = |response: &Response| {
+            crate::announcements::scse::validate_document_mime(
+                response.headers.get("content-type").map(String::as_str),
+            )?;
+            Ok((
+                response.body.clone(),
+                response.headers.clone(),
+                response.fetched_at_unix_ms,
+                response.revalidated_at_unix_ms,
+                response.revalidation_status,
+            ))
+        };
+        let before = client.get(&target, true, observe).unwrap();
+        let client = client.with_cache_mode(CacheMode::Revalidate);
+        assert_eq!(
+            client.get(&target, true, observe).unwrap_err().code,
+            "unavailable"
+        );
+        let client = client.with_cache_mode(CacheMode::Offline);
+        let after = client.get(&target, true, observe).unwrap();
+        assert_eq!(after, before);
+        let revalidated = client
+            .with_cache_mode(CacheMode::Revalidate)
+            .get(&target, true, observe)
+            .unwrap();
+        assert_eq!(revalidated.0, before.0);
+        assert_eq!(revalidated.1, before.1);
+        assert_eq!(revalidated.2, before.2);
+        assert!(revalidated.3.is_some());
+        assert_eq!(revalidated.4, Some(200));
+        assert_eq!(server.count(), 2);
     }
 
     #[test]

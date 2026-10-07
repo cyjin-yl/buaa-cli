@@ -286,17 +286,26 @@ pub(super) fn document(mode: CacheMode, article_url: &str) -> Result<Value, Erro
     })
 }
 
-fn validate_pdf(response: &Response) -> Result<(), Error> {
-    let tail = &response.body[response.body.len().saturating_sub(1024)..];
-    let mime_ok = response.headers.get("content-type").is_none_or(|value| {
+pub(crate) fn validate_document_mime(content_type: Option<&str>) -> Result<(), Error> {
+    let mime_ok = content_type.is_none_or(|value| {
         let media = value.split(';').next().unwrap_or_default().trim();
         media.eq_ignore_ascii_case("application/pdf")
             || media.eq_ignore_ascii_case("application/octet-stream")
     });
-    if !mime_ok
-        || !response.body.starts_with(b"%PDF-")
-        || !tail.windows(5).any(|window| window == b"%%EOF")
-    {
+    if !mime_ok {
+        return Err(failed_contract(
+            "source document lacks reviewed PDF MIME",
+            file!(),
+            line!(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pdf(response: &Response) -> Result<(), Error> {
+    validate_document_mime(response.headers.get("content-type").map(String::as_str))?;
+    let tail = &response.body[response.body.len().saturating_sub(1024)..];
+    if !response.body.starts_with(b"%PDF-") || !tail.windows(5).any(|window| window == b"%%EOF") {
         return Err(failed_contract(
             "source document lacks reviewed PDF MIME/framing; bytes are not cached as a PDF",
             file!(),

@@ -601,6 +601,72 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "scse_pdf_fresh_mime_admission_correction": {
+          "issue": null,
+          "pr": null,
+          "status": "local-identical-byte-fresh-pdf-mime-bypass-corrected-unreviewed",
+          "base_head": "1383af264e6fc888b7bba5da714c9e771181fd9d",
+          "owned_worktree": ".worktrees/scse-pdf-refresh",
+          "source_files": [
+            "src/net.rs",
+            "src/announcements/scse.rs",
+            "src/announcements.rs"
+          ],
+          "command": "buaa announcements document; existing SCSE article_url, cache-only by default",
+          "defect": "Equal original PDF bytes under freshHTTP200 text/html reused retained PDF headers and incorrectly marked the immutable original revalidated.",
+          "correction": "One borrowed SCSE MIME validator shared by fresh200 admission before immutable comparison and cached PDF output; no body copy, old-header substitution or original replacement. MIME/framing/bounds, source-declared namespace/cache modes, shared governor and304/no-new-body handling retain prior policy. Sepe DOCX admission stays separate.",
+          "retained_mime_policy": "application/pdf or application/octet-stream, case-insensitive media type before parameters, plus the existing missing-MIME allowance. This is framing/MIME admission, not signatures/checksums/safety/text/OCR.",
+          "reproduction": {
+            "exit": 101,
+            "seconds_including_compilation": 53.44,
+            "passed": 0,
+            "failed": 1,
+            "execution_seconds": 0.28,
+            "unexpected_success_witness": true,
+            "compiler_failure": false,
+            "synthetic_isolated_loopback_only": true
+          },
+          "green_and_affected_consumers": {
+            "fresh_mime_cases": 3,
+            "fresh_mime_exit": 0,
+            "fresh_mime_seconds": 10.61,
+            "existing_scse_cases": 10,
+            "existing_scse_exit": 0,
+            "existing_scse_seconds": 0.21,
+            "existing_immutable_200_304_conflict_cases": 1,
+            "existing_immutable_exit": 0,
+            "existing_immutable_seconds": 10.61,
+            "distinct_cases": 14,
+            "rejected_fresh_html_preserves_whole_original_body_headers_fetch_revalidation_facts": true,
+            "separate_valid_pdf_mime_refresh_succeeds_retaining_original_facts": true,
+            "full_suite_run": false
+          },
+          "actual_native_cached_command": {
+            "exit": 0,
+            "elapsed_seconds": 0.17,
+            "document_bytes": 406588,
+            "whole_prior_native_pdf_output_equal": true,
+            "document_cache_status": "hit",
+            "source_article_cache_status": "hit",
+            "governor_sha256": "e3e6dce38cb7b922030101f506ab7a81be5e30f60e8099e21eaaa15b1a380a44",
+            "governor_bytes_unchanged": true,
+            "new_campus_archive_gets": 0,
+            "authentication_attempts_campus_writes": 0,
+            "fresh_remote_200_or_304_observed": false,
+            "focused_unique_cases": 14,
+            "owned_native_build_exit": 0,
+            "owned_native_build_seconds": 10.6
+          },
+          "account_safety": {
+            "new_campus_archive_gets": 0,
+            "auth_attempts_campus_writes": 0,
+            "same_permanent_process_shared_governor": true,
+            "governor_sha256": "e3e6dce38cb7b922030101f506ab7a81be5e30f60e8099e21eaaa15b1a380a44",
+            "governor_bytes_unchanged": true,
+            "policy": "Same request lease and60-second/15-minute floors/history/latches, no migration/reset/parallel account key/failed-source retry/encoding/MIME whitelist relaxation or TLS/robots/auth/proxy bypass. Synthetic tests use existing isolated fixture governors only; H3i/Sepe failed originals remain blocked."
+          },
+          "review_and_remaining": "Unreviewed local correction; Rust-analyzer unavailable in unchanged toolchain, existing source calls inspected inline, no rename/external input migration. Prior source-check401/GitHub quota stops retained, no retry/provider credential fallback/banned subagent or new claim/PR/push/merge/approval/Pages/root-main integration. No newly observed real fresh200/304, publisher/security certificate or complete college/history/attachment/recording/Life coverage; aggregate announcements remains partial. Final discovery and source-identity gate receipts are separate."
+        },
         "h3i_root_declared_notice_archive_frontier": {
           "issue": null,
           "pr": null,
