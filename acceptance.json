@@ -601,6 +601,97 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "sepe_docx_original_read_path": {
+          "issue": null,
+          "pr": null,
+          "status": "local-source-bound-read-path-current-original-refused-unreviewed",
+          "base_head": "b2e8c759845226c946c47c5bf70d4815e71b032a",
+          "owned_worktree": ".worktrees/sepe-docx-original",
+          "source_files": [
+            "src/announcements.rs",
+            "src/announcements/sepe.rs",
+            "src/announcements/scse.rs",
+            "src/net.rs"
+          ],
+          "command": "buaa announcements document [--online|--refresh]; JSON stdin, default cache-only",
+          "source_reference": {
+            "article_url": "https://sepe.buaa.edu.cn/info/1078/2634.htm",
+            "article_sha256": "7e566e3777abefafdf12a135393fe996a33957f73ee4c8b9ed48937c7ff1c3b1",
+            "source_page": 1,
+            "selected_attachment_ordinal": 3,
+            "source_declared_extension": "docx",
+            "previous_whole_55_paragraph_and_three_active_sibling_hint_proof": true,
+            "references_always_cache_only": true,
+            "query_values_labels_prose_published": false
+          },
+          "admission": {
+            "input": "Provided selector values must be unsigned32-bit integers, never null/absent aliases; SCSE retains article_url-only admission and rejects selector fields. Missing Sepe attachment ordinal is invalid; missing source_page means1.",
+            "source": "Canonical reviewed Sepe article bound to exact retained directory/root/list membership; selected one-based active DOCX hint, no supplied target/file ID or inferred source traversal. SCSE legacy article_url-only PDF route retained.",
+            "url": "HTTPS Sepe exact /system/_content/download.jsp; sole unescaped keys urltype,owner,wbfileid; read operation news.DownloadAttachUrl,1..10 ASCII decimal owner,32 ASCII hexadecimal file ID. No duplicate/extra/escaped parameters, alias, userinfo, fragment or nondefault port.",
+            "response": "Fresh200 standard DOCX MIME or application/octet-stream, nonempty<=8MiB before immutable equality; same borrowed metadata validator on cached output. ZIP header/EOCD-comment framing, not Word package/text/signature/safety.",
+            "automatic_reference_or_other_file_reads": false
+          },
+          "native_proof": {
+            "first_owned_build_exit": 0,
+            "first_owned_build_seconds": 44.45,
+            "actual_default_offline_before_target_exit": 7,
+            "actual_default_offline_before_target_seconds": 0.25,
+            "expired_policy_first_online_exit": 8,
+            "expired_policy_first_online_seconds": 2.11,
+            "required_robots_status": 404,
+            "required_robots_original_bytes": 1693,
+            "normal_pacing": "Required expired robots refresh completed;60-second interval exceeds30-second bounded local wait. One deliberate first target request only after ordinary deadline ready.",
+            "first_actual_target_exit": 3,
+            "first_actual_target_seconds": 0.32,
+            "first_actual_target_diagnostic": {
+              "error": "unsupported",
+              "message": "DOCX original requires supported MIME and a bounded nonempty response",
+              "schema_version": 1
+            },
+            "response_mime": null,
+            "original_byte_length": null,
+            "original_sha256": null,
+            "original_verified": false,
+            "source_zip_or_word_verified": false,
+            "actual_post_refusal_offline_exit": 7,
+            "actual_post_refusal_offline_seconds": 0.32,
+            "legacy_scse_cached_pdf_exit": 0,
+            "legacy_scse_cached_pdf_seconds": 0.22,
+            "legacy_scse_cached_pdf_bytes": 406588,
+            "nullable_selector_reproduction_exit": 0,
+            "nullable_selector_fixed_exit": 2,
+            "nullable_selector_fixed_seconds": 0.0,
+            "invalid_harness_flag_attempts": 2,
+            "scope": "Current target failed supported-MIME/nonempty admission; exact response facts unobserved, not auth/transport/outage diagnosis. Retain syntax/refusal receipts; no new successful Sepe original or current-service claim."
+          },
+          "focused_offline_proof": {
+            "final_sepe_cases": 5,
+            "new_uncertain_cases": 4,
+            "document_null_selector_case": 1,
+            "document_null_selector_seconds": 7.29,
+            "final_sepe_seconds": 4.63,
+            "affected_existing_scse_cases": 10,
+            "affected_scse_seconds": 0.24,
+            "affected_existing_spoc_fresh_mime_case": 1,
+            "affected_spoc_seconds": 0.53,
+            "distinct_cases": 17,
+            "scope": "Separate focused commands, not full283 or summed reruns. Initial one failure corrected wrong test expectation to existing egress_denied. A real API null-selector acceptance0 was corrected to invalid_input2; strict input regression is isolated/pure and uses no account cache."
+          },
+          "account_safety": {
+            "new_campus_public_gets": 2,
+            "required_policy_gets": 1,
+            "selected_original_target_gets": 1,
+            "selected_target_retries": 0,
+            "other_attachments_gets": 0,
+            "auth_attempts": 0,
+            "campus_writes": 0,
+            "governor_sha256_after_target": "a025f06fe9ce9dc75decc9d23b42fef7cadd171226223c4ea92a388aa0ecc4c8",
+            "later_offline_governor_bytes_unchanged": true,
+            "same_permanent_governor_and_floors": true,
+            "policy": "Retain60-second/15-minute floors, pendingNone/disarmed/noLatch/failures0 through normal completed HTTP outcomes. No history reset/migration/split account, MIME widening, retry, protocol/host/proxy/TLS/robots/auth bypass. Prior Materials8archiveGETs are separate historical scope."
+          },
+          "remaining": "Actual source original verification BLOCKED on admissible exact original/header facts or genuinely changed authorized source prerequisite. Never replay this completed target attempt or invent its MIME/body. .doc/.xlsx, Word text/structure, other attachments/current sources/history/full non-VPN coverage unfinished. Independent-inspection401/GitHub quota stop remain; no new review/approval/claim/PR/push/merge/root-main/Pages integration. Private declaration values/bytes/prose stay outside source."
+        },
         "mse_legacy_sibling_original_evidence": {
           "issue": null,
           "pr": null,

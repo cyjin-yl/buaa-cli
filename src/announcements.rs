@@ -8,8 +8,9 @@
 //! (`/info/<category>/<id>.htm`) carry the title in `h2`, the publish date in
 //! `.cont-tit`, and the body in `.v_news_content`. Rows missing a title are
 //! rejected rather than reconstructed; missing dates stay `null`. Attachment
-//! links are surfaced as hints and never downloaded. Historical bytes remain
-//! operator-asserted provenance, bound by SHA-256.
+//! links in article output remain unfetched hints. The separate document command
+//! reads one explicitly selected, supported source-declared original. Historical
+//! bytes remain operator-asserted provenance, bound by SHA-256.
 
 use crate::html::{active_element_text, element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL};
@@ -166,7 +167,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai and Iiif source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page must bind a supported college article to its source-advertised notice page",
     )
 }
 
@@ -1053,10 +1054,41 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
     client.get(&url, false, normalize_article)
 }
 
-/// Retrieve one original PDF explicitly declared by a reviewed college article.
-/// Does not infer a document from preview names or follow unreviewed links.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentInput {
+    article_url: String,
+    #[serde(default, deserialize_with = "document_selector")]
+    attachment_ordinal: Option<u32>,
+    #[serde(default, deserialize_with = "document_selector")]
+    source_page: Option<u32>,
+}
+
+fn document_selector<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // A present null must not erase a selector and relax SCSE's old input shape.
+    <u32 as serde::Deserialize<'de>>::deserialize(deserializer).map(Some)
+}
+
+/// Retrieve one supported original explicitly declared by a retained article.
+/// Does not infer a document from preview names or automatically follow hints.
 pub fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
-    scse::document(mode, input)
+    if input.len() > 32 * 1024 {
+        return Err(invalid_article());
+    }
+    let input: DocumentInput = serde_json::from_str(input).map_err(|_| invalid_article())?;
+    let article = Url::parse(&input.article_url).map_err(|_| invalid_article())?;
+    match article.host_str() {
+        Some("sepe.buaa.edu.cn") => sepe::document(mode, &input),
+        Some("scse.buaa.edu.cn")
+            if input.attachment_ordinal.is_none() && input.source_page.is_none() =>
+        {
+            scse::document(mode, &input.article_url)
+        }
+        _ => Err(invalid_article()),
+    }
 }
 
 /// Fixed public college pages, not a unified college crawler or a verified
@@ -1745,8 +1777,8 @@ pub fn schema() -> Value {
         .collect();
     let mut output = json!({
         "document": {
-            "input":{"type":"object","additionalProperties":false,"required":["article_url"],"properties":{"article_url":{"type":"string","description":"Reviewed HTTPS SCSE notice article; the viewer must declare exactly one supported original PDF."}}},
-            "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
+            "input":{"type":"object","additionalProperties":false,"required":["article_url"],"properties":{"article_url":{"type":"string","pattern":"^https://(?:scse|sepe)\\.buaa\\.edu\\.cn/","description":"Canonical reviewed HTTPS college article. SCSE requires one source-declared original PDF; Sepe requires an existing directory/root/list/article snapshot and an explicit DOCX hint ordinal."},"attachment_ordinal":{"type":"integer","minimum":1,"maximum":MAX_ATTACHMENT_HINTS,"description":"Sepe only, required: one-based order among retained active JSP file hints; not a file ID. Only a declared .docx is supported."},"source_page":{"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Sepe retained source listing ordinal, default1; it must declare the article. Not accepted for SCSE."}},"allOf":[{"if":{"properties":{"article_url":{"pattern":"^https://sepe\\.buaa\\.edu\\.cn/"}}},"then":{"required":["attachment_ordinal"]}},{"if":{"properties":{"article_url":{"pattern":"^https://scse\\.buaa\\.edu\\.cn/"}}},"then":{"not":{"anyOf":[{"required":["attachment_ordinal"]},{"required":["source_page"]}]}}}]},
+            "output":{"type":"object","description":"One source-declared original as base64, byte length, SHA-256 and separate article/document retrieval facts. SCSE PDF framing or Sepe DOCX-labelled ZIP framing only; not a package/signature/safety certificate. Immutable byte cache; Sepe fresh-response MIME/size admission precedes equality. Sepe source references are cache-only even with --online/--refresh. No OCR, text extraction, implicit article refresh or other-attachment download."}
         },
         "college_source": {
             "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse|sa|ase [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse, sepe, sa and ase bind the retained authoritative directory; selected boards must be declared by their retained root. Mse, Rse, Sepe, Sa and Ase preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. Sa admits only a fixed root observation; its first governed robots request did not complete and no root/notice original is available, so no Sa listing/article adapter or route is claimed. Ase admits only a fixed selected-root probe; its first governed invocation did not complete a response and retained no root/notice original, so no Ase listing/article adapter or route is claimed. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
@@ -1880,6 +1912,12 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_null_selector_cannot_disappear_from_scse_input_contract() {
+        let input = r#"{"article_url":"https://scse.buaa.edu.cn/info/1099/42.htm","attachment_ordinal":null}"#;
+        assert!(serde_json::from_str::<DocumentInput>(input).is_err());
+    }
 
     #[test]
     fn directory_identity_preserves_distinct_declared_literal_and_resolved_root() {

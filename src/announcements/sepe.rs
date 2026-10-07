@@ -1,14 +1,17 @@
 //! Energy college: retained HTTP directory identity, separate HTTPS observation.
 use super::{
-    ArticleDocument, ListQuery, MAX_TEXT, advertised_page_url, article_category_from_url,
-    article_output, article_paragraphs, bind_college_board, college_directory_attribution,
-    college_html, declared_jsp_attachment_hints, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
-    parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval, unavailable,
+    ArticleDocument, DocumentInput, ListQuery, MAX_ATTACHMENT_HINTS, MAX_TEXT, advertised_page_url,
+    article_category_from_url, article_output, article_paragraphs, bind_college_board,
+    college_directory_attribution, college_html, declared_jsp_attachment_hints,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, inert_element,
+    invalid_article, invalid_list, parse_chinese_publication_date, parse_iso_date,
+    parse_notice_list, retrieval, unavailable,
 };
 use crate::net::{
-    ArchiveClient, CacheMode, Error, SEPE_NOTICES_URL, SEPE_ROOT_URL, sepe_path_allowed,
+    ArchiveClient, CacheMode, Error, SEPE_NOTICES_URL, SEPE_ROOT_URL, sepe_document_url_allowed,
+    sepe_path_allowed,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use scraper::{Html, Selector};
 use serde_json::{Value, json};
 use url::Url;
@@ -158,6 +161,116 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
         })?
 }
 
+pub(super) fn document(mode: CacheMode, input: &DocumentInput) -> Result<Value, Error> {
+    let ordinal = input.attachment_ordinal.ok_or_else(invalid_article)?;
+    if ordinal == 0 || ordinal as usize > MAX_ATTACHMENT_HINTS || input.source_page == Some(0) {
+        return Err(invalid_article());
+    }
+    // Document reads cannot turn missing/changed reference snapshots into
+    // background source observations. Refresh the article separately.
+    let mut source = article(
+        CacheMode::Offline,
+        &input.article_url,
+        input.source_page.unwrap_or(1),
+    )?;
+    let hint = source["attachments"]["hints"]
+        .get(ordinal as usize - 1)
+        .ok_or_else(|| {
+            Error::new(
+                "unsupported",
+                "retained article does not declare this file ordinal",
+            )
+        })?;
+    let href = hint["href"].as_str().ok_or_else(unavailable)?;
+    let name = hint["text"].as_str().ok_or_else(unavailable)?;
+    if !name
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("docx"))
+    {
+        return Err(Error::new(
+            "unsupported",
+            "only a source-declared DOCX original is supported for Sepe",
+        ));
+    }
+    let target = Url::parse(&input.article_url)
+        .map_err(|_| invalid_article())?
+        .join(href)
+        .map_err(|_| invalid_article())?;
+    if !href.starts_with("/system/_content/download.jsp?") || !sepe_document_url_allowed(&target) {
+        return Err(Error::new(
+            "unsupported",
+            "source file link is outside the bounded read-only Sepe download contract",
+        ));
+    }
+    let declaration = json!({"ordinal":ordinal,"href":href,"text":name,"declared_format":"docx"});
+    let source_retrieval = source["retrieval"].take();
+    let directory_attribution = source["directory_attribution"].take();
+    let source_listing = source["source_listing"].take();
+    let hints_truncated = source["attachments"]["hints_truncated"].take();
+    let client = ArchiveClient::open_sepe(mode)?;
+    client.get(&target, true, |response| {
+        validate_document(response)?;
+        let media = response.headers.get("content-type").and_then(|value| value.split(';').next()).unwrap_or_default().trim();
+        Ok(json!({
+            "schema_version":1,"type":"announcement_document","result":"source_document_bytes",
+            "publisher":PUBLISHER,"college":"sepe","directory_attribution":directory_attribution,
+            "source_article":source_retrieval,"source_listing":source_listing,"source_declaration":declaration,
+            "reference_policy":"cache_only_directory_root_listing_article; refresh sources separately, document refresh revalidates only the selected original",
+            "relationship":"original from one retained active DOCX-labelled file link; not a preview or transcode",
+            "document":{"media_type":media,"declared_format":"docx","byte_length":response.body.len(),"sha256":response.sha256,"content_base64":STANDARD.encode(&response.body)},
+            "retrieval":retrieval(response),
+            "verification":{"hash_scope":"retrieved_document_bytes","zip_header_and_eocd_framing_checked":true,"word_package_verified":false,"external_published_checksum_verified":false,"publisher_signature_verified":false,"document_safety_scan_performed":false},
+            "completeness":{"scope":"single_source_declared_docx_labelled_original","source_hints_truncated":hints_truncated,"other_attachments_fetched":false,"text_extracted":false,"ocr_performed":false},
+        }))
+    })
+}
+
+pub(crate) fn validate_document_metadata(
+    status: u16,
+    content_type: Option<&str>,
+    byte_length: usize,
+) -> Result<(), Error> {
+    let mime_ok = content_type.is_some_and(|value| {
+        let media = value.split(';').next().unwrap_or_default().trim();
+        media.eq_ignore_ascii_case(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ) || media.eq_ignore_ascii_case("application/octet-stream")
+    });
+    if status != 200 || !mime_ok || byte_length == 0 || byte_length > crate::net::MAX_BODY {
+        return Err(Error::new(
+            "unsupported",
+            "DOCX original requires supported MIME and a bounded nonempty response",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_document(response: &crate::net::Response) -> Result<(), Error> {
+    validate_document_metadata(
+        response.status,
+        response.headers.get("content-type").map(String::as_str),
+        response.body.len(),
+    )?;
+    let bytes = response.body.as_slice();
+    let tail_start = bytes.len().saturating_sub(22 + u16::MAX as usize);
+    let framed = bytes.starts_with(b"PK\x03\x04")
+        && bytes[tail_start..]
+            .windows(22)
+            .enumerate()
+            .any(|(offset, end)| {
+                end.starts_with(b"PK\x05\x06")
+                    && tail_start + offset + 22 + u16::from_le_bytes([end[20], end[21]]) as usize
+                        == bytes.len()
+            });
+    if !framed {
+        return Err(Error::new(
+            "unsupported",
+            "declared DOCX lacks ZIP header/end framing; original bytes were not admitted",
+        ));
+    }
+    Ok(())
+}
+
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
     let mains = Selector::parse("div.nymain > div.w16 > div.ny-right > form > div.art-main")
         .map_err(|_| unavailable())?;
@@ -289,6 +402,28 @@ mod tests {
         assert_eq!(
             output["attachments"]["hints"],
             json!([{"href":"/system/_content/download.jsp?wbfileid=form&owner=1","text":"Form.docx","fetched":false}])
+        );
+    }
+
+    #[test]
+    fn sepe_docx_end_record_cannot_hide_truncation_or_unaccounted_trailing_bytes() {
+        let mut response = source("", "", "");
+        response
+            .headers
+            .insert("content-type".into(), "application/octet-stream".into());
+        response.body = b"PK\x03\x04syntheticPK\x05\x06".to_vec();
+        response.body.extend_from_slice(&[0; 18]);
+        response
+            .body
+            .extend_from_slice(b"unaccounted trailing bytes");
+        assert_eq!(
+            validate_document(&response).unwrap_err().code,
+            "unsupported"
+        );
+        response.body.truncate(10);
+        assert_eq!(
+            validate_document(&response).unwrap_err().code,
+            "unsupported"
         );
     }
 

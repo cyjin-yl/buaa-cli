@@ -251,18 +251,8 @@ fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
     Ok(selected)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DocumentInput {
-    article_url: String,
-}
-
-pub(super) fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
-    if input.len() > 32 * 1024 {
-        return Err(invalid_article());
-    }
-    let input: DocumentInput = serde_json::from_str(input).map_err(|_| invalid_article())?;
-    let article = resolve_article(&input.article_url)?;
+pub(super) fn document(mode: CacheMode, article_url: &str) -> Result<Value, Error> {
+    let article = resolve_article(article_url)?;
     // Resolve against the retained article snapshot. An operator may refresh
     // that article separately; document --refresh revalidates only its PDF.
     let source_mode = if mode == CacheMode::Revalidate {

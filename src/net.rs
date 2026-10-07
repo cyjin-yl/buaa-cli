@@ -18,7 +18,7 @@ use std::os::unix::fs::MetadataExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
-const MAX_BODY: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_BODY: usize = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_HEADERS: usize = 64 * 1024;
 const MAX_URL: usize = 16 * 1024;
@@ -146,6 +146,48 @@ pub(crate) const SA_ROOT_URL: &str = "https://www.sa.buaa.edu.cn/";
 const SA_ROBOTS_URL: &str = "https://www.sa.buaa.edu.cn/robots.txt";
 pub(crate) const ASE_ROOT_URL: &str = "https://www.ase.buaa.edu.cn/";
 const ASE_ROBOTS_URL: &str = "https://www.ase.buaa.edu.cn/robots.txt";
+
+pub(crate) fn sepe_document_url_allowed(url: &Url) -> bool {
+    if url.scheme() != "https"
+        || url.host_str() != Some("sepe.buaa.edu.cn")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/system/_content/download.jsp"
+    {
+        return false;
+    }
+    let Some(query) = url.query() else {
+        return false;
+    };
+    let (mut operation, mut owner, mut file) = (false, false, false);
+    for part in query.split('&') {
+        let Some((key, value)) = part.split_once('=') else {
+            return false;
+        };
+        match key {
+            "urltype" if !operation && value == "news.DownloadAttachUrl" => operation = true,
+            "owner"
+                if !owner
+                    && !value.is_empty()
+                    && value.len() <= 10
+                    && value.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                owner = true;
+            }
+            "wbfileid"
+                if !file
+                    && value.len() == 32
+                    && value.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+            {
+                file = true;
+            }
+            _ => return false,
+        }
+    }
+    operation && owner && file
+}
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -487,8 +529,8 @@ impl SourceProfile {
             }
             Self::Sepe => {
                 url.host_str() == Some("sepe.buaa.edu.cn")
-                    && url.query().is_none()
-                    && sepe_path_allowed(url.path())
+                    && ((url.query().is_none() && sepe_path_allowed(url.path()))
+                        || sepe_document_url_allowed(url))
             }
             Self::Sa => {
                 url.host_str() == Some("www.sa.buaa.edu.cn")
@@ -1002,17 +1044,23 @@ impl ArchiveClient {
             if body.len() > MAX_BODY {
                 return Err(body_limit());
             }
-            // Immutable originals retain their original headers. Validate the
-            // fresh script response before those headers can hide MIME drift.
-            if status == 200
-                && self.profile == SourceProfile::Spoc
-                && spoc_script_path_allowed(url.path())
-            {
-                crate::spoc::validate_script(
-                    status,
-                    headers.get("content-type").map(String::as_str),
-                    body.len(),
-                )?;
+            // Validate fresh metadata before retained immutable headers can
+            // hide MIME drift. Cached output repeats the same admission policy.
+            if status == 200 {
+                let content_type = headers.get("content-type").map(String::as_str);
+                match self.profile {
+                    SourceProfile::Spoc if spoc_script_path_allowed(url.path()) => {
+                        crate::spoc::validate_script(status, content_type, body.len())?;
+                    }
+                    SourceProfile::Sepe if sepe_document_url_allowed(url) => {
+                        crate::announcements::sepe::validate_document_metadata(
+                            status,
+                            content_type,
+                            body.len(),
+                        )?;
+                    }
+                    _ => {}
+                }
             }
             let now = unix_ms()?;
             let mut entry = if status == 304 {
@@ -1862,6 +1910,86 @@ mod tests {
         let client = fixture.spoc_client(CacheMode::Offline, &server);
         let after = crate::spoc::script_with_client(client, CacheMode::Offline, &target).unwrap();
         assert_eq!(after["script"], before["script"]);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn sepe_document_ambiguous_read_and_write_operations_never_reach_transport() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: application/octet-stream\r\n",
+                b"unadmitted",
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Sepe;
+        seed(
+            &client,
+            SEPE_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse("https://sepe.buaa.edu.cn/system/_content/download.jsp?urltype=news.DownloadAttachUrl&owner=1&wbfileid=00000000000000000000000000000000&urltype=news.DeleteAttachUrl").unwrap();
+        assert_eq!(
+            client.get(&target, true, |_| Ok(())).unwrap_err().code,
+            "egress_denied"
+        );
+        assert_eq!(server.count(), 0);
+    }
+
+    #[test]
+    fn sepe_document_refresh_rejects_wrong_mime_without_revalidating_identical_original_bytes() {
+        const TARGET: &str = "https://sepe.buaa.edu.cn/system/_content/download.jsp?urltype=news.DownloadAttachUrl&owner=1&wbfileid=00000000000000000000000000000000";
+        const ORIGINAL: &[u8] = b"synthetic retained document bytes";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /system/_content/download.jsp?"));
+            reply(socket, 200, "Content-Type: text/html\r\n", ORIGINAL);
+        });
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Sepe;
+        seed(
+            &client,
+            SEPE_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed(&client, TARGET, ORIGINAL, true);
+        let target = Url::parse(TARGET).unwrap();
+        let mut original = client.load(&target).unwrap().unwrap();
+        original
+            .response
+            .headers
+            .insert("content-type".into(), "application/octet-stream".into());
+        client.save(&original).unwrap();
+        let observe = |response: &Response| {
+            crate::announcements::sepe::validate_document_metadata(
+                response.status,
+                response.headers.get("content-type").map(String::as_str),
+                response.body.len(),
+            )?;
+            Ok((
+                response.body.clone(),
+                response.headers.clone(),
+                response.fetched_at_unix_ms,
+                response.revalidated_at_unix_ms,
+                response.revalidation_status,
+            ))
+        };
+        let before = client.get(&target, true, observe).unwrap();
+        let client = client.with_cache_mode(CacheMode::Revalidate);
+        assert_eq!(
+            client.get(&target, true, observe).unwrap_err().code,
+            "unsupported"
+        );
+        let after = client
+            .with_cache_mode(CacheMode::Offline)
+            .get(&target, true, observe)
+            .unwrap();
+        assert_eq!(after, before);
         assert_eq!(server.count(), 1);
     }
 
