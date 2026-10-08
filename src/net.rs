@@ -149,6 +149,24 @@ const ASE_ROBOTS_URL: &str = "https://www.ase.buaa.edu.cn/robots.txt";
 pub(crate) const DEPT3_ROOT_URL: &str = "https://dept3.buaa.edu.cn/";
 pub(crate) const DEPT3_NOTICES_URL: &str = "https://dept3.buaa.edu.cn/xwzx/xygg.htm";
 const DEPT3_ROBOTS_URL: &str = "https://dept3.buaa.edu.cn/robots.txt";
+pub(crate) const YQGDXY_ROOT_URL: &str = "https://yqgdxy.buaa.edu.cn/";
+pub(crate) const YQGDXY_NOTICES_URL: &str = "https://yqgdxy.buaa.edu.cn/tzgg.htm";
+const YQGDXY_ROBOTS_URL: &str = "https://yqgdxy.buaa.edu.cn/robots.txt";
+
+pub(crate) fn yqgdxy_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/tzgg.htm") {
+        return true;
+    }
+    ["/tzgg/", "/info/1053/"].into_iter().any(|prefix| {
+        path.strip_prefix(prefix)
+            .and_then(|stem| stem.strip_suffix(".htm"))
+            .is_some_and(|stem| {
+                !stem.is_empty()
+                    && stem.len() <= 10
+                    && stem.bytes().all(|byte| byte.is_ascii_digit())
+            })
+    })
+}
 
 pub(crate) fn dept3_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwzx/xygg.htm") {
@@ -415,6 +433,7 @@ enum SourceProfile {
     Sa,
     Ase,
     Dept3,
+    Yqgdxy,
 }
 
 impl SourceProfile {
@@ -438,6 +457,7 @@ impl SourceProfile {
             Self::Sa => SA_ROBOTS_URL,
             Self::Ase => ASE_ROBOTS_URL,
             Self::Dept3 => DEPT3_ROBOTS_URL,
+            Self::Yqgdxy => YQGDXY_ROBOTS_URL,
         }
     }
 
@@ -461,6 +481,7 @@ impl SourceProfile {
             Self::Sa => ".buaa-cli-sa-cache",
             Self::Ase => ".buaa-cli-ase-cache",
             Self::Dept3 => ".buaa-cli-dept3-cache",
+            Self::Yqgdxy => ".buaa-cli-yqgdxy-cache",
         }
     }
 
@@ -563,6 +584,11 @@ impl SourceProfile {
                 url.host_str() == Some("dept3.buaa.edu.cn")
                     && url.query().is_none()
                     && dept3_path_allowed(url.path())
+            }
+            Self::Yqgdxy => {
+                url.host_str() == Some("yqgdxy.buaa.edu.cn")
+                    && url.query().is_none()
+                    && yqgdxy_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -791,6 +817,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_dept3(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Dept3)
+    }
+
+    pub(crate) fn open_yqgdxy(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Yqgdxy)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2924,6 +2954,108 @@ mod tests {
             client,
             CacheMode::Offline,
             &target,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(cached["body_paragraphs"], output["body_paragraphs"]);
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn yqgdxy_article_observes_only_a_retained_board_declaration() {
+        const ARTICLE: &str = r#"<div class="nymain"><div class="ny-right"><div class="art-main"><form><div class="art-tit"><h3>Original source heading</h3><p><span>&#26085;&#26399;&#65306;2026-09-21</span></p></div><div class="art-body"><div><div class="v_news_content"><p>Source <em>inline</em> paragraph.</p></div></div></div><p>Outside body prose</p></form></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1053/42.htm "));
+            let headers = request.to_ascii_lowercase();
+            assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Yqgdxy;
+        for (url,body) in [
+            (YQGDXY_ROOT_URL,br#"<a href="tzgg.htm">Fixture board</a>"# as &[u8]),
+            (YQGDXY_NOTICES_URL,br#"<div class="nymain"><div class="ny-right"><div class="text-list"><ul><li><a href="info/1053/42.htm">Distinct listing teaser</a><span>2026-09-21</span></li><li><a href="https://external.example/notice">External reference</a></li></ul></div></div></div>"# as &[u8]),
+        ] {
+            seed(&client,url,body,false);
+            let mut entry=client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(),"text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(
+            &client,
+            YQGDXY_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        assert_eq!(
+            client
+                .snapshot(
+                    &Url::parse("https://yqgdxy.buaa.edu.cn/info/1052/42.htm").unwrap(),
+                    false
+                )
+                .unwrap_err()
+                .code,
+            "egress_denied"
+        );
+        assert_eq!(
+            client
+                .snapshot(
+                    &Url::parse("http://yqgdxy.buaa.edu.cn/info/1053/42.htm").unwrap(),
+                    false
+                )
+                .unwrap_err()
+                .code,
+            "egress_denied"
+        );
+        let undeclared = Url::parse("https://yqgdxy.buaa.edu.cn/info/1053/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::yqgdxy::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://yqgdxy.buaa.edu.cn/info/1053/42.htm").unwrap();
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Yqgdxy;
+        let output = crate::announcements::yqgdxy::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Original source heading");
+        assert_eq!(output["published_at"], "2026-09-21");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Source inline paragraph."])
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Yqgdxy;
+        let cached = crate::announcements::yqgdxy::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            1,
             serde_json::json!({}),
         )
         .unwrap();

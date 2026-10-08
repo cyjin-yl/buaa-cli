@@ -34,6 +34,7 @@ pub(crate) mod sa;
 pub(crate) mod scse;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
+pub(crate) mod yqgdxy;
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -936,6 +937,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("mse") => return mse::list(mode, &query),
         Some("sepe") => return sepe::list(mode, &query),
         Some("dept3") => return dept3::list(mode, &query),
+        Some("yqgdxy") => return yqgdxy::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -1050,6 +1052,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("dept3.buaa.edu.cn") => {
             return dept3::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("yqgdxy.buaa.edu.cn") => {
+            return yqgdxy::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -1141,6 +1146,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "dept3" {
         return dept3::surface(mode, page);
+    }
+    if college == "yqgdxy" {
+        return yqgdxy::surface(mode, page);
     }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
@@ -1246,6 +1254,7 @@ fn describe_college_surface(
             | "sa"
             | "ase"
             | "dept3"
+            | "yqgdxy"
     ) {
         college_html(response)?
     } else {
@@ -1521,6 +1530,12 @@ fn notice_history_college(raw: &str, url: &Url) -> Option<&'static str> {
             Some("sepe")
         }
         Some("dept3.buaa.edu.cn") if path == "/xwzx/xygg.htm" => Some("dept3"),
+        Some("yqgdxy.buaa.edu.cn")
+            if (path == "/tzgg.htm" || path.starts_with("/tzgg/"))
+                && crate::net::yqgdxy_path_allowed(path) =>
+        {
+            Some("yqgdxy")
+        }
         _ => None,
     }
 }
@@ -1554,6 +1569,11 @@ fn article_history_college(raw: &str, url: &Url) -> Option<&'static str> {
             if path.starts_with("/info/1302/") && crate::net::dept3_path_allowed(path) =>
         {
             Some("dept3")
+        }
+        Some("yqgdxy.buaa.edu.cn")
+            if path.starts_with("/info/1053/") && crate::net::yqgdxy_path_allowed(path) =>
+        {
+            Some("yqgdxy")
         }
         _ => None,
     }
@@ -1633,6 +1653,7 @@ pub fn history(input: &str) -> Result<Value, Error> {
             "h3i" => (h3i::parse_article(&source), h3i::PUBLISHER),
             "beijing" => (beijing::parse_article(&source), beijing::PUBLISHER),
             "dept3" => (dept3::parse_article(&source), dept3::PUBLISHER),
+            "yqgdxy" => (yqgdxy::parse_article(&source), yqgdxy::PUBLISHER),
             _ => return Err(invalid_history()),
         };
         let mut output = document.map_err(|_| invalid_history())?;
@@ -1714,6 +1735,11 @@ pub fn history(input: &str) -> Result<Value, Error> {
                     dept3::parse_listing(&source, &base),
                     dept3::PUBLISHER,
                     "学院公告（历史快照）",
+                ),
+                "yqgdxy" => (
+                    yqgdxy::parse_listing(&source, &base),
+                    yqgdxy::PUBLISHER,
+                    "通知公告（历史快照）",
                 ),
                 _ => return Err(invalid_history()),
             };
@@ -1806,16 +1832,16 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"One source-declared original as base64, byte length, SHA-256 and separate article/document retrieval facts. SCSE PDF framing or Sepe DOCX-labelled ZIP framing only; not a package/signature/safety certificate. Immutable byte cache; fresh SCSE PDF MIME and Sepe DOCX MIME/size admission precede equality. SCSE retains its missing-MIME allowance. Sepe source references are cache-only even with --online/--refresh. No OCR, text extraction, implicit article refresh or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe|dept3 [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse|sa|ase [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse, sepe, sa, ase and dept3 bind the retained authoritative directory; selected boards must be declared by their retained root. Mse, Rse, Sepe, Sa, Ase and Dept3 preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. Sa admits only a fixed root observation; its first governed robots request did not complete and no root/notice original is available, so no Sa listing/article adapter or route is claimed. Ase admits only a fixed selected-root probe; its first governed invocation did not complete a response and retained no root/notice original, so no Ase listing/article adapter or route is claimed. Dept3 observes its root-declared xwzx/xygg.htm college-notice board; other boards and root news-category1065 links are not admitted, with no root/host alias or HTTP fallback. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe|dept3|yqgdxy [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse|sa|ase [root] [--online|--refresh]. Fixed public pages only; selected college boards bind one visible exact authoritative-directory member and their retained root declaration. Literal HTTP identities and separately selected HTTPS observations are not upgrades, aliases or protocol-equivalence claims. Rse is root metadata only; Sa and Ase lack observed root originals, not working notice adapters. Dept3 admits only xwzx/xygg.htm, not news-category1065 or other boards. Yqgdxy admits the root-declared tzgg.htm board, not other root navigation. H3i preserves the exact index.htm root and recruitment board; Zfai selects xxgg1.htm, Iiif xwgg/tzgg.htm, Mse and Sepe their own xwdt/gggs.htm. Bounded hints may be truncated and are not exhaustive discovery. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg); college=mse selects Materials-college public notices (gggs); college=sepe selects Energy-college public notices (gggs); college=dept3 selects Automation-college notices (xygg). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe/Dept3 boards bind the directory and retained root. Mse, Sepe and Dept3 keep their exact HTTP member and explicit separate HTTPS observation. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date. Mse and Sepe reuse one scoped nymain/notice-list view, direct a/h3 headings, a/p excerpts bounded by the existing 8-KiB paragraph limit, and direct a/span YYYY.MM.DD dates. Dept3 uses one main/text-list view, direct div.title/a source text and direct span.time Chinese dates, with no invented excerpt. Absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i and Dept3 accept page1 only; retained Sepe page1 declares no later ordinal, so page2 is unavailable, not inferred. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg); college=mse selects Materials-college public notices (gggs); college=sepe selects Energy-college public notices (gggs); college=dept3 selects Automation-college notices (xygg). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe/Dept3 boards bind the directory and retained root. Mse, Sepe and Dept3 keep their exact HTTP member and explicit separate HTTPS observation. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date. Mse and Sepe reuse one scoped nymain/notice-list view, direct a/h3 headings, a/p excerpts bounded by the existing 8-KiB paragraph limit, and direct a/span YYYY.MM.DD dates. Dept3 uses one main/text-list view, direct div.title/a source text and direct span.time Chinese dates, with no invented excerpt. Absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i and Dept3 accept page1 only; retained Sepe page1 declares no later ordinal, so page2 is unavailable, not inferred. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs. college=yqgdxy selects the root-declared tzgg.htm board, direct nymain/ny-right/text-list rows and ISO span dates, with no summary reconstruction. Source-advertised pagination only; links outside canonical1053 remain unfetched references.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse","sepe","dept3",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse","sepe","dept3","yqgdxy",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
@@ -1825,7 +1851,7 @@ pub fn schema() -> Value {
                 "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse","sepe"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
                     "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"dept3"}}},"then":{"properties":{"category":{"enum":["xygg",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif","yqgdxy"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
                     {"if":{"required":["college"],"properties":{"college":{"enum":["h3i","dept3"]}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
             },
             "output": {
@@ -1836,15 +1862,15 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, Mse board-declared notice in category 1061/1058, Sepe board-declared notice in category 1078/1093/1080, or Dept3 board-declared notice in category1302. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe/Dept3 articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i and Dept3 accept source_page1 only; retained Sepe page1 declares no later ordinal. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse and Sepe publication require one direct art-tit/p/span.date 日期：YYYY年MM月DD日. Dept3 uses one main1/form view, a direct h1 original heading and adjacent plain ISO-date div, never dates inside its scoped v_news_content body. Missing or invalid header dates stay unknown. Mse and Dept3 include supported flat-table text separately. Sepe retains scoped source paragraphs and reports nonparagraph table text, images or unfetched sibling-file contents as partial_text; pure-image/table-only/empty Sepe bodies remain unavailable under shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE1099/1299, IC1042, aviation1061, Beijing1014, Shenyuan1083, H3i1141, Zfai1196, Iiif1186, Mse1061/1058, Sepe1078/1093/1080, Dept31302 or Yqgdxy1053. Directory-bound college articles must be declared by their retained listing; source_page defaults to1 and selects a source-advertised ordinal. H3i/Dept3 accept only1; other sources reject a non-null source_page. Original headings never come from listing teasers. Iiif uses direct [发表时间]： metadata; Mse/Sepe a direct labelled Chinese header date; Dept3 its direct h1 and adjacent plain ISO-date div. Yqgdxy requires one nymain/art-main form, owned art-tit/h3, unique leaf 日期： ISO-date span and art-body/v_news_content. Missing, invalid or ambiguous header dates stay unknown; body dates are not promoted. Shared flat-table extraction preserves supported records separately. Untranscribed images or unfetched files remain partial; source-specific nonempty-body admission is unchanged. Yqgdxy listing links in1052 or outside the canonical1053 namespace are retained references, not fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|dept3[.]buaa[.]edu[.]cn/info/1302)/[0-9]{1,10}[.]htm$"}}}},
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|dept3[.]buaa[.]edu[.]cn/info/1302|yqgdxy[.]buaa[.]edu[.]cn/info/1053)/[0-9]{1,10}[.]htm$"}}}},
                     {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://(h3i|dept3)[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse, H3i, Beijing and Dept3 additionally return separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. They use one shared extraction and count paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. The retained H3i original preserves181 paragraphs plus two source tables with42 rows/84 cells. Beijing preserves795 paragraphs plus three source tables with161 rows/793 cells and three declared spans; its existing paragraph text was already complete. Neither changes original retrieval facts or invents paragraphs. Dept3's observed original preserves18 paragraphs, no tables/file hints and one untranscribed image, remaining partial_text. Sepe retains active source-declared JSP file hints within art-main, including siblings outside its text body; the observed55-paragraph original has three unfetched file hints and remains partial_text. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse, H3i, Beijing, Dept3 and Yqgdxy additionally return separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. They use one shared extraction and count paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. The retained H3i original preserves181 paragraphs plus two source tables with42 rows/84 cells. Beijing preserves795 paragraphs plus three source tables with161 rows/793 cells and three declared spans; its existing paragraph text was already complete. Neither changes original retrieval facts or invents paragraphs. Dept3's observed original preserves18 paragraphs, no tables/file hints and one untranscribed image, remaining partial_text. Sepe retains active source-declared JSP file hints within art-main, including siblings outside its text body; the observed55-paragraph original has three unfetched file hints and remains partial_text. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed. The observed Yqgdxy original has two complete source paragraphs and no tables/images/file hints; this is one original, not all notices.",
             }
         },
         "history": {
@@ -1866,12 +1892,12 @@ pub fn schema() -> Value {
                     }
                 },
                 "allOf":[
-                    {"if":{"required":["kind"],"properties":{"kind":{"const":"article"}}},"then":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^(https?://(mse[.]buaa[.]edu[.]cn/info/(1061|1058)|h3i[.]buaa[.]edu[.]cn/info/1141|beijing[.]buaa[.]edu[.]cn/info/1014|dept3[.]buaa[.]edu[.]cn/info/1302)/[0-9]{1,10}[.]htm|http://mse[.]buaa[.]edu[.]cn(:80)?/call_board_detail[.]php[?]call_board_id=[0-9]{1,10})$"}}}}}},
+                    {"if":{"required":["kind"],"properties":{"kind":{"const":"article"}}},"then":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^(https?://(mse[.]buaa[.]edu[.]cn/info/(1061|1058)|h3i[.]buaa[.]edu[.]cn/info/1141|beijing[.]buaa[.]edu[.]cn/info/1014|dept3[.]buaa[.]edu[.]cn/info/1302|yqgdxy[.]buaa[.]edu[.]cn/info/1053)/[0-9]{1,10}[.]htm|http://mse[.]buaa[.]edu[.]cn(:80)?/call_board_detail[.]php[?]call_board_id=[0-9]{1,10})$"}}}}}},
                     {"if":{"required":["encoding"],"properties":{"encoding":{"const":"gb2312"}}},"then":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^http://mse[.]buaa[.]edu[.]cn(:80)?/(call_board_detail[.]php[?]call_board_id=[0-9]{1,10})?$"}}}}}},
                     {"if":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^http://mse[.]buaa[.]edu[.]cn(:80)?/call_board_detail[.]php[?]call_board_id=[0-9]{1,10}$"}}}}},"then":{"required":["kind","encoding"],"properties":{"kind":{"const":"article"},"encoding":{"const":"gb2312"}}}},
                     {"if":{"properties":{"provenance":{"properties":{"source_url":{"pattern":"^http://mse[.]buaa[.]edu[.]cn(:80)?/$"}}}}},"then":{"required":["encoding"],"properties":{"kind":{"const":"listing"},"encoding":{"const":"gb2312"}}}}
                 ],
-                "description": "Fully offline operator-asserted original: base64 original html, provenance.source_url, optional capture_timestamp/asserted_by. Default encoding:utf8 and absent kind or kind:listing retain reviewed news-center/SCSE and exact canonical HTTP/HTTPS observed college board admissions: IC tzgg; aviation xsgz1/tzgg or gkgs; Beijing/Mse/Sepe xwdt/gggs; Shenyuan index/tzgg; Zfai xxgg1; Iiif xwgg/tzgg, with .htm or bounded numeric filenames; H3i only rcpy/cpgg.htm; Dept3 only xwzx/xygg.htm. Explicit kind:article admits Mse info/1061 or info/1058, H3i info/1141, Beijing info/1014 and Dept3 info/1302 with 1..10-digit .htm filenames. Explicit encoding:gb2312 with one matching charset declaration additionally admits literal HTTP mse.buaa.edu.cn, optional :80: root / with absent kind or kind:listing, or exact call_board_detail.php and sole unescaped 1..10-digit call_board_id with kind:article. The root requires one bounded top-level inline classic MM_openBrWindow helper forwarding three distinct parameters unchanged to window.open; only unescaped three-string PHP-notice calls establish rows. Other popup namespaces are not notices. No JavaScript execution or inferred runtime navigation. Article layout-table body text and unlabelled footer remain separate, never invented paragraphs, grids or publication dates. Reuse borrowed decoded HTML, never a fabricated HTTP response. No live profile/query route or fetch permission is widened by history input. Historical era, directory/root/list identity and archive headers remain unverified. Literal source assertions and missing dates stay unchanged. Active HTML base changes fail; no request, cache update or attribution verification occurs.",
+                "description": "Fully offline operator-asserted original: base64 original html, provenance.source_url, optional capture_timestamp/asserted_by. Default encoding:utf8 and absent kind or kind:listing retain reviewed news-center/SCSE and exact canonical HTTP/HTTPS observed college board admissions: IC tzgg; aviation xsgz1/tzgg or gkgs; Beijing/Mse/Sepe xwdt/gggs; Shenyuan index/tzgg; Zfai xxgg1; Iiif xwgg/tzgg, with .htm or bounded numeric filenames; H3i only rcpy/cpgg.htm; Dept3 only xwzx/xygg.htm; Yqgdxy tzgg.htm or bounded tzgg filenames. Explicit kind:article admits Mse info/1061 or info/1058, H3i info/1141, Beijing info/1014, Dept3 info/1302 and Yqgdxy info/1053 with 1..10-digit .htm filenames. Explicit encoding:gb2312 with one matching charset declaration additionally admits literal HTTP mse.buaa.edu.cn, optional :80: root / with absent kind or kind:listing, or exact call_board_detail.php and sole unescaped 1..10-digit call_board_id with kind:article. The root requires one bounded top-level inline classic MM_openBrWindow helper forwarding three distinct parameters unchanged to window.open; only unescaped three-string PHP-notice calls establish rows. Other popup namespaces are not notices. No JavaScript execution or inferred runtime navigation. Article layout-table body text and unlabelled footer remain separate, never invented paragraphs, grids or publication dates. Reuse borrowed decoded HTML, never a fabricated HTTP response. No live profile/query route or fetch permission is widened by history input. Historical era, directory/root/list identity and archive headers remain unverified. Literal source assertions and missing dates stay unchanged. Active HTML base changes fail; no request, cache update or attribution verification occurs.",
             },
             "output": {
                 "type": "object",
@@ -1882,7 +1908,7 @@ pub fn schema() -> Value {
     output["article"]["output"]["properties"] = json!({
         "body_tables": {
             "type":"array","maxItems":MAX_ENTRIES,
-            "description":"Mse, H3i, Beijing and Dept3 source tables only; normalized text is derived from original HTML whose retrieval hash remains unchanged. Arrays preserve table/row/cell source order. Span attributes are DOM-decoded source strings and omitted when absent, not inferred defaults.",
+            "description":"Mse, H3i, Beijing, Dept3 and Yqgdxy source tables only; normalized text is derived from original HTML whose retrieval hash remains unchanged. Arrays preserve table/row/cell source order. Span attributes are DOM-decoded source strings and omitted when absent, not inferred defaults.",
             "items": {
                 "type":"object","additionalProperties":false,"required":["source_order","caption","rows"],
                 "properties": {

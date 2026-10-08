@@ -601,6 +601,244 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "yqgdxy_directory_bound_current_source": {
+          "issue": null,
+          "pr": null,
+          "status": "local-current-source-advertised-pagination-and-original-text-verified-unreviewed",
+          "base_head": "9931e5387c5ed24de493c3375cdb4efc3d35865b",
+          "owned_worktree": ".worktrees/yqgdxy-announcements",
+          "source_files": [
+            "src/net.rs",
+            "src/announcements.rs",
+            "src/announcements/yqgdxy.rs",
+            "src/main.rs"
+          ],
+          "directory_binding": {
+            "visible_source_order": 20,
+            "college": "仪器科学与光电工程学院",
+            "listed_root": "http://yqgdxy.buaa.edu.cn/",
+            "resolved_root": "http://yqgdxy.buaa.edu.cn/",
+            "selected_https_root": "https://yqgdxy.buaa.edu.cn/",
+            "selection_relation": "deliberate separate HTTPS observation, not an alias or protocol upgrade",
+            "current_directory_is_not_past_era_authority": true,
+            "directory_sha256": "9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d"
+          },
+          "source_contract": {
+            "board_uri": "https://yqgdxy.buaa.edu.cn/tzgg.htm",
+            "literal_root_href": "tzgg.htm",
+            "root_active_anchor_orders": [
+              124,
+              131
+            ],
+            "root_active_href_count": 198,
+            "metadata_hints_limit": 64,
+            "root_and_board_hints_truncated": true,
+            "selected_category": "tzgg",
+            "listing_view": "unique nymain/ny-right/text-list ul; direct li/a and ISO li/span dates",
+            "selected_page2_ordinal": 2,
+            "literal_advertised_page2_href": "tzgg/7.htm",
+            "page2_original_uri": "https://yqgdxy.buaa.edu.cn/tzgg/7.htm",
+            "pagination": "source-advertised scoped span.p_no ordinal only; not inferred filename arithmetic or automatic traversal",
+            "row_counts": {
+              "page1": {
+                "entries": 12,
+                "canonical1053": 7,
+                "other1052": 3,
+                "external": 0
+              },
+              "page2": {
+                "entries": 12,
+                "canonical1053": 2,
+                "other1052": 3,
+                "external": 0
+              }
+            },
+            "article_namespace": "exact canonical HTTPS /info/1053/<1..10-digit-id>.htm declared by selected retained source page",
+            "other_article_namespaces_not_admitted": true,
+            "article_view": "unique nymain/ny-right/art-main form; owned art-tit/h3 and unique leaf 日期： ISO-date span; owned art-body/v_news_content",
+            "shared_text_limits_unchanged": true
+          },
+          "observed_originals": [
+            {
+              "label": "robots",
+              "source_url": "https://yqgdxy.buaa.edu.cn/robots.txt",
+              "http_status": 404,
+              "bytes": 1693,
+              "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+              "fetched_at_unix_ms": 1791429067694,
+              "private_cache_body_and_metadata_verified": true
+            },
+            {
+              "label": "root",
+              "source_url": "https://yqgdxy.buaa.edu.cn/",
+              "http_status": 200,
+              "bytes": 58875,
+              "sha256": "6648542d124e58aaf1001c767ff2021ef3836d2a331937c5b5f1ec9715970c28",
+              "fetched_at_unix_ms": 1791429147956,
+              "complete_cache_native_byte_facts_equal": true,
+              "native_exit": 0,
+              "native_seconds": 0.36
+            },
+            {
+              "label": "board",
+              "source_url": "https://yqgdxy.buaa.edu.cn/tzgg.htm",
+              "http_status": 200,
+              "bytes": 32069,
+              "sha256": "64fc4b9277144f0d287206f87646c86484c43e96806ad7bacc59bc525ccd97c6",
+              "fetched_at_unix_ms": 1791429341640,
+              "complete_cache_native_byte_facts_equal": true,
+              "native_exit": 0,
+              "native_seconds": 0.32
+            },
+            {
+              "label": "first_original",
+              "source_url": "https://yqgdxy.buaa.edu.cn/info/1053/7292.htm",
+              "http_status": 200,
+              "bytes": 29121,
+              "sha256": "379226a7a44a0ba10c87a880ab4c7f5a4cace5f2adaf6a7c44b5946f46442ffd",
+              "fetched_at_unix_ms": 1791429666711,
+              "complete_cache_native_byte_facts_equal": true,
+              "native_exit": 0,
+              "native_seconds": 0.34
+            },
+            {
+              "label": "advertised_page2",
+              "source_url": "https://yqgdxy.buaa.edu.cn/tzgg/7.htm",
+              "http_status": 200,
+              "bytes": 32061,
+              "sha256": "1bcc687f33ed649bfcd2d56279d7a767e375bac7798bc09fb02ef6d62b8bd46e",
+              "fetched_at_unix_ms": 1791479205447,
+              "complete_cache_native_byte_facts_equal": true,
+              "native_exit": 0,
+              "native_seconds": 0.95
+            }
+          ],
+          "cold_robots_pacing": {
+            "native_exit": 8,
+            "native_seconds": 0.26,
+            "root_requested": false,
+            "normal_request_interval_ms": 60000,
+            "no_failed_resource_retry": true
+          },
+          "native_complete_comparisons": {
+            "first_board": {
+              "exit": 0,
+              "seconds": 0.09,
+              "entries": 12,
+              "whole_private_original_entry_array_equal": true
+            },
+            "advertised_second_page": {
+              "exit": 0,
+              "seconds": 0.95,
+              "entries": 12,
+              "whole_private_original_entry_array_equal": true
+            },
+            "first_original_article": {
+              "exit": 0,
+              "seconds": 0.11,
+              "published_at": "2026-09-21",
+              "paragraphs": 2,
+              "tables": 0,
+              "images": 0,
+              "file_hints": 0,
+              "result": "full_text",
+              "whole_original_heading_date_paragraphs_equal": true
+            },
+            "inclusive_date_filter": {
+              "since": "2026-09-20",
+              "until": "2026-09-21",
+              "exit": 0,
+              "seconds": 1.21,
+              "rows": 2,
+              "whole_original_selection_equal": true
+            },
+            "originals_are_separate_observation_times_not_simultaneous_or_deduplicated_corpus": true
+          },
+          "offline_history_compatibility": {
+            "originals": [
+              "retained current board",
+              "retained current advertised page2",
+              "retained current article"
+            ],
+            "commands": {
+              "board": {
+                "exit": 0,
+                "seconds": 0.03
+              },
+              "page2": {
+                "exit": 0,
+                "seconds": 0.03
+              },
+              "article": {
+                "exit": 0,
+                "seconds": 0.03
+              }
+            },
+            "whole_original_entries_or_article_facts_equal": true,
+            "raw_original_sha256_size_preserved": true,
+            "provenance": "operator_asserted",
+            "capture_timestamp": null,
+            "actual_historical_archive_capture_observed": false,
+            "no_invented_directory_or_request_facts": true
+          },
+          "native_source_refusals": {
+            "exit_codes": {
+              "unknown_category": 2,
+              "unadvertised_page": 7,
+              "other_news_namespace": 2,
+              "undeclared_original": 3,
+              "live_http_alias": 2
+            },
+            "requests": 0,
+            "governor_byte_unchanged": true
+          },
+          "focused_offline_proof": {
+            "new_source_consumers": 4,
+            "new_consumer_exit": 0,
+            "new_consumer_seconds_including_compilation": 18.38,
+            "new_consumer_execution_seconds": 0.37,
+            "affected_pagination_consumers": 2,
+            "pagination_exit": 0,
+            "pagination_seconds_including_compilation": 24.84,
+            "affected_history_admission_consumers": 1,
+            "history_admission_exit": 0,
+            "history_admission_seconds": 0.22,
+            "unique_cases": 7,
+            "full_292_library_or_cli_suite_run": false,
+            "format_exit": 0,
+            "format_seconds": 0.94,
+            "format_check_exit": 0,
+            "format_check_seconds": 0.5,
+            "strict_locked_offline_all_target_clippy_exit": 0,
+            "clippy_seconds": 22.05
+          },
+          "account_safety": {
+            "public_campus_gets": 5,
+            "authentication_attempts": 0,
+            "campus_writes": 0,
+            "same_permanent_process_shared_governor": true,
+            "request_interval_ms": 60000,
+            "background_interval_ms": 900000,
+            "governor_after_page2_sha256": "43c6df12728bf622ccd1040415b7627cb808e621a8b43b42cef2001eee9f7c9b",
+            "pending": null,
+            "network_failures": 0,
+            "safety_latched": false,
+            "authentication_armed": false,
+            "unchanged_during_offline_proof": true,
+            "no_reset_account_split_migration_retry_or_source_bypass": true,
+            "prior_completed_or_failed_sources_not_replayed": true
+          },
+          "delivery_limits": {
+            "temporary_native_observer_removed": true,
+            "fresh_owned_target": "target/native",
+            "parent_binaries_and_root_main_untouched": true,
+            "private_evidence_directory": "/home/ezra/.buaa-cli-yqgdxy-announcements-proof-20261008",
+            "source_names_prose_full_attributes_and_per_person_hashes_not_published": true,
+            "independent_review": "unavailable after prior upstream401; no retry/provider fallback/subagents",
+            "github": "prior quota stop; no calls/claim/issue/PR/push/merge/Pages",
+            "complete_colleges_history_attachments_media_life_not_claimed": true
+          }
+        },
         "dept3_exact_attributed_historical_board": {
           "issue": null,
           "pr": null,
