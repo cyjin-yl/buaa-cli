@@ -28,6 +28,7 @@ pub(crate) mod dept3;
 pub(crate) mod h3i;
 pub(crate) mod ic;
 pub(crate) mod iiif;
+pub(crate) mod math;
 pub(crate) mod mse;
 pub(crate) mod rse;
 pub(crate) mod sa;
@@ -1150,6 +1151,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "yqgdxy" {
         return yqgdxy::surface(mode, page);
     }
+    if college == "math" {
+        return math::surface(mode, page);
+    }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
         ("scse", "notices") => SCSE_NOTICES_URL,
@@ -1255,6 +1259,7 @@ fn describe_college_surface(
             | "ase"
             | "dept3"
             | "yqgdxy"
+            | "math"
     ) {
         college_html(response)?
     } else {
@@ -1832,7 +1837,7 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"One source-declared original as base64, byte length, SHA-256 and separate article/document retrieval facts. SCSE PDF framing or Sepe DOCX-labelled ZIP framing only; not a package/signature/safety certificate. Immutable byte cache; fresh SCSE PDF MIME and Sepe DOCX MIME/size admission precede equality. SCSE retains its missing-MIME allowance. Sepe source references are cache-only even with --online/--refresh. No OCR, text extraction, implicit article refresh or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe|dept3|yqgdxy [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse|sa|ase [root] [--online|--refresh]. Fixed public pages only; selected college boards bind one visible exact authoritative-directory member and their retained root declaration. Literal HTTP identities and separately selected HTTPS observations are not upgrades, aliases or protocol-equivalence claims. Rse is root metadata only; Sa and Ase lack observed root originals, not working notice adapters. Dept3 admits only xwzx/xygg.htm, not news-category1065 or other boards. Yqgdxy admits the root-declared tzgg.htm board, not other root navigation. H3i preserves the exact index.htm root and recruitment board; Zfai selects xxgg1.htm, Iiif xwgg/tzgg.htm, Mse and Sepe their own xwdt/gggs.htm. Bounded hints may be truncated and are not exhaustive discovery. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe|dept3|yqgdxy [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse|sa|ase|math [root] [--online|--refresh]. Fixed public pages only; selected college boards bind one visible exact authoritative-directory member and their retained root declaration. Literal HTTP identities and separately selected HTTPS observations are not upgrades, aliases or protocol-equivalence claims. Rse is root metadata only; Sa, Ase and Math lack observed root originals, not working notice adapters. Dept3 admits only xwzx/xygg.htm, not news-category1065 or other boards. Yqgdxy admits the root-declared tzgg.htm board, not other root navigation. H3i preserves the exact index.htm root and recruitment board; Zfai selects xxgg1.htm, Iiif xwgg/tzgg.htm, Mse and Sepe their own xwdt/gggs.htm. Bounded hints may be truncated and are not exhaustive discovery. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {

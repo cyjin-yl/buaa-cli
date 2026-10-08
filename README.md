@@ -4,6 +4,8 @@
 
 The exact source-declared Yqgdxy historical board query now retains two literal HTTPS records and a whole-verified454-byte index. Only the first returned literal URI match,20230530160943, is attempted; the original is refused at unsupported HTTP content encoding before usable body/actual header is returned. No second timestamp/cursor/protocol/encoding fallback. Three archive GETs including mandatory robots, zero direct campus/auth/write. Current-original history imports are not2023 content proof; actual original preservation and historical native interpretation remain blocked, not fabricated. [Exact source index and replay limits](docs/STATUS.md#yqgdxy-exact-historical-index-and-original-encoding-refusal).
 
+数学科学学院 has an exact-directory-bound fixed probe, **not verified root metadata or working notices**: `announcements college-source math root`. Visible member23 retains literal/resolved `http://math.buaa.edu.cn/`; selected `https://math.buaa.edu.cn/` is a separate deliberate observation, not an upgrade, alias, school code or historical-era authority. The first mandatory robots transport attempt exits7/10.14s before any root GET, without observed HTTP status/headers/body or a cached original. Preserve the shared failure/backoff; no retry, HTTP/host/TLS/proxy fallback or invented notice route. Notice implementation and original verification remain blocked. Two focused offline consumers defend literal directory identity and root-only admission, not remote content coverage. [Exact Math source frontier](docs/STATUS.md#math-exact-source-transport-frontier).
+
 ## Build and discover
 
 ```sh

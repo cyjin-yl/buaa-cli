@@ -152,6 +152,8 @@ const DEPT3_ROBOTS_URL: &str = "https://dept3.buaa.edu.cn/robots.txt";
 pub(crate) const YQGDXY_ROOT_URL: &str = "https://yqgdxy.buaa.edu.cn/";
 pub(crate) const YQGDXY_NOTICES_URL: &str = "https://yqgdxy.buaa.edu.cn/tzgg.htm";
 const YQGDXY_ROBOTS_URL: &str = "https://yqgdxy.buaa.edu.cn/robots.txt";
+pub(crate) const MATH_ROOT_URL: &str = "https://math.buaa.edu.cn/";
+const MATH_ROBOTS_URL: &str = "https://math.buaa.edu.cn/robots.txt";
 
 pub(crate) fn yqgdxy_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/tzgg.htm") {
@@ -434,6 +436,7 @@ enum SourceProfile {
     Ase,
     Dept3,
     Yqgdxy,
+    Math,
 }
 
 impl SourceProfile {
@@ -458,6 +461,7 @@ impl SourceProfile {
             Self::Ase => ASE_ROBOTS_URL,
             Self::Dept3 => DEPT3_ROBOTS_URL,
             Self::Yqgdxy => YQGDXY_ROBOTS_URL,
+            Self::Math => MATH_ROBOTS_URL,
         }
     }
 
@@ -482,6 +486,7 @@ impl SourceProfile {
             Self::Ase => ".buaa-cli-ase-cache",
             Self::Dept3 => ".buaa-cli-dept3-cache",
             Self::Yqgdxy => ".buaa-cli-yqgdxy-cache",
+            Self::Math => ".buaa-cli-math-cache",
         }
     }
 
@@ -589,6 +594,11 @@ impl SourceProfile {
                 url.host_str() == Some("yqgdxy.buaa.edu.cn")
                     && url.query().is_none()
                     && yqgdxy_path_allowed(url.path())
+            }
+            Self::Math => {
+                url.host_str() == Some("math.buaa.edu.cn")
+                    && url.query().is_none()
+                    && matches!(url.path(), "/" | "/robots.txt")
             }
         };
         if common_invalid || !allowed {
@@ -821,6 +831,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_yqgdxy(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Yqgdxy)
+    }
+
+    pub(crate) fn open_math(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Math)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2962,6 +2976,52 @@ mod tests {
             cached["retrieval"]["response_body_sha256"],
             hash(ARTICLE.as_bytes())
         );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn math_root_probe_refuses_undeclared_surfaces_before_transport() {
+        const BODY: &[u8] = b"<html><title>Synthetic root only</title></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET / HTTP/1.1"));
+            let headers = request.to_ascii_lowercase();
+            assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Math;
+        for raw in [
+            "https://math.buaa.edu.cn/unreviewed-board.htm",
+            "https://math.buaa.edu.cn/?page=1",
+            "http://math.buaa.edu.cn/",
+            "https://www.math.buaa.edu.cn/",
+        ] {
+            assert_eq!(
+                client
+                    .snapshot(&Url::parse(raw).unwrap(), false)
+                    .unwrap_err()
+                    .code,
+                "egress_denied"
+            );
+        }
+        assert_eq!(server.count(), 0);
+        seed(
+            &client,
+            MATH_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let root = Url::parse(MATH_ROOT_URL).unwrap();
+        let original = client.snapshot(&root, false).unwrap();
+        assert_eq!(original.body, BODY);
+        assert_eq!(server.count(), 1);
+        let mut cached_client = fixture.client(CacheMode::Offline, &server);
+        cached_client.profile = SourceProfile::Math;
+        let cached = cached_client.snapshot(&root, false).unwrap();
+        assert_eq!(cached.body, original.body);
+        assert_eq!(cached.sha256, original.sha256);
+        assert_eq!(cached.fetched_at_unix_ms, original.fetched_at_unix_ms);
         assert_eq!(server.count(), 1);
     }
 
