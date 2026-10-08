@@ -209,7 +209,15 @@ printf '%s\n' '{"college":"sepe","since":"2026-09-09","until":"2026-09-30"}' | .
 printf '%s\n' '{"url":"https://sepe.buaa.edu.cn/info/1078/2634.htm"}' | ./target/debug/buaa announcements article
 ```
 
-Shared text reads retain at most 1,024 nonempty source paragraphs, each at most 8 KiB, from HTML bounded to 2 MiB. Mse, H3i and Beijing count paragraphs plus table rows against the same1,024-block budget, with at most256 tables/cells per row,8-KiB normalized row/caption text and512-byte declared span strings. Paragraph-wrapped cells remain in `body_paragraphs` as well as the separate table records; there is no inferred paragraph/table interleaving or visual layout. Overflow is an error rather than truncation; no URL/source-specific allowance exists. The earlier shared512-to1024 paragraph correction and its1,024/1,025 proof retain their historical scope. Beijing's current structured-table boundary is1,022 paragraphs plus2 rows accepted,1,023 plus2 refused:1,024/1,025 combined blocks. This does not relax request, authentication or account-safety limits.
+自动化科学与电气工程学院 binds visible official-directory member15 and exact literal/resolved `http://dept3.buaa.edu.cn/`; the separately selected HTTPS root is not a protocol upgrade, alias or academic school-code assertion. Its root declares 学院公告 at `/xwzx/xygg.htm`. `announcements college-source dept3 [root|notices]` reports fixed source metadata; `{"college":"dept3"}` selects the five source-ordered `main/text-list` rows (`xygg` only), including one external reference that is never fetched. Dates come from direct Chinese-date spans, not body prose; absent/invalid/ambiguous dates remain unknown. Only page1 is declared and admitted. Canonical `/info/1302/` originals must be present in that retained board; root news-category1065 and the separate undergraduate/student-work boards are not admitted. The first selected original preserves its own heading, adjacent plain ISO header date and all18 nonempty source paragraphs. One untranscribed image makes the result `partial_text`; no file hints/tables occur in this original, and no image/attachment is downloaded. Shared flat-table extraction applies when a supported source table exists. Four actual public GETs (robots/root/board/one original), zero authentication attempts or campus writes; subsequent text reads are cache-only. This is an unreviewed local source slice, not complete college/history coverage or root-main/Pages deployment. [Original facts and limits](docs/STATUS.md#directory-bound-dept3-automation-notices).
+
+```sh
+# Cache-only source metadata and inclusive date selection; no raw original prose.
+./target/debug/buaa announcements college-source dept3 notices
+printf '%s\n' '{"college":"dept3","since":"2026-01-01"}' | ./target/debug/buaa announcements list
+```
+
+Shared text reads retain at most 1,024 nonempty source paragraphs, each at most 8 KiB, from HTML bounded to 2 MiB. Mse, H3i, Beijing and Dept3 count paragraphs plus table rows against the same1,024-block budget, with at most256 tables/cells per row,8-KiB normalized row/caption text and512-byte declared span strings. Paragraph-wrapped cells remain in `body_paragraphs` as well as the separate table records; there is no inferred paragraph/table interleaving or visual layout. Overflow is an error rather than truncation; no URL/source-specific allowance exists. The earlier shared512-to1024 paragraph correction and its1,024/1,025 proof retain their historical scope. Beijing's current structured-table boundary is1,022 paragraphs plus2 rows accepted,1,023 plus2 refused:1,024/1,025 combined blocks. This does not relax request, authentication or account-safety limits.
 
 The local Beijing table-record feature preserves all795 existing paragraphs and adds three source tables/161 rows/793 cells, including only the three declared span strings. Its956 combined blocks fit the unchanged budget. Every source paragraph/cell/caption/span and original header/retrieval fact privately matches the retained original. All802 active body text events were already paragraph-wrapped, so this adds structure, not recovered missing text. Table-only text is readable; nested/unowned/overflow fails and images/attachments remain partial/unfetched. No new GET, original refetch, engine or governor change. Local unreviewed stack only, not root-main integration or deployment. [Beijing table evidence and limits](docs/STATUS.md#source-ordered-beijing-table-records).
 
@@ -245,6 +253,7 @@ printf '%s\n' '{"url":"https://news.buaa.edu.cn/info/1010/69802.htm"}' | ./targe
 | Zfai | `zfai.buaa.edu.cn` | `/xxgg1` |
 | Iiif | `iiif.buaa.edu.cn` | `/xwgg/tzgg` |
 | Materials/Energy | `mse.buaa.edu.cn`, `sepe.buaa.edu.cn` | `/xwdt/gggs` |
+| Automation | `dept3.buaa.edu.cn` | `/xwzx/xygg.htm` only |
 
 Output is `announcements_history`; `retrieval.sha256` binds exactly supplied bytes. Reuse each existing source-specific parser and preserve its headings, available excerpts, publication-date rules and source order. Aviation student/public labels remain distinct and mobile copies are not extra records. Literal HTTP provenance and relative links are not upgraded; numeric filenames are not page ordinals or authority to fetch. Active HTML base changes fail closed. Missing publication or capture dates stay unknown; capture time never substitutes for publication. Historical era/layout, directory/root/list identity and archive response headers remain operator-asserted/unverified, without consulting today's directory as historical authority. Eight retained-current-original imports produce65 records equal to the same new binary's cache-only current listings; these prove compatibility, not historical captures. [Expanded observed-source evidence](docs/STATUS.md#observed-college-operator-asserted-historical-snapshots); [earlier Materials/Energy proof](docs/STATUS.md#materials-and-energy-operator-asserted-historical-snapshots).
 
@@ -255,6 +264,7 @@ Explicit `kind:"article"` imports source original bytes using the same provenanc
 | Materials | `mse.buaa.edu.cn` | `/info/1061/<filename>.htm`, `/info/1058/<filename>.htm` |
 | H3i | `h3i.buaa.edu.cn` | `/info/1141/<filename>.htm` |
 | Beijing | `beijing.buaa.edu.cn` | `/info/1014/<filename>.htm` |
+| Automation | `dept3.buaa.edu.cn` | `/info/1302/<filename>.htm` |
 
 Article output remains `announcements_history`, with `full_text` or `partial_text`, source title/publication facts, paragraphs and separate source-ordered table captions/rows/cells/declared spans. Original2-MiB HTML and1024 combined paragraph/row limits apply; images and file contents remain unfetched. Borrowed extraction never constructs a fake HTTP response. Retrieval contains only supplied-byte SHA-256, byte length and `operator_asserted` status—no fetched/cache/revalidation metadata, current directory attribution or source-listing receipt. Three retained **current** originals preserve all previously verified source content; this is cross-interface compatibility, not a historical capture or source-authenticity verification. [Article import evidence and boundaries](docs/STATUS.md#operator-asserted-college-article-originals).
 
@@ -362,7 +372,7 @@ This table projects `acceptance.json`; update both together. `implemented-offlin
 | fengrubei | Fengrubei template access | implemented-observed-read |
 | crater | Crater allocation/API/SSH | blocked |
 | organizations | Authoritative college/institute directory | implemented-observed-read |
-| announcements | College current/historical announcements | partial-live-verified: bounded university/computer/IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif sources and one original PDF; broader sources/history pending |
+| announcements | College current/historical announcements | partial-live-verified: bounded university/computer/IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Materials/Energy/Automation sources and one original PDF; broader sources/history pending |
 | archive | CDX/Memento historical lookup | partial-live-verified: dated index and one exact homepage replay; broader history pending |
 | recordings | Historical recordings/transcript segments | partial: local catalog search; remote media pending |
 | life | Life external object storage/catalog | partial: read-only catalog profile; object retrieval pending |

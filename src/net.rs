@@ -146,6 +146,20 @@ pub(crate) const SA_ROOT_URL: &str = "https://www.sa.buaa.edu.cn/";
 const SA_ROBOTS_URL: &str = "https://www.sa.buaa.edu.cn/robots.txt";
 pub(crate) const ASE_ROOT_URL: &str = "https://www.ase.buaa.edu.cn/";
 const ASE_ROBOTS_URL: &str = "https://www.ase.buaa.edu.cn/robots.txt";
+pub(crate) const DEPT3_ROOT_URL: &str = "https://dept3.buaa.edu.cn/";
+pub(crate) const DEPT3_NOTICES_URL: &str = "https://dept3.buaa.edu.cn/xwzx/xygg.htm";
+const DEPT3_ROBOTS_URL: &str = "https://dept3.buaa.edu.cn/robots.txt";
+
+pub(crate) fn dept3_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwzx/xygg.htm") {
+        return true;
+    }
+    path.strip_prefix("/info/1302/")
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn sepe_document_url_allowed(url: &Url) -> bool {
     if url.scheme() != "https"
@@ -400,6 +414,7 @@ enum SourceProfile {
     Sepe,
     Sa,
     Ase,
+    Dept3,
 }
 
 impl SourceProfile {
@@ -422,6 +437,7 @@ impl SourceProfile {
             Self::Sepe => SEPE_ROBOTS_URL,
             Self::Sa => SA_ROBOTS_URL,
             Self::Ase => ASE_ROBOTS_URL,
+            Self::Dept3 => DEPT3_ROBOTS_URL,
         }
     }
 
@@ -444,6 +460,7 @@ impl SourceProfile {
             Self::Sepe => ".buaa-cli-sepe-cache",
             Self::Sa => ".buaa-cli-sa-cache",
             Self::Ase => ".buaa-cli-ase-cache",
+            Self::Dept3 => ".buaa-cli-dept3-cache",
         }
     }
 
@@ -541,6 +558,11 @@ impl SourceProfile {
                 url.host_str() == Some("www.ase.buaa.edu.cn")
                     && url.query().is_none()
                     && matches!(url.path(), "/" | "/robots.txt")
+            }
+            Self::Dept3 => {
+                url.host_str() == Some("dept3.buaa.edu.cn")
+                    && url.query().is_none()
+                    && dept3_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -765,6 +787,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_ase(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Ase)
+    }
+
+    pub(crate) fn open_dept3(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Dept3)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2817,6 +2843,95 @@ mod tests {
         );
         assert_eq!(cached["body_tables"], output["body_tables"]);
         assert_eq!(cached["result"], "full_text");
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn dept3_article_observes_only_a_retained_board_declaration() {
+        const ARTICLE: &str = r#"<h1>Unrelated heading</h1><div class="main1"><form><div><h1>Original source heading</h1><div>2026-05-18</div><div><div class="v_news_content"><p>Source <em>inline</em> paragraph.</p></div></div><p>Outside body prose</p></div></form></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1302/42.htm "));
+            let headers = request.to_ascii_lowercase();
+            assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Dept3;
+        for (url, body) in [
+            (DEPT3_ROOT_URL, br#"<a href="xwzx/xygg.htm">Fixture board</a>"# as &[u8]),
+            (DEPT3_NOTICES_URL, br#"<div class="main"><div class="text-list"><ul><li><span class="time">2026&#24180;05&#26376;18&#26085;</span><div class="title"><a href="../info/1302/42.htm">Distinct listing teaser</a></div></li><li><div class="title"><a href="https://external.example/notice">External reference</a></div></li></ul></div></div>"# as &[u8]),
+        ] {
+            seed(&client, url, body, false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(
+            &client,
+            DEPT3_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        assert_eq!(
+            client
+                .snapshot(
+                    &Url::parse("https://dept3.buaa.edu.cn/info/1065/42.htm").unwrap(),
+                    false
+                )
+                .unwrap_err()
+                .code,
+            "egress_denied"
+        );
+        let undeclared = Url::parse("https://dept3.buaa.edu.cn/info/1302/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::dept3::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Dept3;
+        let target = Url::parse("https://dept3.buaa.edu.cn/info/1302/42.htm").unwrap();
+        let output = crate::announcements::dept3::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Original source heading");
+        assert_eq!(output["published_at"], "2026-05-18");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Source inline paragraph."])
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Dept3;
+        let cached = crate::announcements::dept3::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(cached["body_paragraphs"], output["body_paragraphs"]);
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
         assert_eq!(server.count(), 1);
     }
 

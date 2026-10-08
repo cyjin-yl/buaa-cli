@@ -601,6 +601,200 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "dept3_directory_bound_current_source": {
+          "issue": null,
+          "pr": null,
+          "status": "local-current-source-and-native-text-verified-unreviewed",
+          "base_head": "a895c1b89e2d7a425308063fdbe999f5f68d2e14",
+          "owned_worktree": ".worktrees/dept3-announcements",
+          "source_files": [
+            "src/net.rs",
+            "src/announcements.rs",
+            "src/announcements/dept3.rs",
+            "src/main.rs"
+          ],
+          "directory_binding": {
+            "visible_member_order": 15,
+            "college": "自动化科学与电气工程学院",
+            "listed_root": "http://dept3.buaa.edu.cn/",
+            "resolved_root": "http://dept3.buaa.edu.cn/",
+            "selected_https_root": "https://dept3.buaa.edu.cn/",
+            "selection_relation": "separate deliberate HTTPS observation, not a protocol upgrade/alias or academic school-code assertion",
+            "current_directory_is_not_historical_era_authority": true
+          },
+          "source_contract": {
+            "board_uri": "https://dept3.buaa.edu.cn/xwzx/xygg.htm",
+            "root_anchor_source_order": 5,
+            "literal_board_href": "xwzx/xygg.htm",
+            "category": "xygg",
+            "page_and_article_source_page": 1,
+            "board_rows": 5,
+            "external_rows_unfetched": 1,
+            "later_page_declarations": 0,
+            "listing_template": "one active main/text-list ul; direct li/div.title/a and li/span.time Chinese dates",
+            "article_namespace": "/info/1302/<1..10-digit-id>.htm; exact canonical HTTPS and retained board membership",
+            "excluded": "Root news-category1065, separate undergraduate/student-work boards, arbitrary URLs/aliases/query/credentials/ports/fragments, unadvertised later pages; no automatic traversal",
+            "article_template": "one active main1/form view, direct h1 original title, adjacent plain ISO-date div and scoped v_news_content; missing/invalid dates remain null without body-date fallback",
+            "text_policy": "Reuse shared source-ordered paragraph/flat-table extraction and existing2-MiB HTML/1024 combined paragraph-row/256 table-cell/8-KiB text/512-byte span bounds; no invented grid/spans, OCR or file/image download"
+          },
+          "observed_originals": {
+            "robots": {
+              "http_status": 404,
+              "bytes": 1693,
+              "sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+              "fetched_at_unix_ms": 1791414542944,
+              "first_cold_cli_exit": 8,
+              "first_cold_cli_seconds": 1.38,
+              "content_not_requested_until_normal_deadline": true
+            },
+            "root": {
+              "http_status": 200,
+              "bytes": 30420,
+              "sha256": "eb642b1fe6f2a7758f7fee90b62d732a7f558da7c0161f4e3faed0362870fa95",
+              "fetched_at_unix_ms": 1791414670515,
+              "exit": 0,
+              "seconds": 0.55,
+              "complete_private_active_href_bindings": 101,
+              "native_hint_limit": 64,
+              "native_hints_truncated": true
+            },
+            "board": {
+              "http_status": 200,
+              "bytes": 16834,
+              "sha256": "db107f0c9daf02443d95f9cdc17971163546bfa9e553d22f179c640cadb3a0fa",
+              "fetched_at_unix_ms": 1791414990850,
+              "exit": 0,
+              "seconds": 0.39,
+              "complete_source_rows": 5,
+              "native_metadata_hints": 55,
+              "native_hints_truncated": false
+            },
+            "selected_article": {
+              "source_row_order": 1,
+              "literal_href": "../info/1302/7795.htm",
+              "uri": "https://dept3.buaa.edu.cn/info/1302/7795.htm",
+              "http_status": 200,
+              "bytes": 38922,
+              "sha256": "a871dc6509aafe69c644f69592aca44794f28a9f1892424ce1fc15eea3309997",
+              "fetched_at_unix_ms": 1791415733139,
+              "first_original_exit": 0,
+              "first_original_seconds": 0.59,
+              "first_original_command": "temporary native same-source-module observer, retained board references cache-only; removed after actual article CLI proof",
+              "paragraphs": 18,
+              "tables": 0,
+              "file_hints": 0,
+              "untranscribed_images": 1,
+              "result": "partial_text"
+            },
+            "whole_private_cache_native_hash_size_time_equal": true,
+            "strict_utf8_roundtrips": true,
+            "source_names_prose_full_attributes_published": false
+          },
+          "native_proof": {
+            "listing": {
+              "exit": 0,
+              "seconds": 0.06,
+              "whole_source_title_date_order_literal_and_resolved_links_equal": true,
+              "entries": 5
+            },
+            "article": {
+              "build_exit": 0,
+              "build_seconds": 4.55,
+              "native_article_exit": 0,
+              "native_article_seconds": 0.08,
+              "whole_original_paragraphs_equal": true,
+              "original_header_title_date_equal": true,
+              "body_paragraph_count": 18,
+              "body_tables": 0,
+              "attachment_hints": 0,
+              "untranscribed_images": 1,
+              "result": "partial_text",
+              "original_hash_size_fetch_time_equal": true,
+              "source_retrieval_cache_status": "hit",
+              "listing_retrieval_cache_status": "hit",
+              "governor_bytes_unchanged": true,
+              "new_gets": 0,
+              "original_observed_public_gets_total": 4,
+              "auth_attempts_campus_writes": 0
+            },
+            "history_and_scope": {
+              "native_listing_exit": 0,
+              "native_listing_seconds": 0.02,
+              "whole_listing_entries_equal": true,
+              "native_article_exit": 0,
+              "native_article_seconds": 0.02,
+              "whole_original_header_paragraphs_tables_equal": true,
+              "body_paragraphs": 18,
+              "source_entries": 5,
+              "capture_dates_unknown": true,
+              "provenance": "operator_asserted",
+              "no_current_source_or_fetched_metadata_invented": true,
+              "actual_historical_capture_observed": false,
+              "filter_exit": 0,
+              "filter_seconds": 0.06,
+              "source_interval_entries": 3,
+              "refused_scopes": [
+                {
+                  "case": "unadvertised-page",
+                  "exit": 2
+                },
+                {
+                  "case": "unobserved-root-news-category",
+                  "exit": 2
+                },
+                {
+                  "case": "unadvertised-source-page",
+                  "exit": 2
+                },
+                {
+                  "case": "undeclared-canonical-article",
+                  "exit": 3
+                }
+              ],
+              "new_gets": 0,
+              "governor_bytes_unchanged": true
+            },
+            "reference_and_original_cache_reads": "hit; no network",
+            "privacy": "All original bodies, complete native text and ordered private oracles outside source under0700/exclusive no-follow fsynced0600; counts/indexes/equality/hash of whole original only are public"
+          },
+          "focused_offline_proof": {
+            "new_source_boundary_cases": 4,
+            "new_exit": 0,
+            "new_seconds": 11.86,
+            "new_execution_seconds": 0.62,
+            "affected_prefixed_date_history_cases": 3,
+            "affected_exit": 0,
+            "affected_seconds": 0.01,
+            "distinct_cases": 7,
+            "full_suite_run": false,
+            "coverage": "External/inert listing rows and unknown dates; original header/body/sibling ownership with no body-date promotion; literal HTTP history asserted-only/no fetched metadata; actual isolated consumer refuses undeclared/1065 targets before egress, observes one canonical original without auth headers and reuses it offline"
+          },
+          "source_cleanup_gate": {
+            "formatter_application_exit": 0,
+            "formatter_application_seconds": 0.82,
+            "format_check_exit": 0,
+            "format_check_seconds": 0.51,
+            "strict_clippy_exit": 0,
+            "strict_clippy_seconds": 17.03,
+            "temporary_entrypoint_removed": true
+          },
+          "account_safety": {
+            "public_gets": 4,
+            "targets": "robots/root/declared board/one declared original only",
+            "auth_attempts_campus_writes": 0,
+            "same_permanent_process_shared_governor": true,
+            "governor_sha256_after_selected_original": "44d2c8fe3bdacb31dce765744dd492340ba764ffec279808ed266fde1c37ee52",
+            "later_offline_bytes_unchanged": true,
+            "request_floor_ms": 60000,
+            "background_floor_ms": 900000,
+            "pending": null,
+            "network_failures": 0,
+            "safety_latched": false,
+            "authentication_armed": false,
+            "policy": "No reset/migration/account split, failed-source or completed observation replay, automatic login/retry, HTTP/host/TLS/robots/proxy/challenge/encoding/MIME bypass; prior Materials/Sepe/H3i gaps retain distinct scopes"
+          },
+          "remaining_and_review": "Selected current board and one original only; other articles/boards/colleges/eras, actual historical captures, complete attachments/recordings/Life and aggregate non-VPN acceptance remain unfinished. Current originals imported offline prove compatibility, not historical capture/publisher/era authenticity. Rust-analyzer unchanged/unavailable; upstream source-inspection401 and GitHub quota stops retained, no retry/provider fallback/subagent or independent exact-head approval/new issue/claim/PR/push/merge/root-main/Pages integration. Final compiled evidence/discovery identity is recorded separately."
+        },
         "scse_pdf_fresh_mime_admission_correction": {
           "issue": null,
           "pr": null,
