@@ -601,6 +601,125 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "dept3_exact_attributed_historical_board": {
+          "issue": null,
+          "pr": null,
+          "status": "exact-source-uri-attributed-2022-original-and-native-listing-verified-unreviewed",
+          "base_head": "3f3db95e4a3d5ce25ccc7b08645c65ef44444063",
+          "owned_worktree": ".worktrees/dept3-archived-notices",
+          "rust_code_changed": false,
+          "native_source_head": "3f3db95e4a3d5ce25ccc7b08645c65ef44444063",
+          "native_binary_sha256": "39e780900459aaa50e8b0c9c19d667bed903c45600eac9b1f52b83065733442f",
+          "source_binding": {
+            "exact_board_uri": "https://dept3.buaa.edu.cn/xwzx/xygg.htm",
+            "root_source_order": 5,
+            "literal_root_href": "xwzx/xygg.htm",
+            "root_raw_sha256": "eb642b1fe6f2a7758f7fee90b62d732a7f558da7c0161f4e3faed0362870fa95",
+            "current_board_raw_sha256": "db107f0c9daf02443d95f9cdc17971163546bfa9e553d22f179c640cadb3a0fa",
+            "current_directory_not_era_authority": true
+          },
+          "exact_index": {
+            "exit": 0,
+            "seconds": 5.03,
+            "http_status": 200,
+            "raw_bytes": 475,
+            "raw_sha256": "bb3f47b711613bdf0131246b1f920741cbc4bb76d787e6a72491eac8645dab9f",
+            "fetched_at_unix_ms": 1791418415315,
+            "limit": 2,
+            "date_bounds_cursor_supplied": false,
+            "records": 2,
+            "unfollowed_next_cursor": true,
+            "complete_history": false,
+            "whole_private_cache_hash_size_time_equal": true
+          },
+          "literal_record_selection": {
+            "query_original_uri": "https://dept3.buaa.edu.cn/xwzx/xygg.htm",
+            "selection_rule": "first returned record whose literal original_url exactly equals the source-declared HTTPS query; no URI/epoch rewrite and no prior capture attempt",
+            "selected_index_record_ordinal": 2,
+            "selected_original_uri": "https://dept3.buaa.edu.cn/xwzx/xygg.htm",
+            "selected_timestamp": "20220125023751",
+            "excluded_records": [
+              {
+                "index_ordinal": 1,
+                "original_uri": "http://dept3.buaa.edu.cn/xwzx/xygg.htm",
+                "capture_timestamp": "20211127014512",
+                "reason": "literal original_uri differs from selected exact HTTPS query; not a protocol-equivalence or fallback candidate"
+              }
+            ],
+            "first_only_exact_uri_original_request": true,
+            "cursor_followed": false,
+            "archive_record_lengths_are_not_original_body_lengths": true,
+            "record_digest_not_verified_against_body": true,
+            "current_directory_not_historical_era_authority": true,
+            "selection_completed_before_first_capture": true
+          },
+          "actual_attributed_original": {
+            "exit": 0,
+            "seconds": 1.62,
+            "uri": "https://dept3.buaa.edu.cn/xwzx/xygg.htm",
+            "timestamp": "20220125023751",
+            "http_status": 200,
+            "content_type": "text/html",
+            "raw_bytes": 20170,
+            "raw_sha256": "e208f6ed3f86fe52cdbb022ea9d22246dd5130888bee361a17f94ad1d3591f27",
+            "fetched_at_unix_ms": 1791418679344,
+            "whole_cache_native_base64_hash_size_time_equal": true,
+            "exact_memento_and_original_rel_target_equal": true,
+            "strict_utf8_roundtrip": true,
+            "archive_record_length_5531_is_not_body_length": true,
+            "record_digest_verified_against_body": false,
+            "capture_publication_date_unknown": true
+          },
+          "actual_native_history": {
+            "native_exit": 0,
+            "native_seconds": 0.02,
+            "source_entries": 10,
+            "whole_source_title_date_order_literal_and_resolved_links_equal": true,
+            "raw_original_hash_and_size_equal": true,
+            "source_publication_dates": [
+              "2021-11-24",
+              "2021-11-16",
+              "2021-11-05",
+              "2021-06-28",
+              "2021-06-28",
+              "2021-06-28",
+              "2021-06-16",
+              "2021-01-13",
+              "2020-08-26",
+              "2020-07-06"
+            ],
+            "independently_observed_exact_memento_original": true,
+            "source_capture_timestamp_compact": "20220125023751",
+            "native_capture_timestamp_utc": "2022-01-25T02:37:51Z",
+            "history_interface_provenance": "operator_asserted; independently retained native capture receipt proves archive attribution separately, not historical directory/publisher authenticity",
+            "current_source_attribution_and_retrieval_not_invented": true,
+            "current2026_board_not_substituted_for2022": true,
+            "new_gets": 0,
+            "original_names_prose_full_attributes_published": false,
+            "proof_helper_correction": "The native history projection converts the compact asserted input capture timestamp to UTC ISO8601; compare normalized UTC semantics, not raw input spelling. Entries, original SHA/size and URI already equal; retained command/output not repeated or changed."
+          },
+          "cache_only_original_reuse": {
+            "native_exit": 0,
+            "native_seconds": 0.01,
+            "cache_status": "hit",
+            "whole_immutable_original_and_archive_header_projection_equal": true,
+            "original_fetched_time_unchanged": true,
+            "new_gets": 0,
+            "governor_sha256": "fb48dd38a00cf6881c63ce39334b452c760df350f1c773e05d3f753ab1bc15c5",
+            "governor_bytes_unchanged": true
+          },
+          "proof_oracle_corrections": "Private helpers only: completeness is nested, normalized original_link is the URI not raw multi-link header, and history compact timestamp projects UTC ISO8601. Retained originals/native output unchanged; no completed command/source replay or product fix.",
+          "account_safety": {
+            "separate_archive_gets": 2,
+            "direct_campus_gets_auth_attempts_writes": 0,
+            "same_permanent_process_shared_governor": true,
+            "governor_sha256": "fb48dd38a00cf6881c63ce39334b452c760df350f1c773e05d3f753ab1bc15c5",
+            "later_offline_bytes_unchanged": true,
+            "policy": "Existing robots and60-second/15-minute floors/history/latches retained; no HTTP-record replay, cursor/other timestamp/article/college traversal, failed-source replay, source/protocol/host/TLS/robots/auth/proxy/encoding/MIME bypass, reset/migration/account split or automatic login."
+          },
+          "privacy": "Actual originals/full native entries/ordered oracle outside source0700/exclusive no-follow fsynced0600; public whole-original hashes/counts/dates/indexes/equality only.",
+          "remaining": "One exact2022 board original, not all pages/captures/eras/colleges/full history or publisher/historical-organization authenticity. Current2026 directory/root/list not substituted into2022. Other original articles/files/images unfinished. Materials modern-board gap and Sepe/H3i failed originals retain distinct scope/no replay. Review401/GitHub quota stop persists; no new approval/review/claim/issue/PR/push/merge/root-main/Pages or Rust build/fmt/clippy/tests. Unchanged3f3 source proof retains prior scope."
+        },
         "dept3_directory_bound_current_source": {
           "issue": null,
           "pr": null,
