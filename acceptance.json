@@ -601,6 +601,114 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "yqgdxy_exact_historical_board_index_and_refusal": {
+          "issue": null,
+          "pr": null,
+          "status": "exact-source-index-verified-selected-original-encoding-refused-unreviewed",
+          "base_head": "70b8d92112e829d72048f820bac902624f1afbd9",
+          "owned_worktree": ".worktrees/yqgdxy-archived-notices",
+          "rust_code_changed": false,
+          "native_binary_sha256": "e3b85173b0dd07d9b0dba2a10d58396a9d479fce44206e907f409ed164d7ce9d",
+          "new_build_tests_or_formatter_run": false,
+          "source_binding": {
+            "literal_board_uri": "https://yqgdxy.buaa.edu.cn/tzgg.htm",
+            "literal_root_href": "tzgg.htm",
+            "root_active_anchor_orders": [
+              124,
+              131
+            ],
+            "current_root_original_sha256": "6648542d124e58aaf1001c767ff2021ef3836d2a331937c5b5f1ec9715970c28",
+            "current_directory_http_identity": "http://yqgdxy.buaa.edu.cn/",
+            "current_directory_is_not_protocol_or_past_era_authority": true
+          },
+          "required_archive_robots": {
+            "native_cold_exit": 8,
+            "native_cold_seconds": 0.95,
+            "index_requested_before_normal_deadline": false,
+            "http_status": 404,
+            "bytes": 146,
+            "sha256": "55f7d9e99b8e2d4e0e193b2f0275501e6d9c1ebd29cadbea6a0da48a8587e3e0",
+            "fetched_at_unix_ms": 1791481534050,
+            "cache_body_and_metadata_verified": true
+          },
+          "exact_source_index": {
+            "input": {
+              "url": "https://yqgdxy.buaa.edu.cn/tzgg.htm",
+              "limit": 2
+            },
+            "from_to_cursor": null,
+            "native_exit": 0,
+            "native_seconds": 3.37,
+            "http_status": 200,
+            "bytes": 454,
+            "sha256": "b10718d5909c9f55d7036a5d76045c78525b89e4aac41db624dd8a474cac5e32",
+            "fetched_at_unix_ms": 1791481657083,
+            "whole_cache_native_original_and_records_equal": true,
+            "records": [
+              {
+                "ordinal": 1,
+                "literal_original_uri": "https://yqgdxy.buaa.edu.cn/tzgg.htm",
+                "timestamp": "20230530160943",
+                "archive_record_length": 7028,
+                "capture_body_sha256": null,
+                "reported_digest_verified": false
+              },
+              {
+                "ordinal": 2,
+                "literal_original_uri": "https://yqgdxy.buaa.edu.cn/tzgg.htm",
+                "timestamp": "20230531232148",
+                "archive_record_length": 5496,
+                "capture_body_sha256": null,
+                "reported_digest_verified": false
+              }
+            ],
+            "selected_first_literal_match_before_any_replay": 1,
+            "uri_protocol_mismatches": 0,
+            "cursor_unfollowed": true,
+            "complete_history": false,
+            "archive_record_length_is_not_original_body_length": true
+          },
+          "sole_selected_original_attempt": {
+            "uri": "https://yqgdxy.buaa.edu.cn/tzgg.htm",
+            "timestamp": "20230530160943",
+            "native_exit": 3,
+            "native_seconds": 1.91,
+            "error": "unsupported: public source content encoding is not supported",
+            "usable_original_body_or_actual_encoding_header_returned": false,
+            "second_capture_cursor_uri_protocol_host_or_encoding_fallback_attempted": false
+          },
+          "historical_native_interpretation": {
+            "status": "blocked",
+            "reason": "no usable exact original to compare or parse; current/synthetic template compatibility is not2023 content proof",
+            "prerequisite": "admissible exact original with independent response/provenance facts or genuinely changed authorized source prerequisite",
+            "original_publication_date": "unknown",
+            "publisher_authenticity_and_historical_directory_identity": "unverified"
+          },
+          "account_safety": {
+            "archive_gets": 3,
+            "direct_campus_gets": 0,
+            "authentication_attempts": 0,
+            "campus_writes": 0,
+            "same_permanent_process_shared_governor": true,
+            "request_interval_ms": 60000,
+            "background_interval_ms": 900000,
+            "state_after_refusal_sha256": "abeb1e18ff215772d41d5f4aacbfac64f8fcd7554819f5d76cce17c3ec379ae6",
+            "pending": null,
+            "network_failures": 0,
+            "safety_latched": false,
+            "authentication_armed": false,
+            "no_state_reset_account_split_migration_or_challenge_tls_robots_proxy_encoding_mime_bypass": true,
+            "prior_failed_or_completed_targets_not_replayed": true
+          },
+          "projection_limits": {
+            "private_packet_directory": "/home/ezra/.buaa-cli-yqgdxy-archived-notices-proof-20261008",
+            "private_original_names_prose_full_attributes_or_per_person_digests_not_published": true,
+            "independent_review": "prior401 stop; no retry/provider fallback/subagents",
+            "github": "prior quota stop; no calls/claim/issue/PR/push/merge/Pages",
+            "new_compiled_manifest_claimed": false,
+            "aggregate_goal": "partial and active"
+          }
+        },
         "yqgdxy_directory_bound_current_source": {
           "issue": null,
           "pr": null,
