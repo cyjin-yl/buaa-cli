@@ -58,6 +58,8 @@ The new `Offline Rust` workflow fetches the declared toolchain and locked depend
 
 ## 2026-10-17: bounded Beijing source correction
 
+The later synthetic ownership regression covers the exact SVG/style/foreignObject case using the existing script/style/template/noscript ancestor policy. A bare SVG/foreignObject copy remains a competing active owner and is not silently excluded. Ordinary template controls and ambiguous active-owner rejection are retained; no broader foreign-content policy or shared legacy-parser semantic rewrite is introduced.
+
 PR96 / issue95 remains stacked on PR94 and retains the original Beijing contract, not a new college/history claim. The refreshed child inherits the earliest shared directory/source-admission/ordinal corrections and offline workflow via a non-force merge. Its own surface, discovery, list and article-declaration callbacks admit HTML once, then preserve downstream errors inside the transport result until exact original bytes persist privately. Row heading and href are bound to the same unique source anchor; ambiguous headings/anchors refuse, conflicting row/header dates remain unknown, and inert views cannot supply identity. Existing table-order and 1,024/1,025 bounds remain unchanged. Added synthetic/real-loopback consumers cover these boundaries without campus traffic. Exact-head exercised proof and independent review are recorded in the PR; workflow presence is not an executed trusted check, and no runtime/deployment/maintainer approval is inferred from the old receipts below.
 ## 2026-10-03: directory-bound Shenyuan college notices
 
