@@ -603,6 +603,12 @@
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "mse_table_text_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/107",
+          "boundary_revision_20261017": {
+            "published_source_reviewed": "e049becd1d655ec2fae0a7194dfe77a27592967d",
+            "contract": "Whole ordered multi-table/caption/row/cell/header/span records, unequal source row widths and source-present empty or leading-zero spans remain exact source facts. No inferred cells, span expansion or OCR. Existing attachment-bearing tables stay partial_text with unfetched hints. Native article schema explicitly exposes optional table-extension types as a partial projection, not complete validation of common text/provenance fields.",
+            "focused_fixture_contract": "Boundary pairs cover256/257 tables and cells,8192/8193-byte normalized row/caption text,512/513-byte spans and shared paragraph-plus-row limits. Nested, empty and code/fallback-only source bodies refuse. Existing original-versus-derived retrieval facts and source/membership/selected-only refresh gates are inherited unchanged.",
+            "scope": "No new campus reads or authentication, private original/cell text publication, production-governor changes, campus writes, issue closure or inferred source/CI approval. Historical ten-case evidence retains its original head and scope."
+          },
           "stack_base": "PR106 exact bb2dad9fb359718ed73bc9950c3bd75b804b1350; owned work/mse-table-text, dependent on unmerged PR106 and PR104/PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
           "command": "announcements article with the same retained-board-declared canonical Mse URL and existing source_page selection; cache-only original reused, no new command or endpoint",
           "source_original": {

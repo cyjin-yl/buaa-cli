@@ -1,5 +1,9 @@
 # Development status
 
+## Materials table boundary review
+
+The 2026-10-17 PR108 follow-up keeps the bounded source-table implementation rather than changing the data model or adding inferred cells. New focused cases compare the entire two-table ordered value, unequal source row widths, captions, `th` facts and only source-present empty/leading-zero spans. Boundary pairs exercise 256/257 tables and cells, 8192/8193-byte row/caption text, 512/513-byte source spans, and the shared paragraph-plus-row block budget; nested, empty and code/fallback-only bodies must refuse rather than fabricate readable text. A table with an unfetched document attachment retains the existing explicit `partial_text` result and hint, not a new download. The native article schema now explicitly labels its typed table fields as an optional partial projection, not a complete validator of common paragraph/retrieval fields. These synthetic cases and current native cache-only proof remain separate from the historical ten-case/live-original receipts below. The retained original is not fetched again, and exact source hash/time are never replaced by hashes of derived table output. No OCR, visual grid or span expansion is introduced.
+
 ## Source-ordered Mse table text
 
 Bounded [issue #107](https://github.com/cyjin-yl/buaa-cli/issues/107) closes the known nonparagraph table-text gap in the already retained Mse original, not a new endpoint, source crawl or fixture-only adapter. Owned `work/mse-table-text` starts at PR106 exact `bb2dad9fb359718ed73bc9950c3bd75b804b1350`; PR106 and PR104/PR102/PR100/PR98/PR96/PR94 remain unmerged. Root-main, parent worktrees/binaries and deployed Pages are unchanged. External exact-head approval, trusted checks and maintainer stack decisions remain separate gates; implementation proceeds without polling or waiting for them.

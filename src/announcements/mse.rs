@@ -680,6 +680,118 @@ mod tests {
     }
 
     #[test]
+    fn mse_tables_with_unfetched_attachments_remain_explicitly_partial() {
+        let response = source(
+            "<h3>Original table heading</h3>",
+            "<table><tr><td>Source cell <a href=\"material.pdf\">Declared material</a></td></tr></table>",
+        );
+        let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["attachments"]["found"], true);
+        assert_eq!(output["attachments"]["hints"], json!([{"href":"material.pdf","text":"Declared material"}]));
+        assert_eq!(output["body_tables"][0]["rows"][0]["cells"], json!([{"header":false,"text":"Source cell Declared material"}]));
+        assert_eq!(output["completeness"]["missing_nonparagraph_content"], "image text and attachment contents are not reconstructed or downloaded");
+    }
+
+    #[test]
+    fn mse_tables_preserve_whole_order_and_only_source_present_cells_and_spans() {
+        let response = source(
+            "<h3>Original table heading</h3>",
+            "<table><caption>First <b>source</b> caption</caption><tr><th rowspan=\"\">First header</th><td colspan=\"001\">Before <em>inline</em> after</td></tr><tr><td>Short row</td></tr></table><noscript><table><tr><td>Inactive fallback table</td></tr></table></noscript><table><tr><td rowspan=\"2\" colspan=\"3\">Last source cell<style>inactive style</style><template>inactive template</template><noscript>inactive fallback</noscript></td></tr></table>",
+        );
+        let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
+        assert_eq!(output["body_table_count"], 2);
+        assert_eq!(output["body_table_row_count"], 3);
+        assert_eq!(output["body_table_cell_count"], 4);
+        assert_eq!(
+            output["body_tables"],
+            json!([
+                {"source_order":1,"caption":"First source caption","rows":[
+                    {"cells":[{"header":true,"text":"First header","rowspan":""},{"header":false,"text":"Before inline after","colspan":"001"}]},
+                    {"cells":[{"header":false,"text":"Short row"}]}
+                ]},
+                {"source_order":2,"caption":null,"rows":[
+                    {"cells":[{"header":false,"text":"Last source cell","rowspan":"2","colspan":"3"}]}
+                ]}
+            ])
+        );
+    }
+
+    #[test]
+    fn mse_table_count_cell_text_caption_and_span_limits_refuse_overflow() {
+        for (bounded, overflow) in [
+            (
+                "<table><tr><td>x</td></tr></table>".repeat(MAX_ENTRIES),
+                "<table><tr><td>x</td></tr></table>".repeat(MAX_ENTRIES + 1),
+            ),
+            (
+                format!("<table><tr>{}</tr></table>", "<td>x</td>".repeat(MAX_ENTRIES)),
+                format!("<table><tr>{}</tr></table>", "<td>x</td>".repeat(MAX_ENTRIES + 1)),
+            ),
+            (
+                format!("<table><tr><td>{}</td></tr></table>", "x".repeat(MAX_PARAGRAPH)),
+                format!("<table><tr><td>{}</td><td>y</td></tr></table>", "x".repeat(MAX_PARAGRAPH)),
+            ),
+            (
+                format!("<table><caption>{}</caption><tr><td>x</td></tr></table>", "x".repeat(MAX_PARAGRAPH)),
+                format!("<table><caption>{}</caption><tr><td>x</td></tr></table>", "x".repeat(MAX_PARAGRAPH + 1)),
+            ),
+            (
+                format!("<table><tr><td rowspan=\"{}\" colspan=\"{}\">x</td></tr></table>", "0".repeat(MAX_TEXT), "1".repeat(MAX_TEXT)),
+                format!("<table><tr><td rowspan=\"{}\">x</td></tr></table>", "0".repeat(MAX_TEXT + 1)),
+            ),
+            (
+                format!("<table><tr><td colspan=\"{}\">x</td></tr></table>", "1".repeat(MAX_TEXT)),
+                format!("<table><tr><td colspan=\"{}\">x</td></tr></table>", "1".repeat(MAX_TEXT + 1)),
+            ),
+        ] {
+            let response = source("<h3>Original table heading</h3>", &bounded);
+            assert_eq!(
+                normalize(&response, &college_html(&response).unwrap()).unwrap()["result"],
+                "full_text"
+            );
+            let response = source("<h3>Original table heading</h3>", &overflow);
+            assert_eq!(
+                normalize(&response, &college_html(&response).unwrap()).unwrap_err().code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn mse_table_rows_and_paragraphs_share_the_existing_block_budget() {
+        for (rows, accepted) in [(MAX_BODY_PARAGRAPHS - 1, true), (MAX_BODY_PARAGRAPHS, false)] {
+            let response = source(
+                "<h3>Original table heading</h3>",
+                &format!("<p>Source paragraph.</p><table>{}</table>", "<tr><td>x</td></tr>".repeat(rows)),
+            );
+            let result = normalize(&response, &college_html(&response).unwrap());
+            if accepted {
+                let output = result.unwrap();
+                assert_eq!(output["body_table_row_count"], rows);
+                assert_eq!(output["body_paragraph_count"], 1);
+            } else {
+                assert_eq!(result.unwrap_err().code, "unavailable");
+            }
+        }
+    }
+
+    #[test]
+    fn mse_nested_or_empty_nontext_tables_do_not_fabricate_readable_content() {
+        for body in [
+            "<table><tr><td>Outer<table><tr><td>Nested source</td></tr></table></td></tr></table>",
+            "<table><tr><td><script>code only</script><template>inactive only</template><noscript>fallback only</noscript></td></tr></table>",
+            "<table><tr><td></td></tr></table>",
+        ] {
+            let response = source("<h3>Original table heading</h3>", body);
+            assert_eq!(
+                normalize(&response, &college_html(&response).unwrap()).unwrap_err().code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
     fn mse_table_row_budget_rejects_overflow_without_partial_success() {
         let bounded = source(
             "<h3>Original table heading</h3>",

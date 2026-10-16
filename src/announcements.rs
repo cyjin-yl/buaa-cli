@@ -1134,7 +1134,7 @@ pub fn schema() -> Value {
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Partial output schema projection: only the optional Mse table extension below is typed; common paragraph, publication, attachment, completeness and retrieval fields remain descriptive, not a complete output validator. Source paragraph text excludes code/fallback markup and retains original publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {
@@ -1177,6 +1177,16 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mse_article_schema_exposes_optional_tables_without_claiming_complete_validation() {
+        let output = schema();
+        let article = &output["article"]["output"];
+        assert!(article["description"].as_str().unwrap().starts_with("Partial output schema projection:"));
+        assert_eq!(article["properties"]["body_tables"]["type"], "array");
+        assert!(article.get("required").is_none());
+        assert!(article.get("additionalProperties").is_none());
+    }
 
     fn listing_html() -> String {
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>通知公告-新闻网</title></head><body>
