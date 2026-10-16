@@ -66,15 +66,16 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "mse", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(response, &document, "mse", attribution))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let titles = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&titles)
-        .next()
+        .find(|node| !inert_element(*node))
         .map(element_text)
         .unwrap_or_default();
     if title.len() > MAX_TEXT {
@@ -499,6 +500,23 @@ mod tests {
             parse_listing(&duplicate_headings, &base).unwrap_err().code,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn mse_listing_uses_active_title_view_and_direct_source_facts() {
+        let inactive = listing("<li><a href=\"../info/1061/99.htm\"><h3>Inactive view heading</h3></a></li>");
+        let active = listing("<li><a href=\"../info/1061/42.htm\"><template><h3>Inactive nested heading</h3><p>Inactive excerpt</p><span>2020.01.01</span></template><h3>Active source heading</h3><p>Active source excerpt</p><span>2026.09.21</span></a></li>");
+        let document = Html::parse_document(&format!(
+            "<template><title>Inactive document title</title>{}</template><title>Active document title</title>{}",
+            inactive.html(), active.html()
+        ));
+        let parsed = parse_listing(&document, &Url::parse(MSE_NOTICES_URL).unwrap()).unwrap();
+        assert_eq!(parsed.title, "Active document title");
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].title, "Active source heading");
+        assert_eq!(parsed.entries[0].summary.as_deref(), Some("Active source excerpt"));
+        assert_eq!(parsed.entries[0].date.as_deref(), Some("2026-09-21"));
+        assert_eq!(parsed.entries[0].resolved_http_url.as_deref(), Some("https://mse.buaa.edu.cn/info/1061/42.htm"));
     }
 
     #[test]
