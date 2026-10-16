@@ -180,7 +180,7 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
             "div.pb_sys_common span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/index/tzgg/"),
         )
-    })??
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
