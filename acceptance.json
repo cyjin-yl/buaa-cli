@@ -602,6 +602,32 @@
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "mse_table_text_slice": {
+          "foster_owner_correction_20261017": {
+            "finding": "The source-inference candidate was executed before repair and genuinely returned full_text with only the kept cell, losing unowned source text. It is not merely a prepared or assumed defect.",
+            "red_source_head": "753d0c8db92f1949d8b31fbcee414d7bf708e92a",
+            "same_consumer": "announcements::mse::tests::mse_unowned_table_text_cannot_be_dropped_by_foster_parenting",
+            "red": {
+              "exit": 101,
+              "executed": 1,
+              "passed": 0,
+              "failed": 1
+            },
+            "green": {
+              "exit": 0,
+              "executed": 1,
+              "passed": 1,
+              "failed": 0
+            },
+            "locked_parser_observation": {
+              "fostered_direct_body_text_nodes": 1,
+              "fostered_text_bytes": 19,
+              "kept_cell_text_bytes": 16,
+              "values_printed": false
+            },
+            "correction": "For Mse bodies containing active tables, require active text to be owned inside that source body by a source paragraph, a direct-row table cell, a direct caption, or a surfaced document hint; inert payloads remain excluded. Stop ancestry at the source body so external page-layout cells cannot lend ownership. Existing flat table-only text/budgets, span strings, image/attachment partial results and every other source remain unchanged.",
+            "additional_consumer": "mse_table_body_ownership_keeps_hints_without_borrowing_layout_cells checks supported paragraphs/captions/cells/document hints and refuses ownership from a page-layout ancestor. Final focused and retained-original/model proof follow separately.",
+            "production_governor_fingerprint_omitted": true
+          },
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/107",
           "boundary_revision_20261017": {
             "published_source_reviewed": "e049becd1d655ec2fae0a7194dfe77a27592967d",

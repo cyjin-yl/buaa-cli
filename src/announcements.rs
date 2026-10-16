@@ -1210,7 +1210,12 @@ mod tests {
     fn mse_article_schema_exposes_optional_tables_without_claiming_complete_validation() {
         let output = schema();
         let article = &output["article"]["output"];
-        assert!(article["description"].as_str().unwrap().starts_with("Partial output schema projection:"));
+        assert!(
+            article["description"]
+                .as_str()
+                .unwrap()
+                .starts_with("Partial output schema projection:")
+        );
         assert_eq!(article["properties"]["body_tables"]["type"], "array");
         assert!(article.get("required").is_none());
         assert!(article.get("additionalProperties").is_none());

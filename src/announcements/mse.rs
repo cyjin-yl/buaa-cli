@@ -433,6 +433,58 @@ fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
         value["rows"] = Value::Array(source_rows);
         result.values.push(value);
     }
+    // HTML5 foster parenting can move table text to a sibling under this body.
+    // Page-layout cells outside the source body must not become text owners.
+    if !result.values.is_empty()
+        && body.descendants().any(|node| {
+            let Node::Text(text) = node.value() else {
+                return false;
+            };
+            if text.trim().is_empty() {
+                return false;
+            }
+            let mut cell_in_source_row = false;
+            for ancestor in node.ancestors().take_while(|node| node.id() != body.id()) {
+                let Some(element) = ancestor.value().as_element() else {
+                    continue;
+                };
+                match element.name() {
+                    "p" | "script" | "style" | "template" | "noscript" => return false,
+                    "a" if element.attr("href").is_some_and(super::is_document_href) => {
+                        return false;
+                    }
+                    "td" | "th" => {
+                        cell_in_source_row = cell_in_source_row
+                            || ancestor.parent().is_some_and(|parent| {
+                                parent
+                                    .value()
+                                    .as_element()
+                                    .is_some_and(|element| element.name() == "tr")
+                            });
+                    }
+                    "table" if cell_in_source_row => return false,
+                    "caption"
+                        if ancestor.parent().is_some_and(|parent| {
+                            parent
+                                .value()
+                                .as_element()
+                                .is_some_and(|element| element.name() == "table")
+                        }) =>
+                    {
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+            true
+        })
+    {
+        return Err(failed_contract(
+            "Mse table article text must belong to source paragraphs, cells, captions or document hints",
+            file!(),
+            line!(),
+        ));
+    }
     Ok(result)
 }
 
@@ -774,9 +826,18 @@ mod tests {
         let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
         assert_eq!(output["result"], "partial_text");
         assert_eq!(output["attachments"]["found"], true);
-        assert_eq!(output["attachments"]["hints"], json!([{"href":"material.pdf","text":"Declared material"}]));
-        assert_eq!(output["body_tables"][0]["rows"][0]["cells"], json!([{"header":false,"text":"Source cell Declared material"}]));
-        assert_eq!(output["completeness"]["missing_nonparagraph_content"], "image text and attachment contents are not reconstructed or downloaded");
+        assert_eq!(
+            output["attachments"]["hints"],
+            json!([{"href":"material.pdf","text":"Declared material"}])
+        );
+        assert_eq!(
+            output["body_tables"][0]["rows"][0]["cells"],
+            json!([{"header":false,"text":"Source cell Declared material"}])
+        );
+        assert_eq!(
+            output["completeness"]["missing_nonparagraph_content"],
+            "image text and attachment contents are not reconstructed or downloaded"
+        );
     }
 
     #[test]
@@ -811,24 +872,55 @@ mod tests {
                 "<table><tr><td>x</td></tr></table>".repeat(MAX_ENTRIES + 1),
             ),
             (
-                format!("<table><tr>{}</tr></table>", "<td>x</td>".repeat(MAX_ENTRIES)),
-                format!("<table><tr>{}</tr></table>", "<td>x</td>".repeat(MAX_ENTRIES + 1)),
+                format!(
+                    "<table><tr>{}</tr></table>",
+                    "<td>x</td>".repeat(MAX_ENTRIES)
+                ),
+                format!(
+                    "<table><tr>{}</tr></table>",
+                    "<td>x</td>".repeat(MAX_ENTRIES + 1)
+                ),
             ),
             (
-                format!("<table><tr><td>{}</td></tr></table>", "x".repeat(MAX_PARAGRAPH)),
-                format!("<table><tr><td>{}</td><td>y</td></tr></table>", "x".repeat(MAX_PARAGRAPH)),
+                format!(
+                    "<table><tr><td>{}</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH)
+                ),
+                format!(
+                    "<table><tr><td>{}</td><td>y</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH)
+                ),
             ),
             (
-                format!("<table><caption>{}</caption><tr><td>x</td></tr></table>", "x".repeat(MAX_PARAGRAPH)),
-                format!("<table><caption>{}</caption><tr><td>x</td></tr></table>", "x".repeat(MAX_PARAGRAPH + 1)),
+                format!(
+                    "<table><caption>{}</caption><tr><td>x</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH)
+                ),
+                format!(
+                    "<table><caption>{}</caption><tr><td>x</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH + 1)
+                ),
             ),
             (
-                format!("<table><tr><td rowspan=\"{}\" colspan=\"{}\">x</td></tr></table>", "0".repeat(MAX_TEXT), "1".repeat(MAX_TEXT)),
-                format!("<table><tr><td rowspan=\"{}\">x</td></tr></table>", "0".repeat(MAX_TEXT + 1)),
+                format!(
+                    "<table><tr><td rowspan=\"{}\" colspan=\"{}\">x</td></tr></table>",
+                    "0".repeat(MAX_TEXT),
+                    "1".repeat(MAX_TEXT)
+                ),
+                format!(
+                    "<table><tr><td rowspan=\"{}\">x</td></tr></table>",
+                    "0".repeat(MAX_TEXT + 1)
+                ),
             ),
             (
-                format!("<table><tr><td colspan=\"{}\">x</td></tr></table>", "1".repeat(MAX_TEXT)),
-                format!("<table><tr><td colspan=\"{}\">x</td></tr></table>", "1".repeat(MAX_TEXT + 1)),
+                format!(
+                    "<table><tr><td colspan=\"{}\">x</td></tr></table>",
+                    "1".repeat(MAX_TEXT)
+                ),
+                format!(
+                    "<table><tr><td colspan=\"{}\">x</td></tr></table>",
+                    "1".repeat(MAX_TEXT + 1)
+                ),
             ),
         ] {
             let response = source("<h3>Original table heading</h3>", &bounded);
@@ -838,7 +930,9 @@ mod tests {
             );
             let response = source("<h3>Original table heading</h3>", &overflow);
             assert_eq!(
-                normalize(&response, &college_html(&response).unwrap()).unwrap_err().code,
+                normalize(&response, &college_html(&response).unwrap())
+                    .unwrap_err()
+                    .code,
                 "unavailable"
             );
         }
@@ -846,10 +940,16 @@ mod tests {
 
     #[test]
     fn mse_table_rows_and_paragraphs_share_the_existing_block_budget() {
-        for (rows, accepted) in [(MAX_BODY_PARAGRAPHS - 1, true), (MAX_BODY_PARAGRAPHS, false)] {
+        for (rows, accepted) in [
+            (MAX_BODY_PARAGRAPHS - 1, true),
+            (MAX_BODY_PARAGRAPHS, false),
+        ] {
             let response = source(
                 "<h3>Original table heading</h3>",
-                &format!("<p>Source paragraph.</p><table>{}</table>", "<tr><td>x</td></tr>".repeat(rows)),
+                &format!(
+                    "<p>Source paragraph.</p><table>{}</table>",
+                    "<tr><td>x</td></tr>".repeat(rows)
+                ),
             );
             let result = normalize(&response, &college_html(&response).unwrap());
             if accepted {
@@ -876,6 +976,37 @@ mod tests {
     }
 
     #[test]
+    fn mse_table_body_ownership_keeps_hints_without_borrowing_layout_cells() {
+        let linked = source(
+            "<h3>Original table heading</h3>",
+            "<table><caption>Source caption</caption><tr><td>Kept source cell</td></tr></table><p>Source paragraph.</p><a href='brief.pdf'>Document hint</a>",
+        );
+        let output = normalize(&linked, &college_html(&linked).unwrap()).unwrap();
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["body_paragraphs"], json!(["Source paragraph."]));
+        assert_eq!(output["body_tables"][0]["caption"], "Source caption");
+        assert_eq!(
+            output["body_tables"][0]["rows"][0]["cells"][0]["text"],
+            "Kept source cell"
+        );
+        assert_eq!(output["attachments"]["hints"][0]["text"], "Document hint");
+
+        let mut wrapped = source(
+            "<h3>Original table heading</h3>",
+            "<table>Unowned source text<tr><td>Kept source cell</td></tr></table>",
+        );
+        let html = String::from_utf8(wrapped.body).unwrap();
+        wrapped.body = format!("<table><tr><td>{html}</td></tr></table>").into_bytes();
+        wrapped.sha256 = format!("{:x}", Sha256::digest(&wrapped.body));
+        assert_eq!(
+            normalize(&wrapped, &college_html(&wrapped).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn mse_nested_or_empty_nontext_tables_do_not_fabricate_readable_content() {
         for body in [
             "<table><tr><td>Outer<table><tr><td>Nested source</td></tr></table></td></tr></table>",
@@ -884,7 +1015,9 @@ mod tests {
         ] {
             let response = source("<h3>Original table heading</h3>", body);
             assert_eq!(
-                normalize(&response, &college_html(&response).unwrap()).unwrap_err().code,
+                normalize(&response, &college_html(&response).unwrap())
+                    .unwrap_err()
+                    .code,
                 "unavailable"
             );
         }
