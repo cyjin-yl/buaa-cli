@@ -1930,6 +1930,38 @@ mod tests {
     }
 
     #[test]
+    fn aviation_listing_errors_retain_admitted_source_without_fetching_an_article() {
+        for (body, page, expected) in [
+            (b"<title>Changed listing</title>".as_slice(), 1, "unavailable"),
+            (b"<title>No ordinal</title>".as_slice(), 2, "unavailable"),
+            (br#"<div class="body mh"><div class="moudle"><div class="right"><div class="items"><div class="item"><div class="r"><a href="info/1061/99.htm"><div class="title">Other fixture</div></a></div></div></div></div></div></div>"#.as_slice(), 1, "unsupported"),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /gkgs.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Aviation;
+            seed(&client, AVIATION_ROOT_URL, br#"<a href="gkgs.htm">Fixture public notices</a>"#, false);
+            let root = Url::parse(AVIATION_ROOT_URL).unwrap();
+            let mut entry = client.load(&root).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+            seed(&client, AVIATION_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            let target = Url::parse("https://aviation.buaa.edu.cn/info/1061/42.htm").unwrap();
+            assert_eq!(crate::announcements::aviation::article_with_client(client, CacheMode::PreferCache, &target, page, serde_json::json!({})).unwrap_err().code, expected);
+            let mut offline = fixture.client(CacheMode::Offline, &server);
+            offline.profile = SourceProfile::Aviation;
+            let retained = offline.load(&Url::parse(AVIATION_PUBLIC_NOTICES_URL).unwrap()).unwrap().unwrap().response;
+            assert_eq!(retained.body, body);
+            assert_eq!(retained.sha256, hash(body));
+            assert_eq!(crate::announcements::aviation::article_with_client(offline, CacheMode::Offline, &target, page, serde_json::json!({})).unwrap_err().code, expected);
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
     fn offline_and_prefer_cache_make_no_observation_or_governor_state() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _| panic!("offline operation contacted the network"));
@@ -2023,14 +2055,8 @@ mod tests {
         });
         let client = fixture.organization_client(CacheMode::PreferCache, &server);
         let url = Url::parse(ORGANIZATIONS_URL).unwrap();
-        let count = client
-            .get(&url, false, |response| {
-                Ok(crate::organizations::parse_html(&response.body)?
-                    .entries
-                    .len())
-            })
-            .unwrap();
-        assert_eq!(count, 1);
+        let output = crate::organizations::list_with_client(&client).unwrap();
+        assert_eq!(output["completeness"]["entry_count"], 1);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
         assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_secs(5));
@@ -2053,6 +2079,94 @@ mod tests {
             );
         }
         assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn official_directory_admission_refuses_untyped_prefix_mime_and_active_base() {
+        const BODY: &[u8] = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='http://rse.buaa.edu.cn'>Fixture</a></div></div></html>";
+        for (headers, body) in [
+            ("", BODY.to_vec()),
+            ("Content-Type: text/html-unknown\r\n", BODY.to_vec()),
+            (
+                "Content-Type: text/html\r\n",
+                [b"<base href='https://foreign.example/'>".as_slice(), BODY].concat(),
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+                reply(socket, 200, headers, &body);
+            });
+            let client = fixture.organization_client(CacheMode::PreferCache, &server);
+            seed(
+                &client,
+                ORGANIZATIONS_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            assert_eq!(
+                crate::organizations::list_with_client(&client)
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+            assert!(
+                client
+                    .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(server.count(), 1);
+            assert_eq!(
+                crate::organizations::list_with_client(&client.with_cache_mode(CacheMode::Offline))
+                    .unwrap_err()
+                    .code,
+                "offline_miss"
+            );
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn official_directory_layout_failure_retains_exact_admitted_original() {
+        const BODY: &[u8] = b"<html><title>Changed directory</title><main>No reviewed directory layout</main></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html; charset=utf-8\r\n",
+                BODY,
+            );
+        });
+        let client = fixture.organization_client(CacheMode::PreferCache, &server);
+        seed(
+            &client,
+            ORGANIZATIONS_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        assert_eq!(
+            crate::organizations::list_with_client(&client)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let original = client
+            .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(original.response.body, BODY);
+        assert_eq!(original.response.sha256, hash(BODY));
+        assert_eq!(server.count(), 1);
+        assert_eq!(
+            crate::organizations::list_with_client(&client.with_cache_mode(CacheMode::Offline))
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
     }
 
     #[test]
