@@ -396,6 +396,25 @@ mod tests {
     }
 
     #[test]
+    fn hidden_source_attributes_apply_to_ancestor_owned_members() {
+        for attributes in [
+            "hidden",
+            "class='xbt'",
+            "style='display: none'",
+            "style='DISPLAY: NONE !important'",
+            "style='visibility: hidden'",
+            "style='visibility: collapse'",
+        ] {
+            let html = format!(
+                "<title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><ul><li {attributes}><a href='https://fixture.example/'>Fixture</a></li></ul></div></div>"
+            );
+            let parsed = parse_html(html.as_bytes()).unwrap();
+            assert_eq!(parsed.entries.len(), 1);
+            assert!(parsed.entries[0].hidden_in_source, "{attributes}");
+        }
+    }
+
+    #[test]
     fn normalized_output_binds_counts_and_retrieval_provenance() {
         let body = b"<html><title>Official</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='https://one.buaa.edu.cn/'>One</a></div></div></html>";
         let response = Response {

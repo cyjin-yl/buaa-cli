@@ -4,9 +4,9 @@
 
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_ATTACHMENT_HINTS, MAX_BODY_PARAGRAPHS,
-    MAX_ENTRIES, MAX_HREF, MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, college_html, element_text,
-    entry_in_scope, failed_contract, invalid_article, invalid_list, is_document_href, is_http,
-    parse_iso_date, retrieval, source_html, unavailable,
+    MAX_ENTRIES, MAX_HREF, MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, college_html,
+    element_text, entry_in_scope, failed_contract, invalid_article, invalid_list, is_document_href,
+    is_http, parse_iso_date, retrieval, source_html, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, scse_document_path_allowed,
@@ -156,11 +156,17 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         latest
     } else {
         client.get(&latest, false, |response| {
-            advertised_page_url(response, &latest, page, "div.pb_sys_common span.p_no a[href]", |url| {
-                plain_url(url, false)
-                    && url.path().starts_with("/xwgg/gggs/")
-                    && list_path(url.path())
-            })
+            advertised_page_url(
+                response,
+                &latest,
+                page,
+                "div.pb_sys_common span.p_no a[href]",
+                |url| {
+                    plain_url(url, false)
+                        && url.path().starts_with("/xwgg/gggs/")
+                        && list_path(url.path())
+                },
+            )
         })??
     };
     client.with_cache_mode(mode).get(&target, false, |response| {
@@ -268,14 +274,14 @@ pub(super) fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
     let (document_url, source) = client.get(&article, false, |response| {
         let document = college_html(response)?;
         Ok((|| {
-        let declared = declared_pdf(&document, &article)?.ok_or_else(|| {
-            failed_contract(
-                "article has no supported source-declared original PDF",
-                file!(),
-                line!(),
-            )
-        })?;
-        Ok((declared, retrieval(response)))
+            let declared = declared_pdf(&document, &article)?.ok_or_else(|| {
+                failed_contract(
+                    "article has no supported source-declared original PDF",
+                    file!(),
+                    line!(),
+                )
+            })?;
+            Ok((declared, retrieval(response)))
         })())
     })??;
     client.with_cache_mode(mode).get(&document_url, true, |response| {
@@ -500,14 +506,28 @@ mod tests {
         };
         let body = br#"<div class="pb_sys_common"><span class="p_no"><a href="gggs/1.htm">2</a></span></div>"#;
         assert_eq!(
-            super::super::advertised_page_url_document(&source_html(body).unwrap(), &base, 2, "div.pb_sys_common span.p_no a[href]", allowed).unwrap().path(),
+            super::super::advertised_page_url_document(
+                &source_html(body).unwrap(),
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                allowed
+            )
+            .unwrap()
+            .path(),
             "/xwgg/gggs/1.htm"
         );
         let wrong_board = br#"<div class="pb_sys_common"><span class="p_no"><a href="xydt/1.htm">2</a></span></div>"#;
         assert_eq!(
-            super::super::advertised_page_url_document(&source_html(wrong_board).unwrap(), &base, 2, "div.pb_sys_common span.p_no a[href]", allowed)
-                .unwrap_err()
-                .code,
+            super::super::advertised_page_url_document(
+                &source_html(wrong_board).unwrap(),
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                allowed
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
     }

@@ -3,8 +3,8 @@ use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     advertised_page_url, article_body, article_output, bind_college_board,
     college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http, parse_iso_date,
-    retrieval, unavailable,
+    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
+    parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     AVIATION_NOTICES_URL, AVIATION_PUBLIC_NOTICES_URL, AVIATION_ROOT_URL, ArchiveClient, CacheMode,
@@ -54,7 +54,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         .with_cache_mode(mode)
         .get(&target, false, |response| {
             let document = college_html(response)?;
-            Ok(describe_college_surface(response, &document, "aviation", attribution))
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "aviation",
+                attribution,
+            ))
         })?
 }
 
@@ -81,8 +86,11 @@ fn parse_listing(document: &Html, base: &Url, label: &str) -> Result<ListingDocu
         if anchors.next().is_some() {
             return Err(unavailable());
         }
-        let mut headings = anchor.select(&headings).filter(|node| !inert_element(*node));
-        let title = headings.next()
+        let mut headings = anchor
+            .select(&headings)
+            .filter(|node| !inert_element(*node));
+        let title = headings
+            .next()
             .map(element_text)
             .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
             .ok_or_else(|| {
@@ -103,7 +111,8 @@ fn parse_listing(document: &Html, base: &Url, label: &str) -> Result<ListingDocu
         }
         let mut parts = row.select(&date_parts);
         let mut years = row.select(&years);
-        let date = years.next()
+        let date = years
+            .next()
             .zip(parts.next())
             .zip(parts.next())
             .filter(|_| parts.next().is_none() && years.next().is_none())
@@ -156,9 +165,13 @@ fn listing_url(client: &ArchiveClient, raw: &str, page: u32) -> Result<Url, Erro
         "/gkgs/"
     };
     client.get(&latest, false, |response| {
-        advertised_page_url(response, &latest, page, "div.pb_sys_common span.p_no a[href]", |url| {
-            plain_url(url) && url.path().starts_with(prefix)
-        })
+        advertised_page_url(
+            response,
+            &latest,
+            page,
+            "div.pb_sys_common span.p_no a[href]",
+            |url| plain_url(url) && url.path().starts_with(prefix),
+        )
     })?
 }
 
@@ -225,18 +238,18 @@ pub(crate) fn article_with_client(
     let listing = client.get(&source, false, |response| {
         let source_document = college_html(response)?;
         Ok((|| {
-        let document = parse_listing(&source_document, &source, "公开公示")?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained public notice page does not declare the selected aviation article",
-            ));
-        }
-        Ok(retrieval(response))
+            let document = parse_listing(&source_document, &source, "公开公示")?;
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained public notice page does not declare the selected aviation article",
+                ));
+            }
+            Ok(retrieval(response))
         })())
     })??;
     client
@@ -280,7 +293,9 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
                         .any(|class| class == "title")
                 })
         });
-    let title = headings.next().map(element_text)
+    let title = headings
+        .next()
+        .map(element_text)
         .filter(|title| !title.is_empty() && title.len() <= MAX_HREF)
         .ok_or_else(|| {
             failed_contract(
@@ -293,14 +308,15 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         return Err(unavailable());
     }
     let dates = Selector::parse("div.date > span").map_err(|_| unavailable())?;
-    let mut dates = form
-        .select(&dates)
-        .filter(|node| {
-            node.parent()
-                .and_then(|parent| parent.parent())
-                .is_some_and(|parent| parent.id() == form.id())
-        });
-    let published_at = dates.next().filter(|_| dates.next().is_none()).and_then(|node| {
+    let mut dates = form.select(&dates).filter(|node| {
+        node.parent()
+            .and_then(|parent| parent.parent())
+            .is_some_and(|parent| parent.id() == form.id())
+    });
+    let published_at = dates
+        .next()
+        .filter(|_| dates.next().is_none())
+        .and_then(|node| {
             let text = element_text(node);
             parse_iso_date(text.strip_prefix("发布时间：")?.trim())
         });
@@ -322,7 +338,8 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
             attachments_found,
         },
     );
-    output["completeness"]["body_source"] = json!("unique desktop_source_form and v_news_content; source paragraphs only");
+    output["completeness"]["body_source"] =
+        json!("unique desktop_source_form and v_news_content; source paragraphs only");
     output["completeness"]["responsive_copies"] =
         json!("desktop_prose_only; mobile copies omitted");
     Ok(output)
@@ -416,15 +433,30 @@ mod tests {
 
     #[test]
     fn ambiguous_row_identity_and_article_views_are_not_combined() {
-        let row = |anchors: &str| response(&format!("<div class=\"body mh\"><div class=\"moudle\"><div class=\"right\"><div class=\"items\"><div class=\"item\"><div class=\"r\">{anchors}</div></div></div></div></div></div>"));
+        let row = |anchors: &str| {
+            response(&format!(
+                "<div class=\"body mh\"><div class=\"moudle\"><div class=\"right\"><div class=\"items\"><div class=\"item\"><div class=\"r\">{anchors}</div></div></div></div></div></div>"
+            ))
+        };
         for anchors in [
             "<a href=\"info/1061/99.htm\">Unrelated</a><a href=\"info/1061/42.htm\"><div class=\"title\">Fixture</div></a>",
             "<a href=\"info/1061/42.htm\"><div class=\"title\">First</div><div class=\"title\">Second</div></a>",
         ] {
             let source = row(anchors);
-            assert!(parse_listing(&college_html(&source).unwrap(), &Url::parse(AVIATION_PUBLIC_NOTICES_URL).unwrap(), "Fixture").is_err());
+            assert!(
+                parse_listing(
+                    &college_html(&source).unwrap(),
+                    &Url::parse(AVIATION_PUBLIC_NOTICES_URL).unwrap(),
+                    "Fixture"
+                )
+                .is_err()
+            );
         }
-        let article = |content: &str| response(&format!("<div class=\"body mh\"><div class=\"moudle\"><div class=\"right\"><div class=\"items\"><form>{content}</form></div></div></div></div>"));
+        let article = |content: &str| {
+            response(&format!(
+                "<div class=\"body mh\"><div class=\"moudle\"><div class=\"right\"><div class=\"items\"><form>{content}</form></div></div></div></div>"
+            ))
+        };
         for content in [
             "<div class=\"title\">First</div><div class=\"title\">Second</div><div class=\"v_news_content\"><p>Source.</p></div>",
             "<div class=\"title\">Fixture</div><div class=\"v_news_content\"><p>First.</p></div><div class=\"v_news_content\"><p>Second.</p></div>",
@@ -432,7 +464,12 @@ mod tests {
             let source = article(content);
             assert!(normalize(&source, &college_html(&source).unwrap()).is_err());
         }
-        let source = article("<div class=\"title\">Fixture</div><div class=\"date\"><span>发布时间：2026-09-22</span><span>发布时间：2026-09-23</span></div><div class=\"v_news_content\"><p>Source.</p></div>");
-        assert_eq!(normalize(&source, &college_html(&source).unwrap()).unwrap()["published_at"], Value::Null);
+        let source = article(
+            "<div class=\"title\">Fixture</div><div class=\"date\"><span>发布时间：2026-09-22</span><span>发布时间：2026-09-23</span></div><div class=\"v_news_content\"><p>Source.</p></div>",
+        );
+        assert_eq!(
+            normalize(&source, &college_html(&source).unwrap()).unwrap()["published_at"],
+            Value::Null
+        );
     }
 }
