@@ -597,6 +597,8 @@
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "aviation_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/93",
+          "pull_request": "https://github.com/cyjin-yl/buaa-cli/pull/94",
+          "source_admission_correction_2026_10_17": "Shared news/SCSE/IC/aviation HTML admission validates HTTP/MIME/UTF-8/bounds/active-base once, while downstream board/ordinal/layout/article-declaration failures remain inner errors until admitted private originals persist. History uses the byte/base gate without invented HTTP facts. Conflicting ordinals and unreviewed href syntax fail closed. Offline Rust CI is credential-free and loopback-only after dependency acquisition; its definition is not an observed check. Historical runtime receipts below do not approve this changed head; exact-head offline evidence, independent review, maintainer source-contract decision and parent integration remain separate PR gates. No new campus read, authentication or governor mutation.",
           "commands": [
             "announcements college-source aviation root|notices|public-notices [--online|--refresh]",
             "announcements list with college=aviation, category=tzgg (default) or gkgs, source-advertised page and date/title filters",

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
+
 - Require one non-hidden directory member's exact literal and resolved root in shared IC/aviation admission; reject normalized aliases without a second source-specific convention.
 - Bind IC article extraction to one source body container. Reject ambiguous bodies instead of combining responsive prose or guessing a desktop selector; preserve the retained policy's original paragraphs, attachments, heading/date and cache metadata.
 - Add official-directory/root/list-bound aviation college notices (`college=aviation`): separate student/public boards, exact source day/month dates, date/title filters and declared own-site article paragraphs. Exclude duplicate responsive rows/prose and body dates from publication metadata; preserve unfetched external links and private originals. Reuse common college admission and explicitly scoped paragraph extraction without a new governor or account identity. Keep external-body, all-college/faculty/history and other-attachment coverage incomplete.
