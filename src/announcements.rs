@@ -1349,6 +1349,20 @@ mod tests {
     }
 
     #[test]
+    fn supplied_history_refuses_active_bases_without_invented_http_metadata() {
+        for (source, body) in [
+            ("https://news.buaa.edu.cn/tzgg.htm", listing_html()),
+            ("http://scse.buaa.edu.cn/xwgg/gggs.htm", "<title>Fixture</title><div class='ej_nr'><div class='list'><ul><li><a href='../../info/1099/42.htm'><p class='bt'>Fixture</p></a></li></ul></div></div>".into()),
+        ] {
+            let input = |prefix: &str| json!({"html":STANDARD.encode(format!("{prefix}{body}")),"provenance":{"source_url":source}}).to_string();
+            assert_eq!(history(&input("<base href='https://foreign.example/'>")).unwrap_err().code, "invalid_input");
+            for inert in ["<template><base href='https://foreign.example/'></template>", "<noscript><base href='https://foreign.example/'></noscript>"] {
+                assert!(history(&input(inert)).is_ok());
+            }
+        }
+    }
+
+    #[test]
     fn history_requires_operator_asserted_provenance() {
         let html = listing_html();
         let encoded = STANDARD.encode(html.as_bytes());
