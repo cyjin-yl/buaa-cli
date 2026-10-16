@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
+=======
+- Preserve Beijing admitted source originals across downstream listing/ordinal/article-declaration failures; bind each row to one source heading/anchor, ignore inert views and keep ambiguous date headers unknown. Retain the existing table/paragraph ceilings and partial coverage. Integrate shared directory/source/CI corrections through the actual PR94 dependency without rewriting published history.
+
+- Add exact-directory/root/list-bound Beijing college notices (`college=beijing`), source dot-date filters and canonical declared article reads. Parse the actual unique article/header/body structure and Chinese publication caption, retaining table-cell paragraphs without promoting sidebar headings or body dates. Keep source originals/personal text private, source discovery cache-first and selected-only refresh on the same governor; all-college/history/attachment coverage remains incomplete.
+- Raise the shared text paragraph ceiling from 512 to 1,024 after a legitimate 795-paragraph table notice exceeded it; retain 2 MiB HTML and 8 KiB per-paragraph bounds. Synthetic 1,024/1,025 consumer proof fails before the change and passes afterward. No per-source exception, silent truncation or account-safety relaxation.
+>>>>>>> b4072f8 (fix(announcements): retain and bind selected Beijing originals)
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
 - Express the existing cache revalidation allow-list as one negated disjunction, preserving its status/attribution rules while satisfying the declared Rust toolchain's strict clippy gate.

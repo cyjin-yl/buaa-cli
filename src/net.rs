@@ -2152,6 +2152,7 @@ mod tests {
     }
 
     #[test]
+
     fn offline_and_prefer_cache_make_no_observation_or_governor_state() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _| panic!("offline operation contacted the network"));
