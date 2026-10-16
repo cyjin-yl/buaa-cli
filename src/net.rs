@@ -1075,11 +1075,11 @@ impl ArchiveClient {
                 .is_some_and(|value| !valid_header(value))
             || cached.revalidated_at_unix_ms.is_some() != cached.revalidation_status.is_some()
             || cached.revalidation_status.is_some_and(|status| {
-                !matches!(status, 200 | 304 | 404 | 410)
-                    && !(status == cached.status
+                !(matches!(status, 200 | 304 | 404 | 410)
+                    || (status == cached.status
                         && self
                             .profile
-                            .has_attributed_archive_error(url, status, &cached.headers))
+                            .has_attributed_archive_error(url, status, &cached.headers)))
             })
         {
             return Err(corrupt_cache());

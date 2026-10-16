@@ -462,6 +462,32 @@ mod tests {
     }
 
     #[test]
+    fn article_ignores_style_inert_copies_but_not_active_foreign_owners() {
+        let active = r#"<div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Active source heading</h3><p><span class="date">日期：2026年9月22日</span></p></div><div class="art-body-box"><div id="vsb_content"><div class="v_news_content"><p>Active source paragraph.</p></div></div></div></div></form></div>"#;
+        let foreign = active.replace("Active source", "Foreign copy");
+        for (open, close) in [
+            (
+                "<svg><style><foreignObject>",
+                "</foreignObject></style></svg>",
+            ),
+            ("<template>", "</template>"),
+        ] {
+            let source = response(&format!("{open}{foreign}{close}{active}"));
+            let output = normalize(&source, &college_html(&source).unwrap()).unwrap();
+            assert_eq!(output["title"], "Active source heading");
+            assert_eq!(output["published_at"], "2026-09-22");
+            assert_eq!(
+                output["body_paragraphs"],
+                json!(["Active source paragraph."])
+            );
+        }
+        let competing = response(&format!(
+            "<svg><foreignObject>{foreign}</foreignObject></svg>{active}"
+        ));
+        assert!(normalize(&competing, &college_html(&competing).unwrap()).is_err());
+    }
+
+    #[test]
     fn ambiguous_row_links_headings_and_publication_dates_are_not_guessed() {
         let listing = |anchors: &str| {
             response(&format!(
