@@ -520,6 +520,26 @@ mod tests {
     }
 
     #[test]
+    fn mse_article_refuses_publication_metadata_from_a_separate_header() {
+        // Close the heading owner before opening a sibling publication owner.
+        let response = source(
+            concat!(
+                "<h3>Source heading</h3></div>",
+                "<div class=\"art-tit\"><p><span class=\"date\">",
+                "日期：2026年9月21日</span></p>",
+            ),
+            "<p>Original source paragraph.</p>",
+        );
+        let document = college_html(&response).unwrap();
+        let headers = Selector::parse("div.art-main > div.art-tit").unwrap();
+        assert_eq!(document.select(&headers).count(), 2);
+        assert_eq!(
+            normalize(&response, &document).unwrap_err().code,
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn mse_article_original_header_and_nonparagraph_table_content_stay_distinct() {
         let response = source(
             "<h3>Original article heading</h3><p><span class=\"date\">日期：2026年09月21日</span></p>",
