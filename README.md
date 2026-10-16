@@ -158,10 +158,14 @@ The International Innovation college binds visible 国际创新学院 member45 a
 printf '%s\n' '{"college":"h3i","since":"2026-08-24","until":"2026-10-01"}' | ./target/debug/buaa announcements list
 ```
 
+**Current Zfai authority blocker (2026-10-17):** the retained directory HTML `77c310f0905ff42540e85aa3bc3f2827efdc2f72742738414a0a35be554e09ba` marks member46 `hidden_in_source=true`. The existing non-hidden attribution rule therefore refuses Zfai source/list/article reads as unavailable before any college request. Acceptance remains incomplete and [issue #101](https://github.com/cyjin-yl/buaa-cli/issues/101) remains open. Older visible-directory bytes are not a current-authority fallback.
+
+**Historical visible-source receipt only:** the following contract, nine-row/two-filtered-row/five-paragraph results and examples belong to directory HTML `f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9`, not the current hidden-member source.
+
 The Sino-French Aviation college binds visible 中法航空学院 member46 and exact literal/resolved `https://zfai.buaa.edu.cn/`; the ordinal is not an academic school code. Its actual root declares `/xxgg1.htm`, labelled 信息公告, rather than a guessed `tzgg` board. `announcements college-source zfai [root|notices]` reports source metadata, and `{"college":"zfai"}` selects that information listing (`xxgg1` only). Nine source-ordered rows retain separate `rr/h4s2` titles and `rr/p.ps3` excerpts; excerpts are not original article text. Dates require one `MM-DD` and one `YYYY` slot; missing, invalid or duplicated slots stay null and cannot satisfy a date filter. The source `pagebar` advertises ordinal2 as `/xxgg1/2.htm` and ordinal3 as `/xxgg1/1.htm`; no address or ordinal is inferred, no automatic traversal occurs, and neither later page was observed live. Canonical `/info/1196/` articles must be declared by the selected retained board. The observed original's direct `left/form/ar_tit/h3` title, second header span's `时间：2026-09-14` and unique `vsb_content_1001/v_news_content` body privately match all five nonempty paragraphs. Click scripts, other dates, sidebar headings and listing excerpts are not substitutes. This owned source depends on unmerged PR100/PR98/PR96/PR94, not root-main or Pages deployment. [Zfai source evidence and limits](docs/STATUS.md#directory-bound-zfai-information-announcements).
 
 ```sh
-# Cache-only information source and inclusive date filter; no raw article output.
+# Historical visible-source examples; current hidden-member authority refuses these reads.
 ./target/debug/buaa announcements college-source zfai notices
 printf '%s\n' '{"college":"zfai","since":"2026-09-12","until":"2026-09-14"}' | ./target/debug/buaa announcements list
 ```

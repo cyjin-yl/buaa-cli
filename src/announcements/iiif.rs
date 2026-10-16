@@ -53,7 +53,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         .with_cache_mode(mode)
         .get(&target, false, |response| {
             let document = college_html(response)?;
-            Ok(describe_college_surface(response, &document, "iiif", attribution))
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "iiif",
+                attribution,
+            ))
         })?
 }
 
@@ -229,17 +234,17 @@ pub(crate) fn article_with_client(
     let listing = client.get(&source, false, |response| {
         let source_html = college_html(response)?;
         Ok(parse_listing(&source_html, &source).and_then(|document| {
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained notice board does not declare the selected Iiif article",
-            ));
-        }
-        Ok(retrieval(response))
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained notice board does not declare the selected Iiif article",
+                ));
+            }
+            Ok(retrieval(response))
         }))
     })??;
     client
@@ -320,9 +325,10 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
         .map_err(|_| unavailable())?;
     let mut bodies = form.select(&bodies).filter(|body| {
         !inert_element(*body)
-            && body.parent()
-            .and_then(|node| node.parent())
-            .is_some_and(|parent| parent.id() == form.id())
+            && body
+                .parent()
+                .and_then(|node| node.parent())
+                .is_some_and(|parent| parent.id() == form.id())
     });
     let body = bodies
         .next()
@@ -363,8 +369,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::advertised_page_url_document as advertised_document_page_url;
+    use super::*;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
@@ -394,20 +400,35 @@ mod tests {
         );
         let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
         assert_eq!(output["result"], "full_text");
-        assert_eq!(output["body_paragraphs"], json!(["Complete first middle final paragraph."]));
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["Complete first middle final paragraph."])
+        );
         assert_eq!(output["completeness"]["image_content_present"], false);
         assert!(output["completeness"].get("missing_image_text").is_none());
-        let partial = source("<h3>Original mixed heading</h3>", "<p>Only source text.</p><img src='poster.png' alt='Not OCR'>");
+        let partial = source(
+            "<h3>Original mixed heading</h3>",
+            "<p>Only source text.</p><img src='poster.png' alt='Not OCR'>",
+        );
         let output = normalize(&partial, &college_html(&partial).unwrap()).unwrap();
         assert_eq!(output["result"], "partial_text");
         assert_eq!(output["completeness"]["image_content_present"], true);
-        assert_eq!(output["completeness"]["missing_image_text"], "not_reconstructed");
+        assert_eq!(
+            output["completeness"]["missing_image_text"],
+            "not_reconstructed"
+        );
         assert_eq!(output["body_paragraphs"], json!(["Only source text."]));
-        let linked = source("<h3>Original linked heading</h3>", "<p>Only source text.</p><a href='brief.pdf'>Unfetched document</a>");
+        let linked = source(
+            "<h3>Original linked heading</h3>",
+            "<p>Only source text.</p><a href='brief.pdf'>Unfetched document</a>",
+        );
         let output = normalize(&linked, &college_html(&linked).unwrap()).unwrap();
         assert_eq!(output["result"], "partial_text");
         assert!(output["completeness"].get("missing_image_text").is_none());
-        assert_eq!(output["completeness"]["missing_attachment_content"], "not_downloaded");
+        assert_eq!(
+            output["completeness"]["missing_attachment_content"],
+            "not_downloaded"
+        );
     }
 
     #[test]
