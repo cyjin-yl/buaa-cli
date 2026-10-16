@@ -128,6 +128,21 @@ const SHENYUAN_ROBOTS_URL: &str = "https://hc.buaa.edu.cn/robots.txt";
 pub(crate) const H3I_ROOT_URL: &str = "https://h3i.buaa.edu.cn/index.htm";
 pub(crate) const H3I_NOTICES_URL: &str = "https://h3i.buaa.edu.cn/rcpy/cpgg.htm";
 const H3I_ROBOTS_URL: &str = "https://h3i.buaa.edu.cn/robots.txt";
+pub(crate) const ZFAI_ROOT_URL: &str = "https://zfai.buaa.edu.cn/";
+pub(crate) const ZFAI_NOTICES_URL: &str = "https://zfai.buaa.edu.cn/xxgg1.htm";
+const ZFAI_ROBOTS_URL: &str = "https://zfai.buaa.edu.cn/robots.txt";
+
+pub(crate) fn zfai_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xxgg1.htm") {
+        return true;
+    }
+    path.strip_prefix("/xxgg1/")
+        .or_else(|| path.strip_prefix("/info/1196/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn h3i_path_allowed(path: &str) -> bool {
     if matches!(path, "/index.htm" | "/robots.txt" | "/rcpy/cpgg.htm") {
@@ -282,6 +297,7 @@ enum SourceProfile {
     Beijing,
     Shenyuan,
     H3i,
+    Zfai,
 }
 
 impl SourceProfile {
@@ -297,6 +313,7 @@ impl SourceProfile {
             Self::Beijing => BEIJING_ROBOTS_URL,
             Self::Shenyuan => SHENYUAN_ROBOTS_URL,
             Self::H3i => H3I_ROBOTS_URL,
+            Self::Zfai => ZFAI_ROBOTS_URL,
         }
     }
 
@@ -312,6 +329,7 @@ impl SourceProfile {
             Self::Beijing => ".buaa-cli-beijing-cache",
             Self::Shenyuan => ".buaa-cli-shenyuan-cache",
             Self::H3i => ".buaa-cli-h3i-cache",
+            Self::Zfai => ".buaa-cli-zfai-cache",
         }
     }
 
@@ -374,6 +392,11 @@ impl SourceProfile {
                 url.host_str() == Some("h3i.buaa.edu.cn")
                     && url.query().is_none()
                     && h3i_path_allowed(url.path())
+            }
+            Self::Zfai => {
+                url.host_str() == Some("zfai.buaa.edu.cn")
+                    && url.query().is_none()
+                    && zfai_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -570,6 +593,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_h3i(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::H3i)
+    }
+
+    pub(crate) fn open_zfai(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Zfai)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2301,7 +2328,12 @@ mod tests {
         let server = Server::new(|socket, request| {
             assert!(request.starts_with("GET /info/1141/42.htm "));
             assert!(!request.to_ascii_lowercase().contains("cookie:"));
-            reply(socket, 200, "Content-Type: text/html\r\n", ARTICLE.as_bytes());
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
         });
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         client.profile = SourceProfile::H3i;
@@ -2316,22 +2348,56 @@ mod tests {
         }
         seed(&client, H3I_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
         let undeclared = Url::parse("https://h3i.buaa.edu.cn/info/1141/99.htm").unwrap();
-        assert_eq!(crate::announcements::h3i::article_with_client(client, CacheMode::Revalidate, &undeclared, 1, serde_json::json!({})).unwrap_err().code, "unsupported");
+        assert_eq!(
+            crate::announcements::h3i::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
         assert_eq!(server.count(), 0);
         let target = Url::parse("https://h3i.buaa.edu.cn/info/1141/42.htm").unwrap();
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         client.profile = SourceProfile::H3i;
-        let output = crate::announcements::h3i::article_with_client(client, CacheMode::Revalidate, &target, 1, serde_json::json!({})).unwrap();
+        let output = crate::announcements::h3i::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
         assert_eq!(output["title"], "Original source headline");
         assert_eq!(output["published_at"], "2026-10-01");
-        assert_eq!(output["body_paragraphs"], serde_json::json!(["Source policy paragraph."]));
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
         assert_eq!(server.count(), 1);
         let mut client = fixture.client(CacheMode::Offline, &server);
         client.profile = SourceProfile::H3i;
-        let cached = crate::announcements::h3i::article_with_client(client, CacheMode::Offline, &target, 1, serde_json::json!({})).unwrap();
-        assert_eq!(cached["retrieval"]["response_body_sha256"], hash(ARTICLE.as_bytes()));
+        let cached = crate::announcements::h3i::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
         assert_eq!(cached["title"], "Original source headline");
-        assert_eq!(cached["body_paragraphs"], serde_json::json!(["Source policy paragraph."]));
+        assert_eq!(
+            cached["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
         assert_eq!(server.count(), 1);
     }
 
@@ -2355,27 +2421,57 @@ mod tests {
                 client
             };
             let client = open(CacheMode::PreferCache);
-            seed(&client, SHENYUAN_ROOT_URL, br#"<a href="index/tzgg.htm">Notices</a>"#, false);
-            let mut root = client.load(&Url::parse(SHENYUAN_ROOT_URL).unwrap()).unwrap().unwrap();
-            root.response.headers.insert("content-type".into(), "text/html".into());
+            seed(
+                &client,
+                SHENYUAN_ROOT_URL,
+                br#"<a href="index/tzgg.htm">Notices</a>"#,
+                false,
+            );
+            let mut root = client
+                .load(&Url::parse(SHENYUAN_ROOT_URL).unwrap())
+                .unwrap()
+                .unwrap();
+            root.response
+                .headers
+                .insert("content-type".into(), "text/html".into());
             client.save(&root).unwrap();
-            seed(&client, SHENYUAN_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            seed(
+                &client,
+                SHENYUAN_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
             let target = Url::parse("https://hc.buaa.edu.cn/info/1083/42.htm").unwrap();
             assert_eq!(
                 crate::announcements::shenyuan::article_with_client(
-                    client, CacheMode::PreferCache, &target, page, serde_json::json!({})
-                ).unwrap_err().code,
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    page,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
                 expected
             );
             let client = open(CacheMode::Offline);
-            let retained = client.load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap()).unwrap().unwrap();
+            let retained = client
+                .load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap())
+                .unwrap()
+                .unwrap();
             assert_eq!(retained.response.body, body);
             assert_eq!(retained.response.sha256, hash(body));
             assert!(retained.response.fetched_at_unix_ms > 0);
             assert_eq!(
                 crate::announcements::shenyuan::article_with_client(
-                    client, CacheMode::Offline, &target, page, serde_json::json!({})
-                ).unwrap_err().code,
+                    client,
+                    CacheMode::Offline,
+                    &target,
+                    page,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
                 expected
             );
             assert_eq!(server.count(), 1);
@@ -2398,19 +2494,54 @@ mod tests {
                 client
             };
             let client = open(CacheMode::PreferCache);
-            seed(&client, H3I_ROOT_URL, br#"<a href="rcpy/cpgg.htm">Recruitment</a>"#, false);
-            let mut root = client.load(&Url::parse(H3I_ROOT_URL).unwrap()).unwrap().unwrap();
-            root.response.headers.insert("content-type".into(), "text/html".into());
+            seed(
+                &client,
+                H3I_ROOT_URL,
+                br#"<a href="rcpy/cpgg.htm">Recruitment</a>"#,
+                false,
+            );
+            let mut root = client
+                .load(&Url::parse(H3I_ROOT_URL).unwrap())
+                .unwrap()
+                .unwrap();
+            root.response
+                .headers
+                .insert("content-type".into(), "text/html".into());
             client.save(&root).unwrap();
             seed(&client, H3I_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
             let target = Url::parse("https://h3i.buaa.edu.cn/info/1141/42.htm").unwrap();
-            assert_eq!(crate::announcements::h3i::article_with_client(client, CacheMode::PreferCache, &target, 1, serde_json::json!({})).unwrap_err().code, expected);
+            assert_eq!(
+                crate::announcements::h3i::article_with_client(
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
+                expected
+            );
             let client = open(CacheMode::Offline);
-            let retained = client.load(&Url::parse(H3I_NOTICES_URL).unwrap()).unwrap().unwrap();
+            let retained = client
+                .load(&Url::parse(H3I_NOTICES_URL).unwrap())
+                .unwrap()
+                .unwrap();
             assert_eq!(retained.response.body, body);
             assert_eq!(retained.response.sha256, hash(body));
             assert!(retained.response.fetched_at_unix_ms > 0);
-            assert_eq!(crate::announcements::h3i::article_with_client(client, CacheMode::Offline, &target, 1, serde_json::json!({})).unwrap_err().code, expected);
+            assert_eq!(
+                crate::announcements::h3i::article_with_client(
+                    client,
+                    CacheMode::Offline,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
+                expected
+            );
             assert_eq!(server.count(), 1);
         }
     }
@@ -2451,7 +2582,10 @@ mod tests {
     fn h3i_unadmitted_recruitment_discovery_is_not_retained_or_followed() {
         for (mime, body) in [
             ("text/plain", b"<title>Wrong MIME</title>" as &[u8]),
-            ("text/html", b"<base href='https://example.org/'><title>Changed base</title>" as &[u8]),
+            (
+                "text/html",
+                b"<base href='https://example.org/'><title>Changed base</title>" as &[u8],
+            ),
             ("text/html", &[0xffu8] as &[u8]),
             ("text/html", b"" as &[u8]),
         ] {
@@ -2462,16 +2596,42 @@ mod tests {
             });
             let mut client = fixture.client(CacheMode::PreferCache, &server);
             client.profile = SourceProfile::H3i;
-            seed(&client, H3I_ROOT_URL, br#"<a href="rcpy/cpgg.htm">Recruitment</a>"#, false);
-            let mut root = client.load(&Url::parse(H3I_ROOT_URL).unwrap()).unwrap().unwrap();
-            root.response.headers.insert("content-type".into(), "text/html".into());
+            seed(
+                &client,
+                H3I_ROOT_URL,
+                br#"<a href="rcpy/cpgg.htm">Recruitment</a>"#,
+                false,
+            );
+            let mut root = client
+                .load(&Url::parse(H3I_ROOT_URL).unwrap())
+                .unwrap()
+                .unwrap();
+            root.response
+                .headers
+                .insert("content-type".into(), "text/html".into());
             client.save(&root).unwrap();
             seed(&client, H3I_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
             let target = Url::parse("https://h3i.buaa.edu.cn/info/1141/42.htm").unwrap();
-            assert_eq!(crate::announcements::h3i::article_with_client(client, CacheMode::PreferCache, &target, 1, serde_json::json!({})).unwrap_err().code, "unavailable");
+            assert_eq!(
+                crate::announcements::h3i::article_with_client(
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
+                "unavailable"
+            );
             let mut client = fixture.client(CacheMode::Offline, &server);
             client.profile = SourceProfile::H3i;
-            assert!(client.load(&Url::parse(H3I_NOTICES_URL).unwrap()).unwrap().is_none());
+            assert!(
+                client
+                    .load(&Url::parse(H3I_NOTICES_URL).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
             assert!(client.load(&target).unwrap().is_none());
             assert_eq!(server.count(), 1);
         }
@@ -2481,7 +2641,10 @@ mod tests {
     fn shenyuan_unadmitted_discovery_is_not_retained_or_followed() {
         for (mime, body) in [
             ("text/plain", b"<title>Wrong MIME</title>" as &[u8]),
-            ("text/html", b"<base href='https://example.org/'><title>Changed base</title>" as &[u8]),
+            (
+                "text/html",
+                b"<base href='https://example.org/'><title>Changed base</title>" as &[u8],
+            ),
             ("text/html", &[0xffu8] as &[u8]),
             ("text/html", b"" as &[u8]),
         ] {
@@ -2492,21 +2655,47 @@ mod tests {
             });
             let mut client = fixture.client(CacheMode::PreferCache, &server);
             client.profile = SourceProfile::Shenyuan;
-            seed(&client, SHENYUAN_ROOT_URL, br#"<a href="index/tzgg.htm">Notices</a>"#, false);
-            let mut root = client.load(&Url::parse(SHENYUAN_ROOT_URL).unwrap()).unwrap().unwrap();
-            root.response.headers.insert("content-type".into(), "text/html".into());
+            seed(
+                &client,
+                SHENYUAN_ROOT_URL,
+                br#"<a href="index/tzgg.htm">Notices</a>"#,
+                false,
+            );
+            let mut root = client
+                .load(&Url::parse(SHENYUAN_ROOT_URL).unwrap())
+                .unwrap()
+                .unwrap();
+            root.response
+                .headers
+                .insert("content-type".into(), "text/html".into());
             client.save(&root).unwrap();
-            seed(&client, SHENYUAN_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            seed(
+                &client,
+                SHENYUAN_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
             let target = Url::parse("https://hc.buaa.edu.cn/info/1083/42.htm").unwrap();
             assert_eq!(
                 crate::announcements::shenyuan::article_with_client(
-                    client, CacheMode::PreferCache, &target, 1, serde_json::json!({})
-                ).unwrap_err().code,
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
                 "unavailable"
             );
             let mut client = fixture.client(CacheMode::Offline, &server);
             client.profile = SourceProfile::Shenyuan;
-            assert!(client.load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap()).unwrap().is_none());
+            assert!(
+                client
+                    .load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
             assert!(client.load(&target).unwrap().is_none());
             assert_eq!(server.count(), 1);
         }

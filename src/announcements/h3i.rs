@@ -2,8 +2,8 @@
 use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     article_body, article_output, bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, invalid_article,
-    inert_element, invalid_list, is_http, parse_iso_date, retrieval, unavailable,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, inert_element,
+    invalid_article, invalid_list, is_http, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, H3I_NOTICES_URL, H3I_ROOT_URL, Response, h3i_path_allowed,
@@ -61,7 +61,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         .with_cache_mode(mode)
         .get(&target, false, |response| {
             let document = college_html(response)?;
-            Ok(describe_college_surface(response, &document, "h3i", attribution))
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "h3i",
+                attribution,
+            ))
         })?
 }
 
@@ -265,9 +270,7 @@ pub(crate) fn article_with_client(
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let forms = Selector::parse("div.detail div.fl1 > div.wp.flex > div.left > div > form")
         .map_err(|_| unavailable())?;
-    let mut forms = document
-        .select(&forms)
-        .filter(|node| !inert_element(*node));
+    let mut forms = document.select(&forms).filter(|node| !inert_element(*node));
     let main = forms
         .next()
         .filter(|_| forms.next().is_none())
