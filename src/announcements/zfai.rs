@@ -62,7 +62,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         .with_cache_mode(mode)
         .get(&target, false, |response| {
             let document = college_html(response)?;
-            Ok(describe_college_surface(response, &document, "zfai", attribution))
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "zfai",
+                attribution,
+            ))
         })?
 }
 
@@ -381,8 +386,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::advertised_page_url_document as advertised_document_page_url;
+    use super::*;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
@@ -499,20 +504,37 @@ mod tests {
         let base = Url::parse(ZFAI_NOTICES_URL).unwrap();
         let source = br#"<div class="pb_sys_common"><span class="p_no"><a href="xxgg1/99.htm">2</a></span></div><template><div class="pagebar"><span class="p_no"><a href="xxgg1/98.htm">2</a></span></div></template><div class="pagebar"><span class="p_no"><a href="xxgg1/8.htm">2</a></span><span class="p_no"><a href="xxgg1/1.htm">3</a></span></div>"#;
         let source = &Html::parse_document(std::str::from_utf8(source).unwrap());
-        let selected =
-            advertised_document_page_url(source, &base, 2, "div.pagebar span.p_no a[href]", plain_url)
-                .unwrap();
+        let selected = advertised_document_page_url(
+            source,
+            &base,
+            2,
+            "div.pagebar span.p_no a[href]",
+            plain_url,
+        )
+        .unwrap();
         assert_eq!(selected.path(), "/xxgg1/8.htm");
         assert_eq!(
-            advertised_document_page_url(source, &base, 3, "div.pagebar span.p_no a[href]", plain_url)
-                .unwrap()
-                .path(),
+            advertised_document_page_url(
+                source,
+                &base,
+                3,
+                "div.pagebar span.p_no a[href]",
+                plain_url
+            )
+            .unwrap()
+            .path(),
             "/xxgg1/1.htm"
         );
         assert_eq!(
-            advertised_document_page_url(source, &base, 8, "div.pagebar span.p_no a[href]", plain_url)
-                .unwrap_err()
-                .code,
+            advertised_document_page_url(
+                source,
+                &base,
+                8,
+                "div.pagebar span.p_no a[href]",
+                plain_url
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
         let foreign = br#"<div class="pagebar"><span class="p_no"><a href="https://foreign.example/xxgg1/8.htm">2</a></span></div>"#;
@@ -581,11 +603,17 @@ mod tests {
             normalize(&inert, &college_html(&inert).unwrap()).unwrap()["title"],
             "Original source heading"
         );
-        let linked = response(&article_html("", "<p>Original paragraph.</p><a href='brief.pdf'>Unfetched document</a>"));
+        let linked = response(&article_html(
+            "",
+            "<p>Original paragraph.</p><a href='brief.pdf'>Unfetched document</a>",
+        ));
         let linked = normalize(&linked, &college_html(&linked).unwrap()).unwrap();
         assert_eq!(linked["result"], "partial_text");
         assert_eq!(linked["attachments"]["found"], true);
-        assert_eq!(linked["completeness"]["missing_attachment_content"], "not_downloaded");
+        assert_eq!(
+            linked["completeness"]["missing_attachment_content"],
+            "not_downloaded"
+        );
     }
 
     #[test]
