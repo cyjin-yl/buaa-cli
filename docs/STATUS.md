@@ -14,6 +14,8 @@ Current legacy prerequisites were rechecked, not inferred from old blocker wordi
 
 These four issues stay open with exact prerequisites; no status-only PR masquerades as a working integration. Public CI remains offline and credential-free; missing checks are not green checks.
 
+Live sanitized prerequisite receipts were published/read back as issue comments6220178790 (17),6220179709 (19),6220180860 (42) and6220181945 (74). PR110 was published non-force atdb24f8d139990770a0d80528f1102eb833c11ebc; its body binds that exact head and retains `Refs #109`, not a closing keyword. Actual check-runs0 is an absence of checks, not green CI. PrMaterials' no-finding review of30f0706 is retained as prior-head evidence only and renewed exact-head review is required.
+
 Exact 30f0706 baseline reproduction used only three test-only additions in a detached owned worktree: **0 passed /3 failed /101, 74.24s** for absent MIME, active base and hidden-ancestor authority. Corrected owned target gate: formatter0/2.08s, native build0/14.98s, focused directory/organization tests **13 passed** (251 filtered)0/22.87s, two existing CLI refusal/privacy tests0/2.17s, strict all-target Clippy0/23.86s, formatter check0/1.60s. Native help/schema/capabilities each exit0 (29 commands,15 families,44 capabilities) without a source cache/governor operation. No full-suite run or campus read is inferred. The corrected directory/layout consumer exercised real isolated loopback transport, exact retained bytes/hash and cache-only reuse; all public CI-relevant proof is synthetic/offline. Independent review of30f0706 predates these repairs and does not carry forward to a new head.
 
 ## Rse strict identity and root-source frontier
