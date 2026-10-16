@@ -131,6 +131,21 @@ const H3I_ROBOTS_URL: &str = "https://h3i.buaa.edu.cn/robots.txt";
 pub(crate) const ZFAI_ROOT_URL: &str = "https://zfai.buaa.edu.cn/";
 pub(crate) const ZFAI_NOTICES_URL: &str = "https://zfai.buaa.edu.cn/xxgg1.htm";
 const ZFAI_ROBOTS_URL: &str = "https://zfai.buaa.edu.cn/robots.txt";
+pub(crate) const IIIF_ROOT_URL: &str = "https://iiif.buaa.edu.cn/";
+pub(crate) const IIIF_NOTICES_URL: &str = "https://iiif.buaa.edu.cn/xwgg/tzgg.htm";
+const IIIF_ROBOTS_URL: &str = "https://iiif.buaa.edu.cn/robots.txt";
+
+pub(crate) fn iiif_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwgg/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwgg/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1186/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn zfai_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xxgg1.htm") {
@@ -298,6 +313,7 @@ enum SourceProfile {
     Shenyuan,
     H3i,
     Zfai,
+    Iiif,
 }
 
 impl SourceProfile {
@@ -314,6 +330,7 @@ impl SourceProfile {
             Self::Shenyuan => SHENYUAN_ROBOTS_URL,
             Self::H3i => H3I_ROBOTS_URL,
             Self::Zfai => ZFAI_ROBOTS_URL,
+            Self::Iiif => IIIF_ROBOTS_URL,
         }
     }
 
@@ -330,6 +347,7 @@ impl SourceProfile {
             Self::Shenyuan => ".buaa-cli-shenyuan-cache",
             Self::H3i => ".buaa-cli-h3i-cache",
             Self::Zfai => ".buaa-cli-zfai-cache",
+            Self::Iiif => ".buaa-cli-iiif-cache",
         }
     }
 
@@ -397,6 +415,11 @@ impl SourceProfile {
                 url.host_str() == Some("zfai.buaa.edu.cn")
                     && url.query().is_none()
                     && zfai_path_allowed(url.path())
+            }
+            Self::Iiif => {
+                url.host_str() == Some("iiif.buaa.edu.cn")
+                    && url.query().is_none()
+                    && iiif_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -597,6 +620,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_zfai(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Zfai)
+    }
+
+    pub(crate) fn open_iiif(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Iiif)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
