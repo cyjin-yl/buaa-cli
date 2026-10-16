@@ -1731,24 +1731,54 @@ mod tests {
         let client = fixture.ic_client(CacheMode::PreferCache, &server);
         seed(&client, IC_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
         let mut attribution = serde_json::json!({});
-        assert_eq!(crate::announcements::bind_college_board(&client, IC_ROOT_URL, IC_NOTICES_URL, &mut attribution).unwrap_err().code, "unsupported");
+        assert_eq!(
+            crate::announcements::bind_college_board(
+                &client,
+                IC_ROOT_URL,
+                IC_NOTICES_URL,
+                &mut attribution
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
         assert!(attribution.get("root_retrieval").is_none());
         let root = Url::parse(IC_ROOT_URL).unwrap();
         let retained = client.load(&root).unwrap().unwrap().response;
         assert_eq!(retained.body, BODY);
         assert_eq!(retained.sha256, hash(BODY));
         let offline = client.with_cache_mode(CacheMode::Offline);
-        assert_eq!(crate::announcements::bind_college_board(&offline, IC_ROOT_URL, IC_NOTICES_URL, &mut attribution).unwrap_err().code, "unsupported");
+        assert_eq!(
+            crate::announcements::bind_college_board(
+                &offline,
+                IC_ROOT_URL,
+                IC_NOTICES_URL,
+                &mut attribution
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
         assert_eq!(server.count(), 1);
     }
 
     #[test]
     fn college_ordinal_discovery_rejects_unadmitted_sources_without_caching() {
         for (headers, body) in [
-            ("Content-Type: application/json\r\n", b"<title>Not HTML</title>".as_slice()),
-            ("Content-Type: text/html-unknown\r\n", b"<title>Not HTML</title>".as_slice()),
+            (
+                "Content-Type: application/json\r\n",
+                b"<title>Not HTML</title>".as_slice(),
+            ),
+            (
+                "Content-Type: text/html-unknown\r\n",
+                b"<title>Not HTML</title>".as_slice(),
+            ),
             ("", b"<title>Untyped</title>".as_slice()),
-            ("Content-Type: text/html\r\n", b"<base href=\"https://foreign.example/\"><title>Unreviewed base</title>".as_slice()),
+            (
+                "Content-Type: text/html\r\n",
+                b"<base href=\"https://foreign.example/\"><title>Unreviewed base</title>"
+                    .as_slice(),
+            ),
             ("Content-Type: text/html\r\n", b"\xff".as_slice()),
         ] {
             let fixture = Fixture::new();
@@ -1759,10 +1789,27 @@ mod tests {
             let client = fixture.ic_client(CacheMode::PreferCache, &server);
             seed(&client, IC_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
             let url = Url::parse(IC_NOTICES_URL).unwrap();
-            assert_eq!(client.get(&url, false, |response| crate::announcements::advertised_page_url(response, &url, 2, "div.pb_sys_common span.p_no a[href]", |_| true)).unwrap_err().code, "unavailable");
+            assert_eq!(
+                client
+                    .get(&url, false, |response| {
+                        crate::announcements::advertised_page_url(
+                            response,
+                            &url,
+                            2,
+                            "div.pb_sys_common span.p_no a[href]",
+                            |_| true,
+                        )
+                    })
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
             assert!(client.load(&url).unwrap().is_none());
             let offline = client.with_cache_mode(CacheMode::Offline);
-            assert_eq!(offline.get(&url, false, |_| Ok(())).unwrap_err().code, "offline_miss");
+            assert_eq!(
+                offline.get(&url, false, |_| Ok(())).unwrap_err().code,
+                "offline_miss"
+            );
             assert_eq!(server.count(), 1);
         }
     }
@@ -1779,15 +1826,42 @@ mod tests {
         let client = fixture.ic_client(CacheMode::PreferCache, &server);
         seed(&client, IC_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
         let url = Url::parse(IC_NOTICES_URL).unwrap();
-        assert_eq!(client.get(&url, false, |response| crate::announcements::advertised_page_url(response, &url, 2, "div.pb_sys_common span.p_no a[href]", |_| true)).unwrap().unwrap_err().code, "unavailable");
+        assert_eq!(
+            client
+                .get(&url, false, |response| {
+                    crate::announcements::advertised_page_url(
+                        response,
+                        &url,
+                        2,
+                        "div.pb_sys_common span.p_no a[href]",
+                        |_| true,
+                    )
+                })
+                .unwrap()
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
         let retained = client.load(&url).unwrap().unwrap().response;
         assert_eq!(retained.body, original);
         assert_eq!(retained.sha256, hash(&original));
         let offline = client.with_cache_mode(CacheMode::Offline);
-        assert_eq!(offline.get(&url, false, |response| {
-            let document = crate::announcements::college_html(response)?;
-            Ok(crate::announcements::describe_college_surface(response, &document, "ic", serde_json::json!({})))
-        }).unwrap().unwrap_err().code, "unavailable");
+        assert_eq!(
+            offline
+                .get(&url, false, |response| {
+                    let document = crate::announcements::college_html(response)?;
+                    Ok(crate::announcements::describe_college_surface(
+                        response,
+                        &document,
+                        "ic",
+                        serde_json::json!({}),
+                    ))
+                })
+                .unwrap()
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
         assert_eq!(server.count(), 1);
     }
 
