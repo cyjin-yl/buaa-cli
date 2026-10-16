@@ -53,8 +53,9 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "aviation", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(response, &document, "aviation", attribution))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url, label: &str) -> Result<ListingDocument, Error> {
@@ -152,15 +153,10 @@ fn listing_url(client: &ArchiveClient, raw: &str, page: u32) -> Result<Url, Erro
         "/gkgs/"
     };
     client.get(&latest, false, |response| {
-        college_html(response)?;
-        advertised_page_url(
-            &response.body,
-            &latest,
-            page,
-            "div.pb_sys_common span.p_no a[href]",
-            |url| plain_url(url) && url.path().starts_with(prefix),
-        )
-    })
+        advertised_page_url(response, &latest, page, "div.pb_sys_common span.p_no a[href]", |url| {
+            plain_url(url) && url.path().starts_with(prefix)
+        })
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -188,10 +184,12 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, AVIATION_ROOT_URL, raw, &mut attribution)?;
     let target = listing_url(&client, raw, page)?;
     client.with_cache_mode(mode).get(&target,false,|response| {
-        let document = parse_listing(&college_html(response)?,&target,label)?;
+        let source = college_html(response)?;
+        Ok(parse_listing(&source,&target,label).map(|document| {
         let entries:Vec<&ListingEntry> = document.entries.iter().filter(|entry| entry_in_scope(entry,&since,&until,&query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot","publisher":PUBLISHER,"college":"aviation","category":category,"listing_label":label,"page":page,"document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},"entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,"completeness":{"scope":"single_college_selected_board_page","responsive_copies":"desktop_rows_only; mobile copies omitted","pagination":"source_advertised_ordinal_only; no inferred pages","external_links":"retained as source hints; never fetched","other_colleges":"not_covered","dates":"source_year_then_day_and_slash_month; missing stays null"},"retrieval":retrieval(response)}))
-    })
+        json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot","publisher":PUBLISHER,"college":"aviation","category":category,"listing_label":label,"page":page,"document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},"entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,"completeness":{"scope":"single_college_selected_board_page","responsive_copies":"desktop_rows_only; mobile copies omitted","pagination":"source_advertised_ordinal_only; no inferred pages","external_links":"retained as source hints; never fetched","other_colleges":"not_covered","dates":"source_year_then_day_and_slash_month; missing stays null"},"retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -222,7 +220,9 @@ pub(crate) fn article_with_client(
     )?;
     let source = listing_url(&client, AVIATION_PUBLIC_NOTICES_URL, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source, "公开公示")?;
+        let source_document = college_html(response)?;
+        Ok((|| {
+        let document = parse_listing(&source_document, &source, "公开公示")?;
         if !document
             .entries
             .iter()
@@ -234,7 +234,8 @@ pub(crate) fn article_with_client(
             ));
         }
         Ok(retrieval(response))
-    })?;
+        })())
+    })??;
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
