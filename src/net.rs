@@ -2288,27 +2288,57 @@ mod tests {
                 client
             };
             let client = open(CacheMode::PreferCache);
-            seed(&client, SHENYUAN_ROOT_URL, br#"<a href="index/tzgg.htm">Notices</a>"#, false);
-            let mut root = client.load(&Url::parse(SHENYUAN_ROOT_URL).unwrap()).unwrap().unwrap();
-            root.response.headers.insert("content-type".into(), "text/html".into());
+            seed(
+                &client,
+                SHENYUAN_ROOT_URL,
+                br#"<a href="index/tzgg.htm">Notices</a>"#,
+                false,
+            );
+            let mut root = client
+                .load(&Url::parse(SHENYUAN_ROOT_URL).unwrap())
+                .unwrap()
+                .unwrap();
+            root.response
+                .headers
+                .insert("content-type".into(), "text/html".into());
             client.save(&root).unwrap();
-            seed(&client, SHENYUAN_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            seed(
+                &client,
+                SHENYUAN_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
             let target = Url::parse("https://hc.buaa.edu.cn/info/1083/42.htm").unwrap();
             assert_eq!(
                 crate::announcements::shenyuan::article_with_client(
-                    client, CacheMode::PreferCache, &target, page, serde_json::json!({})
-                ).unwrap_err().code,
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    page,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
                 expected
             );
             let client = open(CacheMode::Offline);
-            let retained = client.load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap()).unwrap().unwrap();
+            let retained = client
+                .load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap())
+                .unwrap()
+                .unwrap();
             assert_eq!(retained.response.body, body);
             assert_eq!(retained.response.sha256, hash(body));
             assert!(retained.response.fetched_at_unix_ms > 0);
             assert_eq!(
                 crate::announcements::shenyuan::article_with_client(
-                    client, CacheMode::Offline, &target, page, serde_json::json!({})
-                ).unwrap_err().code,
+                    client,
+                    CacheMode::Offline,
+                    &target,
+                    page,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
                 expected
             );
             assert_eq!(server.count(), 1);
@@ -2351,7 +2381,10 @@ mod tests {
     fn shenyuan_unadmitted_discovery_is_not_retained_or_followed() {
         for (mime, body) in [
             ("text/plain", b"<title>Wrong MIME</title>" as &[u8]),
-            ("text/html", b"<base href='https://example.org/'><title>Changed base</title>" as &[u8]),
+            (
+                "text/html",
+                b"<base href='https://example.org/'><title>Changed base</title>" as &[u8],
+            ),
             ("text/html", &[0xffu8] as &[u8]),
             ("text/html", b"" as &[u8]),
         ] {
@@ -2362,21 +2395,47 @@ mod tests {
             });
             let mut client = fixture.client(CacheMode::PreferCache, &server);
             client.profile = SourceProfile::Shenyuan;
-            seed(&client, SHENYUAN_ROOT_URL, br#"<a href="index/tzgg.htm">Notices</a>"#, false);
-            let mut root = client.load(&Url::parse(SHENYUAN_ROOT_URL).unwrap()).unwrap().unwrap();
-            root.response.headers.insert("content-type".into(), "text/html".into());
+            seed(
+                &client,
+                SHENYUAN_ROOT_URL,
+                br#"<a href="index/tzgg.htm">Notices</a>"#,
+                false,
+            );
+            let mut root = client
+                .load(&Url::parse(SHENYUAN_ROOT_URL).unwrap())
+                .unwrap()
+                .unwrap();
+            root.response
+                .headers
+                .insert("content-type".into(), "text/html".into());
             client.save(&root).unwrap();
-            seed(&client, SHENYUAN_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            seed(
+                &client,
+                SHENYUAN_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
             let target = Url::parse("https://hc.buaa.edu.cn/info/1083/42.htm").unwrap();
             assert_eq!(
                 crate::announcements::shenyuan::article_with_client(
-                    client, CacheMode::PreferCache, &target, 1, serde_json::json!({})
-                ).unwrap_err().code,
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
                 "unavailable"
             );
             let mut client = fixture.client(CacheMode::Offline, &server);
             client.profile = SourceProfile::Shenyuan;
-            assert!(client.load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap()).unwrap().is_none());
+            assert!(
+                client
+                    .load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
             assert!(client.load(&target).unwrap().is_none());
             assert_eq!(server.count(), 1);
         }
