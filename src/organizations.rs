@@ -1,7 +1,7 @@
 //! Authoritative organization directory parsing over one fixed official source.
 use crate::html::{element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, ORGANIZATIONS_URL, Response};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -41,11 +41,54 @@ fn unavailable() -> Error {
 /// Parse the official directory document. This is public for offline evidence
 /// validation and library consumers; it performs no network or cache access.
 pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
+    parse_document(&admitted_html(bytes)?)
+}
+
+fn admitted_html(bytes: &[u8]) -> Result<Html, Error> {
     if bytes.is_empty() || bytes.len() > MAX_HTML {
         return Err(unavailable());
     }
     let input = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
     let document = Html::parse_document(input);
+    let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
+    if document.select(&bases).any(|base| !inert_element(base)) {
+        return Err(unavailable());
+    }
+    Ok(document)
+}
+
+fn hidden_in_source(element: ElementRef<'_>) -> bool {
+    std::iter::once(element)
+        .chain(element.ancestors().filter_map(ElementRef::wrap))
+        .any(|node| {
+            if node.value().attr("hidden").is_some()
+                || node.value().attr("class").is_some_and(|classes| {
+                    classes.split_ascii_whitespace().any(|class| class == "xbt")
+                })
+            {
+                return true;
+            }
+            node.value().attr("style").is_some_and(|style| {
+                style.split(';').any(|declaration| {
+                    let Some((property, value)) = declaration.split_once(':') else {
+                        return false;
+                    };
+                    let property = property.trim_matches(|ch: char| ch.is_ascii_whitespace());
+                    let value = value
+                        .split('!')
+                        .next()
+                        .unwrap_or_default()
+                        .trim_matches(|ch: char| ch.is_ascii_whitespace());
+                    (property.eq_ignore_ascii_case("display") && value.eq_ignore_ascii_case("none"))
+                        || (property.eq_ignore_ascii_case("visibility")
+                            && (value.eq_ignore_ascii_case("hidden")
+                                || value.eq_ignore_ascii_case("collapse")))
+                })
+            })
+        })
+}
+
+fn parse_document(document: &Html) -> Result<DirectoryDocument, Error> {
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let box_selector = Selector::parse(".kyjg-box").map_err(|_| unavailable())?;
     let category_selector = Selector::parse(".kyjg-tit h3").map_err(|_| unavailable())?;
@@ -120,19 +163,6 @@ pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
                     Err(_) => (None, "invalid"),
                 },
             };
-            let classes = element
-                .value()
-                .attr("class")
-                .unwrap_or_default()
-                .split_whitespace();
-            let style = element
-                .value()
-                .attr("style")
-                .unwrap_or_default()
-                .chars()
-                .filter(|character| !character.is_ascii_whitespace())
-                .flat_map(char::to_lowercase)
-                .collect::<String>();
             entries.push(Organization {
                 source_order: entries.len() + 1,
                 category: category.clone(),
@@ -140,8 +170,7 @@ pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
                 listed_href,
                 resolved_http_url,
                 link_kind,
-                hidden_in_source: classes.into_iter().any(|class| class == "xbt")
-                    || style.contains("display:none"),
+                hidden_in_source: hidden_in_source(element),
             });
         }
         if entries.len() == group_entry_start {
@@ -171,18 +200,28 @@ fn retrieval(response: &Response) -> Value {
     })
 }
 
-fn normalize(response: &Response) -> Result<Value, Error> {
-    if response.url != ORGANIZATIONS_URL || response.status != 200 {
-        return Err(unavailable());
-    }
-    if response
-        .headers
-        .get("content-type")
-        .is_some_and(|value| !value.to_ascii_lowercase().starts_with("text/html"))
+fn normalize(response: &Response) -> Result<Result<Value, Error>, Error> {
+    if response.url != ORGANIZATIONS_URL
+        || response.status != 200
+        || !response.headers.get("content-type").is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim_matches([' ', '\t'])
+                .eq_ignore_ascii_case("text/html")
+        })
     {
         return Err(unavailable());
     }
-    let parsed = parse_html(&response.body)?;
+    let document = admitted_html(&response.body)?;
+    // Transport admission is outer; layout errors stay inner so the admitted
+    // original is retained under the same lease for a later offline repair.
+    Ok(normalize_document(response, &document))
+}
+
+fn normalize_document(response: &Response, document: &Html) -> Result<Value, Error> {
+    let parsed = parse_document(document)?;
     let entry_count = parsed.entries.len();
     let category_count = parsed.categories.len();
     Ok(json!({
@@ -209,9 +248,12 @@ fn normalize(response: &Response) -> Result<Value, Error> {
 }
 
 pub fn list(mode: CacheMode) -> Result<Value, Error> {
-    let client = ArchiveClient::open_organizations(mode)?;
+    list_with_client(&ArchiveClient::open_organizations(mode)?)
+}
+
+pub(crate) fn list_with_client(client: &ArchiveClient) -> Result<Value, Error> {
     let url = Url::parse(ORGANIZATIONS_URL).map_err(|_| unavailable())?;
-    client.get(&url, false, normalize)
+    client.get(&url, false, normalize)?
 }
 
 pub fn schema() -> Value {
@@ -296,6 +338,64 @@ mod tests {
     }
 
     #[test]
+    fn directory_active_bases_cannot_change_source_member_resolution() {
+        let directory = "<div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='/relative'>Fixture</a></div></div>";
+        for base in [
+            "<base href='https://foreign.example/'>",
+            "<base href='https://www.buaa.edu.cn/'>",
+        ] {
+            assert_eq!(
+                parse_html(
+                    format!("<html><title>Directory</title>{base}{directory}</html>").as_bytes()
+                )
+                .unwrap_err()
+                .code,
+                "unavailable"
+            );
+        }
+        let inert = format!(
+            "<html><title>Directory</title><template><base href='https://foreign.example/'></template><noscript><base href='https://foreign.example/'></noscript>{directory}</html>"
+        );
+        let parsed = parse_html(inert.as_bytes()).unwrap();
+        assert_eq!(
+            parsed.entries[0].resolved_http_url.as_deref(),
+            Some("https://www.buaa.edu.cn/relative")
+        );
+    }
+
+    #[test]
+    fn directory_source_metadata_requires_exact_html_mime() {
+        let body = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='http://rse.buaa.edu.cn'>Fixture</a></div></div></html>";
+        let mut response = Response {
+            url: ORGANIZATIONS_URL.to_owned(),
+            status: 200,
+            headers: Default::default(),
+            body: body.to_vec(),
+            sha256: "a".repeat(64),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        for content_type in [
+            None,
+            Some("text/plain"),
+            Some("text/html-unknown"),
+            Some("text/html\u{00a0}"),
+        ] {
+            response.headers.clear();
+            if let Some(value) = content_type {
+                response.headers.insert("content-type".into(), value.into());
+            }
+            assert!(normalize(&response).is_err(), "{content_type:?}");
+        }
+        for value in ["text/html; charset=utf-8", "\tTeXt/HtMl ; charset=utf-8"] {
+            response.headers.insert("content-type".into(), value.into());
+            assert!(normalize(&response).unwrap().is_ok());
+        }
+    }
+
+    #[test]
     fn normalized_output_binds_counts_and_retrieval_provenance() {
         let body = b"<html><title>Official</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='https://one.buaa.edu.cn/'>One</a></div></div></html>";
         let response = Response {
@@ -309,7 +409,7 @@ mod tests {
             revalidated_at_unix_ms: None,
             revalidation_status: None,
         };
-        let output = normalize(&response).unwrap();
+        let output = normalize(&response).unwrap().unwrap();
         assert_eq!(output["completeness"]["entry_count"], 1);
         assert_eq!(output["completeness"]["category_count"], 1);
         assert_eq!(
