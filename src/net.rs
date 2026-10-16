@@ -2378,7 +2378,7 @@ mod tests {
         for (mime, body) in [
             ("text/plain", b"<title>Wrong MIME</title>" as &[u8]),
             ("text/html", b"<base href='https://example.org/'><title>Changed base</title>" as &[u8]),
-            ("text/html", &[0xff] as &[u8]),
+            ("text/html", &[0xffu8] as &[u8]),
             ("text/html", b"" as &[u8]),
         ] {
             let fixture = Fixture::new();
@@ -2408,7 +2408,7 @@ mod tests {
         for (mime, body) in [
             ("text/plain", b"<title>Wrong MIME</title>" as &[u8]),
             ("text/html", b"<base href='https://example.org/'><title>Changed base</title>" as &[u8]),
-            ("text/html", &[0xff] as &[u8]),
+            ("text/html", &[0xffu8] as &[u8]),
             ("text/html", b"" as &[u8]),
         ] {
             let fixture = Fixture::new();
