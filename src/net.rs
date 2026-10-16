@@ -1520,6 +1520,12 @@ mod tests {
             client
         }
 
+        fn mse_client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
+            let mut client = self.client(mode, server);
+            client.profile = SourceProfile::Mse;
+            client
+        }
+
         fn governor(&self) -> Governor {
             Governor::isolated_for_test(&self.0.join("governor")).unwrap()
         }
@@ -2458,6 +2464,261 @@ mod tests {
             serde_json::json!(["Original source paragraph."])
         );
         assert_eq!(cached["result"], "partial_text");
+        assert_eq!(server.count(), 1);
+    }
+
+    fn seed_mse_root(client: &ArchiveClient) {
+        seed(
+            client,
+            MSE_ROOT_URL,
+            br#"<a href="xwdt/gggs.htm">Fixture notice board</a>"#,
+            false,
+        );
+        let root = Url::parse(MSE_ROOT_URL).unwrap();
+        let mut entry = client.load(&root).unwrap().unwrap();
+        entry
+            .response
+            .headers
+            .insert("content-type".into(), "text/html".into());
+        client.save(&entry).unwrap();
+        seed(client, MSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+    }
+
+    #[test]
+    fn mse_listing_layout_refusal_retains_exact_original_for_offline_repair() {
+        const BODY: &[u8] = b"<title>Fixture changed listing layout</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        let query = serde_json::from_str(r#"{"college":"mse"}"#).unwrap();
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::PreferCache,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let retained = client
+            .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, BODY);
+        assert_eq!(retained.response.sha256, hash(BODY));
+        assert_eq!(retained.response.status, 200);
+        assert_eq!(retained.response.headers["content-type"], "text/html");
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::Offline,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_missing_ordinal_retains_latest_original_without_inferred_request() {
+        const BODY: &[u8] = b"<title>Fixture has no requested ordinal</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        let query = serde_json::from_str(r#"{"college":"mse","page":2}"#).unwrap();
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::PreferCache,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let retained = client
+            .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, BODY);
+        assert_eq!(retained.response.sha256, hash(BODY));
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::Offline,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_membership_refusal_retains_exact_listing_without_fetching_article() {
+        const BODY: &[u8] = br#"<div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul><li><a href="../info/1061/41.htm"><h3>Another source entry</h3></a></li></ul></div></div></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        let target = Url::parse("https://mse.buaa.edu.cn/info/1061/42.htm").unwrap();
+        assert_eq!(
+            crate::announcements::mse::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &target,
+                1,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let retained = client
+            .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, BODY);
+        assert_eq!(retained.response.sha256, hash(BODY));
+        assert!(client.load(&target).unwrap().is_none());
+        assert_eq!(
+            crate::announcements::mse::article_with_client(
+                client,
+                CacheMode::Offline,
+                &target,
+                1,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_listing_and_discovery_reject_unadmitted_originals_without_caching() {
+        for page in [1, 2] {
+            for (headers, body) in [
+                ("Content-Type: application/json\r\n", b"<title>Wrong MIME</title>" as &[u8]),
+                ("Content-Type: text/html\r\n", b"<base href='https://other.invalid/'><title>Active base</title>" as &[u8]),
+                ("Content-Type: text/html\r\n", b"\xff" as &[u8]),
+            ] {
+                let fixture = Fixture::new();
+                let server = Server::new(move |socket, request| {
+                    assert!(request.starts_with("GET /xwdt/gggs.htm "));
+                    reply(socket, 200, headers, body);
+                });
+                let client = fixture.mse_client(CacheMode::PreferCache, &server);
+                seed_mse_root(&client);
+                let query = serde_json::from_value(serde_json::json!({"college":"mse","page":page})).unwrap();
+                assert_eq!(
+                    crate::announcements::mse::list_with_client(
+                        client,
+                        CacheMode::PreferCache,
+                        &query,
+                        None,
+                        None,
+                        serde_json::json!({}),
+                    )
+                    .unwrap_err()
+                    .code,
+                    "unavailable"
+                );
+                let client = fixture.mse_client(CacheMode::Offline, &server);
+                assert!(client.load(&Url::parse(MSE_NOTICES_URL).unwrap()).unwrap().is_none());
+                assert_eq!(
+                    crate::announcements::mse::list_with_client(
+                        client,
+                        CacheMode::Offline,
+                        &query,
+                        None,
+                        None,
+                        serde_json::json!({}),
+                    )
+                    .unwrap_err()
+                    .code,
+                    "offline_miss"
+                );
+                assert_eq!(server.count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn mse_list_refreshes_only_selected_advertised_page_and_reuses_whole_output() {
+        const LATEST: &[u8] = br#"<div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#;
+        const BODY: &[u8] = br#"<div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul><li><a href="../../info/1061/41.htm"><span>2026.09.21</span><h3>First source title</h3><p>Whole first excerpt.</p></a></li><li><a href="../../info/1058/42.htm"><span>2026.09.15</span><h3>Second source title</h3><p>Whole second excerpt.</p></a></li></ul></div></div></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs/8.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        seed(&client, MSE_NOTICES_URL, LATEST, false);
+        let latest = Url::parse(MSE_NOTICES_URL).unwrap();
+        let mut entry = client.load(&latest).unwrap().unwrap();
+        entry.response.headers.insert("content-type".into(), "text/html".into());
+        client.save(&entry).unwrap();
+        let query = serde_json::from_str(r#"{"college":"mse","page":2}"#).unwrap();
+        let first = crate::announcements::mse::list_with_client(
+            client,
+            CacheMode::Revalidate,
+            &query,
+            Some("2026-09-15".into()),
+            Some("2026-09-21".into()),
+            serde_json::json!({}),
+        ).unwrap();
+        assert_eq!(first["entry_count"], 2);
+        assert_eq!(first["entries"][0]["title"], "First source title");
+        assert_eq!(first["entries"][1]["title"], "Second source title");
+        assert_eq!(first["entries"][0]["summary"], "Whole first excerpt.");
+        assert_eq!(first["entries"][1]["summary"], "Whole second excerpt.");
+        assert_eq!(first["retrieval"]["response_body_sha256"], hash(BODY));
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let cached = crate::announcements::mse::list_with_client(
+            client,
+            CacheMode::Offline,
+            &query,
+            Some("2026-09-15".into()),
+            Some("2026-09-21".into()),
+            serde_json::json!({}),
+        ).unwrap();
+        let mut expected = first;
+        expected["retrieval"]["cache_status"] = "hit".into();
+        assert_eq!(cached, expected);
         assert_eq!(server.count(), 1);
     }
 

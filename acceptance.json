@@ -603,6 +603,12 @@
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "mse_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/105",
+          "retention_revision_20261017": {
+            "published_source_reviewed": "bb2dad9fb359718ed73bc9950c3bd75b804b1350",
+            "correction": "Mse listing layout, advertised-ordinal discovery and listing-membership errors remain inner results until ArchiveClient persists admitted originals and completes the lease. Status, exact MIME, UTF-8, bounded HTML and active-base admission stay outer failures and uncached. Shared ordinal admission is inherited from the lower stack; no duplicate parser or transport/governor-policy change.",
+            "focused_fixture_contract": "Real isolated HTTP consumers check exact original body/hash retention and cache-only reuse after layout/ordinal/membership refusal; wrong MIME, active base and invalid UTF-8 stay uncached on listing/discovery; selected-only listing refresh preserves whole ordered filtered output and never fetches root/latest discovery or undeclared articles.",
+            "scope": "No new campus reads, authentication or campus writes. Private originals/derived output stay private; historical live proof below is not replayed or relabelled as new verification. Parent owns stack integration, source approval and issue closure."
+          },
           "stack_base": "PR104 exact a3ce5c8a3a7ea7b8fe84aac45556393a05c5e46f; owned work/mse-announcements, explicitly dependent on unmerged PR104/PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
           "commands": [
             "announcements college-source mse root|notices [--online|--refresh]",

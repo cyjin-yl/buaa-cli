@@ -1,5 +1,11 @@
 # Development status
 
+## Materials admitted-original retention
+
+The 2026-10-17 review of PR106's published `bb2dad9fb359718ed73bc9950c3bd75b804b1350` found real outer-result boundaries in Mse listing, advertised-ordinal discovery and listing-membership processing. `ArchiveClient::get` persists only after its processing callback returns outer success; those downstream refusals therefore discarded already admitted originals. Mse now follows the existing nested-result convention: admit once, retain the source while the request lease remains held, then return the inner layout/ordinal/membership error. The shared admitted-response ordinal helper is inherited from the lower stack rather than introducing a second byte parser.
+
+The focused real-loopback regressions exercise exact body/hash retention and offline reuse after layout, missing-ordinal and membership refusals; wrong MIME, active base and invalid UTF-8 remain uncached on both listing and discovery paths. A selected-page refresh fixture checks the whole ordered list/filter output and proves no root/latest-listing refresh or undeclared article request. These are isolated HTTP fixtures with separate test governors, not campus observations. Existing private originals and their original-versus-derived facts remain distinct; no source contract, production governor state, account identity, authentication or campus-write policy is changed. Current native verification and exact-head independent review are recorded separately from the historical source receipts below.
+
 ## Directory-bound Mse materials notices
 
 Bounded [issue #105](https://github.com/cyjin-yl/buaa-cli/issues/105) binds visible official-directory member1 材料科学与工程学院 under 航空航天学科群. Preserve exact literal/resolved `http://mse.buaa.edu.cn/`; the deliberate separate observation is `https://mse.buaa.edu.cn/`, not a source-declared HTTPS alias, protocol-equivalence claim or silent original-URL upgrade. Original directory HTML SHA-256 `f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9` is distinct from derived50-entry JSON SHA-256 `9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d`. Source order is not an academic school code. The observed HTTPS root actively declares `/xwdt/gggs.htm`, labelled 公告公示.

@@ -182,6 +182,8 @@ printf '%s\n' '{"college":"iiif","since":"2026-09-08","until":"2026-09-09"}' | .
 printf '%s\n' '{"college":"mse","since":"2026-09-15","until":"2026-09-21"}' | ./target/debug/buaa announcements list
 ```
 
+Mse retains a valid admitted source even when its listing layout, requested advertised ordinal or article membership cannot be interpreted. The command still refuses rather than returning empty success or fetching an inferred target; the exact original can be inspected or repaired offline. Invalid MIME, UTF-8, active-base semantics and source-size/status failures remain outside that retention boundary and are not cached. Discovery is cache-first, and refresh affects only the selected listing or original.
+
 Shared text reads retain at most 1,024 nonempty source paragraphs, each at most 8 KiB, from HTML bounded to 2 MiB. Overflow is an error rather than truncation; no URL/source-specific allowance exists. The previous 512-paragraph limit rejected a legitimate 795-paragraph table notice; a synthetic 1,024/1,025 boundary reproduced red before the shared limit correction and passes green. This does not relax request, authentication or account-safety limits.
 
 Some computer-college policies are image/PDF-preview pages. They return `embedded_document` or `partial_text`, not invented plaintext: preview scripts are excluded, OCR is not performed, and attachment/preview paths are unverified hints, never downloads. Historical SCSE listing bytes stay offline and operator-asserted, including original HTTP source URLs. Colleges beyond the individually observed slices and complete historical coverage remain unimplemented.

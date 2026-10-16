@@ -90,7 +90,7 @@ struct ArticleDocument {
 
 #[derive(serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct ListQuery {
+pub(crate) struct ListQuery {
     college: Option<String>,
     category: Option<String>,
     page: Option<u32>,
