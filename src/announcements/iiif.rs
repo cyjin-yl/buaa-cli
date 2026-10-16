@@ -52,15 +52,21 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "iiif", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "iiif",
+                attribution,
+            ))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let titles = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&titles)
-        .next()
+        .find(|node| !inert_element(*node))
         .map(element_text)
         .unwrap_or_default();
     let views = Selector::parse("div.main > div.wape-right > ul.ss").map_err(|_| unavailable())?;
@@ -155,15 +161,14 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
         advertised_page_url(
-            &response.body,
+            response,
             &latest,
             page,
             "div.main > div.wape-right > div.pb_sys_common span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xwgg/tzgg/"),
         )
-    })
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -190,16 +195,18 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, IIIF_ROOT_URL, IIIF_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+        let source = college_html(response)?;
+        Ok(parse_listing(&source, &target).map(|document| {
         let entries: Vec<&ListingEntry> = document.entries.iter()
             .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
+        json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
             "publisher":PUBLISHER,"college":"iiif","category":"tzgg","listing_label":"通知公告","page":page,
             "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
             "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
             "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"one direct row/span YYYY-MM-DD; missing, invalid or ambiguous stays null"},
-            "retrieval":retrieval(response)}))
-    })
+            "retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -225,19 +232,21 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, IIIF_ROOT_URL, IIIF_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained notice board does not declare the selected Iiif article",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let source_html = college_html(response)?;
+        Ok(parse_listing(&source_html, &source).and_then(|document| {
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained notice board does not declare the selected Iiif article",
+                ));
+            }
+            Ok(retrieval(response))
+        }))
+    })??;
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
@@ -315,9 +324,11 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     let bodies = Selector::parse("div#vsb_content.single-content > div.v_news_content")
         .map_err(|_| unavailable())?;
     let mut bodies = form.select(&bodies).filter(|body| {
-        body.parent()
-            .and_then(|node| node.parent())
-            .is_some_and(|parent| parent.id() == form.id())
+        !inert_element(*body)
+            && body
+                .parent()
+                .and_then(|node| node.parent())
+                .is_some_and(|parent| parent.id() == form.id())
     });
     let body = bodies
         .next()
@@ -344,15 +355,21 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
         },
     );
     output["completeness"]["image_content_present"] = json!(has_images);
-    if has_images {
+    if has_images || attachments_found {
         output["result"] = json!("partial_text");
+    }
+    if has_images {
         output["completeness"]["missing_image_text"] = json!("not_reconstructed");
+    }
+    if attachments_found {
+        output["completeness"]["missing_attachment_content"] = json!("not_downloaded");
     }
     Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::advertised_page_url_document as advertised_document_page_url;
     use super::*;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};
@@ -373,6 +390,45 @@ mod tests {
             revalidated_at_unix_ms: None,
             revalidation_status: None,
         }
+    }
+
+    #[test]
+    fn rescue_iiif_text_and_inert_images_do_not_claim_untranscribed_content() {
+        let response = source(
+            "<h3>Original text heading</h3><div>[发表时间]：2026-09-09</div>",
+            "<p>Complete first <em>middle</em> final paragraph.</p><template><img src='inert.png'></template>",
+        );
+        let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
+        assert_eq!(output["result"], "full_text");
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["Complete first middle final paragraph."])
+        );
+        assert_eq!(output["completeness"]["image_content_present"], false);
+        assert!(output["completeness"].get("missing_image_text").is_none());
+        let partial = source(
+            "<h3>Original mixed heading</h3>",
+            "<p>Only source text.</p><img src='poster.png' alt='Not OCR'>",
+        );
+        let output = normalize(&partial, &college_html(&partial).unwrap()).unwrap();
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["completeness"]["image_content_present"], true);
+        assert_eq!(
+            output["completeness"]["missing_image_text"],
+            "not_reconstructed"
+        );
+        assert_eq!(output["body_paragraphs"], json!(["Only source text."]));
+        let linked = source(
+            "<h3>Original linked heading</h3>",
+            "<p>Only source text.</p><a href='brief.pdf'>Unfetched document</a>",
+        );
+        let output = normalize(&linked, &college_html(&linked).unwrap()).unwrap();
+        assert_eq!(output["result"], "partial_text");
+        assert!(output["completeness"].get("missing_image_text").is_none());
+        assert_eq!(
+            output["completeness"]["missing_attachment_content"],
+            "not_downloaded"
+        );
     }
 
     #[test]
@@ -515,9 +571,10 @@ mod tests {
     fn iiif_advertised_ordinal_is_scoped_not_filename_inferred() {
         let base = Url::parse(IIIF_NOTICES_URL).unwrap();
         let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/99.htm">2</a></span></div><div class="main"><div class="wape-right"><div class="pb_sys_common"><span class="p_no"><a href="tzgg/8.htm">2</a></span></div></div></div>"#;
+        let html = &Html::parse_document(std::str::from_utf8(html).unwrap());
         let allowed = |url: &Url| plain_url(url) && url.path().starts_with("/xwgg/tzgg/");
         assert_eq!(
-            advertised_page_url(
+            advertised_document_page_url(
                 html,
                 &base,
                 2,
@@ -529,7 +586,7 @@ mod tests {
             "https://iiif.buaa.edu.cn/xwgg/tzgg/8.htm"
         );
         assert_eq!(
-            advertised_page_url(
+            advertised_document_page_url(
                 html,
                 &base,
                 3,

@@ -3,8 +3,8 @@ use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     advertised_page_url, article_body, article_output, bind_college_board,
     college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, invalid_article, invalid_list, is_http, parse_iso_date,
-    retrieval, unavailable,
+    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
+    parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, BEIJING_NOTICES_URL, BEIJING_ROOT_URL, CacheMode, Error, Response,
@@ -68,8 +68,14 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "beijing", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "beijing",
+                attribution,
+            ))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
@@ -82,15 +88,22 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
     let rows = Selector::parse("div.ny-right div.notice-list > div > ul > li")
         .map_err(|_| unavailable())?;
     let headings = Selector::parse("a > h3").map_err(|_| unavailable())?;
-    let anchors = Selector::parse("a[href]").map_err(|_| unavailable())?;
+    let anchors = Selector::parse("a").map_err(|_| unavailable())?;
     let dates = Selector::parse("a > span").map_err(|_| unavailable())?;
     let mut entries = Vec::new();
-    for row in document.select(&rows) {
+    for row in document.select(&rows).filter(|node| !inert_element(*node)) {
         if entries.len() == MAX_ENTRIES {
             return Err(unavailable());
         }
-        let title = row
+        let mut anchors = row.select(&anchors).filter(|node| !inert_element(*node));
+        let anchor = anchors.next().ok_or_else(unavailable)?;
+        if anchors.next().is_some() {
+            return Err(unavailable());
+        }
+        let mut headings = anchor
             .select(&headings)
+            .filter(|node| !inert_element(*node));
+        let title = headings
             .next()
             .map(element_text)
             .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
@@ -101,18 +114,19 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
                     line!(),
                 )
             })?;
-        let listed_href = row
-            .select(&anchors)
-            .next()
-            .and_then(|node| node.value().attr("href"));
+        if headings.next().is_some() {
+            return Err(unavailable());
+        }
+        let listed_href = anchor.value().attr("href");
         if listed_href
             .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
         {
             return Err(unavailable());
         }
-        let date = row
-            .select(&dates)
+        let mut dates = anchor.select(&dates).filter(|node| !inert_element(*node));
+        let date = dates
             .next()
+            .filter(|_| dates.next().is_none())
             .and_then(|node| source_date(&element_text(node)));
         let (resolved_http_url, link_kind) = match listed_href {
             None => (None, "missing"),
@@ -149,15 +163,14 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
         advertised_page_url(
-            &response.body,
+            response,
             &latest,
             page,
             "div.pb_sys_common span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xwdt/gggs/"),
         )
-    })
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -191,14 +204,16 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     )?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target,false,|response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+        let source = college_html(response)?;
+        Ok(parse_listing(&source, &target).map(|document| {
         let entries:Vec<&ListingEntry> = document.entries.iter().filter(|entry| entry_in_scope(entry,&since,&until,&query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
+        json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
             "publisher":PUBLISHER,"college":"beijing","category":"gggs","listing_label":"通知公告","page":page,
             "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
             "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
-            "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source_YYYY.MM.DD; missing or invalid stays null"},"retrieval":retrieval(response)}))
-    })
+            "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source_YYYY.MM.DD; missing, ambiguous or invalid stays null"},"retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -229,19 +244,22 @@ pub(crate) fn article_with_client(
     )?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained notice page does not declare the selected Beijing article",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let source_document = college_html(response)?;
+        Ok((|| {
+            let document = parse_listing(&source_document, &source)?;
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained notice page does not declare the selected Beijing article",
+                ));
+            }
+            Ok(retrieval(response))
+        })())
+    })??;
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
@@ -275,7 +293,7 @@ fn publication_date(raw: &str) -> Option<String> {
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let mains = Selector::parse("div.ny-right form > div.art-main").map_err(|_| unavailable())?;
-    let mut mains = document.select(&mains);
+    let mut mains = document.select(&mains).filter(|node| !inert_element(*node));
     let main = mains.next().ok_or_else(|| {
         failed_contract(
             "Beijing article requires its ny-right form/art-main source container",
@@ -288,9 +306,11 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     }
     let headings = Selector::parse("div.art-tit > h3").map_err(|_| unavailable())?;
     let mut headings = main.select(&headings).filter(|node| {
-        node.parent()
-            .and_then(|parent| parent.parent())
-            .is_some_and(|parent| parent.id() == main.id())
+        !inert_element(*node)
+            && node
+                .parent()
+                .and_then(|parent| parent.parent())
+                .is_some_and(|parent| parent.id() == main.id())
     });
     let title = headings
         .next()
@@ -307,19 +327,21 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         return Err(unavailable());
     }
     let dates = Selector::parse("div.art-tit > p > span.date").map_err(|_| unavailable())?;
-    let published_at = main
-        .select(&dates)
-        .filter(|node| {
-            node.parent()
+    let mut dates = main.select(&dates).filter(|node| {
+        !inert_element(*node)
+            && node
+                .parent()
                 .and_then(|parent| parent.parent())
                 .and_then(|parent| parent.parent())
                 .is_some_and(|parent| parent.id() == main.id())
-        })
-        .filter_map(|node| publication_date(&element_text(node)))
-        .next();
+    });
+    let published_at = dates
+        .next()
+        .filter(|_| dates.next().is_none())
+        .and_then(|node| publication_date(&element_text(node)));
     let bodies = Selector::parse("div.art-body-box div#vsb_content div.v_news_content")
         .map_err(|_| unavailable())?;
-    let mut bodies = main.select(&bodies);
+    let mut bodies = main.select(&bodies).filter(|node| !inert_element(*node));
     let body = bodies.next().ok_or_else(|| {
         failed_contract(
             "Beijing article requires its source vsb_content/v_news_content body",
@@ -436,6 +458,70 @@ mod tests {
                 .unwrap_err()
                 .code,
             "unavailable"
+        );
+    }
+
+    #[test]
+    fn article_ignores_style_inert_copies_but_not_active_foreign_owners() {
+        let active = r#"<div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Active source heading</h3><p><span class="date">日期：2026年9月22日</span></p></div><div class="art-body-box"><div id="vsb_content"><div class="v_news_content"><p>Active source paragraph.</p></div></div></div></div></form></div>"#;
+        let foreign = active.replace("Active source", "Foreign copy");
+        for (open, close) in [
+            (
+                "<svg><style><foreignObject>",
+                "</foreignObject></style></svg>",
+            ),
+            ("<template>", "</template>"),
+        ] {
+            let source = response(&format!("{open}{foreign}{close}{active}"));
+            let output = normalize(&source, &college_html(&source).unwrap()).unwrap();
+            assert_eq!(output["title"], "Active source heading");
+            assert_eq!(output["published_at"], "2026-09-22");
+            assert_eq!(
+                output["body_paragraphs"],
+                json!(["Active source paragraph."])
+            );
+        }
+        let competing = response(&format!(
+            "<svg><foreignObject>{foreign}</foreignObject></svg>{active}"
+        ));
+        assert!(normalize(&competing, &college_html(&competing).unwrap()).is_err());
+    }
+
+    #[test]
+    fn ambiguous_row_links_headings_and_publication_dates_are_not_guessed() {
+        let listing = |anchors: &str| {
+            response(&format!(
+                "<div class=\"ny-right\"><div class=\"notice-list\"><div><ul><li>{anchors}</li></ul></div></div></div>"
+            ))
+        };
+        for anchors in [
+            "<a href=\"info/1014/99.htm\">Unrelated</a><a href=\"info/1014/42.htm\"><h3>Fixture</h3></a>",
+            "<a href=\"info/1014/42.htm\"><h3>First</h3><h3>Second</h3></a>",
+        ] {
+            let source = listing(anchors);
+            assert!(
+                parse_listing(
+                    &college_html(&source).unwrap(),
+                    &Url::parse(BEIJING_NOTICES_URL).unwrap()
+                )
+                .is_err()
+            );
+        }
+        let source = listing(
+            "<a href=\"info/1014/42.htm\"><h3>Fixture</h3><span>2026.09.22</span><span>2026.09.23</span></a>",
+        );
+        let parsed = parse_listing(
+            &college_html(&source).unwrap(),
+            &Url::parse(BEIJING_NOTICES_URL).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed.entries[0].date, None);
+        let source = response(
+            "<div class=\"ny-right\"><form><div class=\"art-main\"><div class=\"art-tit\"><h3>Fixture</h3><p><span class=\"date\">日期：2026年9月22日</span><span class=\"date\">日期：2026年9月23日</span></p></div><div class=\"art-body-box\"><div id=\"vsb_content\"><div class=\"v_news_content\"><p>Source.</p></div></div></div></div></form></div>",
+        );
+        assert_eq!(
+            normalize(&source, &college_html(&source).unwrap()).unwrap()["published_at"],
+            Value::Null
         );
     }
 
