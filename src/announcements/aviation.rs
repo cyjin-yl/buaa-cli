@@ -109,8 +109,8 @@ fn parse_listing(document: &Html, base: &Url, label: &str) -> Result<ListingDocu
         {
             return Err(unavailable());
         }
-        let mut parts = row.select(&date_parts);
-        let mut years = row.select(&years);
+        let mut parts = row.select(&date_parts).filter(|node| !inert_element(*node));
+        let mut years = row.select(&years).filter(|node| !inert_element(*node));
         let date = years
             .next()
             .zip(parts.next())
@@ -402,6 +402,39 @@ mod tests {
             .map(|entry| entry.title.as_str())
             .collect::<Vec<_>>();
         assert_eq!(filtered, ["Fixture policy"]);
+    }
+
+    #[test]
+    fn listing_ignores_only_style_inert_date_copies_before_uniqueness() {
+        let date = r#"<div class="l"><div class="year">2026</div><div class="mouth"><span>03</span><span>/04</span></div></div>"#;
+        let listing = |copy: &str| {
+            response(&format!(
+                r#"<div class="body mh"><div class="moudle"><div class="right"><div class="items"><div class="item">{copy}{date}<div class="r"><a href="info/1061/42.htm"><div class="title">Fixture policy</div></a></div></div></div></div></div></div>"#
+            ))
+        };
+        for (open, close, expected) in [
+            (
+                "<svg><style><foreignObject>",
+                "</foreignObject></style></svg>",
+                Some("2026-04-03"),
+            ),
+            ("<template>", "</template>", Some("2026-04-03")),
+            ("<svg><foreignObject>", "</foreignObject></svg>", None),
+        ] {
+            let source = listing(&format!("{open}{date}{close}"));
+            let parsed = parse_listing(
+                &college_html(&source).unwrap(),
+                &Url::parse(AVIATION_PUBLIC_NOTICES_URL).unwrap(),
+                "公开公示",
+            )
+            .unwrap();
+            assert_eq!(parsed.entries[0].date.as_deref(), expected);
+            let day = Some("2026-04-03".into());
+            assert_eq!(
+                entry_in_scope(&parsed.entries[0], &day, &day, &None),
+                expected.is_some()
+            );
+        }
     }
 
     #[test]
