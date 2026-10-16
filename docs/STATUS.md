@@ -1,5 +1,11 @@
 # Development status
 
+## 2026-10-17: H3i recruitment source-integrity repair
+
+The existing stacked [PR #100](https://github.com/cyjin-yl/buaa-cli/pull/100) / [issue #99](https://github.com/cyjin-yl/buaa-cli/issues/99) continuation retains visible 国际创新学院's exact `https://h3i.buaa.edu.cn/index.htm` directory identity and the declared `rcpy/cpgg.htm` **recruitment** board. It is not a general-notice adapter or historical enumeration. A canonical row has one direct source link and its own unique heading; competing links/headings refuse rather than combining authority from different elements. Ambiguous date parts stay unknown, inert duplicate views are excluded and missing links remain explicit facts.
+
+Admitted recruitment HTML is retained when source layout or the selected article declaration is unavailable, but wrong MIME, invalid UTF-8, empty and active-base sources remain uncached errors. Source-owned callbacks use the prerequisite stack's shared admission boundary and permanent governor, not a new transport/limiter. Synthetic loopback consumers cover exact retained bytes/hash/time, offline error reuse and no selected article request after source rejection. Current proof and independent review bind the published head in the PR; the dated receipts below retain their original head scope. Page one, exact publication slot, source order and original-versus-derived distinctions are unchanged. No new campus observation, merge, deployment or expanded history/attachment acceptance is claimed.
+
 ## 2026-10-02: current safety frontier
 
 The earlier blocker table and dated receipts below are historical observations, not a current domain-wide egress verdict. Public SPOC pages and one source-declared script, university news, computer-college/integrated-circuit-college notices and an original policy PDF were later read through the shared governor. Authenticated campus contracts, rights-cleared recording/Life inventory, the current skills-fs Go contract, private CI runner/signing trust and full devcontainer runtime proof remain separate gaps.
