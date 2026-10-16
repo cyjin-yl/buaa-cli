@@ -604,6 +604,12 @@
         "zfai_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/101",
           "repair_20261017": {
+            "current_directory_authority": {
+              "directory_html_sha256": "77c310f0905ff42540e85aa3bc3f2827efdc2f72742738414a0a35be554e09ba",
+              "member46_hidden_in_source": true,
+              "actual_cli_result": "Zfai surface/list/article refuse unavailable before any college request under the existing non-hidden attribution rule; governor bytes unchanged and no campus read performed.",
+              "acceptance": "Current bounded Zfai service remains incomplete. Historical visible-member receipts below stay bound to old directory SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9. Do not substitute those bytes, weaken hidden authority or close issue101; integration needs an explicit maintainer source-contract decision."
+            },
             "source_admission": "Admit status/MIME/bounded UTF-8/no-active-base before persistence; invalid sources remain outer errors and uncached. Root declaration, ordinal, listing layout and selected-article membership errors remain inner results until admitted original persistence completes.",
             "pagination": "Use the admitted DOM once with each caller's reviewed selector; no byte-wrapper or inferred routes. Duplicate identical active targets are permitted; conflicting URLs for one ordinal refuse.",
             "content": "Information-board caption, whole heading and complete distinct excerpt are preserved. Article header requires one element even when a second heading is empty. No source scripts, attachments or images are executed/downloaded/reconstructed; an active document attachment makes the result partial_text with missing content explicit.",
