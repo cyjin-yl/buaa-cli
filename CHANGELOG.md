@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Mark Zfai source paragraphs with active untranscribed body images as partial text, while preserving inert-image full text and image-only refusal. State the current hidden-directory authority blocker at public entry points and label earlier visible-source success historical; issue101 remains incomplete without an authority fallback or new campus request.
 - Preserve admitted Zfai listing/root originals when layout, article membership or an advertised ordinal is unsupported; invalid MIME, UTF-8 and active HTML bases remain uncached failures. Reuse the admitted DOM for shared ordinal selection, reject conflicting active targets and retain the information-board caption and complete, separate excerpts. Empty extra article headings remain ambiguous rather than silently disappearing; unfetched attachment content keeps the article partial.
 - Remove production-governor state fingerprints from the current Shenyuan/H3i receipt summaries, preserving dated unchanged-byte outcomes and all original-source hashes. Historical Git objects and protected receipts are not rewritten or claimed erased.
 - Preserve admitted Shenyuan listing/ordinal originals when their layout or selected-article declaration is unavailable, while rejecting untyped, invalid UTF-8, empty or active-base sources before caching. Bind each canonical row to one direct source link and heading; keep ambiguous dates unknown and exclude inert duplicate views. This does not add campus observations, hidden-member aliases, history coverage or a second governor.

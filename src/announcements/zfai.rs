@@ -366,6 +366,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             )
         })?;
     let (paragraphs, attachment_hints, attachments_found) = article_body(body)?;
+    let images = Selector::parse("img").map_err(|_| unavailable())?;
+    let has_images = body.select(&images).any(|image| !inert_element(image));
     let mut output = article_output(
         response,
         ArticleDocument {
@@ -377,8 +379,14 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             attachments_found,
         },
     );
-    if attachments_found {
+    output["completeness"]["image_content_present"] = json!(has_images);
+    if has_images || attachments_found {
         output["result"] = json!("partial_text");
+    }
+    if has_images {
+        output["completeness"]["missing_image_text"] = json!("not_reconstructed");
+    }
+    if attachments_found {
         output["completeness"]["missing_attachment_content"] = json!("not_downloaded");
     }
     Ok(output)
@@ -641,6 +649,46 @@ mod tests {
         assert!(
             normalize(&missing, &college_html(&missing).unwrap()).unwrap()["published_at"]
                 .is_null()
+        );
+    }
+
+    #[test]
+    fn article_marks_active_images_partial_without_inventing_image_text() {
+        for (body, expected_result, has_images) in [
+            (
+                "<p>Visible source paragraph.</p><img src='poster.png' alt='Not OCR'>",
+                "partial_text",
+                true,
+            ),
+            (
+                "<p>Visible source paragraph.</p><template><img src='inert.png'></template>",
+                "full_text",
+                false,
+            ),
+        ] {
+            let original = response(&article_html("", body));
+            let output = normalize(&original, &college_html(&original).unwrap()).unwrap();
+            assert_eq!(output["result"], expected_result);
+            assert_eq!(
+                output["body_paragraphs"],
+                json!(["Visible source paragraph."])
+            );
+            assert_eq!(output["completeness"]["image_content_present"], has_images);
+            if has_images {
+                assert_eq!(
+                    output["completeness"]["missing_image_text"],
+                    "not_reconstructed"
+                );
+            } else {
+                assert!(output["completeness"].get("missing_image_text").is_none());
+            }
+        }
+        let image_only = response(&article_html("", "<img src='poster.png' alt='Not OCR'>"));
+        assert_eq!(
+            normalize(&image_only, &college_html(&image_only).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
         );
     }
 
