@@ -629,7 +629,7 @@
             "body_table_cell_count": 2331,
             "all_cells_captions_and_declared_spans_privately_equal": true,
             "original_heading_date_paragraph_retrieval_and_attribution_unchanged": true,
-            "production_governor_sha256": "68857c0a5646124c69aaee3392169e3d23ee04a3582b6affac2c787fc4685eab",
+            "production_governor_bytes_unchanged": true,
             "production_governor_byte_unchanged": true
           },
           "table_contract": {

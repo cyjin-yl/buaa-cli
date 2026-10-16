@@ -810,6 +810,19 @@ mod tests {
     }
 
     #[test]
+    fn mse_unowned_table_text_cannot_be_dropped_by_foster_parenting() {
+        let response = source(
+            "<h3>Original table heading</h3>",
+            "<table>Unowned source text<tr><td>Kept source cell</td></tr></table>",
+        );
+        let document = college_html(&response).unwrap();
+        assert_eq!(
+            normalize(&response, &document).unwrap_err().code,
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn mse_nested_or_empty_nontext_tables_do_not_fabricate_readable_content() {
         for body in [
             "<table><tr><td>Outer<table><tr><td>Nested source</td></tr></table></td></tr></table>",
