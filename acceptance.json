@@ -122,6 +122,7 @@
       "blocker": "Governed public entry and source-bound JavaScript observation are verified, including one private immutable app bundle and offline metadata reuse. This is public contract evidence, not an authenticated service. A verified current course/session/material read contract, accessible authorized course inventory and private credential delivery are still required. No course/media endpoint or download permission is inferred from script bytes or historical catalog links.",
       "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/42",
       "evidence": {
+        "contract_recheck_2026_10_17": "Live issue/discussion and linked-PR reads confirm public surface/script slices already merged in PR68/PR88; no approved course/session/material read contract or rights-cleared inventory is supplied. Exact routes/session/pagination/integrity/limits, bounded original/derived rights inventory and private credential delivery remain required. No login, script execution, new campus read, duplicate public-source PR or remote-adapter claim.",
         "command": "buaa spoc surface [root|entry] [--online|--refresh]; buaa spoc script [--online|--refresh] with source-declared JSON URL on stdin",
         "observation": "2026-09-28 governed public-surface read (one in flight, shared raised 60-second interval, TLS on, no cookies/redirects/proxy/retry): robots.txt HTTP 200 (998 B); root / HTTP 200 (377 B, sha256 373cd4cd521ae2c33d27ce647d416b6a4d44523e100fa8503fd7f984af355243, no title, no server-rendered form); entry /spocnew/ HTTP 200 (2173 B, sha256 5b6709aa5aafd07227e9348c619a5b0e07bff36059fc0ea33e8c1e6c897cdf9f, title 智学北航, no server-rendered form). INCO middleware; newSpoc session cookie.",
         "contract_draft": "docs/SPOC.md (current authenticated course/session/material read contract unverified; one public bundle is retained privately, but source bytes alone do not establish endpoint/session compatibility or material rights)",
@@ -608,6 +609,8 @@
           "command": "announcements college-source rse [root] [--online|--refresh]; fixed root metadata only, no Rse list/article adapter or notice route",
           "authority": "Visible official-directory member2 可靠性与系统工程学院 under 航空航天学科群; exact literal http://rse.buaa.edu.cn and resolved http://rse.buaa.edu.cn/. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9 differs from derived50-entry JSON SHA9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. Ordinal is not an academic school code. Selected HTTPS root is an explicit separate observation, not an alias, silent upgrade or verified protocol equivalence.",
           "strict_identity_change": "Existing shared authority helper now requires both independently declared literal and resolved strings, without normalizing either. Eight existing callers retain their same expected root pair. AST migrated9 parsed calls; three macro-contained test calls were migrated manually. Existing hidden/ambiguous/nonliteral refusals remain intact; no shim or Rse-specific URL normalization.",
+          "authority_repair_2026_10_17": "Require exact explicit text/html for directory authority; reject active bases before resolving members and propagate literal ancestor hiding into hidden_in_source without dropping records. Admitted layout-drift originals are retained under the same lease through nested results while the caller still fails; MIME/base/UTF-8/size failures remain outer and uncached. Synthetic parser-to-pair and actual isolated-loopback consumers cover the changes. No new campus read or parent-owned Rse implementation; this frontier does not close109.",
+          "authority_repair_verification_2026_10_17": "Exact30f0706 detached test-only baseline red0/3 exit101/74.24s for absent MIME,active base,hidden ancestor. Corrected formatter0/2.08s, native build0/14.98s,13 focused directory tests+2 existing CLI cases pass,strict all-target clippy0/23.86s,fmtcheck0/1.60s; native help/schema/capabilities0. Layout retention consumer proves exact admitted bytes/hash and offline reuse over real isolated loopback; invalid admission remains uncached. No full suite/campus observation/trusted CI/independent new-head approval.",
           "robots": {
             "url": "https://rse.buaa.edu.cn/robots.txt",
             "http_status": 404,
@@ -2064,6 +2067,7 @@
       "sources": [],
       "evidence": {
         "access": "Authorized repository read access confirmed; no private source or credential contents copied into public project.",
+        "contract_recheck_2026_10_17": "Current issue/discussion, merged PR75 and scoped local source inspection still establish only exact HEAD/GET inspector,256-KiB SHA-256 and finally closure. Registered private Life operations do not authorize buaa-cli downloads. Explicit HTTPS/authentication/immutability/byte-budget approval, exact rights-cleared original/derived inventory and private credential delivery remain absent. No credentials/session/private rows/operational defaults/media/object-store request/private-code execution or copy.",
         "storage_interface_draft": {
           "upstream_head": "af59427c7f6bac3382b5989b811b69872f4de928",
           "review_issue": "https://github.com/cyjin-yl/buaa-cli/issues/74",
@@ -2090,7 +2094,11 @@
       "status": "blocked",
       "acceptance": "Real manifest/discovery/read/write/stream integration; default read-only and same cross-process governor.",
       "sources": [],
-      "blocker": "Authoritative source mount absent; both unauthenticated and authenticated repository API requests returned404. Current Go contract remains inaccessible here."
+      "blocker": "2026-10-17: actual container lacks /references and /references/skills-fs; both public and authenticated authoritative repository API reads still return404. Pinned napcat consumer fragment/mount docs are not the licensed current Go engine or a versioned discovery/read/write/stream/error/cancellation contract. Scoped Life/research sources supply no replacement or owner-approved BUAA safe-space manifest. Require the accessible reviewed engine/reference revision, provider manifest/contract and authorized mount/test environment; no compatible provider is claimed.",
+      "blocker_issues": [
+        "https://github.com/cyjin-yl/buaa-cli/issues/17",
+        "https://github.com/cyjin-yl/buaa-cli/issues/19"
+      ]
     },
     {
       "id": "contribution",

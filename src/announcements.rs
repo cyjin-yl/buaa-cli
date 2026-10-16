@@ -1216,6 +1216,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn directory_hidden_ancestors_cannot_grant_literal_resolved_authority() {
+        for attributes in [
+            "hidden",
+            "class='xbt'",
+            "style='display: none'",
+            "style='DISPLAY : NONE !important'",
+            "style='visibility: hidden'",
+            "style='visibility: collapse'",
+        ] {
+            let source = format!(
+                "<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><div {attributes}><a href='http://rse.buaa.edu.cn'>Fixture Reliability Institute</a></div></div></div></html>"
+            );
+            let parsed = crate::organizations::parse_html(source.as_bytes()).unwrap();
+            assert_eq!(parsed.entries.len(), 1);
+            assert!(parsed.entries[0].hidden_in_source, "{attributes}");
+            let directory = json!({"entries":parsed.entries});
+            assert_eq!(
+                college_directory_attribution(
+                    &directory,
+                    "Fixture Reliability Institute",
+                    "http://rse.buaa.edu.cn",
+                    "http://rse.buaa.edu.cn/",
+                )
+                .unwrap_err()
+                .code,
+                "unavailable"
+            );
+        }
+    }
+
     fn listing_html() -> String {
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>通知公告-新闻网</title></head><body>
 <div class="tlist"><ul>

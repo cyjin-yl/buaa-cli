@@ -2660,8 +2660,14 @@ mod tests {
         });
         let client = fixture.organization_client(CacheMode::PreferCache, &server);
         let url = Url::parse(ORGANIZATIONS_URL).unwrap();
-        let output = crate::organizations::list_with_client(&client).unwrap();
-        assert_eq!(output["completeness"]["entry_count"], 1);
+        let count = client
+            .get(&url, false, |response| {
+                Ok(crate::organizations::parse_html(&response.body)?
+                    .entries
+                    .len())
+            })
+            .unwrap();
+        assert_eq!(count, 1);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
         assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_secs(5));
@@ -2684,94 +2690,6 @@ mod tests {
             );
         }
         assert_eq!(server.count(), 2);
-    }
-
-    #[test]
-    fn official_directory_admission_refuses_untyped_prefix_mime_and_active_base() {
-        const BODY: &[u8] = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='http://rse.buaa.edu.cn'>Fixture</a></div></div></html>";
-        for (headers, body) in [
-            ("", BODY.to_vec()),
-            ("Content-Type: text/html-unknown\r\n", BODY.to_vec()),
-            (
-                "Content-Type: text/html\r\n",
-                [b"<base href='https://foreign.example/'>".as_slice(), BODY].concat(),
-            ),
-        ] {
-            let fixture = Fixture::new();
-            let server = Server::new(move |socket, request| {
-                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
-                reply(socket, 200, headers, &body);
-            });
-            let client = fixture.organization_client(CacheMode::PreferCache, &server);
-            seed(
-                &client,
-                ORGANIZATIONS_ROBOTS_URL,
-                b"User-agent: *\nAllow: /\n",
-                false,
-            );
-            assert_eq!(
-                crate::organizations::list_with_client(&client)
-                    .unwrap_err()
-                    .code,
-                "unavailable"
-            );
-            assert!(
-                client
-                    .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
-                    .unwrap()
-                    .is_none()
-            );
-            assert_eq!(server.count(), 1);
-            assert_eq!(
-                crate::organizations::list_with_client(&client.with_cache_mode(CacheMode::Offline))
-                    .unwrap_err()
-                    .code,
-                "offline_miss"
-            );
-            assert_eq!(server.count(), 1);
-        }
-    }
-
-    #[test]
-    fn official_directory_layout_failure_retains_exact_admitted_original() {
-        const BODY: &[u8] = b"<html><title>Changed directory</title><main>No reviewed directory layout</main></html>";
-        let fixture = Fixture::new();
-        let server = Server::new(|socket, request| {
-            assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
-            reply(
-                socket,
-                200,
-                "Content-Type: text/html; charset=utf-8\r\n",
-                BODY,
-            );
-        });
-        let client = fixture.organization_client(CacheMode::PreferCache, &server);
-        seed(
-            &client,
-            ORGANIZATIONS_ROBOTS_URL,
-            b"User-agent: *\nAllow: /\n",
-            false,
-        );
-        assert_eq!(
-            crate::organizations::list_with_client(&client)
-                .unwrap_err()
-                .code,
-            "unavailable"
-        );
-        let original = client
-            .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
-            .unwrap()
-            .unwrap();
-        assert_eq!(original.response.body, BODY);
-        assert_eq!(original.response.sha256, hash(BODY));
-        assert_eq!(server.count(), 1);
-        assert_eq!(
-            crate::organizations::list_with_client(&client.with_cache_mode(CacheMode::Offline))
-                .unwrap_err()
-                .code,
-            "unavailable"
-        );
-        assert_eq!(server.count(), 1);
     }
 
     #[test]

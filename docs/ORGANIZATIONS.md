@@ -33,13 +33,15 @@ Each result preserves:
 - the literal `href` attribute when present;
 - a normalized HTTP(S) URL only when it can be represented safely;
 - link kind: `http`, `https`, `missing`, `non_http`, or `invalid`;
-- whether the source anchor is hidden by its class/inline style.
+- whether the source anchor or an ancestor has the source's `xbt` class, an HTML `hidden` attribute, or an explicit inline `display:none` / `visibility:hidden|collapse` declaration. This is conservative literal source evidence, not computed browser styling.
 
 No missing URL is reconstructed. A `javascript:void(0)` link remains non-HTTP. Plain HTTP links are not silently upgraded to HTTPS. Hidden entries still present in active source HTML are returned and marked. Script/style/template/noscript groups, headings and member declarations cannot supply college identity; their inline label payloads are excluded using the same active-text walk as announcement sources. A combined active source label remains one directory entry rather than being split into institutions the source did not separately link.
 
 The materials-college source preserves visible member1 材料科学与工程学院 and exact literal/resolved `http://mse.buaa.edu.cn/`. Its source command deliberately selects `https://mse.buaa.edu.cn/` as a separate HTTPS observation, following the explicit computer-college precedent. Output retains the original member/directory retrieval and records `selected_https_root` plus `selection_relation`; it does not assert that the directory declared HTTPS, that the protocols serve identical resources, or that an inferred alias grants admission. Source order1 is not an academic school code. The selected HTTPS root must separately declare a board, and its retained board must declare a selected original; the organization command itself follows neither.
 
 The parser requires the official directory structure, bounds the HTML to 2 MiB, accepts UTF-8 only, and rejects duplicate categories, empty/control-bearing labels or more than 64 categories/512 entries. A site redesign fails as unavailable instead of returning plausible partial data.
+
+Directory authority requires an explicit exact `text/html` response media type (parameters allowed), not absent MIME or a `text/html-*` lookalike. Active `base[href]` declarations refuse before resolving members; bases under inert template/noscript markup confer no authority. Literal and resolved roots are compared separately and exactly. A hidden ancestor cannot turn a member into visible egress authority, while the hidden source entry remains in the directory output. Validly admitted originals whose directory layout has drifted are retained under the request lease for offline repair; the command still fails, and invalid MIME/base/UTF-8/size responses are not cached as admitted sources.
 
 Completeness means every active anchor inside every active recognized organization box in the captured official directory document. Inactive declarations are not visible-member authority. It does **not** claim that the document names every university unit, that every linked site is reachable/current, or that hidden/unlinked institutes have no other official page.
 
