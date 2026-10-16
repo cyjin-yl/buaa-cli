@@ -68,7 +68,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         .with_cache_mode(mode)
         .get(&target, false, |response| {
             let document = college_html(response)?;
-            Ok(describe_college_surface(response, &document, "shenyuan", attribution))
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "shenyuan",
+                attribution,
+            ))
         })?
 }
 
@@ -287,9 +292,7 @@ pub(crate) fn article_with_client(
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let forms = Selector::parse("section.n_news_detail div.ar_article_box > form")
         .map_err(|_| unavailable())?;
-    let mut forms = document
-        .select(&forms)
-        .filter(|node| !inert_element(*node));
+    let mut forms = document.select(&forms).filter(|node| !inert_element(*node));
     let main = forms.next().ok_or_else(|| {
         failed_contract(
             "Shenyuan article requires its n_news_detail/ar_article_box form",
@@ -354,9 +357,10 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         .map_err(|_| unavailable())?;
     let mut bodies = main.select(&bodies).filter(|node| {
         !inert_element(*node)
-            && node.parent()
-            .and_then(|parent| parent.parent())
-            .is_some_and(|parent| parent.id() == main.id())
+            && node
+                .parent()
+                .and_then(|parent| parent.parent())
+                .is_some_and(|parent| parent.id() == main.id())
     });
     let body = bodies.next().ok_or_else(|| {
         failed_contract(
@@ -501,7 +505,10 @@ mod tests {
         ));
         let parsed = normalize(&inert, &college_html(&inert).unwrap()).unwrap();
         assert_eq!(parsed["title"], "Fixture original heading");
-        assert_eq!(parsed["body_paragraphs"], json!(["Source paragraph.", "Source table cell."]));
+        assert_eq!(
+            parsed["body_paragraphs"],
+            json!(["Source paragraph.", "Source table cell."])
+        );
         let output = normalize(&source, &college_html(&source).unwrap()).unwrap();
         assert_eq!(output["title"], "Fixture original heading");
         assert_eq!(output["published_at"], "2026-09-29");
