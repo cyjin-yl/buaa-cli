@@ -603,6 +603,12 @@
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "zfai_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/101",
+          "repair_20261017": {
+            "source_admission": "Admit status/MIME/bounded UTF-8/no-active-base before persistence; invalid sources remain outer errors and uncached. Root declaration, ordinal, listing layout and selected-article membership errors remain inner results until admitted original persistence completes.",
+            "pagination": "Use the admitted DOM once with each caller's reviewed selector; no byte-wrapper or inferred routes. Duplicate identical active targets are permitted; conflicting URLs for one ordinal refuse.",
+            "content": "Information-board caption, whole heading and complete distinct excerpt are preserved. Article header requires one element even when a second heading is empty. No source scripts, attachments or images are executed/downloaded/reconstructed; an active document attachment makes the result partial_text with missing content explicit.",
+            "evidence_boundary": "New isolated focused proof, actual retained-cache CLI smoke, current exact published head, independent checkout review and live check/permission gates are recorded in the PR receipt. Existing 238+19/full-suite/local-UI receipts below remain older-head evidence, not a new full-suite or deployment claim. No campus request is part of the repair."
+          },
           "stack_base": "PR100 exact6d13df1962aca201f210070fbe69094497a4b73f; owned work/zfai-announcements, explicitly dependent on unmerged PR100/PR98/PR96/PR94; no root-main or deployed claim",
           "commands": [
             "announcements college-source zfai root|notices [--online|--refresh]",
