@@ -602,6 +602,91 @@
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "mse_slice": {
+          "native_ownership_gate_20261017": {
+            "code_proof_head": "38cc898c2e4aa87ea2a80fc75e0277ab06f1cf68",
+            "ordinary_inherited_PR104_head": "611ab5cb9009f03ccb1172b8b2db5f021f05049d",
+            "toolchain": "native cargo1.98.1; declared Rust1.89 CI remains a separate parent publication gate",
+            "header_consumer": {
+              "red_exit": 101,
+              "red_executed": 1,
+              "red_failed": 1,
+              "green_exit": 0,
+              "green_executed": 1,
+              "green_passed": 1
+            },
+            "focused_offline": {
+              "executed": 14,
+              "passed": 14,
+              "failed": 0,
+              "ignored": 0,
+              "new_real_HTTP_loopback_consumers": 5,
+              "invalid_source_admission_lanes": 6,
+              "scope": "--lib mse_; not a full-library or CLI-integration-suite run"
+            },
+            "final_code_gates": {
+              "formatter_exit": 0,
+              "build_exit": 0,
+              "strict_all_target_clippy_exit": 0,
+              "formatter_check_exit": 0
+            },
+            "actual_offline_CLI": {
+              "success_commands": 9,
+              "refusal_commands": 3,
+              "refusal_exit_codes": [
+                3,
+                7,
+                2
+              ],
+              "models_independently_frozen_before_comparison": 9,
+              "whole_models_equal": true,
+              "current_listing_entries": 6,
+              "current_inclusive_filtered_entries": 2,
+              "filter_contract": "inclusive2026-09-15 through2026-09-21",
+              "directory_entries": 50,
+              "article_source_paragraphs": 1,
+              "article_result": "partial_text",
+              "unextracted_table_count": 1,
+              "unextracted_source_rows": 339,
+              "unextracted_source_cells": 2331,
+              "capability_manifest_entries_in_this_worktree": 44,
+              "parent_mainline_49_74_totals_replaced": false
+            },
+            "current_source_inputs": {
+              "mse-root": {
+                "url": "https://mse.buaa.edu.cn/",
+                "http_status": 200,
+                "source_HTML_byte_length": 58155,
+                "source_HTML_sha256": "e91f514de0d56a270ef8d590721f44753ebfb703791697bd56a1402745a54505",
+                "fetched_at_unix_ms": 1792099465076
+              },
+              "mse-board": {
+                "url": "https://mse.buaa.edu.cn/xwdt/gggs.htm",
+                "http_status": 200,
+                "source_HTML_byte_length": 26920,
+                "source_HTML_sha256": "93f2df6a1a3840eca468cc1a8986964fbfa0947dd0ea220e4a84c9ffd08beca2",
+                "fetched_at_unix_ms": 1792101108962
+              },
+              "mse-article": {
+                "url": "https://mse.buaa.edu.cn/info/1061/2881.htm",
+                "http_status": 200,
+                "source_HTML_byte_length": 522352,
+                "source_HTML_sha256": "dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3",
+                "fetched_at_unix_ms": 1791096587326
+              },
+              "directory": {
+                "url": "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm",
+                "http_status": 200,
+                "source_HTML_byte_length": 41857,
+                "source_HTML_sha256": "77c310f0905ff42540e85aa3bc3f2827efdc2f72742738414a0a35be554e09ba",
+                "fetched_at_unix_ms": 1792097607764
+              }
+            },
+            "cache_scope_boundary": "The current frozen root/board differ in length, original HTML hash and fetched timestamp from the dated historical originals. Cause UNKNOWN. Historical six-row/three-filtered-row receipts and original oracle remain unchanged; the current independently reconstructed six-row/two-filtered-row models use only actual admitted current bytes. No old directory/cache substitution, source rewrite, GET or CLI replay. The declared article remains the exact522352-byte historical original with its original hash/time.",
+            "oracle_failures_retained": "The first full comparator failed its historical-board identity assertion. A comparison-only suffix then exposed missing expected selected_https_root/selection_relation fields; these were corrected from source contract, not CLI values. The final source models independently reconstruct directory/root/board/list/filter/article and freeze all nine expected objects before comparing the already captured outputs. Both failures and original tools remain protected.",
+            "production_governor_bytes_unchanged": true,
+            "selected_source_cache_files_byte_unchanged": 4,
+            "source_scope": "Readonly existing caches; no campus GET/auth/refresh, HOME/passwd/identity override, governor/cache mutation, OCR or claimed missing-table reconstruction. Exact final metadata rebuild/model consumption, independent source review, publication/native checks and maintainer/integration decisions remain separate."
+          },
           "header_owner_correction_20261017": {
             "finding": "Independent heading/date selection across sibling art-tit owners combined facts from separate headers. Require one active direct art-tit source owner before selecting its local heading and date; no URL/input special case, fallback or error suppression.",
             "red_source_head": "9cf7b77d4a3ae9dbe2899ae809da9b6d2bcc475d",
