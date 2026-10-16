@@ -203,7 +203,13 @@ pub(crate) fn advertised_page_url(
     allowed_page: impl Fn(&Url) -> bool,
 ) -> Result<Result<Url, Error>, Error> {
     let document = college_html(response)?;
-    Ok(advertised_page_url_document(&document, base, page, ordinal_links, allowed_page))
+    Ok(advertised_page_url_document(
+        &document,
+        base,
+        page,
+        ordinal_links,
+        allowed_page,
+    ))
 }
 
 fn advertised_page_url_document(
@@ -220,12 +226,11 @@ fn advertised_page_url_document(
             continue;
         }
         let href = link.value().attr("href").ok_or_else(unavailable)?;
-        if href.len() > MAX_HREF || href.chars().any(char::is_control) || href.contains(['%', '\\']) {
+        if href.len() > MAX_HREF || href.chars().any(char::is_control) || href.contains(['%', '\\'])
+        {
             return Err(unavailable());
         }
-        let url = base
-            .join(href)
-            .map_err(|_| unavailable())?;
+        let url = base.join(href).map_err(|_| unavailable())?;
         if !allowed_page(&url) {
             return Err(failed_contract(
                 "advertised listing page must remain in the selected category",
@@ -723,15 +728,27 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
     } else {
         let prefix = format!("/{category}/");
         discovery_client.get(&latest, false, |response| {
-            advertised_page_url(response, &latest, page, "div.pb_sys_common span.p_no a[href]", |url| {
-                is_list_source_url(url.as_str()) && url.path().starts_with(&prefix)
-            })
+            advertised_page_url(
+                response,
+                &latest,
+                page,
+                "div.pb_sys_common span.p_no a[href]",
+                |url| is_list_source_url(url.as_str()) && url.path().starts_with(&prefix),
+            )
         })??
     };
     let client = discovery_client.with_cache_mode(mode);
     client.get(&url, false, move |response| {
         let document = college_html(response)?;
-        Ok(normalize_listing(response, &document, category, page, &since, &until, &query.r#match))
+        Ok(normalize_listing(
+            response,
+            &document,
+            category,
+            page,
+            &since,
+            &until,
+            &query.r#match,
+        ))
     })?
 }
 
@@ -857,7 +874,12 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     let attribution = json!({"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","note":"the directory href is preserved; this command explicitly observes HTTPS separately"});
     client.get(&url, false, |response| {
         let document = college_html(response)?;
-        Ok(describe_college_surface(response, &document, "computer_science", attribution))
+        Ok(describe_college_surface(
+            response,
+            &document,
+            "computer_science",
+            attribution,
+        ))
     })?
 }
 
@@ -993,21 +1015,21 @@ pub(crate) fn bind_college_board(
         let document = college_html(response)?;
         let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
         let declared = document.select(&links).any(|node| {
-                !element_text(node).is_empty()
-                    && node.value().attr("href").is_some_and(|raw| {
-                        raw.len() <= MAX_HREF
-                            && !raw.chars().any(char::is_control)
-                            && !raw.contains(['%', '\\'])
-                            && root.join(raw).is_ok_and(|url| url == board)
-                    })
-            });
+            !element_text(node).is_empty()
+                && node.value().attr("href").is_some_and(|raw| {
+                    raw.len() <= MAX_HREF
+                        && !raw.chars().any(char::is_control)
+                        && !raw.contains(['%', '\\'])
+                        && root.join(raw).is_ok_and(|url| url == board)
+                })
+        });
         Ok(if declared {
             Ok(retrieval(response))
         } else {
             Err(Error::new(
-                    "unsupported",
-                    "retained college root does not declare the reviewed notice board",
-                ))
+                "unsupported",
+                "retained college root does not declare the reviewed notice board",
+            ))
         })
     })??;
     attribution["root_retrieval"] = root_source;
@@ -1263,7 +1285,9 @@ mod tests {
             |url: &Url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/");
         let selector = "div.pb_sys_common span.p_no a[href]";
         assert_eq!(
-            advertised_page_url_document(&document, &base, 2, selector, allowed).unwrap().path(),
+            advertised_page_url_document(&document, &base, 2, selector, allowed)
+                .unwrap()
+                .path(),
             "/tzgg/252.htm"
         );
         assert_eq!(
@@ -1280,9 +1304,15 @@ mod tests {
         );
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://evil.example/tzgg/252.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url_document(&source_html(foreign).unwrap(), &base, 2, selector, allowed)
-                .unwrap_err()
-                .code,
+            advertised_page_url_document(
+                &source_html(foreign).unwrap(),
+                &base,
+                2,
+                selector,
+                allowed
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
     }
@@ -1291,14 +1321,35 @@ mod tests {
     fn ordinal_conflicts_and_unreviewed_href_syntax_are_not_selected() {
         let base = latest_listing_url("tzgg").unwrap();
         let selector = "div.pb_sys_common span.p_no a[href]";
-        let link = |href: &str| format!("<div class=\"pb_sys_common\"><span class=\"p_no\"><a href=\"{href}\">2</a></span></div>");
+        let link = |href: &str| {
+            format!(
+                "<div class=\"pb_sys_common\"><span class=\"p_no\"><a href=\"{href}\">2</a></span></div>"
+            )
+        };
         let first = link("tzgg/252.htm");
-        for second in ["tzgg/251.htm", "tzgg/%32.htm", "tzgg\\252.htm", "tzgg/25&#10;2.htm"] {
+        for second in [
+            "tzgg/251.htm",
+            "tzgg/%32.htm",
+            "tzgg\\252.htm",
+            "tzgg/25&#10;2.htm",
+        ] {
             let document = source_html(format!("{first}{}", link(second)).as_bytes()).unwrap();
-            assert!(advertised_page_url_document(&document, &base, 2, selector, |url| is_list_source_url(url.as_str())).is_err());
+            assert!(
+                advertised_page_url_document(&document, &base, 2, selector, |url| {
+                    is_list_source_url(url.as_str())
+                })
+                .is_err()
+            );
         }
         let document = source_html(format!("{first}{first}").as_bytes()).unwrap();
-        assert_eq!(advertised_page_url_document(&document, &base, 2, selector, |url| is_list_source_url(url.as_str())).unwrap().path(), "/tzgg/252.htm");
+        assert_eq!(
+            advertised_page_url_document(&document, &base, 2, selector, |url| is_list_source_url(
+                url.as_str()
+            ))
+            .unwrap()
+            .path(),
+            "/tzgg/252.htm"
+        );
     }
 
     #[test]
@@ -1398,6 +1449,20 @@ mod tests {
         assert!(resolve_article_url("https://news.buaa.edu.cn/info/1010/1.htm?x=1").is_err());
         assert!(resolve_article_url("https://news.buaa.edu.cn/xwzx.htm").is_err());
         assert!(resolve_article_url("https://news.buaa.edu.cn/info/abc/1.htm").is_err());
+    }
+
+    #[test]
+    fn supplied_history_refuses_active_bases_without_invented_http_metadata() {
+        for (source, body) in [
+            ("https://news.buaa.edu.cn/tzgg.htm", listing_html()),
+            ("http://scse.buaa.edu.cn/xwgg/gggs.htm", "<title>Fixture</title><div class='ej_nr'><div class='list'><ul><li><a href='../../info/1099/42.htm'><p class='bt'>Fixture</p></a></li></ul></div></div>".into()),
+        ] {
+            let input = |prefix: &str| json!({"html":STANDARD.encode(format!("{prefix}{body}")),"provenance":{"source_url":source}}).to_string();
+            assert_eq!(history(&input("<base href='https://foreign.example/'>")).unwrap_err().code, "invalid_input");
+            for inert in ["<template><base href='https://foreign.example/'></template>", "<noscript><base href='https://foreign.example/'></noscript>"] {
+                assert!(history(&input(inert)).is_ok());
+            }
+        }
     }
 
     #[test]

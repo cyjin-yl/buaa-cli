@@ -2,8 +2,8 @@
 use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     article_body, article_output, bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, invalid_article,
-    invalid_list, is_http, parse_iso_date, retrieval, unavailable,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, inert_element,
+    invalid_article, invalid_list, is_http, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, H3I_NOTICES_URL, H3I_ROOT_URL, Response, h3i_path_allowed,
@@ -60,8 +60,14 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "h3i", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "h3i",
+                attribution,
+            ))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
@@ -76,7 +82,9 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
     }
     let containers =
         Selector::parse("div.news div.fl1 > div.wp > ul.list11.flex").map_err(|_| unavailable())?;
-    let mut containers = document.select(&containers);
+    let mut containers = document
+        .select(&containers)
+        .filter(|node| !inert_element(*node));
     let primary = containers
         .next()
         .filter(|_| containers.next().is_none())
@@ -88,18 +96,24 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
             )
         })?;
     let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
-    let anchors = Selector::parse(":scope > a.a[href]").map_err(|_| unavailable())?;
-    let headings = Selector::parse("a.a > div.rr > h4.h4s2").map_err(|_| unavailable())?;
-    let monthdays = Selector::parse("a.a > div.time > h3").map_err(|_| unavailable())?;
-    let years = Selector::parse("a.a > div.time > h6").map_err(|_| unavailable())?;
+    let anchors = Selector::parse(":scope > a.a").map_err(|_| unavailable())?;
+    let headings = Selector::parse(":scope > div.rr > h4.h4s2").map_err(|_| unavailable())?;
+    let monthdays = Selector::parse(":scope > div.time > h3").map_err(|_| unavailable())?;
+    let years = Selector::parse(":scope > div.time > h6").map_err(|_| unavailable())?;
     let mut entries = Vec::new();
     for row in primary.select(&rows) {
         if entries.len() == MAX_ENTRIES {
             return Err(unavailable());
         }
-        let title = row
-            .select(&headings)
+        let mut anchors = row.select(&anchors);
+        let anchor = anchors
             .next()
+            .filter(|_| anchors.next().is_none())
+            .ok_or_else(unavailable)?;
+        let mut headings = anchor.select(&headings);
+        let title = headings
+            .next()
+            .filter(|_| headings.next().is_none())
             .map(element_text)
             .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
             .ok_or_else(|| {
@@ -109,19 +123,18 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
                     line!(),
                 )
             })?;
-        let listed_href = row
-            .select(&anchors)
-            .next()
-            .and_then(|node| node.value().attr("href"));
+        let listed_href = anchor.value().attr("href");
         if listed_href
             .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
         {
             return Err(unavailable());
         }
-        let date = row
-            .select(&monthdays)
+        let mut monthdays = anchor.select(&monthdays);
+        let mut years = anchor.select(&years);
+        let date = monthdays
             .next()
-            .zip(row.select(&years).next())
+            .zip(years.next())
+            .filter(|_| monthdays.next().is_none() && years.next().is_none())
             .and_then(|(monthday, year)| source_date(&element_text(monthday), &element_text(year)));
         let (resolved_http_url, link_kind) = match listed_href {
             None => (None, "missing"),
@@ -182,16 +195,18 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, H3I_ROOT_URL, H3I_NOTICES_URL, &mut attribution)?;
     let target = Url::parse(H3I_NOTICES_URL).map_err(|_| unavailable())?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
-        let entries: Vec<&ListingEntry> = document.entries.iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
-            "publisher":PUBLISHER,"college":"h3i","category":"cpgg","listing_label":"招聘公告","page":page,
-            "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
-            "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
-            "completeness":{"scope":"single_college_selected_page","pagination":"no reviewed later-page declaration; no traversal","other_colleges":"not_covered","dates":"source MM-DD and YYYY; source order retained; missing or invalid stays null"},
-            "retrieval":retrieval(response)}))
-    })
+        let admitted = college_html(response)?;
+        Ok(parse_listing(&admitted, &target).map(|document| {
+            let entries: Vec<&ListingEntry> = document.entries.iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
+            json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
+                "publisher":PUBLISHER,"college":"h3i","category":"cpgg","listing_label":"招聘公告","page":page,
+                "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
+                "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
+                "completeness":{"scope":"single_college_selected_page","pagination":"no reviewed later-page declaration; no traversal","other_colleges":"not_covered","dates":"source MM-DD and YYYY; source order retained; missing, invalid or ambiguous stays null"},
+                "retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -223,19 +238,21 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, H3I_ROOT_URL, H3I_NOTICES_URL, &mut attribution)?;
     let source = Url::parse(H3I_NOTICES_URL).map_err(|_| unavailable())?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained recruitment page does not declare the selected H3i article",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let admitted = college_html(response)?;
+        Ok(parse_listing(&admitted, &source).and_then(|document| {
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained recruitment page does not declare the selected H3i article",
+                ));
+            }
+            Ok(retrieval(response))
+        }))
+    })??;
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
@@ -253,7 +270,7 @@ pub(crate) fn article_with_client(
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let forms = Selector::parse("div.detail div.fl1 > div.wp.flex > div.left > div > form")
         .map_err(|_| unavailable())?;
-    let mut forms = document.select(&forms);
+    let mut forms = document.select(&forms).filter(|node| !inert_element(*node));
     let main = forms
         .next()
         .filter(|_| forms.next().is_none())
@@ -265,7 +282,7 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
             )
         })?;
     let headers = Selector::parse(":scope > div.ar_tit").map_err(|_| unavailable())?;
-    let mut headers = main.select(&headers);
+    let mut headers = main.select(&headers).filter(|node| !inert_element(*node));
     let header = headers
         .next()
         .filter(|_| headers.next().is_none())
@@ -316,7 +333,7 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let bodies =
         Selector::parse(":scope > div.ar_article > div#vsb_content_1043 > div.v_news_content")
             .map_err(|_| unavailable())?;
-    let mut bodies = main.select(&bodies);
+    let mut bodies = main.select(&bodies).filter(|node| !inert_element(*node));
     let body = bodies
         .next()
         .filter(|_| bodies.next().is_none())
@@ -409,10 +426,56 @@ mod tests {
     }
 
     #[test]
+    fn listing_requires_one_recruitment_link_and_heading_per_row() {
+        let row = r#"<a class="a" href="../info/1141/42.htm"><div class="rr"><h4 class="h4s2">Source recruitment heading</h4></div></a>"#;
+        for row in [
+            format!("{row}{row}"),
+            row.replace("</h4>", "</h4><h4 class=\"h4s2\">Competing heading</h4>"),
+        ] {
+            let source = format!(
+                r#"<div class="news"><div class="fl1"><div class="wp"><ul class="list11 flex"><li>{row}</li></ul></div></div></div>"#
+            );
+            assert_eq!(
+                parse_listing(
+                    &Html::parse_document(&source),
+                    &Url::parse(H3I_NOTICES_URL).unwrap(),
+                )
+                .unwrap_err()
+                .code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn listing_keeps_ambiguous_dates_unknown_and_ignores_inert_views() {
+        let source = r#"<div class="news"><div class="fl1"><div class="wp"><ul class="list11 flex"><li><a class="a"><div class="time"><h3>10-01</h3><h6>2026</h6><h6>2027</h6></div><div class="rr"><h4 class="h4s2">Source recruitment heading</h4></div></a></li></ul></div></div></div>"#;
+        let source = format!("<template>{source}</template>{source}");
+        let parsed = parse_listing(
+            &Html::parse_document(&source),
+            &Url::parse(H3I_NOTICES_URL).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].title, "Source recruitment heading");
+        assert_eq!(parsed.entries[0].date, None);
+        assert_eq!(parsed.entries[0].listed_href, None);
+        assert_eq!(parsed.entries[0].link_kind, "missing");
+    }
+
+    #[test]
     fn article_owns_header_tables_and_second_publication_slot_not_body_dates() {
         let body = "<p>Body date 2030-01-01</p><table><tr><td><p>First source cell</p></td><td><p>Second source cell</p></td></tr></table>";
         let header = "<h6><span>时间：2020-01-01<script>counter()</script></span><span>时间：2026-10-01</span><span>时间：2040-01-01</span></h6>";
         let original = response(&article_html(header, body));
+        let inert = response(&format!(
+            "<template>{}</template>{}",
+            std::str::from_utf8(&original.body).unwrap(),
+            std::str::from_utf8(&original.body).unwrap(),
+        ));
+        let parsed = normalize(&inert, &college_html(&inert).unwrap()).unwrap();
+        assert_eq!(parsed["title"], "Original source heading");
+        assert_eq!(parsed["published_at"], "2026-10-01");
         let parsed = normalize(&original, &college_html(&original).unwrap()).unwrap();
         assert_eq!(parsed["title"], "Original source heading");
         assert_eq!(parsed["published_at"], "2026-10-01");
