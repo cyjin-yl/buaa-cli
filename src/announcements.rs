@@ -898,7 +898,6 @@ pub(crate) fn describe_college_surface(
     college: &str,
     attribution: Value,
 ) -> Result<Value, Error> {
-
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
