@@ -2092,6 +2092,88 @@ mod tests {
     }
 
     #[test]
+    fn shenyuan_discovery_failures_retain_exact_admitted_sources() {
+        const CHANGED: &[u8] = b"<title>Changed source layout</title>";
+        const UNDECLARED: &[u8] = br#"<section class="n_zhuanti"><div id="tab_a1"><ul class="list_box_03s"><li><a class="a" href="../info/1083/99.htm"><div class="con"><h5>Another source article</h5></div></a></li></ul></div></section>"#;
+        for (body, page, expected) in [
+            (CHANGED, 1, "unavailable"),
+            (CHANGED, 2, "unavailable"),
+            (UNDECLARED, 1, "unsupported"),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /index/tzgg.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body);
+            });
+            let open = |mode| {
+                let mut client = fixture.client(mode, &server);
+                client.profile = SourceProfile::Shenyuan;
+                client
+            };
+            let client = open(CacheMode::PreferCache);
+            seed(&client, SHENYUAN_ROOT_URL, br#"<a href="index/tzgg.htm">Notices</a>"#, false);
+            let mut root = client.load(&Url::parse(SHENYUAN_ROOT_URL).unwrap()).unwrap().unwrap();
+            root.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&root).unwrap();
+            seed(&client, SHENYUAN_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            let target = Url::parse("https://hc.buaa.edu.cn/info/1083/42.htm").unwrap();
+            assert_eq!(
+                crate::announcements::shenyuan::article_with_client(
+                    client, CacheMode::PreferCache, &target, page, serde_json::json!({})
+                ).unwrap_err().code,
+                expected
+            );
+            let client = open(CacheMode::Offline);
+            let retained = client.load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap()).unwrap().unwrap();
+            assert_eq!(retained.response.body, body);
+            assert_eq!(retained.response.sha256, hash(body));
+            assert!(retained.response.fetched_at_unix_ms > 0);
+            assert_eq!(
+                crate::announcements::shenyuan::article_with_client(
+                    client, CacheMode::Offline, &target, page, serde_json::json!({})
+                ).unwrap_err().code,
+                expected
+            );
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn shenyuan_unadmitted_discovery_is_not_retained_or_followed() {
+        for (mime, body) in [
+            ("text/plain", b"<title>Wrong MIME</title>" as &[u8]),
+            ("text/html", b"<base href='https://example.org/'><title>Changed base</title>" as &[u8]),
+            ("text/html", &[0xff] as &[u8]),
+            ("text/html", b"" as &[u8]),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /index/tzgg.htm "));
+                reply(socket, 200, &format!("Content-Type: {mime}\r\n"), body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Shenyuan;
+            seed(&client, SHENYUAN_ROOT_URL, br#"<a href="index/tzgg.htm">Notices</a>"#, false);
+            let mut root = client.load(&Url::parse(SHENYUAN_ROOT_URL).unwrap()).unwrap().unwrap();
+            root.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&root).unwrap();
+            seed(&client, SHENYUAN_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            let target = Url::parse("https://hc.buaa.edu.cn/info/1083/42.htm").unwrap();
+            assert_eq!(
+                crate::announcements::shenyuan::article_with_client(
+                    client, CacheMode::PreferCache, &target, 1, serde_json::json!({})
+                ).unwrap_err().code,
+                "unavailable"
+            );
+            let mut client = fixture.client(CacheMode::Offline, &server);
+            client.profile = SourceProfile::Shenyuan;
+            assert!(client.load(&Url::parse(SHENYUAN_NOTICES_URL).unwrap()).unwrap().is_none());
+            assert!(client.load(&target).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
     fn offline_and_prefer_cache_make_no_observation_or_governor_state() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _| panic!("offline operation contacted the network"));

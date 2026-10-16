@@ -1,5 +1,11 @@
 # Development status
 
+## 2026-10-17: Shenyuan source-integrity repair
+
+The existing stacked [PR #98](https://github.com/cyjin-yl/buaa-cli/pull/98) / [issue #97](https://github.com/cyjin-yl/buaa-cli/issues/97) continuation preserves the exact visible 沈元学院 directory member and HTTPS root, not the hidden shared-host member. Canonical listing rows now require one direct source link and one heading belonging to that link; competing links/headings fail closed. Duplicate source date parts yield an unknown date, and inert duplicate views do not become source rows. Dynamic links remain unfetched facts.
+
+Source admission and source interpretation are distinct: invalid MIME, UTF-8, empty or active-base HTML remains an uncached error, while admitted listing/ordinal bytes survive downstream layout, missing-page and undeclared-article errors for cache-only diagnosis. The source-specific callbacks use the shared admission boundary from the prerequisite stack, not a new limiter or transport. Synthetic loopback consumers cover exact retained bytes/hash/time, offline error reuse and zero selected-article requests after source rejection. Current proof and independent review bind the published head in the PR; all dated totals below retain their historical head scope. No new campus observations, general-board equivalence, history/attachment completion, merge or deployment is claimed.
+
 ## 2026-10-02: current safety frontier
 
 The earlier blocker table and dated receipts below are historical observations, not a current domain-wide egress verdict. Public SPOC pages and one source-declared script, university news, computer-college/integrated-circuit-college notices and an original policy PDF were later read through the shared governor. Authenticated campus contracts, rights-cleared recording/Life inventory, the current skills-fs Go contract, private CI runner/signing trust and full devcontainer runtime proof remain separate gaps.
