@@ -3319,8 +3319,14 @@ mod tests {
     fn mse_listing_and_discovery_reject_unadmitted_originals_without_caching() {
         for page in [1, 2] {
             for (headers, body) in [
-                ("Content-Type: application/json\r\n", b"<title>Wrong MIME</title>" as &[u8]),
-                ("Content-Type: text/html\r\n", b"<base href='https://other.invalid/'><title>Active base</title>" as &[u8]),
+                (
+                    "Content-Type: application/json\r\n",
+                    b"<title>Wrong MIME</title>" as &[u8],
+                ),
+                (
+                    "Content-Type: text/html\r\n",
+                    b"<base href='https://other.invalid/'><title>Active base</title>" as &[u8],
+                ),
                 ("Content-Type: text/html\r\n", b"\xff" as &[u8]),
             ] {
                 let fixture = Fixture::new();
@@ -3330,7 +3336,9 @@ mod tests {
                 });
                 let client = fixture.mse_client(CacheMode::PreferCache, &server);
                 seed_mse_root(&client);
-                let query = serde_json::from_value(serde_json::json!({"college":"mse","page":page})).unwrap();
+                let query =
+                    serde_json::from_value(serde_json::json!({"college":"mse","page":page}))
+                        .unwrap();
                 assert_eq!(
                     crate::announcements::mse::list_with_client(
                         client,
@@ -3345,7 +3353,12 @@ mod tests {
                     "unavailable"
                 );
                 let client = fixture.mse_client(CacheMode::Offline, &server);
-                assert!(client.load(&Url::parse(MSE_NOTICES_URL).unwrap()).unwrap().is_none());
+                assert!(
+                    client
+                        .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+                        .unwrap()
+                        .is_none()
+                );
                 assert_eq!(
                     crate::announcements::mse::list_with_client(
                         client,
@@ -3379,7 +3392,10 @@ mod tests {
         seed(&client, MSE_NOTICES_URL, LATEST, false);
         let latest = Url::parse(MSE_NOTICES_URL).unwrap();
         let mut entry = client.load(&latest).unwrap().unwrap();
-        entry.response.headers.insert("content-type".into(), "text/html".into());
+        entry
+            .response
+            .headers
+            .insert("content-type".into(), "text/html".into());
         client.save(&entry).unwrap();
         let query = serde_json::from_str(r#"{"college":"mse","page":2}"#).unwrap();
         let first = crate::announcements::mse::list_with_client(
@@ -3389,7 +3405,8 @@ mod tests {
             Some("2026-09-15".into()),
             Some("2026-09-21".into()),
             serde_json::json!({}),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(first["entry_count"], 2);
         assert_eq!(first["entries"][0]["title"], "First source title");
         assert_eq!(first["entries"][1]["title"], "Second source title");
@@ -3404,7 +3421,8 @@ mod tests {
             Some("2026-09-15".into()),
             Some("2026-09-21".into()),
             serde_json::json!({}),
-        ).unwrap();
+        )
+        .unwrap();
         let mut expected = first;
         expected["retrieval"]["cache_status"] = "hit".into();
         assert_eq!(cached, expected);

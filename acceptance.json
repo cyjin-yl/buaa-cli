@@ -602,6 +602,25 @@
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "mse_slice": {
+          "header_owner_correction_20261017": {
+            "finding": "Independent heading/date selection across sibling art-tit owners combined facts from separate headers. Require one active direct art-tit source owner before selecting its local heading and date; no URL/input special case, fallback or error suppression.",
+            "red_source_head": "9cf7b77d4a3ae9dbe2899ae809da9b6d2bcc475d",
+            "consumer": "announcements::mse::tests::mse_article_refuses_publication_metadata_from_a_separate_header",
+            "red": {
+              "exit": 101,
+              "executed_cases": 1,
+              "passed": 0,
+              "failed": 1
+            },
+            "green": {
+              "exit": 0,
+              "executed_cases": 1,
+              "passed": 1,
+              "failed": 0
+            },
+            "boundaries": "Same consumer, exact synthetic source paragraph and sibling-owner fixture. Existing inert/unknown-date/body budgets stay unchanged. Current original CLI, complete model comparison and final focused/build/clippy/formatter gates are recorded separately after execution.",
+            "production_governor_fingerprint_omitted": true
+          },
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/105",
           "retention_revision_20261017": {
             "published_source_reviewed": "bb2dad9fb359718ed73bc9950c3bd75b804b1350",

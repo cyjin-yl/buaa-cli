@@ -67,7 +67,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         .with_cache_mode(mode)
         .get(&target, false, |response| {
             let document = college_html(response)?;
-            Ok(describe_college_surface(response, &document, "mse", attribution))
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "mse",
+                attribution,
+            ))
         })?
 }
 
@@ -328,8 +333,27 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let headings = Selector::parse(":scope > div.art-tit > h3").map_err(|_| unavailable())?;
-    let mut headings = main.select(&headings);
+    let mut headers = main
+        .children()
+        .filter_map(scraper::ElementRef::wrap)
+        .filter(|node| {
+            node.value().name() == "div"
+                && node
+                    .value()
+                    .has_class("art-tit", scraper::CaseSensitivity::CaseSensitive)
+        });
+    let header = headers
+        .next()
+        .filter(|_| headers.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "Mse article requires one direct art-tit source header",
+                file!(),
+                line!(),
+            )
+        })?;
+    let headings = Selector::parse(":scope > h3").map_err(|_| unavailable())?;
+    let mut headings = header.select(&headings);
     let title = headings
         .next()
         .filter(|_| headings.next().is_none())
@@ -342,9 +366,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let dates =
-        Selector::parse(":scope > div.art-tit > p > span.date").map_err(|_| unavailable())?;
-    let mut dates = main.select(&dates);
+    let dates = Selector::parse(":scope > p > span.date").map_err(|_| unavailable())?;
+    let mut dates = header.select(&dates);
     let published_at = dates
         .next()
         .filter(|_| dates.next().is_none())
@@ -413,8 +436,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::advertised_page_url_document;
+    use super::*;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
@@ -504,19 +527,29 @@ mod tests {
 
     #[test]
     fn mse_listing_uses_active_title_view_and_direct_source_facts() {
-        let inactive = listing("<li><a href=\"../info/1061/99.htm\"><h3>Inactive view heading</h3></a></li>");
-        let active = listing("<li><a href=\"../info/1061/42.htm\"><template><h3>Inactive nested heading</h3><p>Inactive excerpt</p><span>2020.01.01</span></template><h3>Active source heading</h3><p>Active source excerpt</p><span>2026.09.21</span></a></li>");
+        let inactive =
+            listing("<li><a href=\"../info/1061/99.htm\"><h3>Inactive view heading</h3></a></li>");
+        let active = listing(
+            "<li><a href=\"../info/1061/42.htm\"><template><h3>Inactive nested heading</h3><p>Inactive excerpt</p><span>2020.01.01</span></template><h3>Active source heading</h3><p>Active source excerpt</p><span>2026.09.21</span></a></li>",
+        );
         let document = Html::parse_document(&format!(
             "<template><title>Inactive document title</title>{}</template><title>Active document title</title>{}",
-            inactive.html(), active.html()
+            inactive.html(),
+            active.html()
         ));
         let parsed = parse_listing(&document, &Url::parse(MSE_NOTICES_URL).unwrap()).unwrap();
         assert_eq!(parsed.title, "Active document title");
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].title, "Active source heading");
-        assert_eq!(parsed.entries[0].summary.as_deref(), Some("Active source excerpt"));
+        assert_eq!(
+            parsed.entries[0].summary.as_deref(),
+            Some("Active source excerpt")
+        );
         assert_eq!(parsed.entries[0].date.as_deref(), Some("2026-09-21"));
-        assert_eq!(parsed.entries[0].resolved_http_url.as_deref(), Some("https://mse.buaa.edu.cn/info/1061/42.htm"));
+        assert_eq!(
+            parsed.entries[0].resolved_http_url.as_deref(),
+            Some("https://mse.buaa.edu.cn/info/1061/42.htm")
+        );
     }
 
     #[test]
@@ -583,7 +616,9 @@ mod tests {
     #[test]
     fn mse_page_ordinal_uses_only_active_scoped_notice_pagination() {
         let base = Url::parse(MSE_NOTICES_URL).unwrap();
-        let html = Html::parse_document(r#"<div class="pagestyle"><span class="p_no"><a href="gggs/99.htm">2</a></span></div><div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><template><span class="p_no"><a href="gggs/98.htm">2</a></span></template><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#);
+        let html = Html::parse_document(
+            r#"<div class="pagestyle"><span class="p_no"><a href="gggs/99.htm">2</a></span></div><div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><template><span class="p_no"><a href="gggs/98.htm">2</a></span></template><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#,
+        );
         let selected = advertised_page_url_document(
             &html,
             &base,

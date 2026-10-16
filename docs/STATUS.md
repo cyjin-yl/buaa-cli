@@ -8,7 +8,7 @@ The focused real-loopback regressions exercise exact body/hash retention and off
 
 Current Materials aggregate receipts omit full and abbreviated production-state fingerprints while preserving dated unchanged-byte outcomes and original HTML/PDF hashes. Retired SHA-labelled JSON fields use explicit non-hash boolean evidence: unchanged-byte facts only where the existing record proves them, otherwise fingerprint omission without an invented equality observation. Prior Git objects, tool outputs and protected receipts may still retain identifiers; this current-summary correction is not historical erasure.
 
-A separate source-only peer review identified possible title/date borrowing between distinct direct article headers. A bounded consumer is prepared but has not been executed; production header selection is intentionally unchanged until the authorized red observation and subsequent narrow correction. No native reproduction or green result is claimed.
+The independent split-header finding is now reproduced and corrected at the Mse layer. After ordinary final-104 inheritance, the unchanged production parser ran the exact prepared consumer once and failed: a synthetic title-only header and separate date-only header returned one combined article instead of refusing. The narrow correction selects one active direct `art-tit` owner before its local heading/date fields; the same one-case consumer then passes. Real receipts retain red exit101 (0 passed/1 failed) and green exit0 (1 passed/0 failed), not a preparation-only claim. No input/URL special case, fallback, date substitution or body-budget change was added. Current original CLI/model and final focused/native gates remain separately pending until exercised.
 
 ## Directory-bound Mse materials notices
 
