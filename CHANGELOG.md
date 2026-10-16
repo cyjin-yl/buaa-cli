@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Remove the remaining Zfai production-governor fingerprints from current derived evidence, retaining the original dated unchanged-byte outcomes and source hashes. Historical Git objects and protected receipts are preserved, not erased.
 - Mark Zfai source paragraphs with active untranscribed body images as partial text, while preserving inert-image full text and image-only refusal. State the current hidden-directory authority blocker at public entry points and label earlier visible-source success historical; issue101 remains incomplete without an authority fallback or new campus request.
 - Preserve admitted Zfai listing/root originals when layout, article membership or an advertised ordinal is unsupported; invalid MIME, UTF-8 and active HTML bases remain uncached failures. Reuse the admitted DOM for shared ordinal selection, reject conflicting active targets and retain the information-board caption and complete, separate excerpts. Empty extra article headings remain ambiguous rather than silently disappearing; unfetched attachment content keeps the article partial.
 - Remove production-governor state fingerprints from the current Shenyuan/H3i receipt summaries, preserving dated unchanged-byte outcomes and all original-source hashes. Historical Git objects and protected receipts are not rewritten or claimed erased.
