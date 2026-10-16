@@ -2434,6 +2434,93 @@ mod tests {
     }
 
     #[test]
+    fn rescue_iiif_discovery_retains_admitted_failures_and_rejects_unadmitted_sources() {
+        const LISTING: &[u8] = br#"<div class="main"><div class="wape-right"><ul class="ss"><li><a href="../info/1186/99.htm">Different declared heading</a><span>2026-09-09</span></li></ul></div></div>"#;
+        for (headers, body, retained, expected) in [
+            ("Content-Type: text/html\r\n", b"<title>Admitted unsupported layout</title>".as_slice(), true, "unavailable"),
+            ("Content-Type: text/html\r\n", LISTING, true, "unsupported"),
+            ("Content-Type: application/json\r\n", LISTING, false, "unavailable"),
+            ("Content-Type: text/html\r\n", b"<base href='https://foreign.example/'><p>Unsupported base</p>".as_slice(), false, "unavailable"),
+            ("Content-Type: text/html\r\n", b"\xff".as_slice(), false, "unavailable"),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /xwgg/tzgg.htm "));
+                assert!(!request.to_ascii_lowercase().contains("cookie:"));
+                reply(socket, 200, headers, body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Iiif;
+            seed(&client, IIIF_ROOT_URL, br#"<a href="xwgg/tzgg.htm">Notice board</a>"#, false);
+            let root = Url::parse(IIIF_ROOT_URL).unwrap();
+            let mut entry = client.load(&root).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+            seed(&client, IIIF_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            let target = Url::parse("https://iiif.buaa.edu.cn/info/1186/42.htm").unwrap();
+            assert_eq!(crate::announcements::iiif::article_with_client(client, CacheMode::PreferCache, &target, 1, serde_json::json!({})).unwrap_err().code, expected);
+            let mut client = fixture.client(CacheMode::Offline, &server);
+            client.profile = SourceProfile::Iiif;
+            let cached = client.load(&Url::parse(IIIF_NOTICES_URL).unwrap()).unwrap();
+            assert_eq!(cached.is_some(), retained);
+            if let Some(cached) = cached {
+                assert_eq!(cached.response.body, body);
+                assert_eq!(cached.response.sha256, hash(body));
+            }
+            assert_eq!(crate::announcements::iiif::article_with_client(client, CacheMode::Offline, &target, 1, serde_json::json!({})).unwrap_err().code, if retained { expected } else { "offline_miss" });
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn rescue_iiif_missing_ordinal_retains_the_admitted_board() {
+        const BOARD: &[u8] = b"<title>Notice board without another ordinal</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwgg/tzgg.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BOARD);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Iiif;
+        seed(&client, IIIF_ROOT_URL, br#"<a href="xwgg/tzgg.htm">Notice board</a>"#, false);
+        let mut root = client.load(&Url::parse(IIIF_ROOT_URL).unwrap()).unwrap().unwrap();
+        root.response.headers.insert("content-type".into(), "text/html".into());
+        client.save(&root).unwrap();
+        seed(&client, IIIF_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let target = Url::parse("https://iiif.buaa.edu.cn/info/1186/42.htm").unwrap();
+        assert_eq!(crate::announcements::iiif::article_with_client(client, CacheMode::PreferCache, &target, 2, serde_json::json!({})).unwrap_err().code, "unavailable");
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Iiif;
+        let cached = client.load(&Url::parse(IIIF_NOTICES_URL).unwrap()).unwrap().unwrap();
+        assert_eq!(cached.response.body, BOARD);
+        assert_eq!(cached.response.sha256, hash(BOARD));
+        assert_eq!(crate::announcements::iiif::article_with_client(client, CacheMode::Offline, &target, 2, serde_json::json!({})).unwrap_err().code, "unavailable");
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn rescue_iiif_missing_root_declaration_retains_the_admitted_root() {
+        const ROOT: &[u8] = b"<title>Source root without the reviewed board</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET / HTTP/1.1"));
+            reply(socket, 200, "Content-Type: text/html\r\n", ROOT);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Iiif;
+        seed(&client, IIIF_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let target = Url::parse("https://iiif.buaa.edu.cn/info/1186/42.htm").unwrap();
+        assert_eq!(crate::announcements::iiif::article_with_client(client, CacheMode::PreferCache, &target, 1, serde_json::json!({})).unwrap_err().code, "unsupported");
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Iiif;
+        let cached = client.load(&Url::parse(IIIF_ROOT_URL).unwrap()).unwrap().unwrap();
+        assert_eq!(cached.response.body, ROOT);
+        assert_eq!(cached.response.sha256, hash(ROOT));
+        assert_eq!(crate::announcements::iiif::article_with_client(client, CacheMode::Offline, &target, 1, serde_json::json!({})).unwrap_err().code, "unsupported");
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
     fn offline_and_prefer_cache_make_no_observation_or_governor_state() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _| panic!("offline operation contacted the network"));

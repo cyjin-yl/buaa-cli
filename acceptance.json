@@ -603,6 +603,11 @@
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "iiif_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/103",
+          "repair_20261017": {
+            "source_admission": "Root declaration, listing layout, ordinal and selected-article membership are inner results after fresh typed MIME/bounded UTF-8/no-active-base admission, retaining exact originals before failure is surfaced. Invalid response sources remain outer failures and uncached. No new campus read.",
+            "content": "Image-only and empty source bodies refuse. Source paragraphs without images or document attachments remain full_text; real paragraphs plus active untranscribed images or unfetched document attachments remain partial_text with missing content explicit. Inert images are not promoted to active content. Original paragraphs, ordered tables, attachment hints and retrieval metadata stay distinct from listing captions.",
+            "evidence_boundary": "New isolated focused proof, actual retained-cache CLI smoke, current exact published head, independent checkout review and live check/permission gates are recorded in the PR receipt. Existing 244+19/full-suite/local-UI receipts below remain older-head evidence, not a new full-suite or deployment claim."
+          },
           "stack_base": "PR102 exact eca2b12dff6d7bd453e7e019aac882bf392ea9c5; owned work/iiif-announcements, explicitly dependent on unmerged PR102/PR100/PR98/PR96/PR94; no root-main or deployed claim",
           "commands": [
             "announcements college-source iiif root|notices [--online|--refresh]",
