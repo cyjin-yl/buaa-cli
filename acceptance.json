@@ -769,6 +769,12 @@
         },
         "zfai_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/101",
+          "repair_20261017": {
+            "source_admission": "Admit status/MIME/bounded UTF-8/no-active-base before persistence; invalid sources remain outer errors and uncached. Root declaration, ordinal, listing layout and selected-article membership errors remain inner results until admitted original persistence completes.",
+            "pagination": "Use the admitted DOM once with each caller's reviewed selector; no byte-wrapper or inferred routes. Duplicate identical active targets are permitted; conflicting URLs for one ordinal refuse.",
+            "content": "Information-board caption, whole heading and complete distinct excerpt are preserved. Article header requires one element even when a second heading is empty. No source scripts, attachments or images are executed/downloaded/reconstructed; an active document attachment makes the result partial_text with missing content explicit.",
+            "evidence_boundary": "New isolated focused proof, actual retained-cache CLI smoke, current exact published head, independent checkout review and live check/permission gates are recorded in the PR receipt. Existing 238+19/full-suite/local-UI receipts below remain older-head evidence, not a new full-suite or deployment claim. No campus request is part of the repair."
+          },
           "stack_base": "PR100 exact6d13df1962aca201f210070fbe69094497a4b73f; owned work/zfai-announcements, explicitly dependent on unmerged PR100/PR98/PR96/PR94; no root-main or deployed claim",
           "commands": [
             "announcements college-source zfai root|notices [--online|--refresh]",
@@ -896,7 +902,8 @@
         },
         "h3i_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/99",
-          "stack_base": "PR98 exact 1eb39fc789df3192aef7ed303ecf0b0e31b19f30; owned work/h3i-announcements, explicitly dependent on unmerged PR98/PR96/PR94; no root-main or deployed claim",
+          "stack_base": "Published PR98 dependency; final exact ancestor and head proof are bound in PR100 review. Explicitly dependent on unmerged PR98/PR96/PR94; no root-main or deployed claim",
+          "source_integrity_20261017": "Preserve exact visible index.htm directory identity, recruitment-only cpgg scope and reviewed page-one limit. Canonical active rows bind one direct source anchor and its unique own heading; ambiguous date parts stay null, inert duplicate article/listing structures are excluded and missing links stay facts. Invalid MIME/UTF-8/empty/active-base originals refuse before caching; admitted recruitment bytes survive layout and undeclared-target errors for offline diagnosis. Synthetic loopback consumers check exact body/hash/time, cache-only errors and zero selected-article GET after source rejection. Shared admission/transport/governor remains the prerequisite stack's implementation. Published exact-head proof/review is in PR100; earlier totals remain historical, not current CI or approval. No new campus read or general-notice/history acceptance.",
           "commands": [
             "announcements college-source h3i root|notices [--online|--refresh]",
             "announcements list with college=h3i, category=cpgg, page1 and inclusive date/title filters",
@@ -991,7 +998,8 @@
         },
         "shenyuan_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/97",
-          "stack_base": "PR96 exact e1a7875d7facc025889063b21cd668b4d374b8f1; owned work/shenyuan-announcements, explicitly dependent on unmerged PR96/PR94; no root-main or deployed claim",
+          "stack_base": "Published PR96 dependency; final exact ancestor and head proof are bound in PR98 review. Explicitly dependent on unmerged PR96/PR94; no root-main or deployed claim",
+          "source_integrity_20261017": "Canonical active rows bind one direct source anchor and one own heading; ambiguous date parts stay null, inert duplicate article/listing structures are excluded and missing links remain facts. Invalid MIME/UTF-8/empty/active-base originals are refused without caching; admitted source bytes survive layout, missing-ordinal and undeclared-target errors for offline diagnosis. Synthetic loopback consumers check exact body/hash/time, cache-only error reuse and no selected-article GET after source refusal. Shared admission/transport/governor remains the prerequisite stack's implementation. Published exact-head proof/review is in PR98; earlier totals below remain historical, not current-head CI or approval. No new campus observation or wider source/history acceptance.",
           "commands": [
             "announcements college-source shenyuan root|notices [--online|--refresh]",
             "announcements list with college=shenyuan, category=tzgg, source-advertised page and inclusive date/title filters",
@@ -1072,7 +1080,9 @@
         },
         "beijing_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/95",
-          "stack_base": "PR94 exact d38441e82fa39f689cb7c9ea92c292e576eea6b7; owned work/beijing-announcements, parent unmerged; no root-main or deployed Beijing claim",
+          "pull_request": "https://github.com/cyjin-yl/buaa-cli/pull/96",
+          "stack_base": "PR94 work/aviation-announcements; inherited corrections integrated non-force, exact published parent/child heads are bound in the current PR receipt. Original d384/e1 receipts remain historical; no root-main or deployed Beijing claim.",
+          "source_correction_2026_10_17": "All selected-source/discovery/list/declaration callbacks separate HTML admission from inner layout errors, retaining exact admitted originals for offline repair without fetching undeclared articles. Rows bind their one heading to the same unique anchor; conflicting row/header dates remain null and inert views do not provide identity. Shared corrected directory authority and credential-free loopback-only Offline Rust workflow are inherited through PR94. Earlier test/runtime/browser totals below apply only to their original e1 checkpoint; current exact-head offline/native evidence and review belong to this PR's current receipt. No new campus request, authentication or governor mutation; issue95 remains open pending parent serial integration, maintainer source-contract decision and actual check/runtime gates.",
           "commands": [
             "announcements college-source beijing root|notices [--online|--refresh]",
             "announcements list with college=beijing, category=gggs, source-advertised page and inclusive date/title filters",
@@ -1140,6 +1150,9 @@
         },
         "aviation_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/93",
+          "pull_request": "https://github.com/cyjin-yl/buaa-cli/pull/94",
+          "bounded_parser_correction_2026_10_17": "Official-directory authority now excludes inert identity declarations and carries ancestor-hidden flags; its admitted layout failures persist privately. One shared HTML text walker is reused. Aviation rows bind one heading to its own unique anchor; multiple desktop headings/bodies refuse and ambiguous header dates remain null. The issue remains open until parent serial integration and explicit maintainer/source-review/check/runtime gates; no full-college or full-history closing claim.",
+          "source_admission_correction_2026_10_17": "Shared news/SCSE/IC/aviation HTML admission validates HTTP/MIME/UTF-8/bounds/active-base once, while downstream board/ordinal/layout/article-declaration failures remain inner errors until admitted private originals persist. History uses the byte/base gate without invented HTTP facts. Conflicting ordinals and unreviewed href syntax fail closed. Offline Rust CI is credential-free and loopback-only after dependency acquisition; its definition is not an observed check. Historical runtime receipts below do not approve this changed head; exact-head offline evidence, independent review, maintainer source-contract decision and parent integration remain separate PR gates. No new campus read, authentication or governor mutation.",
           "commands": [
             "announcements college-source aviation root|notices|public-notices [--online|--refresh]",
             "announcements list with college=aviation, category=tzgg (default) or gkgs, source-advertised page and date/title filters",

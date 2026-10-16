@@ -11,10 +11,11 @@
 //! links are surfaced as hints and never downloaded. Historical bytes remain
 //! operator-asserted provenance, bound by SHA-256.
 
+use crate::html::{active_element_text, element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{NaiveDate, NaiveDateTime};
-use scraper::{ElementRef, Html, Node, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -23,10 +24,8 @@ pub(crate) mod aviation;
 pub(crate) mod beijing;
 pub(crate) mod h3i;
 pub(crate) mod ic;
-pub(crate) mod iiif;
 mod scse;
 pub(crate) mod shenyuan;
-pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
 const MAX_HTML: usize = 2 * 1024 * 1024;
@@ -139,7 +138,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai and Iiif source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan and H3i source binding",
     )
 }
 
@@ -170,62 +169,6 @@ fn normalized_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
         .join(" ")
 }
 
-fn inert_element(element: ElementRef<'_>) -> bool {
-    element.ancestors().any(|node| {
-        node.value()
-            .as_element()
-            .is_some_and(|node| matches!(node.name(), "script" | "style" | "template" | "noscript"))
-    })
-}
-
-/// Script/style/template/noscript payloads are not source prose.
-fn element_text(element: ElementRef<'_>) -> String {
-    if inert_element(element) {
-        return String::new();
-    }
-    active_element_text(element)
-}
-
-/// Linear DOM walk after the caller has checked the outer context; no ancestor
-/// rescans or subtree copies, including for active image-only attachment links.
-fn active_element_text(element: ElementRef<'_>) -> String {
-    let root = element.id();
-    let mut current = element.first_child();
-    let mut output = String::new();
-    while let Some(node) = current {
-        let skip = node.value().as_element().is_some_and(|node| {
-            matches!(node.name(), "script" | "style" | "template" | "noscript")
-        });
-        if let Node::Text(text) = node.value() {
-            for word in text.text.split_whitespace() {
-                if !output.is_empty() {
-                    output.push(' ');
-                }
-                output.push_str(word);
-            }
-        }
-        if !skip && let Some(child) = node.first_child() {
-            current = Some(child);
-            continue;
-        }
-        let mut cursor = node;
-        loop {
-            if let Some(sibling) = cursor.next_sibling() {
-                current = Some(sibling);
-                break;
-            }
-            match cursor.parent() {
-                Some(parent) if parent.id() != root => cursor = parent,
-                _ => {
-                    current = None;
-                    break;
-                }
-            }
-        }
-    }
-    output
-}
-
 fn category_label(slug: &str) -> Option<&'static str> {
     CATEGORIES
         .iter()
@@ -249,25 +192,36 @@ fn latest_listing_url(category: &str) -> Result<Url, Error> {
     Url::parse(&format!("{NEWS_BASE}/{category}.htm")).map_err(|_| unavailable())
 }
 
-fn advertised_page_url(
-    bytes: &[u8],
+pub(crate) fn advertised_page_url(
+    response: &Response,
+    base: &Url,
+    page: u32,
+    ordinal_links: &str,
+    allowed_page: impl Fn(&Url) -> bool,
+) -> Result<Result<Url, Error>, Error> {
+    let document = college_html(response)?;
+    Ok(advertised_page_url_document(&document, base, page, ordinal_links, allowed_page))
+}
+
+fn advertised_page_url_document(
+    document: &Html,
     base: &Url,
     page: u32,
     ordinal_links: &str,
     allowed_page: impl Fn(&Url) -> bool,
 ) -> Result<Url, Error> {
-    if bytes.is_empty() || bytes.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
-    let document = Html::parse_document(text);
     let selector = Selector::parse(ordinal_links).map_err(|_| unavailable())?;
+    let mut selected = None;
     for link in document.select(&selector) {
         if element_text(link).parse::<u32>().ok() != Some(page) {
             continue;
         }
+        let href = link.value().attr("href").ok_or_else(unavailable)?;
+        if href.len() > MAX_HREF || href.chars().any(char::is_control) || href.contains(['%', '\\']) {
+            return Err(unavailable());
+        }
         let url = base
-            .join(link.value().attr("href").ok_or_else(unavailable)?)
+            .join(href)
             .map_err(|_| unavailable())?;
         if !allowed_page(&url) {
             return Err(failed_contract(
@@ -276,9 +230,18 @@ fn advertised_page_url(
                 line!(),
             ));
         }
-        return Ok(url);
+        match selected.as_ref() {
+            Some(previous) if previous != &url => {
+                return Err(Error::new(
+                    "unavailable",
+                    "requested page has conflicting advertised destinations; no URL was selected",
+                ));
+            }
+            None => selected = Some(url),
+            _ => {}
+        }
     }
-    Err(Error::new(
+    selected.ok_or_else(|| Error::new(
         "unavailable",
         "requested page is not advertised by the latest listing; no URL was inferred",
     ))
@@ -354,11 +317,10 @@ fn parse_iso_date(raw: &str) -> Option<String> {
 /// Parse one news-center category listing. Public for offline evidence
 /// validation; performs no network or cache access.
 pub fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error> {
-    if bytes.is_empty() || bytes.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
-    let document = Html::parse_document(text);
+    parse_listing_document(&source_html(bytes)?, base)
+}
+
+fn parse_listing_document(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let title = document
         .select(&Selector::parse("title").map_err(|_| unavailable())?)
         .next()
@@ -465,13 +427,12 @@ pub fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error>
     Ok(ListingDocument { title, entries })
 }
 
+#[cfg(test)]
 fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
-    if bytes.is_empty() || bytes.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
-    let document = Html::parse_document(text);
+    parse_article_document(&source_html(bytes)?, url)
+}
 
+fn parse_article_document(document: &Html, url: &Url) -> Result<ArticleDocument, Error> {
     let title = document
         .select(&Selector::parse("h2").map_err(|_| unavailable())?)
         .next()
@@ -629,6 +590,7 @@ fn entry_in_scope(
 
 fn normalize_listing(
     response: &Response,
+    source: &Html,
     category: &str,
     page: u32,
     since: &Option<String>,
@@ -636,7 +598,7 @@ fn normalize_listing(
     match_substring: &Option<String>,
 ) -> Result<Value, Error> {
     let url = Url::parse(&response.url).map_err(|_| unavailable())?;
-    let document = parse_listing(&response.body, &url)?;
+    let document = parse_listing_document(source, &url)?;
     let entries: Vec<&ListingEntry> = document
         .entries
         .iter()
@@ -669,9 +631,9 @@ fn normalize_listing(
     }))
 }
 
-fn normalize_article(response: &Response) -> Result<Value, Error> {
+fn normalize_article(response: &Response, source: &Html) -> Result<Value, Error> {
     let url = Url::parse(&response.url).map_err(|_| unavailable())?;
-    let document = parse_article(&response.body, &url)?;
+    let document = parse_article_document(source, &url)?;
     Ok(article_output(response, document))
 }
 
@@ -723,8 +685,6 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("beijing") => return beijing::list(mode, &query),
         Some("shenyuan") => return shenyuan::list(mode, &query),
         Some("h3i") => return h3i::list(mode, &query),
-        Some("zfai") => return zfai::list(mode, &query),
-        Some("iiif") => return iiif::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -755,19 +715,16 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
     } else {
         let prefix = format!("/{category}/");
         discovery_client.get(&latest, false, |response| {
-            advertised_page_url(
-                &response.body,
-                &latest,
-                page,
-                "div.pb_sys_common span.p_no a[href]",
-                |url| is_list_source_url(url.as_str()) && url.path().starts_with(&prefix),
-            )
-        })?
+            advertised_page_url(response, &latest, page, "div.pb_sys_common span.p_no a[href]", |url| {
+                is_list_source_url(url.as_str()) && url.path().starts_with(&prefix)
+            })
+        })??
     };
     let client = discovery_client.with_cache_mode(mode);
     client.get(&url, false, move |response| {
-        normalize_listing(response, category, page, &since, &until, &query.r#match)
-    })
+        let document = college_html(response)?;
+        Ok(normalize_listing(response, &document, category, page, &since, &until, &query.r#match))
+    })?
 }
 
 fn resolve_article_url(raw: &str) -> Result<Url, Error> {
@@ -824,12 +781,6 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("h3i.buaa.edu.cn") => {
             return h3i::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
-        Some("zfai.buaa.edu.cn") => {
-            return zfai::article(mode, raw_url, query.source_page.unwrap_or(1));
-        }
-        Some("iiif.buaa.edu.cn") => {
-            return iiif::article(mode, raw_url, query.source_page.unwrap_or(1));
-        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -840,7 +791,10 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
     }
     let url = resolve_article_url(raw_url)?;
     let client = ArchiveClient::open_announcements(mode)?;
-    client.get(&url, false, normalize_article)
+    client.get(&url, false, |response| {
+        let document = college_html(response)?;
+        Ok(normalize_article(response, &document))
+    })?
 }
 
 /// Retrieve one original PDF explicitly declared by a reviewed college article.
@@ -867,12 +821,6 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "h3i" {
         return h3i::surface(mode, page);
     }
-    if college == "zfai" {
-        return zfai::surface(mode, page);
-    }
-    if college == "iiif" {
-        return iiif::surface(mode, page);
-    }
     let raw = match (college, page) {
         ("scse", "root") => SCSE_ROOT_URL,
         ("scse", "notices") => SCSE_NOTICES_URL,
@@ -882,14 +830,13 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     let client = ArchiveClient::open_scse(mode)?;
     let attribution = json!({"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","note":"the directory href is preserved; this command explicitly observes HTTPS separately"});
     client.get(&url, false, |response| {
-        describe_college_surface(response, "computer_science", attribution)
-    })
+        let document = college_html(response)?;
+        Ok(describe_college_surface(response, &document, "computer_science", attribution))
+    })?
 }
 
-fn college_html(response: &Response) -> Result<Html, Error> {
+pub(crate) fn college_html(response: &Response) -> Result<Html, Error> {
     if response.status != 200
-        || response.body.is_empty()
-        || response.body.len() > MAX_HTML
         || !response.headers.get("content-type").is_some_and(|value| {
             value
                 .split(';')
@@ -901,8 +848,14 @@ fn college_html(response: &Response) -> Result<Html, Error> {
     {
         return Err(unavailable());
     }
-    let document =
-        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?);
+    source_html(&response.body)
+}
+
+fn source_html(bytes: &[u8]) -> Result<Html, Error> {
+    if bytes.is_empty() || bytes.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let document = Html::parse_document(std::str::from_utf8(bytes).map_err(|_| unavailable())?);
     let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
     if document.select(&bases).any(|base| {
         !base.ancestors().any(|node| {
@@ -943,22 +896,13 @@ fn college_directory_attribution(
     )
 }
 
-fn describe_college_surface(
+pub(crate) fn describe_college_surface(
     response: &Response,
+    document: &Html,
     college: &str,
     attribution: Value,
 ) -> Result<Value, Error> {
-    if response.status != 200 || response.body.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let document = if matches!(
-        college,
-        "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif"
-    ) {
-        college_html(response)?
-    } else {
-        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?)
-    };
+
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
@@ -1011,7 +955,7 @@ fn describe_college_surface(
     Ok(output)
 }
 
-fn bind_college_board(
+pub(crate) fn bind_college_board(
     client: &ArchiveClient,
     root: &str,
     board: &str,
@@ -1022,22 +966,24 @@ fn bind_college_board(
     let root_source = client.get(&root, false, |response| {
         let document = college_html(response)?;
         let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
-        if !document.select(&links).any(|node| {
-            !element_text(node).is_empty()
-                && node.value().attr("href").is_some_and(|raw| {
-                    raw.len() <= MAX_HREF
-                        && !raw.chars().any(char::is_control)
-                        && !raw.contains(['%', '\\'])
-                        && root.join(raw).is_ok_and(|url| url == board)
-                })
-        }) {
-            return Err(Error::new(
-                "unsupported",
-                "retained college root does not declare the reviewed notice board",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let declared = document.select(&links).any(|node| {
+                !element_text(node).is_empty()
+                    && node.value().attr("href").is_some_and(|raw| {
+                        raw.len() <= MAX_HREF
+                            && !raw.chars().any(char::is_control)
+                            && !raw.contains(['%', '\\'])
+                            && root.join(raw).is_ok_and(|url| url == board)
+                    })
+            });
+        Ok(if declared {
+            Ok(retrieval(response))
+        } else {
+            Err(Error::new(
+                    "unsupported",
+                    "retained college root does not declare the reviewed notice board",
+                ))
+        })
+    })??;
     attribution["root_retrieval"] = root_source;
     Ok(())
 }
@@ -1127,16 +1073,16 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai and iiif bind the retained authoritative directory; selected boards must be declared by their retained root. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan and h3i bind the retained authoritative directory; selected boards must be declared by their retained root. H3i preserves the directory's exact index.htm root and selects recruitment announcements. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif boards bind the directory and retained root. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date; absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i has no reviewed later-page declaration and accepts page1 only. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg). IC/aviation/Beijing/Shenyuan/H3i boards bind the directory and retained root. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Page defaults to 1; later ordinals must be source-advertised. H3i has no reviewed later-page declaration and accepts page1 only. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
@@ -1145,8 +1091,8 @@ pub fn schema() -> Value {
                 },
                 "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
-                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
+                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
                     {"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
             },
             "output": {
@@ -1157,10 +1103,10 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, or Iiif notice in category 1186. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Iiif pure-image/empty bodies remain unavailable under the unchanged shared text admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, or H3i recruitment notice in category 1141. IC/aviation/Beijing/Shenyuan/H3i articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186)/[0-9]{1,10}[.]htm$"}}}},
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141)/[0-9]{1,10}[.]htm$"}}}},
                     {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://h3i[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
             },
             "output": {
@@ -1285,58 +1231,48 @@ mod tests {
     #[test]
     fn pagination_uses_advertised_ordinals_not_filename_numbers() {
         let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span></div>"#;
+        let document = source_html(html).unwrap();
         let base = latest_listing_url("tzgg").unwrap();
         let allowed =
             |url: &Url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/");
+        let selector = "div.pb_sys_common span.p_no a[href]";
         assert_eq!(
-            advertised_page_url(
-                html,
-                &base,
-                2,
-                "div.pb_sys_common span.p_no a[href]",
-                allowed
-            )
-            .unwrap()
-            .path(),
+            advertised_page_url_document(&document, &base, 2, selector, allowed).unwrap().path(),
             "/tzgg/252.htm"
         );
         assert_eq!(
-            advertised_page_url(
-                html,
-                &base,
-                253,
-                "div.pb_sys_common span.p_no a[href]",
-                allowed
-            )
-            .unwrap()
-            .path(),
+            advertised_page_url_document(&document, &base, 253, selector, allowed)
+                .unwrap()
+                .path(),
             "/tzgg/1.htm"
         );
         assert_eq!(
-            advertised_page_url(
-                html,
-                &base,
-                6,
-                "div.pb_sys_common span.p_no a[href]",
-                allowed
-            )
-            .unwrap_err()
-            .code,
+            advertised_page_url_document(&document, &base, 6, selector, allowed)
+                .unwrap_err()
+                .code,
             "unavailable"
         );
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://evil.example/tzgg/252.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(
-                foreign,
-                &base,
-                2,
-                "div.pb_sys_common span.p_no a[href]",
-                allowed
-            )
-            .unwrap_err()
-            .code,
+            advertised_page_url_document(&source_html(foreign).unwrap(), &base, 2, selector, allowed)
+                .unwrap_err()
+                .code,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn ordinal_conflicts_and_unreviewed_href_syntax_are_not_selected() {
+        let base = latest_listing_url("tzgg").unwrap();
+        let selector = "div.pb_sys_common span.p_no a[href]";
+        let link = |href: &str| format!("<div class=\"pb_sys_common\"><span class=\"p_no\"><a href=\"{href}\">2</a></span></div>");
+        let first = link("tzgg/252.htm");
+        for second in ["tzgg/251.htm", "tzgg/%32.htm", "tzgg\\252.htm", "tzgg/25&#10;2.htm"] {
+            let document = source_html(format!("{first}{}", link(second)).as_bytes()).unwrap();
+            assert!(advertised_page_url_document(&document, &base, 2, selector, |url| is_list_source_url(url.as_str())).is_err());
+        }
+        let document = source_html(format!("{first}{first}").as_bytes()).unwrap();
+        assert_eq!(advertised_page_url_document(&document, &base, 2, selector, |url| is_list_source_url(url.as_str())).unwrap().path(), "/tzgg/252.htm");
     }
 
     #[test]
@@ -1436,6 +1372,20 @@ mod tests {
         assert!(resolve_article_url("https://news.buaa.edu.cn/info/1010/1.htm?x=1").is_err());
         assert!(resolve_article_url("https://news.buaa.edu.cn/xwzx.htm").is_err());
         assert!(resolve_article_url("https://news.buaa.edu.cn/info/abc/1.htm").is_err());
+    }
+
+    #[test]
+    fn supplied_history_refuses_active_bases_without_invented_http_metadata() {
+        for (source, body) in [
+            ("https://news.buaa.edu.cn/tzgg.htm", listing_html()),
+            ("http://scse.buaa.edu.cn/xwgg/gggs.htm", "<title>Fixture</title><div class='ej_nr'><div class='list'><ul><li><a href='../../info/1099/42.htm'><p class='bt'>Fixture</p></a></li></ul></div></div>".into()),
+        ] {
+            let input = |prefix: &str| json!({"html":STANDARD.encode(format!("{prefix}{body}")),"provenance":{"source_url":source}}).to_string();
+            assert_eq!(history(&input("<base href='https://foreign.example/'>")).unwrap_err().code, "invalid_input");
+            for inert in ["<template><base href='https://foreign.example/'></template>", "<noscript><base href='https://foreign.example/'></noscript>"] {
+                assert!(history(&input(inert)).is_ok());
+            }
+        }
     }
 
     #[test]
