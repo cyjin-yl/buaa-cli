@@ -66,15 +66,16 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "mse", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(response, &document, "mse", attribution))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let titles = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&titles)
-        .next()
+        .find(|node| !inert_element(*node))
         .map(element_text)
         .unwrap_or_default();
     if title.len() > MAX_TEXT {
@@ -185,15 +186,14 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
         advertised_page_url(
-            &response.body,
+            response,
             &latest,
             page,
             "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xwdt/gggs/"),
         )
-    })
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -205,7 +205,6 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     {
         return Err(invalid_list());
     }
-    let page = query.page.unwrap_or(1);
     let since = query
         .since
         .as_deref()
@@ -216,20 +215,34 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         .as_deref()
         .map(|raw| parse_iso_date(raw).ok_or_else(invalid_list))
         .transpose()?;
-    let (client, mut attribution) = bound_client(mode)?;
+    let (client, attribution) = bound_client(mode)?;
+    list_with_client(client, mode, query, since, until, attribution)
+}
+
+pub(crate) fn list_with_client(
+    client: ArchiveClient,
+    mode: CacheMode,
+    query: &ListQuery,
+    since: Option<String>,
+    until: Option<String>,
+    mut attribution: Value,
+) -> Result<Value, Error> {
+    let page = query.page.unwrap_or(1);
     bind_college_board(&client, MSE_ROOT_URL, MSE_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
-        let entries: Vec<&ListingEntry> = document.entries.iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
-            "publisher":PUBLISHER,"college":"mse","category":"gggs","listing_label":"公告公示","page":page,
-            "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
-            "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
-            "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null","summaries":"source direct a/p excerpt; not original full text"},
-            "retrieval":retrieval(response)}))
-    })
+        let document = college_html(response)?;
+        Ok(parse_listing(&document, &target).map(|document| {
+            let entries: Vec<&ListingEntry> = document.entries.iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
+            json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
+                "publisher":PUBLISHER,"college":"mse","category":"gggs","listing_label":"公告公示","page":page,
+                "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
+                "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
+                "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null","summaries":"source direct a/p excerpt; not original full text"},
+                "retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -255,19 +268,21 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, MSE_ROOT_URL, MSE_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained notice page does not declare the selected Mse article",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let document = college_html(response)?;
+        Ok(parse_listing(&document, &source).and_then(|document| {
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained notice page does not declare the selected Mse article",
+                ));
+            }
+            Ok(retrieval(response))
+        }))
+    })??;
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
@@ -512,6 +527,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::advertised_page_url_document;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
@@ -597,6 +613,23 @@ mod tests {
             parse_listing(&duplicate_headings, &base).unwrap_err().code,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn mse_listing_uses_active_title_view_and_direct_source_facts() {
+        let inactive = listing("<li><a href=\"../info/1061/99.htm\"><h3>Inactive view heading</h3></a></li>");
+        let active = listing("<li><a href=\"../info/1061/42.htm\"><template><h3>Inactive nested heading</h3><p>Inactive excerpt</p><span>2020.01.01</span></template><h3>Active source heading</h3><p>Active source excerpt</p><span>2026.09.21</span></a></li>");
+        let document = Html::parse_document(&format!(
+            "<template><title>Inactive document title</title>{}</template><title>Active document title</title>{}",
+            inactive.html(), active.html()
+        ));
+        let parsed = parse_listing(&document, &Url::parse(MSE_NOTICES_URL).unwrap()).unwrap();
+        assert_eq!(parsed.title, "Active document title");
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].title, "Active source heading");
+        assert_eq!(parsed.entries[0].summary.as_deref(), Some("Active source excerpt"));
+        assert_eq!(parsed.entries[0].date.as_deref(), Some("2026-09-21"));
+        assert_eq!(parsed.entries[0].resolved_http_url.as_deref(), Some("https://mse.buaa.edu.cn/info/1061/42.htm"));
     }
 
     #[test]
@@ -827,9 +860,9 @@ mod tests {
     #[test]
     fn mse_page_ordinal_uses_only_active_scoped_notice_pagination() {
         let base = Url::parse(MSE_NOTICES_URL).unwrap();
-        let html = br#"<div class="pagestyle"><span class="p_no"><a href="gggs/99.htm">2</a></span></div><div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><template><span class="p_no"><a href="gggs/98.htm">2</a></span></template><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#;
-        let selected = advertised_page_url(
-            html,
+        let html = Html::parse_document(r#"<div class="pagestyle"><span class="p_no"><a href="gggs/99.htm">2</a></span></div><div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><template><span class="p_no"><a href="gggs/98.htm">2</a></span></template><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#);
+        let selected = advertised_page_url_document(
+            &html,
             &base,
             2,
             "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
@@ -838,8 +871,8 @@ mod tests {
         .unwrap();
         assert_eq!(selected.as_str(), "https://mse.buaa.edu.cn/xwdt/gggs/8.htm");
         assert_eq!(
-            advertised_page_url(
-                html,
+            advertised_page_url_document(
+                &html,
                 &base,
                 3,
                 "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
