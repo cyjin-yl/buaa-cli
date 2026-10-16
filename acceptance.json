@@ -602,6 +602,98 @@
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "mse_table_text_slice": {
+          "native_table_ownership_gate_20261017": {
+            "code_proof_head": "1b3fa8974ef2100ab37ecf01bf1cd68795270fb8",
+            "ordinary_final_PR106_head": "ddc4da4e1ebd84a620f5b89a0af7c0789a4def11",
+            "toolchain": "native cargo1.98.1; declared Rust1.89 native CI is a separate parent publication gate",
+            "foster_consumer": {
+              "observed_before_fix": true,
+              "red_exit": 101,
+              "red_executed": 1,
+              "red_failed": 1,
+              "green_exit": 0,
+              "green_executed": 1,
+              "green_passed": 1,
+              "native_parser_direct_body_text_nodes": 1,
+              "native_parser_direct_body_text_bytes": 19,
+              "values_printed": false
+            },
+            "focused_offline": {
+              "executed": 25,
+              "passed": 25,
+              "failed": 0,
+              "ignored": 0,
+              "new_real_HTTP_loopback_consumers": 5,
+              "invalid_source_admission_lanes": 6,
+              "table_bounds": "Whole multiple-table ordered records, unequal rows and source-present spans;256/257 table/cell counts,8192/8193 row/caption text,512/513 span bytes, shared1024 paragraph+row limit/1025 overflow; nested/empty/nontext refusal, unowned/fostered text and external-layout ownership, explicit partial document hints.",
+              "scope": "focused --lib mse_; not a new full-suite total"
+            },
+            "final_code_gates": {
+              "formatter_exit": 0,
+              "build_exit": 0,
+              "strict_all_target_clippy_exit": 0,
+              "formatter_check_exit": 0
+            },
+            "actual_offline_CLI": {
+              "success_commands": 9,
+              "refusal_commands": 3,
+              "refusal_exit_codes": [
+                3,
+                7,
+                2
+              ],
+              "independent_complete_models_frozen_before_comparison": 9,
+              "all_complete_models_equal": true,
+              "current_directory_entries": 50,
+              "current_listing_entries": 6,
+              "current_inclusive_filtered_entries": 2,
+              "filter_contract": "inclusive2026-09-15 through2026-09-21",
+              "source_paragraphs": 1,
+              "table_count": 1,
+              "source_rows": 339,
+              "source_cells": 2331,
+              "result": "full_text",
+              "all_source_present_spans_and_complete_ordered_cell_records_equal": true,
+              "capability_manifest_entries_in_this_worktree": 44,
+              "parent_mainline_49_74_totals_replaced": false
+            },
+            "current_source_inputs": {
+              "mse-root": {
+                "url": "https://mse.buaa.edu.cn/",
+                "http_status": 200,
+                "source_HTML_byte_length": 58155,
+                "source_HTML_sha256": "e91f514de0d56a270ef8d590721f44753ebfb703791697bd56a1402745a54505",
+                "fetched_at_unix_ms": 1792099465076
+              },
+              "mse-board": {
+                "url": "https://mse.buaa.edu.cn/xwdt/gggs.htm",
+                "http_status": 200,
+                "source_HTML_byte_length": 26920,
+                "source_HTML_sha256": "93f2df6a1a3840eca468cc1a8986964fbfa0947dd0ea220e4a84c9ffd08beca2",
+                "fetched_at_unix_ms": 1792101108962
+              },
+              "mse-article": {
+                "url": "https://mse.buaa.edu.cn/info/1061/2881.htm",
+                "http_status": 200,
+                "source_HTML_byte_length": 522352,
+                "source_HTML_sha256": "dfbf74173c1a9d57a5e59e15b70de706874ee8fa4c692ced8366a27fbd0ffcb3",
+                "fetched_at_unix_ms": 1791096587326
+              },
+              "directory": {
+                "url": "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm",
+                "http_status": 200,
+                "source_HTML_byte_length": 41857,
+                "source_HTML_sha256": "77c310f0905ff42540e85aa3bc3f2827efdc2f72742738414a0a35be554e09ba",
+                "fetched_at_unix_ms": 1792097607764
+              }
+            },
+            "cross_version_boundary": "All six complete directory/root/board/list/filter/help objects match PR106; every shared article source/title/date/paragraph/attachment/retrieval/attribution field is preserved. Only the intentional separate flat-table representation and full_text/completeness cutover differ. No inferred cells, grid/span expansion, OCR, missing-text fabrication or linked-material fetch.",
+            "mutable_cache_boundary": "Current root/board58155/26920-byte snapshots differ from dated historical originals; cause UNKNOWN. Current fixed-date filtering independently selects2, not historical3. Preserve historical inputs/oracles/failures, with no old-byte fallback, source rewrite or completed CLI/GET replay. The original article522352 bytes/hash/time remain the same.",
+            "dated_retention_baseline": "The previously prepared originalbb2 membership-retention consumer was executed once in its own new isolated baseline target: exit101,1case/1failure, actual admitted listing discarded. It is dated pre-fix evidence, not a current-head failure or current-source original read; its owned temporary test was removed after preserving source/raw receipt. Current five HTTP consumers retain exact admitted originals and reject invalid sources.",
+            "production_governor_bytes_unchanged": true,
+            "selected_source_cache_files_byte_unchanged_count": 4,
+            "privacy_and_publication": "Private originals/generated expected models/raw failures stay same-UID0700/0600 outside source/tmp. Current summaries omit state fingerprints; historical Git/tool/protected receipts are not erased. Metadata-only consumption, independent exact-head review, published native checks and maintainer/integration decisions remain separate."
+          },
           "foster_owner_correction_20261017": {
             "finding": "The source-inference candidate was executed before repair and genuinely returned full_text with only the kept cell, losing unowned source text. It is not merely a prepared or assumed defect.",
             "red_source_head": "753d0c8db92f1949d8b31fbcee414d7bf708e92a",
