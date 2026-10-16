@@ -54,7 +54,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     let url = Url::parse(raw).map_err(|_| unavailable())?;
     client.with_cache_mode(mode).get(&url, false, |response| {
         let document = college_html(response)?;
-        Ok(describe_college_surface(response, &document, "ic", attribution))
+        Ok(describe_college_surface(
+            response,
+            &document,
+            "ic",
+            attribution,
+        ))
     })?
 }
 
@@ -140,9 +145,13 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        advertised_page_url(response, &latest, page, "div.pb_sys_common span.p_no a[href]", |url| {
-            plain_url(url) && url.path().starts_with("/tzgg/")
-        })
+        advertised_page_url(
+            response,
+            &latest,
+            page,
+            "div.pb_sys_common span.p_no a[href]",
+            |url| plain_url(url) && url.path().starts_with("/tzgg/"),
+        )
     })?
 }
 
@@ -210,18 +219,18 @@ pub(crate) fn article_with_client(
     let listing = client.get(&source, false, |response| {
         let source_document = college_html(response)?;
         Ok((|| {
-        let document = parse_listing(&source_document, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained notice page does not declare the selected IC article",
-            ));
-        }
-        Ok(retrieval(response))
+            let document = parse_listing(&source_document, &source)?;
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained notice page does not declare the selected IC article",
+                ));
+            }
+            Ok(retrieval(response))
         })())
     })??;
     // Retain validated original HTML even if its content layout has drifted.
@@ -360,16 +369,26 @@ mod tests {
     fn inert_pagination_cannot_override_the_advertised_board() {
         let base = Url::parse(IC_NOTICES_URL).unwrap();
         let source = br#"<template><div class="pb_sys_common"><span class="p_no"><a href="tzgg/999.htm">2</a></span></div></template><div class="pb_sys_common"><span class="p_no"><a href="tzgg/22.htm">2</a></span></div>"#;
-        let selected = super::super::advertised_page_url_document(&super::super::source_html(source).unwrap(), &base, 2, "div.pb_sys_common span.p_no a[href]", |url| {
-            plain_url(url) && url.path().starts_with("/tzgg/")
-        })
+        let selected = super::super::advertised_page_url_document(
+            &super::super::source_html(source).unwrap(),
+            &base,
+            2,
+            "div.pb_sys_common span.p_no a[href]",
+            |url| plain_url(url) && url.path().starts_with("/tzgg/"),
+        )
         .unwrap();
         assert_eq!(selected.path(), "/tzgg/22.htm");
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://foreign.example/tzgg/22.htm">2</a></span></div>"#;
         assert_eq!(
-            super::super::advertised_page_url_document(&super::super::source_html(foreign).unwrap(), &base, 2, "div.pb_sys_common span.p_no a[href]", plain_url)
-                .unwrap_err()
-                .code,
+            super::super::advertised_page_url_document(
+                &super::super::source_html(foreign).unwrap(),
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                plain_url
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
     }
