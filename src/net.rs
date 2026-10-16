@@ -2078,6 +2078,38 @@ mod tests {
     }
 
     #[test]
+    fn beijing_listing_errors_retain_admitted_source_without_article_requests() {
+        for (body, page, expected) in [
+            (b"<title>Changed listing</title>".as_slice(), 1, "unavailable"),
+            (b"<title>No ordinal</title>".as_slice(), 2, "unavailable"),
+            (br#"<div class="ny-right"><div class="notice-list"><div><ul><li><a href="../info/1014/99.htm"><h3>Other fixture</h3></a></li></ul></div></div></div>"#.as_slice(), 1, "unsupported"),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /xwdt/gggs.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Beijing;
+            seed(&client, BEIJING_ROOT_URL, br#"<a href="xwdt/gggs.htm">Fixture notices</a>"#, false);
+            let root = Url::parse(BEIJING_ROOT_URL).unwrap();
+            let mut entry = client.load(&root).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+            seed(&client, BEIJING_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            let target = Url::parse("https://beijing.buaa.edu.cn/info/1014/42.htm").unwrap();
+            assert_eq!(crate::announcements::beijing::article_with_client(client, CacheMode::PreferCache, &target, page, serde_json::json!({})).unwrap_err().code, expected);
+            let mut offline = fixture.client(CacheMode::Offline, &server);
+            offline.profile = SourceProfile::Beijing;
+            let retained = offline.load(&Url::parse(BEIJING_NOTICES_URL).unwrap()).unwrap().unwrap().response;
+            assert_eq!(retained.body, body);
+            assert_eq!(retained.sha256, hash(body));
+            assert_eq!(crate::announcements::beijing::article_with_client(offline, CacheMode::Offline, &target, page, serde_json::json!({})).unwrap_err().code, expected);
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
     fn offline_and_prefer_cache_make_no_observation_or_governor_state() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _| panic!("offline operation contacted the network"));
