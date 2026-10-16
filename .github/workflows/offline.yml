@@ -1,0 +1,47 @@
+name: Offline Rust
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'work/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install declared Rust toolchain
+        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt --component clippy && rustup default 1.89.0
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Verify without external network or campus credentials
+        shell: bash
+        run: |
+          isolated_home=$(mktemp -d)
+          sudo unshare --net -- bash -eu -o pipefail -c '
+            ip link set lo up
+            exec setpriv --reuid="$1" --regid="$2" --init-groups env \
+              HOME="$3" CARGO_HOME="$4" RUSTUP_HOME="$5" PATH="$6" \
+              CARGO_NET_OFFLINE=true bash -eu -o pipefail
+          ' _ "$(id -u)" "$(id -g)" "$isolated_home" \
+            "${CARGO_HOME:-$HOME/.cargo}" "${RUSTUP_HOME:-$HOME/.rustup}" "$PATH" <<'OFFLINE'
+          cargo fmt --all -- --check
+          cargo build --locked --offline
+          cargo test --locked --offline
+          cargo clippy --all-targets --locked --offline -- -D warnings
+          target/debug/buaa --help
+          target/debug/buaa schema
+          target/debug/buaa capabilities
+          OFFLINE
