@@ -3,8 +3,8 @@ use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     advertised_page_url, article_body, article_output, bind_college_board,
     college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, invalid_article, invalid_list, is_http, parse_iso_date,
-    retrieval, unavailable,
+    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
+    parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, ZFAI_NOTICES_URL, ZFAI_ROOT_URL, zfai_path_allowed,
@@ -62,15 +62,21 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "zfai", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "zfai",
+                attribution,
+            ))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let titles = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&titles)
-        .next()
+        .find(|node| !inert_element(*node))
         .map(element_text)
         .unwrap_or_default();
     if title.len() > MAX_TEXT {
@@ -78,7 +84,9 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
     }
     let containers =
         Selector::parse("div.news div.fl1 > div.wp > ul.list11.flex").map_err(|_| unavailable())?;
-    let mut containers = document.select(&containers);
+    let mut containers = document
+        .select(&containers)
+        .filter(|node| !inert_element(*node));
     let primary = containers
         .next()
         .filter(|_| containers.next().is_none())
@@ -184,15 +192,14 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
         advertised_page_url(
-            &response.body,
+            response,
             &latest,
             page,
             "div.pagebar span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xxgg1/"),
         )
-    })
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -219,16 +226,18 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, ZFAI_ROOT_URL, ZFAI_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+        let source = college_html(response)?;
+        Ok(parse_listing(&source, &target).map(|document| {
         let entries: Vec<&ListingEntry> = document.entries.iter()
             .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
+        json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
             "publisher":PUBLISHER,"college":"zfai","category":"xxgg1","listing_label":"信息公告","page":page,
             "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
             "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
             "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source MM-DD and YYYY; missing or invalid stays null","summaries":"source rr/p.ps3 excerpt; not original full text"},
-            "retrieval":retrieval(response)}))
-    })
+            "retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -254,19 +263,21 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, ZFAI_ROOT_URL, ZFAI_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained information board does not declare the selected Zfai article",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let source_html = college_html(response)?;
+        Ok(parse_listing(&source_html, &source).and_then(|document| {
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained information board does not declare the selected Zfai article",
+                ));
+            }
+            Ok(retrieval(response))
+        }))
+    })??;
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
@@ -284,7 +295,7 @@ pub(crate) fn article_with_client(
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
     let forms = Selector::parse("div.detail div.fl1 > div.wp.flex > div.left > form")
         .map_err(|_| unavailable())?;
-    let mut forms = document.select(&forms);
+    let mut forms = document.select(&forms).filter(|node| !inert_element(*node));
     let main = forms
         .next()
         .filter(|_| forms.next().is_none())
@@ -296,7 +307,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             )
         })?;
     let headers = Selector::parse(":scope > div.ar_tit").map_err(|_| unavailable())?;
-    let mut headers = main.select(&headers);
+    let mut headers = main.select(&headers).filter(|node| !inert_element(*node));
     let header = headers
         .next()
         .filter(|_| headers.next().is_none())
@@ -310,12 +321,12 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     let mut titles = header
         .children()
         .filter_map(ElementRef::wrap)
-        .filter(|node| node.value().name() == "h3")
-        .map(element_text)
-        .filter(|title| !title.is_empty());
+        .filter(|node| node.value().name() == "h3");
     let title = titles
         .next()
-        .filter(|title| title.len() <= MAX_HREF)
+        .filter(|_| titles.next().is_none())
+        .map(element_text)
+        .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
         .ok_or_else(|| {
             failed_contract(
                 "Zfai article requires one nonempty direct ar_tit/h3 heading",
@@ -323,9 +334,6 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    if titles.next().is_some() {
-        return Err(unavailable());
-    }
     let mut dates = header
         .children()
         .filter_map(ElementRef::wrap)
@@ -347,7 +355,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     let bodies =
         Selector::parse(":scope > div.ar_article > div#vsb_content_1001 > div.v_news_content")
             .map_err(|_| unavailable())?;
-    let mut bodies = main.select(&bodies);
+    let mut bodies = main.select(&bodies).filter(|node| !inert_element(*node));
     let body = bodies
         .next()
         .filter(|_| bodies.next().is_none())
@@ -359,7 +367,9 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             )
         })?;
     let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
-    Ok(article_output(
+    let images = Selector::parse("img").map_err(|_| unavailable())?;
+    let has_images = body.select(&images).any(|image| !inert_element(image));
+    let mut output = article_output(
         response,
         ArticleDocument {
             title,
@@ -369,11 +379,23 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             attachment_hints,
             attachments_found,
         },
-    ))
+    );
+    output["completeness"]["image_content_present"] = json!(has_images);
+    if has_images || attachments_found {
+        output["result"] = json!("partial_text");
+    }
+    if has_images {
+        output["completeness"]["missing_image_text"] = json!("not_reconstructed");
+    }
+    if attachments_found {
+        output["completeness"]["missing_attachment_content"] = json!("not_downloaded");
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::advertised_page_url_document as advertised_document_page_url;
     use super::*;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};
@@ -490,25 +512,44 @@ mod tests {
     fn pagebar_selects_active_ordinals_without_legacy_container_or_filename_inference() {
         let base = Url::parse(ZFAI_NOTICES_URL).unwrap();
         let source = br#"<div class="pb_sys_common"><span class="p_no"><a href="xxgg1/99.htm">2</a></span></div><template><div class="pagebar"><span class="p_no"><a href="xxgg1/98.htm">2</a></span></div></template><div class="pagebar"><span class="p_no"><a href="xxgg1/8.htm">2</a></span><span class="p_no"><a href="xxgg1/1.htm">3</a></span></div>"#;
-        let selected =
-            advertised_page_url(source, &base, 2, "div.pagebar span.p_no a[href]", plain_url)
-                .unwrap();
+        let source = &Html::parse_document(std::str::from_utf8(source).unwrap());
+        let selected = advertised_document_page_url(
+            source,
+            &base,
+            2,
+            "div.pagebar span.p_no a[href]",
+            plain_url,
+        )
+        .unwrap();
         assert_eq!(selected.path(), "/xxgg1/8.htm");
         assert_eq!(
-            advertised_page_url(source, &base, 3, "div.pagebar span.p_no a[href]", plain_url)
-                .unwrap()
-                .path(),
+            advertised_document_page_url(
+                source,
+                &base,
+                3,
+                "div.pagebar span.p_no a[href]",
+                plain_url
+            )
+            .unwrap()
+            .path(),
             "/xxgg1/1.htm"
         );
         assert_eq!(
-            advertised_page_url(source, &base, 8, "div.pagebar span.p_no a[href]", plain_url)
-                .unwrap_err()
-                .code,
+            advertised_document_page_url(
+                source,
+                &base,
+                8,
+                "div.pagebar span.p_no a[href]",
+                plain_url
+            )
+            .unwrap_err()
+            .code,
             "unavailable"
         );
         let foreign = br#"<div class="pagebar"><span class="p_no"><a href="https://foreign.example/xxgg1/8.htm">2</a></span></div>"#;
+        let foreign = &Html::parse_document(std::str::from_utf8(foreign).unwrap());
         assert_eq!(
-            advertised_page_url(
+            advertised_document_page_url(
                 foreign,
                 &base,
                 2,
@@ -518,6 +559,69 @@ mod tests {
             .unwrap_err()
             .code,
             "unavailable"
+        );
+    }
+
+    #[test]
+    fn rescue_zfai_preserves_whole_excerpts_and_rejects_empty_extra_headings() {
+        let excerpt =
+            "Complete first segment <em>complete middle segment</em> complete final segment.";
+        let listing = format!(
+            r#"<title>Information board caption</title><div class="news"><div class="fl1"><div class="wp"><ul class="list11 flex"><li><a class="a" href="info/1196/42.htm"><div class="time"><h3>09-14</h3><h6>2026</h6></div><div class="rr"><h4 class="h4s2">Only the source heading</h4><p class="ps3">{excerpt}</p></div></a></li></ul></div></div></div>"#
+        );
+        let parsed = parse_listing(
+            &Html::parse_document(&listing),
+            &Url::parse(ZFAI_NOTICES_URL).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed.title, "Information board caption");
+        assert_eq!(parsed.entries[0].title, "Only the source heading");
+        assert_eq!(
+            parsed.entries[0].summary.as_deref(),
+            Some("Complete first segment complete middle segment complete final segment.")
+        );
+        assert_eq!(
+            parsed.entries[0].category_label.as_deref(),
+            Some("信息公告")
+        );
+        let ambiguous = response(&article_html("", "<p>Original paragraph.</p>").replace(
+            "<h3>Original source heading</h3>",
+            "<h3>Original source heading</h3><h3></h3>",
+        ));
+        assert_eq!(
+            normalize(&ambiguous, &college_html(&ambiguous).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let competing = response(&article_html("", "<p>Original paragraph.</p>").replace(
+            "<div class=\"ar_tit\">",
+            "<div class=\"ar_tit\"><h3>Competing source heading</h3></div><div class=\"ar_tit\">",
+        ));
+        assert_eq!(
+            normalize(&competing, &college_html(&competing).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let inert = response(&article_html("", "<p>Original paragraph.</p>").replace(
+            "<div class=\"ar_tit\">",
+            "<template><div class=\"ar_tit\"><h3>Inert source heading</h3></div></template><div class=\"ar_tit\">",
+        ));
+        assert_eq!(
+            normalize(&inert, &college_html(&inert).unwrap()).unwrap()["title"],
+            "Original source heading"
+        );
+        let linked = response(&article_html(
+            "",
+            "<p>Original paragraph.</p><a href='brief.pdf'>Unfetched document</a>",
+        ));
+        let linked = normalize(&linked, &college_html(&linked).unwrap()).unwrap();
+        assert_eq!(linked["result"], "partial_text");
+        assert_eq!(linked["attachments"]["found"], true);
+        assert_eq!(
+            linked["completeness"]["missing_attachment_content"],
+            "not_downloaded"
         );
     }
 
@@ -546,6 +650,46 @@ mod tests {
         assert!(
             normalize(&missing, &college_html(&missing).unwrap()).unwrap()["published_at"]
                 .is_null()
+        );
+    }
+
+    #[test]
+    fn article_marks_active_images_partial_without_inventing_image_text() {
+        for (body, expected_result, has_images) in [
+            (
+                "<p>Visible source paragraph.</p><img src='poster.png' alt='Not OCR'>",
+                "partial_text",
+                true,
+            ),
+            (
+                "<p>Visible source paragraph.</p><template><img src='inert.png'></template>",
+                "full_text",
+                false,
+            ),
+        ] {
+            let original = response(&article_html("", body));
+            let output = normalize(&original, &college_html(&original).unwrap()).unwrap();
+            assert_eq!(output["result"], expected_result);
+            assert_eq!(
+                output["body_paragraphs"],
+                json!(["Visible source paragraph."])
+            );
+            assert_eq!(output["completeness"]["image_content_present"], has_images);
+            if has_images {
+                assert_eq!(
+                    output["completeness"]["missing_image_text"],
+                    "not_reconstructed"
+                );
+            } else {
+                assert!(output["completeness"].get("missing_image_text").is_none());
+            }
+        }
+        let image_only = response(&article_html("", "<img src='poster.png' alt='Not OCR'>"));
+        assert_eq!(
+            normalize(&image_only, &college_html(&image_only).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
         );
     }
 

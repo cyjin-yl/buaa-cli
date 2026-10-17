@@ -57,8 +57,14 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     }
     let url = Url::parse(raw).map_err(|_| unavailable())?;
     client.with_cache_mode(mode).get(&url, false, |response| {
-        describe_college_surface(response, "ic", attribution)
-    })
+        let document = college_html(response)?;
+        Ok(describe_college_surface(
+            response,
+            &document,
+            "ic",
+            attribution,
+        ))
+    })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
@@ -143,15 +149,14 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
         advertised_page_url(
-            &response.body,
+            response,
             &latest,
             page,
             "div.pb_sys_common span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/tzgg/"),
         )
-    })
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -180,15 +185,17 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, IC_ROOT_URL, IC_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target,false,|response| {
-        let document = parse_listing(&college_html(response)?,&target)?;
+        let source = college_html(response)?;
+        Ok(parse_listing(&source,&target).map(|document| {
         let entries:Vec<&ListingEntry> = document.entries.iter().filter(|entry| entry_in_scope(entry,&since,&until,&query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
+        json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
             "publisher":PUBLISHER,"college":"ic","category":"tzgg","listing_label":"通知公告","page":page,
             "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
             "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
             "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source_year_and_month_day; missing stays null"},
-            "retrieval":retrieval(response)}))
-    })
+            "retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -214,19 +221,22 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, IC_ROOT_URL, IC_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained notice page does not declare the selected IC article",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let source_document = college_html(response)?;
+        Ok((|| {
+            let document = parse_listing(&source_document, &source)?;
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained notice page does not declare the selected IC article",
+                ));
+            }
+            Ok(retrieval(response))
+        })())
+    })??;
     // Retain validated original HTML even if its content layout has drifted.
     // A parser error remains an error, not an empty/full-text success; this
     // allows an offline source correction without another remote observation.
@@ -363,8 +373,8 @@ mod tests {
     fn inert_pagination_cannot_override_the_advertised_board() {
         let base = Url::parse(IC_NOTICES_URL).unwrap();
         let source = br#"<template><div class="pb_sys_common"><span class="p_no"><a href="tzgg/999.htm">2</a></span></div></template><div class="pb_sys_common"><span class="p_no"><a href="tzgg/22.htm">2</a></span></div>"#;
-        let selected = advertised_page_url(
-            source,
+        let selected = super::super::advertised_page_url_document(
+            &super::super::source_html(source).unwrap(),
             &base,
             2,
             "div.pb_sys_common span.p_no a[href]",
@@ -374,8 +384,8 @@ mod tests {
         assert_eq!(selected.path(), "/tzgg/22.htm");
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://foreign.example/tzgg/22.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(
-                foreign,
+            super::super::advertised_page_url_document(
+                &super::super::source_html(foreign).unwrap(),
                 &base,
                 2,
                 "div.pb_sys_common span.p_no a[href]",

@@ -4,9 +4,9 @@
 
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_ATTACHMENT_HINTS, MAX_BODY_PARAGRAPHS,
-    MAX_ENTRIES, MAX_HREF, MAX_HTML, MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, element_text,
-    entry_in_scope, failed_contract, invalid_article, invalid_list, is_document_href, is_http,
-    parse_iso_date, retrieval, unavailable,
+    MAX_ENTRIES, MAX_HREF, MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, college_html,
+    element_text, entry_in_scope, failed_contract, invalid_article, invalid_list, is_document_href,
+    is_http, parse_iso_date, retrieval, source_html, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, scse_document_path_allowed,
@@ -40,17 +40,11 @@ pub(super) fn is_history_source(raw: &str) -> bool {
     Url::parse(raw).is_ok_and(|url| plain_url(&url, true) && list_path(url.path()))
 }
 
-fn html(bytes: &[u8]) -> Result<Html, Error> {
-    if bytes.is_empty() || bytes.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    Ok(Html::parse_document(
-        std::str::from_utf8(bytes).map_err(|_| unavailable())?,
-    ))
+pub(super) fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error> {
+    parse_listing_document(&source_html(bytes)?, base)
 }
 
-pub(super) fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error> {
-    let document = html(bytes)?;
+fn parse_listing_document(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
@@ -163,7 +157,7 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     } else {
         client.get(&latest, false, |response| {
             advertised_page_url(
-                &response.body,
+                response,
                 &latest,
                 page,
                 "div.pb_sys_common span.p_no a[href]",
@@ -173,11 +167,13 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
                         && list_path(url.path())
                 },
             )
-        })?
+        })??
     };
     client.with_cache_mode(mode).get(&target, false, |response| {
+        let source = college_html(response)?;
+        Ok((|| {
         let base = Url::parse(&response.url).map_err(|_| unavailable())?;
-        let document = parse_listing(&response.body, &base)?;
+        let document = parse_listing_document(&source, &base)?;
         let entries: Vec<&ListingEntry> = document.entries.iter()
             .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
         Ok(json!({
@@ -188,7 +184,8 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
             "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source_year_and_month_day; missing stays null"},
             "retrieval":retrieval(response),
         }))
-    })
+        })())
+    })?
 }
 
 fn resolve_article(raw: &str) -> Result<Url, Error> {
@@ -205,7 +202,10 @@ fn resolve_article(raw: &str) -> Result<Url, Error> {
 pub(super) fn article(mode: CacheMode, raw: &str) -> Result<Value, Error> {
     let url = resolve_article(raw)?;
     let client = ArchiveClient::open_scse(mode)?;
-    client.get(&url, false, normalize_article)
+    client.get(&url, false, |response| {
+        let document = college_html(response)?;
+        Ok(normalize_article_document(response, &document))
+    })?
 }
 
 fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
@@ -272,15 +272,18 @@ pub(super) fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
     };
     let client = ArchiveClient::open_scse(source_mode)?;
     let (document_url, source) = client.get(&article, false, |response| {
-        let declared = declared_pdf(&html(&response.body)?, &article)?.ok_or_else(|| {
-            failed_contract(
-                "article has no supported source-declared original PDF",
-                file!(),
-                line!(),
-            )
-        })?;
-        Ok((declared, retrieval(response)))
-    })?;
+        let document = college_html(response)?;
+        Ok((|| {
+            let declared = declared_pdf(&document, &article)?.ok_or_else(|| {
+                failed_contract(
+                    "article has no supported source-declared original PDF",
+                    file!(),
+                    line!(),
+                )
+            })?;
+            Ok((declared, retrieval(response)))
+        })())
+    })??;
     client.with_cache_mode(mode).get(&document_url, true, |response| {
         validate_pdf(response)?;
         Ok(json!({
@@ -357,8 +360,12 @@ fn preview_paths(document: &Html) -> Result<(bool, Vec<String>), Error> {
     Ok((false, Vec::new()))
 }
 
+#[cfg(test)]
 fn normalize_article(response: &Response) -> Result<Value, Error> {
-    let document = html(&response.body)?;
+    normalize_article_document(response, &college_html(response)?)
+}
+
+fn normalize_article_document(response: &Response, document: &Html) -> Result<Value, Error> {
     let title_selector = Selector::parse("div.d1 p.bt").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
@@ -387,9 +394,9 @@ fn normalize_article(response: &Response) -> Result<Value, Error> {
         }
         paragraphs.push(text);
     }
-    let (has_previews, previews) = preview_paths(&document)?;
+    let (has_previews, previews) = preview_paths(document)?;
     let original_pdf = declared_pdf(
-        &document,
+        document,
         &Url::parse(&response.url).map_err(|_| unavailable())?,
     )?;
     let has_document = has_previews || original_pdf.is_some();
@@ -450,7 +457,7 @@ mod tests {
         Response {
             url: "https://scse.buaa.edu.cn/info/1099/42.htm".into(),
             status: 200,
-            headers: BTreeMap::new(),
+            headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
             body: body.as_bytes().to_vec(),
             sha256: "a".repeat(64),
             fetched_at_unix_ms: 0,
@@ -499,8 +506,8 @@ mod tests {
         };
         let body = br#"<div class="pb_sys_common"><span class="p_no"><a href="gggs/1.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(
-                body,
+            super::super::advertised_page_url_document(
+                &source_html(body).unwrap(),
                 &base,
                 2,
                 "div.pb_sys_common span.p_no a[href]",
@@ -512,8 +519,8 @@ mod tests {
         );
         let wrong_board = br#"<div class="pb_sys_common"><span class="p_no"><a href="xydt/1.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(
-                wrong_board,
+            super::super::advertised_page_url_document(
+                &source_html(wrong_board).unwrap(),
                 &base,
                 2,
                 "div.pb_sys_common span.p_no a[href]",
@@ -546,7 +553,7 @@ mod tests {
             r#"<div class="v_news_content"><script>var vsb_pdf_image_data=["/__local/preview.jpg"];showVsbpdfIframe("{path}","100%");</script></div>"#
         );
         assert_eq!(
-            declared_pdf(&html(body.as_bytes()).unwrap(), &article)
+            declared_pdf(&source_html(body.as_bytes()).unwrap(), &article)
                 .unwrap()
                 .unwrap()
                 .path(),
@@ -554,7 +561,7 @@ mod tests {
         );
         let preview_only = br#"<div class="v_news_content"><script>var vsb_pdf_image_data=["/__local/preview.jpg"];</script></div>"#;
         assert!(
-            declared_pdf(&html(preview_only).unwrap(), &article)
+            declared_pdf(&source_html(preview_only).unwrap(), &article)
                 .unwrap()
                 .is_none()
         );
@@ -572,7 +579,7 @@ mod tests {
                 "<div class=\"v_news_content\"><script>showVsbpdfIframe({argument},\"100%\");</script></div>"
             );
             assert_eq!(
-                declared_pdf(&html(body.as_bytes()).unwrap(), &article)
+                declared_pdf(&source_html(body.as_bytes()).unwrap(), &article)
                     .unwrap_err()
                     .code,
                 "unavailable"
@@ -603,7 +610,7 @@ mod tests {
         for script in scripts {
             let source = format!("<div class=\"v_news_content\"><script>{script}</script></div>");
             assert!(
-                declared_pdf(&html(source.as_bytes()).unwrap(), &article)
+                declared_pdf(&source_html(source.as_bytes()).unwrap(), &article)
                     .unwrap()
                     .is_none()
             );
@@ -625,7 +632,7 @@ mod tests {
                 "<div class=\"v_news_content\"><script {attributes}>showVsbpdfIframe(\"{path}\");</script></div>"
             );
             assert!(
-                declared_pdf(&html(source.as_bytes()).unwrap(), &article)
+                declared_pdf(&source_html(source.as_bytes()).unwrap(), &article)
                     .unwrap()
                     .is_none()
             );
@@ -634,7 +641,7 @@ mod tests {
             "<div class=\"v_news_content\"><script>// comment\rshowVsbpdfIframe(\"{path}\");</script></div>"
         );
         assert_eq!(
-            declared_pdf(&html(source.as_bytes()).unwrap(), &article)
+            declared_pdf(&source_html(source.as_bytes()).unwrap(), &article)
                 .unwrap()
                 .unwrap()
                 .path(),
@@ -643,7 +650,7 @@ mod tests {
         let interpolation = format!(
             "<div class=\"v_news_content\"><script>var unsupported = `x${{showVsbpdfIframe(\"{path}\")}}`;</script></div>"
         );
-        assert!(declared_pdf(&html(interpolation.as_bytes()).unwrap(), &article).is_err());
+        assert!(declared_pdf(&source_html(interpolation.as_bytes()).unwrap(), &article).is_err());
     }
 
     #[test]

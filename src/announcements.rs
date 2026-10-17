@@ -91,7 +91,7 @@ struct ArticleDocument {
 
 #[derive(serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct ListQuery {
+pub(crate) struct ListQuery {
     college: Option<String>,
     category: Option<String>,
     page: Option<u32>,
@@ -196,27 +196,42 @@ fn latest_listing_url(category: &str) -> Result<Url, Error> {
     Url::parse(&format!("{NEWS_BASE}/{category}.htm")).map_err(|_| unavailable())
 }
 
-fn advertised_page_url(
-    bytes: &[u8],
+pub(crate) fn advertised_page_url(
+    response: &Response,
+    base: &Url,
+    page: u32,
+    ordinal_links: &str,
+    allowed_page: impl Fn(&Url) -> bool,
+) -> Result<Result<Url, Error>, Error> {
+    let document = college_html(response)?;
+    Ok(advertised_page_url_document(
+        &document,
+        base,
+        page,
+        ordinal_links,
+        allowed_page,
+    ))
+}
+
+fn advertised_page_url_document(
+    document: &Html,
     base: &Url,
     page: u32,
     ordinal_links: &str,
     allowed_page: impl Fn(&Url) -> bool,
 ) -> Result<Url, Error> {
-    if bytes.is_empty() || bytes.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
-    let document = Html::parse_document(text);
     let selector = Selector::parse(ordinal_links).map_err(|_| unavailable())?;
     let mut selected = None;
     for link in document.select(&selector) {
         if element_text(link).parse::<u32>().ok() != Some(page) {
             continue;
         }
-        let url = base
-            .join(link.value().attr("href").ok_or_else(unavailable)?)
-            .map_err(|_| unavailable())?;
+        let href = link.value().attr("href").ok_or_else(unavailable)?;
+        if href.len() > MAX_HREF || href.chars().any(char::is_control) || href.contains(['%', '\\'])
+        {
+            return Err(unavailable());
+        }
+        let url = base.join(href).map_err(|_| unavailable())?;
         if !allowed_page(&url) {
             return Err(failed_contract(
                 "advertised listing page must remain in the selected category",
@@ -313,11 +328,10 @@ fn parse_iso_date(raw: &str) -> Option<String> {
 /// Parse one news-center category listing. Public for offline evidence
 /// validation; performs no network or cache access.
 pub fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error> {
-    if bytes.is_empty() || bytes.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
-    let document = Html::parse_document(text);
+    parse_listing_document(&source_html(bytes)?, base)
+}
+
+fn parse_listing_document(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let title = document
         .select(&Selector::parse("title").map_err(|_| unavailable())?)
         .next()
@@ -424,13 +438,12 @@ pub fn parse_listing(bytes: &[u8], base: &Url) -> Result<ListingDocument, Error>
     Ok(ListingDocument { title, entries })
 }
 
+#[cfg(test)]
 fn parse_article(bytes: &[u8], url: &Url) -> Result<ArticleDocument, Error> {
-    if bytes.is_empty() || bytes.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
-    let document = Html::parse_document(text);
+    parse_article_document(&source_html(bytes)?, url)
+}
 
+fn parse_article_document(document: &Html, url: &Url) -> Result<ArticleDocument, Error> {
     let title = document
         .select(&Selector::parse("h2").map_err(|_| unavailable())?)
         .next()
@@ -592,6 +605,7 @@ fn entry_in_scope(
 
 fn normalize_listing(
     response: &Response,
+    source: &Html,
     category: &str,
     page: u32,
     since: &Option<String>,
@@ -599,7 +613,7 @@ fn normalize_listing(
     match_substring: &Option<String>,
 ) -> Result<Value, Error> {
     let url = Url::parse(&response.url).map_err(|_| unavailable())?;
-    let document = parse_listing(&response.body, &url)?;
+    let document = parse_listing_document(source, &url)?;
     let entries: Vec<&ListingEntry> = document
         .entries
         .iter()
@@ -632,9 +646,9 @@ fn normalize_listing(
     }))
 }
 
-fn normalize_article(response: &Response) -> Result<Value, Error> {
+fn normalize_article(response: &Response, source: &Html) -> Result<Value, Error> {
     let url = Url::parse(&response.url).map_err(|_| unavailable())?;
-    let document = parse_article(&response.body, &url)?;
+    let document = parse_article_document(source, &url)?;
     Ok(article_output(response, document))
 }
 
@@ -720,18 +734,27 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         let prefix = format!("/{category}/");
         discovery_client.get(&latest, false, |response| {
             advertised_page_url(
-                &response.body,
+                response,
                 &latest,
                 page,
                 "div.pb_sys_common span.p_no a[href]",
                 |url| is_list_source_url(url.as_str()) && url.path().starts_with(&prefix),
             )
-        })?
+        })??
     };
     let client = discovery_client.with_cache_mode(mode);
     client.get(&url, false, move |response| {
-        normalize_listing(response, category, page, &since, &until, &query.r#match)
-    })
+        let document = college_html(response)?;
+        Ok(normalize_listing(
+            response,
+            &document,
+            category,
+            page,
+            &since,
+            &until,
+            &query.r#match,
+        ))
+    })?
 }
 
 fn resolve_article_url(raw: &str) -> Result<Url, Error> {
@@ -807,7 +830,10 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
     }
     let url = resolve_article_url(raw_url)?;
     let client = ArchiveClient::open_announcements(mode)?;
-    client.get(&url, false, normalize_article)
+    client.get(&url, false, |response| {
+        let document = college_html(response)?;
+        Ok(normalize_article(response, &document))
+    })?
 }
 
 /// Retrieve one original PDF explicitly declared by a reviewed college article.
@@ -855,14 +881,18 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     let client = ArchiveClient::open_scse(mode)?;
     let attribution = json!({"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","note":"the directory href is preserved; this command explicitly observes HTTPS separately"});
     client.get(&url, false, |response| {
-        describe_college_surface(response, "computer_science", attribution)
-    })
+        let document = college_html(response)?;
+        Ok(describe_college_surface(
+            response,
+            &document,
+            "computer_science",
+            attribution,
+        ))
+    })?
 }
 
-fn college_html(response: &Response) -> Result<Html, Error> {
+pub(crate) fn college_html(response: &Response) -> Result<Html, Error> {
     if response.status != 200
-        || response.body.is_empty()
-        || response.body.len() > MAX_HTML
         || !response.headers.get("content-type").is_some_and(|value| {
             value
                 .split(';')
@@ -874,8 +904,14 @@ fn college_html(response: &Response) -> Result<Html, Error> {
     {
         return Err(unavailable());
     }
-    let document =
-        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?);
+    source_html(&response.body)
+}
+
+fn source_html(bytes: &[u8]) -> Result<Html, Error> {
+    if bytes.is_empty() || bytes.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let document = Html::parse_document(std::str::from_utf8(bytes).map_err(|_| unavailable())?);
     let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
     if document.select(&bases).any(|base| {
         !base.ancestors().any(|node| {
@@ -917,22 +953,12 @@ fn college_directory_attribution(
     )
 }
 
-fn describe_college_surface(
+pub(crate) fn describe_college_surface(
     response: &Response,
+    document: &Html,
     college: &str,
     attribution: Value,
 ) -> Result<Value, Error> {
-    if response.status != 200 || response.body.len() > MAX_HTML {
-        return Err(unavailable());
-    }
-    let document = if matches!(
-        college,
-        "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif" | "mse" | "rse"
-    ) {
-        college_html(response)?
-    } else {
-        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?)
-    };
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
@@ -985,7 +1011,7 @@ fn describe_college_surface(
     Ok(output)
 }
 
-fn bind_college_board(
+pub(crate) fn bind_college_board(
     client: &ArchiveClient,
     root: &str,
     board: &str,
@@ -996,7 +1022,7 @@ fn bind_college_board(
     let root_source = client.get(&root, false, |response| {
         let document = college_html(response)?;
         let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
-        if !document.select(&links).any(|node| {
+        let declared = document.select(&links).any(|node| {
             !element_text(node).is_empty()
                 && node.value().attr("href").is_some_and(|raw| {
                     raw.len() <= MAX_HREF
@@ -1004,14 +1030,16 @@ fn bind_college_board(
                         && !raw.contains(['%', '\\'])
                         && root.join(raw).is_ok_and(|url| url == board)
                 })
-        }) {
-            return Err(Error::new(
+        });
+        Ok(if declared {
+            Ok(retrieval(response))
+        } else {
+            Err(Error::new(
                 "unsupported",
                 "retained college root does not declare the reviewed notice board",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+            ))
+        })
+    })??;
     attribution["root_retrieval"] = root_source;
     Ok(())
 }
@@ -1131,7 +1159,7 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, or Mse board-declared notice in category 1061/1058. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse publication requires one direct art-tit/p/span.date 日期：YYYY年MM月DD日; unextracted table text outside paragraphs, images or attachment contents produce partial_text. Pure-image/table-only/empty bodies remain unavailable under the unchanged shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, or Mse board-declared notice in category 1061/1058. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse requires one active direct art-tit header owner; its direct h3 heading and p/span.date 日期：YYYY年MM月DD日 publication facts are selected only within that owner. Competing headers refuse, while absent, invalid or duplicated date slots stay unknown; source text with unfetched images or document attachments produces partial_text. Supported flat Mse table-only text is readable within the existing bounds; empty/nontext or pure-image bodies refuse, and unsupported nested/unowned table layouts fail closed. Other sources retain their existing source-specific paragraph/table/image admission limits and reject a non-null source_page where unsupported. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
                 "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058))/[0-9]{1,10}[.]htm$"}}}},
@@ -1139,7 +1167,7 @@ pub fn schema() -> Value {
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Partial output schema projection: only the optional Mse table extension below is typed; common paragraph, publication, attachment, completeness and retrieval fields remain descriptive, not a complete output validator. Source paragraph text excludes code/fallback markup and retains original publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {
@@ -1347,52 +1375,36 @@ mod tests {
     #[test]
     fn pagination_uses_advertised_ordinals_not_filename_numbers() {
         let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span><span class="p_no"><a href="tzgg/252.htm">2</a></span></div>"#;
+        let document = source_html(html).unwrap();
         let base = latest_listing_url("tzgg").unwrap();
         let allowed =
             |url: &Url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/");
+        let selector = "div.pb_sys_common span.p_no a[href]";
         assert_eq!(
-            advertised_page_url(
-                html,
-                &base,
-                2,
-                "div.pb_sys_common span.p_no a[href]",
-                allowed
-            )
-            .unwrap()
-            .path(),
+            advertised_page_url_document(&document, &base, 2, selector, allowed)
+                .unwrap()
+                .path(),
             "/tzgg/252.htm"
         );
         assert_eq!(
-            advertised_page_url(
-                html,
-                &base,
-                253,
-                "div.pb_sys_common span.p_no a[href]",
-                allowed
-            )
-            .unwrap()
-            .path(),
+            advertised_page_url_document(&document, &base, 253, selector, allowed)
+                .unwrap()
+                .path(),
             "/tzgg/1.htm"
         );
         assert_eq!(
-            advertised_page_url(
-                html,
-                &base,
-                6,
-                "div.pb_sys_common span.p_no a[href]",
-                allowed
-            )
-            .unwrap_err()
-            .code,
+            advertised_page_url_document(&document, &base, 6, selector, allowed)
+                .unwrap_err()
+                .code,
             "unavailable"
         );
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://evil.example/tzgg/252.htm">2</a></span></div>"#;
         assert_eq!(
-            advertised_page_url(
-                foreign,
+            advertised_page_url_document(
+                &source_html(foreign).unwrap(),
                 &base,
                 2,
-                "div.pb_sys_common span.p_no a[href]",
+                selector,
                 allowed
             )
             .unwrap_err()
@@ -1402,20 +1414,37 @@ mod tests {
     }
 
     #[test]
-    fn pagination_rejects_conflicting_ordinal_destinations() {
-        let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/251.htm">2</a></span></div>"#;
+    fn ordinal_conflicts_and_unreviewed_href_syntax_are_not_selected() {
         let base = latest_listing_url("tzgg").unwrap();
-        assert_eq!(
-            advertised_page_url(
-                html,
-                &base,
-                2,
-                "div.pb_sys_common span.p_no a[href]",
-                |url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/")
+        let selector = "div.pb_sys_common span.p_no a[href]";
+        let link = |href: &str| {
+            format!(
+                "<div class=\"pb_sys_common\"><span class=\"p_no\"><a href=\"{href}\">2</a></span></div>"
             )
-            .unwrap_err()
-            .code,
-            "unavailable"
+        };
+        let first = link("tzgg/252.htm");
+        for second in [
+            "tzgg/251.htm",
+            "tzgg/%32.htm",
+            "tzgg\\252.htm",
+            "tzgg/25&#10;2.htm",
+        ] {
+            let document = source_html(format!("{first}{}", link(second)).as_bytes()).unwrap();
+            assert!(
+                advertised_page_url_document(&document, &base, 2, selector, |url| {
+                    is_list_source_url(url.as_str())
+                })
+                .is_err()
+            );
+        }
+        let document = source_html(format!("{first}{first}").as_bytes()).unwrap();
+        assert_eq!(
+            advertised_page_url_document(&document, &base, 2, selector, |url| is_list_source_url(
+                url.as_str()
+            ))
+            .unwrap()
+            .path(),
+            "/tzgg/252.htm"
         );
     }
 
@@ -1516,6 +1545,20 @@ mod tests {
         assert!(resolve_article_url("https://news.buaa.edu.cn/info/1010/1.htm?x=1").is_err());
         assert!(resolve_article_url("https://news.buaa.edu.cn/xwzx.htm").is_err());
         assert!(resolve_article_url("https://news.buaa.edu.cn/info/abc/1.htm").is_err());
+    }
+
+    #[test]
+    fn supplied_history_refuses_active_bases_without_invented_http_metadata() {
+        for (source, body) in [
+            ("https://news.buaa.edu.cn/tzgg.htm", listing_html()),
+            ("http://scse.buaa.edu.cn/xwgg/gggs.htm", "<title>Fixture</title><div class='ej_nr'><div class='list'><ul><li><a href='../../info/1099/42.htm'><p class='bt'>Fixture</p></a></li></ul></div></div>".into()),
+        ] {
+            let input = |prefix: &str| json!({"html":STANDARD.encode(format!("{prefix}{body}")),"provenance":{"source_url":source}}).to_string();
+            assert_eq!(history(&input("<base href='https://foreign.example/'>")).unwrap_err().code, "invalid_input");
+            for inert in ["<template><base href='https://foreign.example/'></template>", "<noscript><base href='https://foreign.example/'></noscript>"] {
+                assert!(history(&input(inert)).is_ok());
+            }
+        }
     }
 
     #[test]

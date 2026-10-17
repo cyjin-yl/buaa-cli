@@ -1,5 +1,5 @@
 //! Reliability college: exact HTTP directory identity, separate HTTPS observation.
-use super::{college_directory_attribution, describe_college_surface, unavailable};
+use super::{college_directory_attribution, college_html, describe_college_surface, unavailable};
 use crate::net::{ArchiveClient, CacheMode, Error, RSE_ROOT_URL};
 use serde_json::Value;
 use url::Url;
@@ -34,6 +34,12 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "rse", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "rse",
+                attribution,
+            ))
+        })?
 }

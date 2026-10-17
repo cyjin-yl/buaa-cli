@@ -70,15 +70,21 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "mse", attribution)
-        })
+            let document = college_html(response)?;
+            Ok(describe_college_surface(
+                response,
+                &document,
+                "mse",
+                attribution,
+            ))
+        })?
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let titles = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&titles)
-        .next()
+        .find(|node| !inert_element(*node))
         .map(element_text)
         .unwrap_or_default();
     if title.len() > MAX_TEXT {
@@ -189,15 +195,14 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
         advertised_page_url(
-            &response.body,
+            response,
             &latest,
             page,
             "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xwdt/gggs/"),
         )
-    })
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -209,7 +214,6 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     {
         return Err(invalid_list());
     }
-    let page = query.page.unwrap_or(1);
     let since = query
         .since
         .as_deref()
@@ -220,20 +224,34 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         .as_deref()
         .map(|raw| parse_iso_date(raw).ok_or_else(invalid_list))
         .transpose()?;
-    let (client, mut attribution) = bound_client(mode)?;
+    let (client, attribution) = bound_client(mode)?;
+    list_with_client(client, mode, query, since, until, attribution)
+}
+
+pub(crate) fn list_with_client(
+    client: ArchiveClient,
+    mode: CacheMode,
+    query: &ListQuery,
+    since: Option<String>,
+    until: Option<String>,
+    mut attribution: Value,
+) -> Result<Value, Error> {
+    let page = query.page.unwrap_or(1);
     bind_college_board(&client, MSE_ROOT_URL, MSE_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
-        let entries: Vec<&ListingEntry> = document.entries.iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
-        Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
-            "publisher":PUBLISHER,"college":"mse","category":"gggs","listing_label":"公告公示","page":page,
-            "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
-            "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
-            "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null","summaries":"source direct a/p excerpt; not original full text"},
-            "retrieval":retrieval(response)}))
-    })
+        let document = college_html(response)?;
+        Ok(parse_listing(&document, &target).map(|document| {
+            let entries: Vec<&ListingEntry> = document.entries.iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
+            json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
+                "publisher":PUBLISHER,"college":"mse","category":"gggs","listing_label":"公告公示","page":page,
+                "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
+                "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
+                "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null","summaries":"source direct a/p excerpt; not original full text"},
+                "retrieval":retrieval(response)})
+        }))
+    })?
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -259,19 +277,21 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, MSE_ROOT_URL, MSE_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Err(Error::new(
-                "unsupported",
-                "retained notice page does not declare the selected Mse article",
-            ));
-        }
-        Ok(retrieval(response))
-    })?;
+        let document = college_html(response)?;
+        Ok(parse_listing(&document, &source).and_then(|document| {
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Err(Error::new(
+                    "unsupported",
+                    "retained notice page does not declare the selected Mse article",
+                ));
+            }
+            Ok(retrieval(response))
+        }))
+    })??;
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
@@ -417,6 +437,58 @@ fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
         value["rows"] = Value::Array(source_rows);
         result.values.push(value);
     }
+    // HTML5 foster parenting can move table text to a sibling under this body.
+    // Page-layout cells outside the source body must not become text owners.
+    if !result.values.is_empty()
+        && body.descendants().any(|node| {
+            let Node::Text(text) = node.value() else {
+                return false;
+            };
+            if text.trim().is_empty() {
+                return false;
+            }
+            let mut cell_in_source_row = false;
+            for ancestor in node.ancestors().take_while(|node| node.id() != body.id()) {
+                let Some(element) = ancestor.value().as_element() else {
+                    continue;
+                };
+                match element.name() {
+                    "p" | "script" | "style" | "template" | "noscript" => return false,
+                    "a" if element.attr("href").is_some_and(super::is_document_href) => {
+                        return false;
+                    }
+                    "td" | "th" => {
+                        cell_in_source_row = cell_in_source_row
+                            || ancestor.parent().is_some_and(|parent| {
+                                parent
+                                    .value()
+                                    .as_element()
+                                    .is_some_and(|element| element.name() == "tr")
+                            });
+                    }
+                    "table" if cell_in_source_row => return false,
+                    "caption"
+                        if ancestor.parent().is_some_and(|parent| {
+                            parent
+                                .value()
+                                .as_element()
+                                .is_some_and(|element| element.name() == "table")
+                        }) =>
+                    {
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+            true
+        })
+    {
+        return Err(failed_contract(
+            "Mse table article text must belong to source paragraphs, cells, captions or document hints",
+            file!(),
+            line!(),
+        ));
+    }
     Ok(result)
 }
 
@@ -434,8 +506,27 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let headings = Selector::parse(":scope > div.art-tit > h3").map_err(|_| unavailable())?;
-    let mut headings = main.select(&headings);
+    let mut headers = main
+        .children()
+        .filter_map(scraper::ElementRef::wrap)
+        .filter(|node| {
+            node.value().name() == "div"
+                && node
+                    .value()
+                    .has_class("art-tit", scraper::CaseSensitivity::CaseSensitive)
+        });
+    let header = headers
+        .next()
+        .filter(|_| headers.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "Mse article requires one direct art-tit source header",
+                file!(),
+                line!(),
+            )
+        })?;
+    let headings = Selector::parse(":scope > h3").map_err(|_| unavailable())?;
+    let mut headings = header.select(&headings);
     let title = headings
         .next()
         .filter(|_| headings.next().is_none())
@@ -448,9 +539,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let dates =
-        Selector::parse(":scope > div.art-tit > p > span.date").map_err(|_| unavailable())?;
-    let mut dates = main.select(&dates);
+    let dates = Selector::parse(":scope > p > span.date").map_err(|_| unavailable())?;
+    let mut dates = header.select(&dates);
     let published_at = dates
         .next()
         .filter(|_| dates.next().is_none())
@@ -515,6 +605,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
 
 #[cfg(test)]
 mod tests {
+    use super::super::advertised_page_url_document;
     use super::*;
     use crate::net::{CacheStatus, Response};
     use sha2::{Digest, Sha256};
@@ -604,6 +695,53 @@ mod tests {
     }
 
     #[test]
+    fn mse_listing_uses_active_title_view_and_direct_source_facts() {
+        let inactive =
+            listing("<li><a href=\"../info/1061/99.htm\"><h3>Inactive view heading</h3></a></li>");
+        let active = listing(
+            "<li><a href=\"../info/1061/42.htm\"><template><h3>Inactive nested heading</h3><p>Inactive excerpt</p><span>2020.01.01</span></template><h3>Active source heading</h3><p>Active source excerpt</p><span>2026.09.21</span></a></li>",
+        );
+        let document = Html::parse_document(&format!(
+            "<template><title>Inactive document title</title>{}</template><title>Active document title</title>{}",
+            inactive.html(),
+            active.html()
+        ));
+        let parsed = parse_listing(&document, &Url::parse(MSE_NOTICES_URL).unwrap()).unwrap();
+        assert_eq!(parsed.title, "Active document title");
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].title, "Active source heading");
+        assert_eq!(
+            parsed.entries[0].summary.as_deref(),
+            Some("Active source excerpt")
+        );
+        assert_eq!(parsed.entries[0].date.as_deref(), Some("2026-09-21"));
+        assert_eq!(
+            parsed.entries[0].resolved_http_url.as_deref(),
+            Some("https://mse.buaa.edu.cn/info/1061/42.htm")
+        );
+    }
+
+    #[test]
+    fn mse_article_refuses_publication_metadata_from_a_separate_header() {
+        // Close the heading owner before opening a sibling publication owner.
+        let response = source(
+            concat!(
+                "<h3>Source heading</h3></div>",
+                "<div class=\"art-tit\"><p><span class=\"date\">",
+                "日期：2026年9月21日</span></p>",
+            ),
+            "<p>Original source paragraph.</p>",
+        );
+        let document = college_html(&response).unwrap();
+        let headers = Selector::parse("div.art-main > div.art-tit").unwrap();
+        assert_eq!(document.select(&headers).count(), 2);
+        assert_eq!(
+            normalize(&response, &document).unwrap_err().code,
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn mse_article_original_header_and_nonparagraph_table_content_stay_distinct() {
         let response = source(
             "<h3>Original article heading</h3><p><span class=\"date\">日期：2026年09月21日</span></p>",
@@ -684,6 +822,212 @@ mod tests {
     }
 
     #[test]
+    fn mse_tables_with_unfetched_attachments_remain_explicitly_partial() {
+        let response = source(
+            "<h3>Original table heading</h3>",
+            "<table><tr><td>Source cell <a href=\"material.pdf\">Declared material</a></td></tr></table>",
+        );
+        let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["attachments"]["found"], true);
+        assert_eq!(
+            output["attachments"]["hints"],
+            json!([{"href":"material.pdf","text":"Declared material"}])
+        );
+        assert_eq!(
+            output["body_tables"][0]["rows"][0]["cells"],
+            json!([{"header":false,"text":"Source cell Declared material"}])
+        );
+        assert_eq!(
+            output["completeness"]["missing_nonparagraph_content"],
+            "image text and attachment contents are not reconstructed or downloaded"
+        );
+    }
+
+    #[test]
+    fn mse_tables_preserve_whole_order_and_only_source_present_cells_and_spans() {
+        let response = source(
+            "<h3>Original table heading</h3>",
+            "<table><caption>First <b>source</b> caption</caption><tr><th rowspan=\"\">First header</th><td colspan=\"001\">Before <em>inline</em> after</td></tr><tr><td>Short row</td></tr></table><noscript><table><tr><td>Inactive fallback table</td></tr></table></noscript><table><tr><td rowspan=\"2\" colspan=\"3\">Last source cell<style>inactive style</style><template>inactive template</template><noscript>inactive fallback</noscript></td></tr></table>",
+        );
+        let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
+        assert_eq!(output["body_table_count"], 2);
+        assert_eq!(output["body_table_row_count"], 3);
+        assert_eq!(output["body_table_cell_count"], 4);
+        assert_eq!(
+            output["body_tables"],
+            json!([
+                {"source_order":1,"caption":"First source caption","rows":[
+                    {"cells":[{"header":true,"text":"First header","rowspan":""},{"header":false,"text":"Before inline after","colspan":"001"}]},
+                    {"cells":[{"header":false,"text":"Short row"}]}
+                ]},
+                {"source_order":2,"caption":null,"rows":[
+                    {"cells":[{"header":false,"text":"Last source cell","rowspan":"2","colspan":"3"}]}
+                ]}
+            ])
+        );
+    }
+
+    #[test]
+    fn mse_table_count_cell_text_caption_and_span_limits_refuse_overflow() {
+        for (bounded, overflow) in [
+            (
+                "<table><tr><td>x</td></tr></table>".repeat(MAX_ENTRIES),
+                "<table><tr><td>x</td></tr></table>".repeat(MAX_ENTRIES + 1),
+            ),
+            (
+                format!(
+                    "<table><tr>{}</tr></table>",
+                    "<td>x</td>".repeat(MAX_ENTRIES)
+                ),
+                format!(
+                    "<table><tr>{}</tr></table>",
+                    "<td>x</td>".repeat(MAX_ENTRIES + 1)
+                ),
+            ),
+            (
+                format!(
+                    "<table><tr><td>{}</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH)
+                ),
+                format!(
+                    "<table><tr><td>{}</td><td>y</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH)
+                ),
+            ),
+            (
+                format!(
+                    "<table><caption>{}</caption><tr><td>x</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH)
+                ),
+                format!(
+                    "<table><caption>{}</caption><tr><td>x</td></tr></table>",
+                    "x".repeat(MAX_PARAGRAPH + 1)
+                ),
+            ),
+            (
+                format!(
+                    "<table><tr><td rowspan=\"{}\" colspan=\"{}\">x</td></tr></table>",
+                    "0".repeat(MAX_TEXT),
+                    "1".repeat(MAX_TEXT)
+                ),
+                format!(
+                    "<table><tr><td rowspan=\"{}\">x</td></tr></table>",
+                    "0".repeat(MAX_TEXT + 1)
+                ),
+            ),
+            (
+                format!(
+                    "<table><tr><td colspan=\"{}\">x</td></tr></table>",
+                    "1".repeat(MAX_TEXT)
+                ),
+                format!(
+                    "<table><tr><td colspan=\"{}\">x</td></tr></table>",
+                    "1".repeat(MAX_TEXT + 1)
+                ),
+            ),
+        ] {
+            let response = source("<h3>Original table heading</h3>", &bounded);
+            assert_eq!(
+                normalize(&response, &college_html(&response).unwrap()).unwrap()["result"],
+                "full_text"
+            );
+            let response = source("<h3>Original table heading</h3>", &overflow);
+            assert_eq!(
+                normalize(&response, &college_html(&response).unwrap())
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn mse_table_rows_and_paragraphs_share_the_existing_block_budget() {
+        for (rows, accepted) in [
+            (MAX_BODY_PARAGRAPHS - 1, true),
+            (MAX_BODY_PARAGRAPHS, false),
+        ] {
+            let response = source(
+                "<h3>Original table heading</h3>",
+                &format!(
+                    "<p>Source paragraph.</p><table>{}</table>",
+                    "<tr><td>x</td></tr>".repeat(rows)
+                ),
+            );
+            let result = normalize(&response, &college_html(&response).unwrap());
+            if accepted {
+                let output = result.unwrap();
+                assert_eq!(output["body_table_row_count"], rows);
+                assert_eq!(output["body_paragraph_count"], 1);
+            } else {
+                assert_eq!(result.unwrap_err().code, "unavailable");
+            }
+        }
+    }
+
+    #[test]
+    fn mse_unowned_table_text_cannot_be_dropped_by_foster_parenting() {
+        let response = source(
+            "<h3>Original table heading</h3>",
+            "<table>Unowned source text<tr><td>Kept source cell</td></tr></table>",
+        );
+        let document = college_html(&response).unwrap();
+        assert_eq!(
+            normalize(&response, &document).unwrap_err().code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn mse_table_body_ownership_keeps_hints_without_borrowing_layout_cells() {
+        let linked = source(
+            "<h3>Original table heading</h3>",
+            "<table><caption>Source caption</caption><tr><td>Kept source cell</td></tr></table><p>Source paragraph.</p><a href='brief.pdf'>Document hint</a>",
+        );
+        let output = normalize(&linked, &college_html(&linked).unwrap()).unwrap();
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["body_paragraphs"], json!(["Source paragraph."]));
+        assert_eq!(output["body_tables"][0]["caption"], "Source caption");
+        assert_eq!(
+            output["body_tables"][0]["rows"][0]["cells"][0]["text"],
+            "Kept source cell"
+        );
+        assert_eq!(output["attachments"]["hints"][0]["text"], "Document hint");
+
+        let mut wrapped = source(
+            "<h3>Original table heading</h3>",
+            "<table>Unowned source text<tr><td>Kept source cell</td></tr></table>",
+        );
+        let html = String::from_utf8(wrapped.body).unwrap();
+        wrapped.body = format!("<table><tr><td>{html}</td></tr></table>").into_bytes();
+        wrapped.sha256 = format!("{:x}", Sha256::digest(&wrapped.body));
+        assert_eq!(
+            normalize(&wrapped, &college_html(&wrapped).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn mse_nested_or_empty_nontext_tables_do_not_fabricate_readable_content() {
+        for body in [
+            "<table><tr><td>Outer<table><tr><td>Nested source</td></tr></table></td></tr></table>",
+            "<table><tr><td><script>code only</script><template>inactive only</template><noscript>fallback only</noscript></td></tr></table>",
+            "<table><tr><td></td></tr></table>",
+        ] {
+            let response = source("<h3>Original table heading</h3>", body);
+            assert_eq!(
+                normalize(&response, &college_html(&response).unwrap())
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
     fn mse_table_row_budget_rejects_overflow_without_partial_success() {
         let bounded = source(
             "<h3>Original table heading</h3>",
@@ -719,9 +1063,11 @@ mod tests {
     #[test]
     fn mse_page_ordinal_uses_only_active_scoped_notice_pagination() {
         let base = Url::parse(MSE_NOTICES_URL).unwrap();
-        let html = br#"<div class="pagestyle"><span class="p_no"><a href="gggs/99.htm">2</a></span></div><div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><template><span class="p_no"><a href="gggs/98.htm">2</a></span></template><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#;
-        let selected = advertised_page_url(
-            html,
+        let html = Html::parse_document(
+            r#"<div class="pagestyle"><span class="p_no"><a href="gggs/99.htm">2</a></span></div><div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><template><span class="p_no"><a href="gggs/98.htm">2</a></span></template><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#,
+        );
+        let selected = advertised_page_url_document(
+            &html,
             &base,
             2,
             "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
@@ -730,8 +1076,8 @@ mod tests {
         .unwrap();
         assert_eq!(selected.as_str(), "https://mse.buaa.edu.cn/xwdt/gggs/8.htm");
         assert_eq!(
-            advertised_page_url(
-                html,
+            advertised_page_url_document(
+                &html,
                 &base,
                 3,
                 "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
