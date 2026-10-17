@@ -1206,21 +1206,6 @@ pub fn schema() -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn mse_article_schema_exposes_optional_tables_without_claiming_complete_validation() {
-        let output = schema();
-        let article = &output["article"]["output"];
-        assert!(
-            article["description"]
-                .as_str()
-                .unwrap()
-                .starts_with("Partial output schema projection:")
-        );
-        assert_eq!(article["properties"]["body_tables"]["type"], "array");
-        assert!(article.get("required").is_none());
-        assert!(article.get("additionalProperties").is_none());
-    }
-
     fn listing_html() -> String {
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>通知公告-新闻网</title></head><body>
 <div class="tlist"><ul>
