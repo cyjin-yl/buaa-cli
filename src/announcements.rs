@@ -12,7 +12,7 @@
 //! operator-asserted provenance, bound by SHA-256.
 
 use crate::html::{active_element_text, element_text, inert_element};
-use crate::net::{ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL};
+use crate::net::{ArchiveClient, CacheMode, Error, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{NaiveDate, NaiveDateTime};
 use scraper::{ElementRef, Html, Selector};
@@ -817,23 +817,10 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "aviation" {
         return aviation::surface(mode, page);
     }
-    let raw = match (college, page) {
-        ("scse", "root") => SCSE_ROOT_URL,
-        ("scse", "notices") => SCSE_NOTICES_URL,
-        _ => return Err(Error::new("invalid_input", "unknown college surface page")),
-    };
-    let url = Url::parse(raw).map_err(|_| unavailable())?;
-    let client = ArchiveClient::open_scse(mode)?;
-    let attribution = json!({"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","note":"the directory href is preserved; this command explicitly observes HTTPS separately"});
-    client.get(&url, false, |response| {
-        let document = college_html(response)?;
-        Ok(describe_college_surface(
-            response,
-            &document,
-            "computer_science",
-            attribution,
-        ))
-    })?
+    if college == "scse" {
+        return scse::surface(mode, page);
+    }
+    Err(Error::new("invalid_input", "unknown college surface page"))
 }
 
 pub(crate) fn college_html(response: &Response) -> Result<Html, Error> {

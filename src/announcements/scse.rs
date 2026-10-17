@@ -9,8 +9,8 @@ use super::{
     is_http, parse_iso_date, retrieval, source_html, unavailable,
 };
 use crate::net::{
-    ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, scse_document_path_allowed,
-    scse_path_allowed,
+    ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL,
+    scse_document_path_allowed, scse_path_allowed,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::NaiveDateTime;
@@ -21,6 +21,70 @@ use url::Url;
 pub(super) const PUBLISHER: &str = "北京航空航天大学计算机学院";
 
 mod viewer;
+
+fn source_mode(mode: CacheMode) -> CacheMode {
+    if mode == CacheMode::Revalidate {
+        CacheMode::PreferCache
+    } else {
+        mode
+    }
+}
+
+fn directory_attribution(directory: &Value) -> Result<Value, Error> {
+    let mut members = directory["entries"]
+        .as_array()
+        .ok_or_else(unavailable)?
+        .iter()
+        .filter(|member| {
+            member["name"] == "计算机学院"
+                && member["listed_href"].as_str() == Some("http://scse.buaa.edu.cn/")
+                && member["hidden_in_source"] == false
+        });
+    let member = members.next().ok_or_else(unavailable)?;
+    if members.next().is_some() {
+        return Err(unavailable());
+    }
+    Ok(json!({
+        "member": member,
+        "directory_retrieval": directory["retrieval"],
+        "reference_policy": "retained_authoritative_directory; refresh organizations list separately"
+    }))
+}
+
+fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
+    let directory = crate::organizations::list(source_mode(mode))?;
+    let attribution = directory_attribution(&directory)?;
+    Ok((ArchiveClient::open_scse(source_mode(mode))?, attribution))
+}
+
+fn bind_board(client: &ArchiveClient, attribution: &mut Value) -> Result<(), Error> {
+    let root = Url::parse(SCSE_ROOT_URL).map_err(|_| unavailable())?;
+    let board = Url::parse(SCSE_NOTICES_URL).map_err(|_| unavailable())?;
+    let root_source = client.get(&root, false, |response| {
+        college_html(response)?;
+        let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
+        if !Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?)
+            .select(&links)
+            .any(|node| {
+                !element_text(node).is_empty()
+                    && node.value().attr("href").is_some_and(|raw| {
+                        raw.len() <= MAX_HREF
+                            && !raw.chars().any(char::is_control)
+                            && !raw.contains(['%', '\\'])
+                            && root.join(raw).is_ok_and(|url| url == board)
+                    })
+            })
+        {
+            return Err(Error::new(
+                "unsupported",
+                "retained college root does not declare the reviewed notice board",
+            ));
+        }
+        Ok(retrieval(response))
+    })?;
+    attribution["root_retrieval"] = root_source;
+    Ok(())
+}
 
 fn plain_url(url: &Url, allow_http: bool) -> bool {
     (url.scheme() == "https" || (allow_http && url.scheme() == "http"))
@@ -146,12 +210,8 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         .map(|value| parse_iso_date(value).ok_or_else(invalid_list))
         .transpose()?;
     let latest = Url::parse(SCSE_NOTICES_URL).map_err(|_| unavailable())?;
-    let discovery_mode = if mode == CacheMode::Revalidate {
-        CacheMode::PreferCache
-    } else {
-        mode
-    };
-    let client = ArchiveClient::open_scse(discovery_mode)?;
+    let (client, mut attribution) = bound_client(mode)?;
+    bind_board(&client, &mut attribution)?;
     let target = if page == 1 {
         latest
     } else {
@@ -181,11 +241,31 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
             "publisher":PUBLISHER,"college":"scse","category":"gggs","listing_label":"公告公示","page":page,
             "filters":{"since":since,"until":until,"match":query.r#match},
             "document_title":document.title,"entries":entries,"entry_count":entries.len(),
+            "directory_attribution":attribution,
             "completeness":{"scope":"single_college_selected_page","pagination":"source_advertised_ordinal_only; no automatic traversal","other_colleges":"not_covered","dates":"source_year_and_month_day; missing stays null"},
             "retrieval":retrieval(response),
         }))
         })())
     })?
+}
+
+pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
+    let raw = match page {
+        "root" => SCSE_ROOT_URL,
+        "notices" => SCSE_NOTICES_URL,
+        _ => return Err(Error::new("invalid_input", "unknown college surface page")),
+    };
+    let url = Url::parse(raw).map_err(|_| unavailable())?;
+    let (client, mut attribution) = bound_client(mode)?;
+    if page == "notices" {
+        bind_board(&client, &mut attribution)?;
+    }
+    client.with_cache_mode(mode).get(&url, false, |response| {
+        let document = college_html(response)?;
+        let value =
+            super::describe_college_surface(response, &document, "computer_science", attribution)?;
+        Ok(value)
+    })
 }
 
 fn resolve_article(raw: &str) -> Result<Url, Error> {
@@ -201,11 +281,23 @@ fn resolve_article(raw: &str) -> Result<Url, Error> {
 
 pub(super) fn article(mode: CacheMode, raw: &str) -> Result<Value, Error> {
     let url = resolve_article(raw)?;
-    let client = ArchiveClient::open_scse(mode)?;
-    client.get(&url, false, |response| {
-        let document = college_html(response)?;
-        Ok(normalize_article_document(response, &document))
-    })?
+    let (client, attribution) = bound_client(mode)?;
+    article_with_client(client, mode, &url, attribution)
+}
+
+pub(super) fn article_with_client(
+    client: ArchiveClient,
+    mode: CacheMode,
+    url: &Url,
+    mut attribution: Value,
+) -> Result<Value, Error> {
+    bind_board(&client, &mut attribution)?;
+    client.with_cache_mode(mode).get(url, false, |response| {
+        normalize_article_document(response, &college_html(response)?).map(|mut value| {
+            value["directory_attribution"] = attribution;
+            value
+        })
+    })
 }
 
 fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
@@ -671,5 +763,20 @@ mod tests {
             normalize_article(&response(&intro)).unwrap()["result"],
             "partial_text"
         );
+    }
+
+    #[test]
+    fn hidden_or_ambiguous_directory_members_do_not_grant_egress() {
+        let member = json!({"name":"计算机学院","listed_href":"http://scse.buaa.edu.cn/","resolved_http_url":"https://scse.buaa.edu.cn/","hidden_in_source":false});
+        let mut hidden = member.clone();
+        hidden["hidden_in_source"] = json!(true);
+        for entries in [json!([hidden]), json!([member.clone(), member])] {
+            assert_eq!(
+                directory_attribution(&json!({"entries":entries}))
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+        }
     }
 }
