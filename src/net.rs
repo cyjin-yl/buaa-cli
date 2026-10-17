@@ -1943,6 +1943,91 @@ mod tests {
     }
 
     #[test]
+    fn rse_surface_layout_refusal_retains_exact_admitted_root() {
+        let fixture = Fixture::new();
+        let body = format!("<title>{}</title>", "x".repeat(513)).into_bytes();
+        let original = body.clone();
+        let server = Server::new(move |socket, request| {
+            assert!(request.starts_with("GET / HTTP/"));
+            reply(socket, 200, "Content-Type: text/html\r\n", &body);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Rse;
+        seed(&client, RSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        assert_eq!(
+            crate::announcements::rse::surface_with_client(
+                client,
+                CacheMode::PreferCache,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let mut offline = fixture.client(CacheMode::Offline, &server);
+        offline.profile = SourceProfile::Rse;
+        let retained = offline
+            .load(&Url::parse(RSE_ROOT_URL).unwrap())
+            .unwrap()
+            .unwrap()
+            .response;
+        assert_eq!(retained.body, original);
+        assert_eq!(retained.sha256, hash(&original));
+        assert_eq!(
+            crate::announcements::rse::surface_with_client(
+                offline,
+                CacheMode::Offline,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn rse_surface_empty_root_is_unadmitted_and_never_cached() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET / HTTP/"));
+            reply(socket, 200, "Content-Type: text/html\r\n", b"");
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Rse;
+        seed(&client, RSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        assert_eq!(
+            crate::announcements::rse::surface_with_client(
+                client,
+                CacheMode::PreferCache,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let mut offline = fixture.client(CacheMode::Offline, &server);
+        offline.profile = SourceProfile::Rse;
+        assert!(
+            offline
+                .load(&Url::parse(RSE_ROOT_URL).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            crate::announcements::rse::surface_with_client(
+                offline,
+                CacheMode::Offline,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "offline_miss"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
     fn college_ordinal_layout_and_surface_errors_retain_exact_originals() {
         let fixture = Fixture::new();
         let body = format!("<title>{}</title>", "x".repeat(513)).into_bytes();

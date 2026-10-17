@@ -30,6 +30,14 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         return Err(Error::new("invalid_input", "unknown college surface page"));
     }
     let (client, attribution) = bound_client(mode)?;
+    surface_with_client(client, mode, attribution)
+}
+
+pub(crate) fn surface_with_client(
+    client: ArchiveClient,
+    mode: CacheMode,
+    attribution: Value,
+) -> Result<Value, Error> {
     let target = Url::parse(RSE_ROOT_URL).map_err(|_| unavailable())?;
     client
         .with_cache_mode(mode)
