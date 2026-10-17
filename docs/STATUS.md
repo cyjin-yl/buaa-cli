@@ -1,5 +1,9 @@
 # Development status
 
+## 2026-10-17: Final behavioral gate after schema-test retirement
+
+At code head `d38ae9175a5b42c4d3ac20280d09a14afb6afd38`, remove the incidental description/wiring assertion rather than pinning schema wording as a permanent test. All production behavior and the emitted schema remain unchanged. The same independent108-owned native target passes **24 behavioral Mse cases**, locked offline build, strict all-target Clippy and format check. The earlier25-case gate below remains historical at its recorded code head. Do not replay completed original-source CLI commands or GETs: the unchanged production implementation reuses their whole independent models and preserved failures. Production governor bytes remain unchanged. A final108 review returned provider429 with no answer and is not a zero-finding verdict; Main's separate non-author source review, exact publication, native CI and formal maintainer approval remain distinct.
+
 ## 2026-10-17: Materials table-owner native proof
 
 After ordinary inheritance of final PR106, the foster-parenting candidate was observed rather than assumed: exactly one consumer failed101 because the parser returned full text with only the kept cell. The locked native HTML parser separately placed one19-byte unowned text node directly under the article body. The Mse-only owner fence now stops ancestry at that body and rejects lost text; the identical consumer passes0. Supported paragraph/cell/caption/document-hint owners remain valid, while an external page-layout cell cannot lend ownership. This is a real red/green correction, not preparation-only or an oracle change. No global text/inert policy, HTML repair, input exception or source data was modified.

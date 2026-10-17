@@ -602,6 +602,22 @@
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "mse_table_text_slice": {
+          "final_behavioral_gate_after_test_retirement_20261017": {
+            "code_proof_head": "d38ae9175a5b42c4d3ac20280d09a14afb6afd38",
+            "prior_local_head": "925f06d3510deee46fb794c0b7b4384a0fd760ea",
+            "change": "Delete the incidental schema-description/wiring assertion without a replacement wording test. Production behavior, emitted schema and all retained original-source models are unchanged; the earlier25-case gate remains historical at its recorded code head.",
+            "focused_behavior_cases_passed": 24,
+            "focused_behavior_cases_failed": 0,
+            "locked_offline_build_exit": 0,
+            "strict_all_target_clippy_exit": 0,
+            "format_check_exit": 0,
+            "native_target": "Same independent worktree-owned108 target; no copied or shared artifacts.",
+            "production_governor_whole_bytes_unchanged": true,
+            "original_source_commands_replayed": false,
+            "new_campus_requests": 0,
+            "private_receipt": 467,
+            "review_boundary": "A final108 source review returned provider usage_limit_reached429 without an answer; no retry or substitute zero-finding verdict. Main performs a separate non-author source/delta review. Neither is formal platform approval, native CI, rights certification or merge authority."
+          },
           "native_table_ownership_gate_20261017": {
             "code_proof_head": "1b3fa8974ef2100ab37ecf01bf1cd68795270fb8",
             "ordinary_final_PR106_head": "ddc4da4e1ebd84a620f5b89a0af7c0789a4def11",
