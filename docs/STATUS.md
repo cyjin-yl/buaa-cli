@@ -1,5 +1,11 @@
 # Development status
 
+## Electronic Information Engineering source frontier
+
+The official directory snapshot binds visible member13 电子信息工程学院 under 信息学科群 with exact literal/resolved `http://www.ee.buaa.edu.cn/`. Public read-only reconnaissance found the root-declared `/index/tzgg.htm` 通知公告 board, source-advertised `pb_sys_common` pagination, canonical `/info/1062/` article links, and the bounded selectors retained by the adapter (`ul.news-ul > li`, direct row `a`/`span`, and the direct `article-tt`/`article-sm`/`vsb_content` structure). This is source-contract discovery only; raw HTTP bytes and personal notice text are not committed.
+
+The selected HTTPS candidate `https://www.ee.buaa.edu.cn/` is currently blocked before source admission: certificate SAN/hostname validation reports no alternative certificate subject name for `www.ee.buaa.edu.cn`; a separately probed canonical `ee.buaa.edu.cn` TLS handshake ended unexpectedly. Plain HTTP is not used as a fallback and no TLS verification is disabled. The adapter therefore truthfully exposes `college-source ee root|notices` as `surface_blocked` with `fallback_reason.code=tls_transport_blocked`, preserves the exact HTTP directory attribution and selected HTTPS candidate, and rejects EE listing/article reads as unsupported before transport. No board/article content, all-college/history/attachment coverage or online capability is claimed until a validated HTTPS source is available.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.
