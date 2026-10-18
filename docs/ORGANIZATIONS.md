@@ -35,11 +35,13 @@ Each result preserves:
 - link kind: `http`, `https`, `missing`, `non_http`, or `invalid`;
 - whether the source anchor is hidden by its class/inline style.
 
-No missing URL is reconstructed. A `javascript:void(0)` link remains non-HTTP. Plain HTTP links are not silently upgraded to HTTPS. Hidden entries still present in the official HTML are returned and marked. A combined source label remains one directory entry rather than being split into institutions the source did not separately link.
+No missing URL is reconstructed. A `javascript:void(0)` link remains non-HTTP. Plain HTTP links are not silently upgraded to HTTPS. Hidden entries still present in active source HTML are returned and marked. Script/style/template/noscript groups, headings and member declarations cannot supply college identity; their inline label payloads are excluded using the same active-text walk as announcement sources. A combined active source label remains one directory entry rather than being split into institutions the source did not separately link.
+
+The materials-college source preserves visible member1 材料科学与工程学院 and exact literal/resolved `http://mse.buaa.edu.cn/`. Its source command deliberately selects `https://mse.buaa.edu.cn/` as a separate HTTPS observation, following the explicit computer-college precedent. Output retains the original member/directory retrieval and records `selected_https_root` plus `selection_relation`; it does not assert that the directory declared HTTPS, that the protocols serve identical resources, or that an inferred alias grants admission. Source order1 is not an academic school code. The selected HTTPS root must separately declare a board, and its retained board must declare a selected original; the organization command itself follows neither.
 
 The parser requires the official directory structure, bounds the HTML to 2 MiB, accepts UTF-8 only, and rejects duplicate categories, empty/control-bearing labels or more than 64 categories/512 entries. A site redesign fails as unavailable instead of returning plausible partial data.
 
-Completeness means every anchor inside every recognized organization box in the captured official directory document. It does **not** claim that the document names every university unit, that every linked site is reachable/current, or that hidden/unlinked institutes have no other official page.
+Completeness means every active anchor inside every active recognized organization box in the captured official directory document. Inactive declarations are not visible-member authority. It does **not** claim that the document names every university unit, that every linked site is reachable/current, or that hidden/unlinked institutes have no other official page.
 
 ## Governed observation evidence
 
