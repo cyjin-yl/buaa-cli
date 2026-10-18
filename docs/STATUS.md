@@ -1,5 +1,13 @@
 # Development status
 
+## Directory-bound Wrj无人系统研究院 notices
+
+Owned `work/wrj-adapter` adds the directory-bound `wrj` capability for 北京航空航天大学无人系统研究院. The retained official-directory snapshot identifies visible member10 under 航空航天学科群 with exact literal `http://wrj.buaa.edu.cn` and resolved `http://wrj.buaa.edu.cn/`; the source order is not an academic-unit code. The selected HTTPS root `https://wrj.buaa.edu.cn/` is a deliberate separate observation, not an HTTP upgrade, alias or protocol-equivalence assertion.
+
+Proxy reconnaissance selected the root-declared `https://wrj.buaa.edu.cn/xwgg/tzgg.htm` 通知公告 board. Its current source layout is one scoped `div.main > div.w90 > div.main-right > div.content > div.txt-list > ul` view, with direct `li > a.line1` title links and `li > span` `YYYY-MM-DD` dates; its pagination control is the scoped `div.pb_sys_common span.p_no` declaration. The selected board declares category-1008 article `/info/1008/3067.htm`. Its article contract is one active `_newscontent_fromname` form, direct `h3.title`, one `art-itro` `发布时间：YYYY-MM-DD` span, and one scoped `article > [id^=vsb_content_] > .v_news_content` body. Active JSP attachment links remain unfetched hints; image/table/attachment content is reported as `partial_text`, not reconstructed.
+
+The adapter preserves source order, inclusive date/title filtering, source-advertised pagination only, exact directory identity, root-declared board binding, selected-only article reads and the shared governor/cache. Foreign, query-bearing, credential-bearing, noncanonical or undeclared URLs fail before transport. Raw public reconnaissance originals are not committed; governed native/cache proof and exact-head integration remain separate gates.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

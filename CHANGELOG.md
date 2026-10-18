@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory/root/list-bound 无人系统研究院 notices (`college=wrj`, `category=tzgg`): bind the exact official-directory HTTP identity and separately selected HTTPS root, require the root-declared `xwgg/tzgg.htm` board, preserve source-ordered direct title/date rows, and read only board-declared category-1008 articles. Use the reviewed Visual SiteBuilder selectors (`txt-list`/`line1`, `art-itro`, scoped `v_news_content`), source-advertised pagination and shared date/title filters; keep attachments, images and table text as unfetched/partial content. Foreign, query-bearing, credential-bearing, noncanonical and undeclared URLs fail before transport; no guessed routes, complete history, attachment download, OCR, campus write or deployment claim.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.

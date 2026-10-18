@@ -664,6 +664,24 @@
           },
           "limits": "Root and board64 hints/truncated=true are not exhaustive discovery. Retained board advertises no later ordinal; page2/source_page2 stay unavailable, never guessed. JSP links are unfetched hints, not downloaded documents. No table/image reconstruction, OCR, complete current/history/all-college or campus-write claim. Missing history remains missing; full non-VPN goal stays active. Final discovery/source-check/local-UI proof is recorded separately from platform approval."
         },
+        "wrj_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "local-source-observed-implementation",
+          "stack_base": "Owned work/wrj-adapter starts at origin/main 13b9cbb; no issue/PR, push, approval, merge, root-main or deployment claim.",
+          "commands": "announcements college-source wrj [root|notices]; announcements list with college=wrj, category=tzgg; announcements article for a selected retained-board-declared canonical /info/1008/<id>.htm original. Default offline; explicit online/refresh uses the same production governor, cache-first authority discovery and selected-only refresh.",
+          "authority": "Visible official-directory member10 无人系统研究院 under 航空航天学科群; exact literal http://wrj.buaa.edu.cn and resolved http://wrj.buaa.edu.cn/. Selected https://wrj.buaa.edu.cn/ is explicitly separate, not an upgrade, alias or verified protocol equivalent.",
+          "source_contract": "Root-declared xwgg/tzgg.htm is the 通知公告 board. The retained board uses one main/w90/main-right/content/txt-list view with direct line1 title links and YYYY-MM-DD spans; source pagination is scoped to pb_sys_common/p_no. The selected article category is 1008 with one _newscontent_fromname form, direct h3.title, art-itro 发布时间：YYYY-MM-DD and one article/vsb_content/v_news_content body. JSP attachment links, images and tables remain unfetched or partial.",
+          "reconnaissance": {
+            "method": "bounded public proxy reconnaissance only; raw originals are not committed",
+            "root": {"url":"https://wrj.buaa.edu.cn/","http_status":200,"byte_length":52570,"sha256":"fd067bc801f57bbd1d7b505670cb20433b12d414f282b285bceee3f51d30d0fe"},
+            "board": {"url":"https://wrj.buaa.edu.cn/xwgg/tzgg.htm","http_status":200,"byte_length":19623,"sha256":"923515b5a18f42ad5736e02924c8873fe25c78665f929ce63a1679f705125b12"},
+            "article": {"url":"https://wrj.buaa.edu.cn/info/1008/3067.htm","http_status":200,"byte_length":26789,"sha256":"7433b8ec39233c9dd0330d070b600414edc09cab7997c0966f96e164e50f0014"},
+            "governor_receipt": "No governed native/cache receipt is claimed by this reconnaissance field; parent acceptance must retain the production governor lease through response validation and cache persistence before claiming online proof."
+          },
+          "implementation": "src/announcements/wrj.rs plus the Wrj net profile/path allow-list, list/article/surface dispatch, help/schema route and synthetic parser regressions. Foreign, query-bearing, credential-bearing, noncanonical and undeclared URLs fail before transport.",
+          "limits": "One current notice board and one selected declared original are observed; no later-page live read, complete history, all-college/faculty coverage, attachment bytes, image/OCR/table reconstruction, publisher/security/rights certificate, campus write or deployment claim."
+        },
         "rse_root_slice": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/109",
           "status": "root-metadata-observed-notices-blocked",
