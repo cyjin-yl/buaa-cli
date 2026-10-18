@@ -151,6 +151,9 @@ const SOFT_ROBOTS_URL: &str = "https://soft.buaa.edu.cn/robots.txt";
 pub(crate) const TRANSPORTATION_ROOT_URL: &str = "https://transportation.buaa.edu.cn/";
 pub(crate) const TRANSPORTATION_NOTICES_URL: &str = "https://transportation.buaa.edu.cn/xwdt/gggs.htm";
 const TRANSPORTATION_ROBOTS_URL: &str = "https://transportation.buaa.edu.cn/robots.txt";
+pub(crate) const PHYSICS_ROOT_URL: &str = "https://physics.buaa.edu.cn/";
+pub(crate) const PHYSICS_NOTICES_URL: &str = "https://physics.buaa.edu.cn/index/tzgg.htm";
+const PHYSICS_ROBOTS_URL: &str = "https://physics.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -180,6 +183,12 @@ pub(crate) fn transportation_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") { return true; }
     path.strip_prefix("/xwdt/gggs/").or_else(|| path.strip_prefix("/info/1058/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
+pub(crate) fn physics_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1252/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -384,6 +393,7 @@ enum SourceProfile {
     Math,
     Soft,
     Transportation,
+    Physics,
 }
 
 impl SourceProfile {
@@ -407,6 +417,7 @@ impl SourceProfile {
             Self::Math => MATH_ROBOTS_URL,
             Self::Soft => SOFT_ROBOTS_URL,
             Self::Transportation => TRANSPORTATION_ROBOTS_URL,
+            Self::Physics => PHYSICS_ROBOTS_URL,
         }
     }
 
@@ -430,6 +441,7 @@ impl SourceProfile {
             Self::Math => ".buaa-cli-math-cache",
             Self::Soft => ".buaa-cli-soft-cache",
             Self::Transportation => ".buaa-cli-transportation-cache",
+            Self::Physics => ".buaa-cli-physics-cache",
         }
     }
 
@@ -526,6 +538,10 @@ impl SourceProfile {
             }
             Self::Transportation => {
                 url.host_str() == Some("transportation.buaa.edu.cn") && url.query().is_none() && transportation_path_allowed(url.path())
+            Self::Physics => {
+                url.host_str() == Some("physics.buaa.edu.cn")
+                    && url.query().is_none()
+                    && physics_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -754,6 +770,8 @@ impl ArchiveClient {
 
     pub(crate) fn open_transportation(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Transportation)
+    pub(crate) fn open_physics(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Physics)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
