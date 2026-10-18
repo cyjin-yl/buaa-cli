@@ -169,9 +169,16 @@ const ASE_ROBOTS_URL: &str = "https://ase.buaa.edu.cn/robots.txt";
 
 pub(crate) fn ase_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/zhxw/tzgg.htm") { return true; }
-    path.strip_prefix("/zhxw/tzgg/")
-        .or_else(|| path.strip_prefix("/info/1052/"))
-        .or_else(|| path.strip_prefix("/info/1285/"))
+    path.strip_prefix("/zhxw/tzgg/").or_else(|| path.strip_prefix("/info/1052/")).or_else(|| path.strip_prefix("/info/1285/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+pub(crate) const HSS_ROOT_URL: &str = "http://www.hss.buaa.edu.cn/";
+pub(crate) const HSS_NOTICES_URL: &str = "http://www.hss.buaa.edu.cn/xwzx1/tzgg.htm";
+const HSS_ROBOTS_URL: &str = "http://www.hss.buaa.edu.cn/robots.txt";
+
+pub(crate) fn hss_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwzx1/tzgg.htm") { return true; }
+    path.strip_prefix("/xwzx1/tzgg/").or_else(|| path.strip_prefix("/info/1103/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -511,6 +518,7 @@ enum SourceProfile {
     Yqgdxy,
     Ase,
     Sa,
+    Hss,
 }
 
 impl SourceProfile {
@@ -544,6 +552,7 @@ impl SourceProfile {
             Self::Yqgdxy => YQGDXY_ROBOTS_URL,
             Self::Ase => ASE_ROBOTS_URL,
             Self::Sa => SA_ROBOTS_URL,
+            Self::Hss => HSS_ROBOTS_URL,
         }
     }
 
@@ -577,12 +586,17 @@ impl SourceProfile {
             Self::Yqgdxy => ".buaa-cli-yqgdxy-cache",
             Self::Ase => ".buaa-cli-ase-cache",
             Self::Sa => ".buaa-cli-sa-cache",
+            Self::Hss => ".buaa-cli-hss-cache",
         }
     }
 
     fn validate_url(self, url: &Url) -> Result<(), Error> {
+        let scheme_invalid = match self {
+            Self::Hss => url.scheme() != "http",
+            _ => url.scheme() != "https",
+        };
         let common_invalid = url.as_str().len() > MAX_URL
-            || url.scheme() != "https"
+            || scheme_invalid
             || !url.username().is_empty()
             || url.password().is_some()
             || url.port().is_some()
@@ -703,6 +717,9 @@ impl SourceProfile {
             }
             Self::Sa => {
                 url.host_str() == Some("www.sa.buaa.edu.cn") && url.query().is_none() && sa_path_allowed(url.path())
+            }
+            Self::Hss => {
+                url.host_str() == Some("www.hss.buaa.edu.cn") && hss_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -973,6 +990,10 @@ impl ArchiveClient {
         Self::open_profile(mode, SourceProfile::Sa)
     }
 
+    pub(crate) fn open_hss(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Hss)
+    }
+
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
         let home = governor::identity_home().map_err(|_| cache_error())?;
         let _home = governor::open_directory(&home, false, false).map_err(|_| cache_error())?;
@@ -1084,9 +1105,17 @@ impl ArchiveClient {
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10));
         #[cfg(not(test))]
-        let builder = builder.https_only(true);
+        let builder = if self.profile == SourceProfile::Hss {
+            builder
+        } else {
+            builder.https_only(true)
+        };
         #[cfg(test)]
-        let builder = builder.https_only(self.test_route.is_none());
+        let builder = if self.profile == SourceProfile::Hss {
+            builder
+        } else {
+            builder.https_only(self.test_route.is_none())
+        };
         builder.build().map_err(|_| {
             Error::new(
                 "transport_unavailable",

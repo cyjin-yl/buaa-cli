@@ -24,6 +24,7 @@ pub(crate) mod aviation;
 pub(crate) mod beijing;
 pub(crate) mod fld;
 pub(crate) mod h3i;
+pub(crate) mod hss;
 pub(crate) mod ic;
 pub(crate) mod iiif;
 pub(crate) mod math;
@@ -156,7 +157,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld, ME, Wrj, Yqgdxy and ASE source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, HSS, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld, ME, Wrj, Yqgdxy and ASE source binding",
     )
 }
 
@@ -765,6 +766,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("wrj") => return wrj::list(mode, &query),
         Some("yqgdxy") => return yqgdxy::list(mode, &query),
         Some("ase") => return ase::list(mode, &query),
+        Some("hss") => return hss::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -912,6 +914,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("ase.buaa.edu.cn") => {
             return ase::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("www.hss.buaa.edu.cn") => {
+            return hss::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -996,6 +1001,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "ase" {
         return ase::surface(mode, page);
+    }
+    if college == "hss" {
+        return hss::surface(mode, page);
     }
     if college == "sa" {
         return sa::surface(mode, page);
@@ -1098,6 +1106,7 @@ fn describe_college_surface(
             | "wrj"
             | "yqgdxy"
             | "ase"
+            | "hss"
             | "sa"
     ) {
         college_html(response)?
@@ -1588,6 +1597,27 @@ pub fn schema() -> Value {
     );
     output["college_source"]["input"]["description"] = json!(
         "Fixed public pages for reviewed directory-bound college sources, including Astronautics. Source roots must declare selected notice boards; college-source sa root is root/robots-only while the selected HTTPS endpoint remains explicitly blocked by certificate-host mismatch, with no HTTP fallback or guessed notice route."
+    );
+    output["college_source"]["input"]["description"] = json!(
+        "Fixed public pages for reviewed directory-bound college sources, including Humanities and Social Sciences. HSS preserves the exact literal HTTP www.hss.buaa.edu.cn identity and root-declared xwzx1/tzgg.htm board; no HTTPS upgrade, asset download or inferred route is claimed."
+    );
+    output["list"]["input"]["properties"]["college"]["enum"] = json!([
+        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "zfai", "iiif", "mse",
+        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
+        "me", "wrj", "yqgdxy", "ase", Value::Null
+    ]);
+    output["list"]["input"]["allOf"]
+        .as_array_mut()
+        .expect("announcement list schema allOf")
+        .push(json!({
+            "if":{"required":["college"],"properties":{"college":{"const":"hss"}}},
+            "then":{"properties":{"category":{"enum":["tzgg",null]}}}
+        }));
+    output["article"]["input"]["description"] = json!(
+        "Reviewed HSS article URLs are literal HTTP www.hss.buaa.edu.cn/info/1103/<digits>.htm originals declared by xwzx1/tzgg.htm; source_page defaults to 1 and selects only source-advertised ordinals. No HTTPS upgrade or inferred route."
+    );
+    output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
+        r"^(?:https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/[0-9]{1,10}|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008|yqgdxy[.]buaa[.]edu[.]cn/info/1053|ase[.]buaa[.]edu[.]cn/info/(1052|1285))/[0-9]{1,10}[.]htm$|^http://www[.]hss[.]buaa[.]edu[.]cn/info/1103/[0-9]{1,10}[.]htm$)"
     );
     output
 }
