@@ -1,4 +1,10 @@
-# Development status
+## Development status
+
+## Directory-bound Chemistry college news
+
+The Chemistry adapter binds the non-hidden official-directory member `化学学院` at the exact listed/resolved HTTP root `http://sce.buaa.edu.cn/` and deliberately observes the HTTPS root separately. The retained root declares the active `xwzx/xyxw.htm` 学院新闻 board; the adapter does not infer the adjacent notification, research or student routes. Listing rows are the source-ordered direct rows under one active `.fy-list > ul`, with direct `YYYY-MM-DD` date spans and article anchors. Later pages are selected only when the retained pager advertises the requested board path; no ordinal traversal or guessed URL is used.
+
+Article admission is restricted to HTTPS `sce.buaa.edu.cn/info/1013/<digits>.htm` URLs declared by the selected board. The parser binds one `.c-content` title, one `.other-s` 发布日期 marker and one scoped `#vsb_content .v_news_content` body. Active paragraphs are retained with shared budgets; image-bearing text is `partial_text`, while image-only content remains unavailable. Foreign, credential-bearing, query, fragment and unreviewed paths fail before transport. Root/list/article/surface reads use the shared governor/cache profile; no attachment or image bytes are fetched.
 
 ## Directory-bound Sepe energy notices
 

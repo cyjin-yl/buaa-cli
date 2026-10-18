@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory/root/list-bound Chemistry-college news (`college=sce`, `category=xyxw`) for the root-declared `xwzx/xyxw.htm` board. Preserve exact listed HTTP identity and deliberate HTTPS observation, source row order and direct ISO dates; select only retained pager-declared board paths. Bind article title/date/body to the observed `.c-content`/`v_news_content` layout, keep image-bearing text partial and image-only bodies unavailable, and reject foreign/query/credential/unreviewed routes before transport. Add the shared Sce cache profile, CLI help/schema/dispatch and bounded synthetic parser tests; no image or attachment download, guessed route, history or all-college claim.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
