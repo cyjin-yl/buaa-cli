@@ -142,6 +142,37 @@ const RSE_ROBOTS_URL: &str = "https://rse.buaa.edu.cn/robots.txt";
 pub(crate) const SEPE_ROOT_URL: &str = "https://sepe.buaa.edu.cn/";
 pub(crate) const SEPE_NOTICES_URL: &str = "https://sepe.buaa.edu.cn/xwdt/gggs.htm";
 const SEPE_ROBOTS_URL: &str = "https://sepe.buaa.edu.cn/robots.txt";
+pub(crate) const ME_ROOT_URL: &str = "https://www.me.buaa.edu.cn/";
+pub(crate) const ME_NOTICES_URL: &str = "https://www.me.buaa.edu.cn/xyxw.htm";
+const ME_ROBOTS_URL: &str = "https://www.me.buaa.edu.cn/robots.txt";
+
+pub(crate) fn me_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xyxw.htm" | "/xszx.htm") {
+        return true;
+    }
+    for prefix in ["/xyxw/", "/xszx/"] {
+        if let Some(page) = path
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(".htm"))
+        {
+            return !page.is_empty()
+                && page.len() <= 10
+                && page.bytes().all(|byte| byte.is_ascii_digit());
+        }
+    }
+    let Some(tail) = path
+        .strip_prefix("/info/")
+        .and_then(|value| value.strip_suffix(".htm"))
+    else {
+        return false;
+    };
+    tail.split_once('/').is_some_and(|(category, id)| {
+        matches!(category, "1126" | "1128")
+            && !id.is_empty()
+            && id.len() <= 10
+            && id.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -352,6 +383,7 @@ enum SourceProfile {
     Mse,
     Rse,
     Sepe,
+    Me,
 }
 
 impl SourceProfile {
@@ -372,6 +404,7 @@ impl SourceProfile {
             Self::Mse => MSE_ROBOTS_URL,
             Self::Rse => RSE_ROBOTS_URL,
             Self::Sepe => SEPE_ROBOTS_URL,
+            Self::Me => ME_ROBOTS_URL,
         }
     }
 
@@ -392,6 +425,7 @@ impl SourceProfile {
             Self::Mse => ".buaa-cli-mse-cache",
             Self::Rse => ".buaa-cli-rse-cache",
             Self::Sepe => ".buaa-cli-sepe-cache",
+            Self::Me => ".buaa-cli-me-cache",
         }
     }
 
@@ -479,6 +513,11 @@ impl SourceProfile {
                 url.host_str() == Some("sepe.buaa.edu.cn")
                     && url.query().is_none()
                     && sepe_path_allowed(url.path())
+            }
+            Self::Me => {
+                url.host_str() == Some("www.me.buaa.edu.cn")
+                    && url.query().is_none()
+                    && me_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -695,6 +734,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_sepe(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sepe)
+    }
+
+    pub(crate) fn open_me(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Me)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -1679,6 +1722,32 @@ mod tests {
 
     fn seed_robots(client: &ArchiveClient) {
         seed(client, ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+    }
+
+    #[test]
+    fn me_profile_allows_only_reviewed_https_paths() {
+        for path in [
+            "/",
+            "/robots.txt",
+            "/xyxw.htm",
+            "/xyxw/55.htm",
+            "/xszx.htm",
+            "/xszx/17.htm",
+            "/info/1126/9340.htm",
+            "/info/1128/9011.htm",
+        ] {
+            let url = Url::parse(&format!("https://www.me.buaa.edu.cn{path}")).unwrap();
+            assert!(SourceProfile::Me.validate_url(&url).is_ok(), "{path}");
+        }
+        for raw in [
+            "http://www.me.buaa.edu.cn/xyxw.htm",
+            "https://www.me.buaa.edu.cn/info/1131/9388.htm",
+            "https://www.me.buaa.edu.cn/xyxw/2.htm?x=1",
+            "https://foreign.example/info/1126/42.htm",
+        ] {
+            let url = Url::parse(raw).unwrap();
+            assert!(SourceProfile::Me.validate_url(&url).is_err(), "{raw}");
+        }
     }
 
     fn seed_spoc_html(client: &ArchiveClient, body: &[u8]) {

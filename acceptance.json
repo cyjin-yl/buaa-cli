@@ -605,6 +605,14 @@
         "https://news.buaa.edu.cn/zhxw.htm"
       ],
       "evidence": {
+        "me_slice": {
+          "status": "surface-only-tls-blocked",
+          "implementation": ["src/announcements/me.rs", "src/net.rs"],
+          "authority": "Official directory preserves the exact listed/resolved HTTP member http://www.me.buaa.edu.cn/ for 机械工程及自动化学院. Public reconnaissance identified root-declared xyxw.htm 学院新闻 (/info/1126/) and xszx.htm 学术资讯 (/info/1128/) boards; source selectors and advertised pager boundaries are retained in the surface contract.",
+          "blocker": "HTTPS www.me.buaa.edu.cn certificate names do not match the requested hostname; canonical me.buaa.edu.cn TLS ended unexpectedly. No plaintext HTTP fallback or TLS bypass is permitted.",
+          "commands": "announcements college-source me root|notices [--online|--refresh] returns a structured surface_blocked fallback; college=me list/article refuse before transport.",
+          "limits": "No HTTPS source bytes, listing/article text, attachments, history or complete coverage is claimed until a validated HTTPS observation is available."
+        },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
           "issue": null,

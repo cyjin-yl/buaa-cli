@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add the directory-bound Mechanical Engineering and Automation source (`college=me`) with exact `http://www.me.buaa.edu.cn/` attribution and a separate HTTPS candidate. Public reconnaissance identifies the source-declared `xyxw.htm` (学院新闻, `/info/1126/`) and `xszx.htm` (学术资讯, `/info/1128/`) boards, but the HTTPS certificate/host validation is currently blocked; `college-source me root|notices` returns a structured surface blocker and list/article refuse before transport. Plain HTTP fallback, guessed pagination/article reads and TLS bypasses remain disabled.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
