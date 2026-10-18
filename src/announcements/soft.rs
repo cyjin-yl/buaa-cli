@@ -42,12 +42,8 @@ fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
         mode
     };
     let directory = crate::organizations::list(source_mode)?;
-    let mut attribution = college_directory_attribution(
-        &directory,
-        "软件学院",
-        LISTED_ROOT_URL,
-        LISTED_ROOT_URL,
-    )?;
+    let mut attribution =
+        college_directory_attribution(&directory, "软件学院", LISTED_ROOT_URL, LISTED_ROOT_URL)?;
     attribution["selected_https_root"] = SOFT_ROOT_URL.into();
     attribution["selection_relation"] = "deliberate separate HTTPS observation; the exact listed HTTP identity and original directory provenance are preserved, not upgraded or aliased".into();
     Ok((ArchiveClient::open_soft(source_mode)?, attribution))
@@ -124,37 +120,39 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     let (client, mut attribution) = bound_client(mode)?;
     bind_source(&client, &mut attribution)?;
     let target = listing_url(&client, page)?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_notice_list(&college_html(response)?, &target)?;
-        let entries: Vec<_> = document
-            .entries
-            .iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
-            .collect();
-        Ok(json!({
-            "schema_version":1,
-            "type":"announcements_list",
-            "result":"listing_snapshot",
-            "publisher":PUBLISHER,
-            "college":"soft",
-            "category":"tzgg",
-            "listing_label":"通知公告",
-            "page":page,
-            "document_title":document.title,
-            "filters":{"since":since,"until":until,"match":query.r#match},
-            "entries":entries,
-            "entry_count":entries.len(),
-            "directory_attribution":attribution,
-            "completeness":{
-                "scope":"single_college_selected_page",
-                "pagination":"source_advertised_ordinal_only; no automatic traversal",
-                "other_colleges":"not_covered",
-                "dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null",
-                "summaries":"source direct a/p excerpt; not original full text"
-            },
-            "retrieval":retrieval(response)
-        }))
-    })
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let document = parse_notice_list(&college_html(response)?, &target)?;
+            let entries: Vec<_> = document
+                .entries
+                .iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
+                .collect();
+            Ok(json!({
+                "schema_version":1,
+                "type":"announcements_list",
+                "result":"listing_snapshot",
+                "publisher":PUBLISHER,
+                "college":"soft",
+                "category":"tzgg",
+                "listing_label":"通知公告",
+                "page":page,
+                "document_title":document.title,
+                "filters":{"since":since,"until":until,"match":query.r#match},
+                "entries":entries,
+                "entry_count":entries.len(),
+                "directory_attribution":attribution,
+                "completeness":{
+                    "scope":"single_college_selected_page",
+                    "pagination":"source_advertised_ordinal_only; no automatic traversal",
+                    "other_colleges":"not_covered",
+                    "dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null",
+                    "summaries":"source direct a/p excerpt; not original full text"
+                },
+                "retrieval":retrieval(response)
+            }))
+        })
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -275,9 +273,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     output["completeness"]["body_source"] = json!(
         "unique art-main/art-body-box/art-body/#vsb_content/v_news_content paragraphs; executable and fallback text excluded"
     );
-    output["completeness"]["attachment_source"] = json!(
-        "active source-declared JSP file links within art-main; hints only, never fetched"
-    );
+    output["completeness"]["attachment_source"] =
+        json!("active source-declared JSP file links within art-main; hints only, never fetched");
     output["completeness"]["image_content_present"] = json!(has_images);
     output["completeness"]["unextracted_table_count"] = json!(table_count);
     if attachments_found || has_images || table_count != 0 {
@@ -339,11 +336,8 @@ mod tests {
             "<p>Body.</p>",
             "",
         );
-        let output = normalize(
-            &ambiguous_header,
-            &college_html(&ambiguous_header).unwrap(),
-        )
-        .unwrap();
+        let output =
+            normalize(&ambiguous_header, &college_html(&ambiguous_header).unwrap()).unwrap();
         assert_eq!(output["published_at"], Value::Null);
 
         let ambiguous_body = source(
