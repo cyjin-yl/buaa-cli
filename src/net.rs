@@ -128,6 +128,21 @@ const SHENYUAN_ROBOTS_URL: &str = "https://hc.buaa.edu.cn/robots.txt";
 pub(crate) const H3I_ROOT_URL: &str = "https://h3i.buaa.edu.cn/index.htm";
 pub(crate) const H3I_NOTICES_URL: &str = "https://h3i.buaa.edu.cn/rcpy/cpgg.htm";
 const H3I_ROBOTS_URL: &str = "https://h3i.buaa.edu.cn/robots.txt";
+pub(crate) const ZFAI_ROOT_URL: &str = "https://zfai.buaa.edu.cn/";
+pub(crate) const ZFAI_NOTICES_URL: &str = "https://zfai.buaa.edu.cn/xxgg1.htm";
+const ZFAI_ROBOTS_URL: &str = "https://zfai.buaa.edu.cn/robots.txt";
+
+pub(crate) fn zfai_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xxgg1.htm") {
+        return true;
+    }
+    path.strip_prefix("/xxgg1/")
+        .or_else(|| path.strip_prefix("/info/1196/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn h3i_path_allowed(path: &str) -> bool {
     if matches!(path, "/index.htm" | "/robots.txt" | "/rcpy/cpgg.htm") {
@@ -282,6 +297,7 @@ enum SourceProfile {
     Beijing,
     Shenyuan,
     H3i,
+    Zfai,
 }
 
 impl SourceProfile {
@@ -297,6 +313,7 @@ impl SourceProfile {
             Self::Beijing => BEIJING_ROBOTS_URL,
             Self::Shenyuan => SHENYUAN_ROBOTS_URL,
             Self::H3i => H3I_ROBOTS_URL,
+            Self::Zfai => ZFAI_ROBOTS_URL,
         }
     }
 
@@ -312,6 +329,7 @@ impl SourceProfile {
             Self::Beijing => ".buaa-cli-beijing-cache",
             Self::Shenyuan => ".buaa-cli-shenyuan-cache",
             Self::H3i => ".buaa-cli-h3i-cache",
+            Self::Zfai => ".buaa-cli-zfai-cache",
         }
     }
 
@@ -374,6 +392,11 @@ impl SourceProfile {
                 url.host_str() == Some("h3i.buaa.edu.cn")
                     && url.query().is_none()
                     && h3i_path_allowed(url.path())
+            }
+            Self::Zfai => {
+                url.host_str() == Some("zfai.buaa.edu.cn")
+                    && url.query().is_none()
+                    && zfai_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -570,6 +593,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_h3i(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::H3i)
+    }
+
+    pub(crate) fn open_zfai(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Zfai)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2672,6 +2699,308 @@ mod tests {
             assert!(client.load(&target).unwrap().is_none());
             assert_eq!(server.count(), 1);
         }
+    }
+
+    #[test]
+    fn zfai_article_refreshes_only_declared_original_from_selected_source_page() {
+        const ARTICLE: &str = r#"<div class="detail"><div class="fl1"><div class="wp flex"><div class="left"><form><div class="ar_tit"><h3>Original source headline</h3><h6><span>Count</span><span>时间：2026-09-14</span></h6></div><div class="ar_article"><div id="vsb_content_1001"><div class="v_news_content"><p>Source policy paragraph.</p></div></div></div></form></div></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1196/42.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Zfai;
+        for (url, body) in [
+            (ZFAI_ROOT_URL, br#"<a href="xxgg1.htm">Fixture information board</a>"# as &[u8]),
+            (ZFAI_NOTICES_URL, br#"<div class="pagebar"><span class="p_no"><a href="xxgg1/8.htm">2</a></span></div>"# as &[u8]),
+            ("https://zfai.buaa.edu.cn/xxgg1/8.htm", br#"<div class="news"><div class="fl1"><div class="wp"><ul class="list11 flex"><li><a class="a" href="../info/1196/42.htm"><div class="time"><h3>09-14</h3><h6>2026</h6></div><div class="rr"><h4 class="h4s2">Distinct listing teaser</h4><p class="ps3">Distinct source excerpt</p></div></a></li></ul></div></div></div>"# as &[u8]),
+        ] {
+            seed(&client, url, body, false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(
+            &client,
+            ZFAI_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let undeclared = Url::parse("https://zfai.buaa.edu.cn/info/1196/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::zfai::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://zfai.buaa.edu.cn/info/1196/42.htm").unwrap();
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Zfai;
+        let output = crate::announcements::zfai::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Original source headline");
+        assert_eq!(output["published_at"], "2026-09-14");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
+        assert_eq!(
+            output["source_listing"]["source_url"],
+            "https://zfai.buaa.edu.cn/xxgg1/8.htm"
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Zfai;
+        let cached = crate::announcements::zfai::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
+        assert_eq!(cached["title"], "Original source headline");
+        assert_eq!(
+            cached["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn rescue_zfai_discovery_retains_admitted_failures_and_rejects_unadmitted_sources() {
+        const LISTING: &[u8] = br#"<div class="news"><div class="fl1"><div class="wp"><ul class="list11 flex"><li><a class="a" href="info/1196/99.htm"><div class="time"><h3>09-14</h3><h6>2026</h6></div><div class="rr"><h4 class="h4s2">Different declared heading</h4><p class="ps3">Whole source excerpt.</p></div></a></li></ul></div></div></div>"#;
+        for (headers, body, retained, expected) in [
+            (
+                "Content-Type: text/html\r\n",
+                b"<title>Admitted unsupported layout</title>".as_slice(),
+                true,
+                "unavailable",
+            ),
+            ("Content-Type: text/html\r\n", LISTING, true, "unsupported"),
+            (
+                "Content-Type: application/json\r\n",
+                LISTING,
+                false,
+                "unavailable",
+            ),
+            (
+                "Content-Type: text/html\r\n",
+                b"<base href='https://foreign.example/'><p>Unsupported base</p>".as_slice(),
+                false,
+                "unavailable",
+            ),
+            (
+                "Content-Type: text/html\r\n",
+                b"\xff".as_slice(),
+                false,
+                "unavailable",
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /xxgg1.htm "));
+                assert!(!request.to_ascii_lowercase().contains("cookie:"));
+                reply(socket, 200, headers, body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Zfai;
+            seed(
+                &client,
+                ZFAI_ROOT_URL,
+                br#"<a href="xxgg1.htm">Information board</a>"#,
+                false,
+            );
+            let root = Url::parse(ZFAI_ROOT_URL).unwrap();
+            let mut entry = client.load(&root).unwrap().unwrap();
+            entry
+                .response
+                .headers
+                .insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+            seed(
+                &client,
+                ZFAI_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let target = Url::parse("https://zfai.buaa.edu.cn/info/1196/42.htm").unwrap();
+            assert_eq!(
+                crate::announcements::zfai::article_with_client(
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
+                expected
+            );
+            let mut client = fixture.client(CacheMode::Offline, &server);
+            client.profile = SourceProfile::Zfai;
+            let cached = client.load(&Url::parse(ZFAI_NOTICES_URL).unwrap()).unwrap();
+            assert_eq!(cached.is_some(), retained);
+            if let Some(cached) = cached {
+                assert_eq!(cached.response.body, body);
+                assert_eq!(cached.response.sha256, hash(body));
+            }
+            assert_eq!(
+                crate::announcements::zfai::article_with_client(
+                    client,
+                    CacheMode::Offline,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
+                if retained { expected } else { "offline_miss" }
+            );
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn rescue_zfai_missing_ordinal_retains_the_admitted_board() {
+        const BOARD: &[u8] = b"<title>Information board without another ordinal</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xxgg1.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BOARD);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Zfai;
+        seed(
+            &client,
+            ZFAI_ROOT_URL,
+            br#"<a href="xxgg1.htm">Information board</a>"#,
+            false,
+        );
+        let mut root = client
+            .load(&Url::parse(ZFAI_ROOT_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        root.response
+            .headers
+            .insert("content-type".into(), "text/html".into());
+        client.save(&root).unwrap();
+        seed(
+            &client,
+            ZFAI_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse("https://zfai.buaa.edu.cn/info/1196/42.htm").unwrap();
+        assert_eq!(
+            crate::announcements::zfai::article_with_client(
+                client,
+                CacheMode::PreferCache,
+                &target,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Zfai;
+        let cached = client
+            .load(&Url::parse(ZFAI_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.response.body, BOARD);
+        assert_eq!(cached.response.sha256, hash(BOARD));
+        assert_eq!(
+            crate::announcements::zfai::article_with_client(
+                client,
+                CacheMode::Offline,
+                &target,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn rescue_zfai_missing_root_declaration_retains_the_admitted_root() {
+        const ROOT: &[u8] = b"<title>Source root without the reviewed board</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET / HTTP/1.1"));
+            reply(socket, 200, "Content-Type: text/html\r\n", ROOT);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Zfai;
+        seed(
+            &client,
+            ZFAI_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse("https://zfai.buaa.edu.cn/info/1196/42.htm").unwrap();
+        assert_eq!(
+            crate::announcements::zfai::article_with_client(
+                client,
+                CacheMode::PreferCache,
+                &target,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Zfai;
+        let cached = client
+            .load(&Url::parse(ZFAI_ROOT_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.response.body, ROOT);
+        assert_eq!(cached.response.sha256, hash(ROOT));
+        assert_eq!(
+            crate::announcements::zfai::article_with_client(
+                client,
+                CacheMode::Offline,
+                &target,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 1);
     }
 
     #[test]
