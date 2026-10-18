@@ -35,3 +35,9 @@ This is contributor policy, not an implemented GitHub automation tool. It does n
 ## Private CI bridge proposal — inactive
 
 Public CI must be credential-free, offline with respect to campus, and safe for fork contributions. A future private Gitea runner may run network observations only after maintainer approval binds the exact external head SHA, trusted workflow identity, permitted read operations and expiry. Re-fetch and verify the SHA, reject untrusted workflow/checkout substitution, and emit a minimal signed status tied to that SHA without raw campus responses or credentials. Never use `pull_request_target` with untrusted checkout and secrets. The bridge is not enabled; administrator approval and signing/verification contracts remain required.
+
+## Graceful degradation and self-reporting contract
+
+Every command MUST fail gracefully. When a structured parse, Markdown projection, or typed extraction cannot be produced, the command still returns whatever raw evidence is safe to expose (for HTML surfaces: base64-encoded original response bytes as `raw_html`, plus `content_type` and byte length), together with a machine-readable `fallback_reason` explaining which assumption failed. Fallback output is not an error exit when any verifiable source bytes were retrieved; it is a degraded-success state so that Agents can still inspect, diff, and re-parse the original without another network request.
+
+Agents and users are also first-class error reporters. `buaa-cli report` creates a GitHub Issue on `cyjin-yl/buaa-cli` when the local `gh` CLI is installed and authenticated. If `gh` is missing or not logged in, the command prints the exact login steps and stops; it never fabricates an Issue URL. Automatic Agent-driven reporting keeps failure causes, reproduction commands, environment facts, and affected acceptance IDs attached to the repository so fixes can be triaged without copy-pasting from chat transcripts.

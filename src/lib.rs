@@ -13,6 +13,7 @@ pub mod net;
 pub mod organizations;
 pub mod physics;
 pub mod recordings;
+pub mod report;
 pub mod spoc;
 pub mod timed_input;
 pub mod timetable;

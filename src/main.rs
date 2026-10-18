@@ -476,6 +476,11 @@ fn run() -> CliResult {
         "fengrubei" => run_fengrubei(&args[1..]),
         "gateway" => run_gateway(&args[1..]),
         "governor" => run_governor(&args[1..]),
+        "report" => {
+            let input = read_input()?;
+            let output = buaa_cli::report::report(&input).map_err(service_error)?;
+            emit(&output)
+        }
         "recordings" if args.len() == 2 && args[1] == "search" => {
             let input = read_input()?;
             let output = buaa_cli::recordings::search(&input).map_err(service_error)?;
