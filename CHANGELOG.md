@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory-bound Software-college notices (`college=soft`, `category=tzgg`) through the declared HTTPS homepage section and selected notice board. Reuse the source-ordered `nymain/notice-list` parser, direct dotted dates, declared `/info/1095/` articles and scoped `v_news_content` paragraphs; preserve attachment/image/table omissions as `partial_text`, reject unadvertised pages and foreign/query/credential URLs, and keep both source-declaration retrieval records. No automatic traversal, attachment download, history completion or campus write is implied.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
