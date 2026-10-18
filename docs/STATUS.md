@@ -55,6 +55,12 @@ The article contract is the reviewed `div.ljkm23` layout: direct `mch3` title, `
 
 Focused synthetic parser coverage is included in `src/announcements/fld.rs` for source title/date/link preservation, PDF-only embedded-document handling and foreign/query URL rejection. Native build, online governed source capture, cache-only replay, capability evidence and independent review remain owner-side gates; no deployment, merge or campus mutation is claimed here.
 
+## Mechanical Engineering and Automation source boundary
+
+The official directory member is preserved exactly as listed/resolved `http://www.me.buaa.edu.cn/`, under the name 机械工程及自动化学院. Read-only public reconnaissance through the approved proxy found the root-declared `xyxw.htm` 学院新闻 board (article namespace `/info/1126/`, source-advertised 56-page pager) and `xszx.htm` 学术资讯 board (article namespace `/info/1128/`, source-advertised 18-page pager). The observed selectors are source-specific: `div.news_l > div.news_l_con > ul > li` rows with direct `a`/`p` title/date fields for 学院新闻, `div.noticer > dl` with `dt`/`dd` anchors for 学术资讯, and article `div.news_r > div.news_r_tit`, `p.news_r_tit2`, `div#vsb_content > div.v_news_content` fields. Pagination and article links are source declarations only; no URL is inferred.
+
+The HTTPS candidate `https://www.me.buaa.edu.cn/` is not currently admitted: TLS validation reports a certificate subject-name mismatch for `www.me.buaa.edu.cn`; a separate HTTPS probe of canonical `me.buaa.edu.cn` ended unexpectedly during TLS. The adapter therefore remains **surface-only/blocked**. `college-source me root|notices` retains the literal HTTP directory attribution and reports a structured `tls_transport_blocked` fallback; `college=me` list/article inputs refuse before transport. Plain HTTP requests, TLS verification bypasses, foreign/query/credential URLs and unverified source bytes are not used. A valid HTTPS source observation is required before listing/article extraction can be enabled.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.
