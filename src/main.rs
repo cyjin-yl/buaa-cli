@@ -326,7 +326,7 @@ fn run_announcements(args: &[String]) -> CliResult {
             let output = buaa_cli::announcements::document(mode, &input).map_err(service_error)?;
             emit(&output)
         }
-        Some("college-source") if matches!(args.get(1).map(String::as_str), Some("scse" | "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif" | "mse" | "rse" | "sepe" | "math" | "soft" | "transportation" | "physics")) => {
+        Some("college-source") if matches!(args.get(1).map(String::as_str), Some("scse" | "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif" | "mse" | "rse" | "sepe" | "math" | "soft" | "transportation" | "physics" | "sce")) => {
             let (page, flags) = match args.get(2).map(String::as_str) {
                 Some("root" | "notices" | "public-notices") => (args[2].as_str(), &args[2..]),
                 _ => ("root", &args[1..]),

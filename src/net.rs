@@ -154,6 +154,21 @@ const TRANSPORTATION_ROBOTS_URL: &str = "https://transportation.buaa.edu.cn/robo
 pub(crate) const PHYSICS_ROOT_URL: &str = "https://physics.buaa.edu.cn/";
 pub(crate) const PHYSICS_NOTICES_URL: &str = "https://physics.buaa.edu.cn/index/tzgg.htm";
 const PHYSICS_ROBOTS_URL: &str = "https://physics.buaa.edu.cn/robots.txt";
+pub(crate) const SCE_ROOT_URL: &str = "https://sce.buaa.edu.cn/";
+pub(crate) const SCE_NOTICES_URL: &str = "https://sce.buaa.edu.cn/xwzx/xyxw.htm";
+const SCE_ROBOTS_URL: &str = "https://sce.buaa.edu.cn/robots.txt";
+
+pub(crate) fn sce_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwzx/xyxw.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwzx/xyxw/")
+        .or_else(|| path.strip_prefix("/info/1013/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -394,6 +409,7 @@ enum SourceProfile {
     Soft,
     Transportation,
     Physics,
+    Sce,
 }
 
 impl SourceProfile {
@@ -418,6 +434,7 @@ impl SourceProfile {
             Self::Soft => SOFT_ROBOTS_URL,
             Self::Transportation => TRANSPORTATION_ROBOTS_URL,
             Self::Physics => PHYSICS_ROBOTS_URL,
+            Self::Sce => SCE_ROBOTS_URL,
         }
     }
 
@@ -442,6 +459,7 @@ impl SourceProfile {
             Self::Soft => ".buaa-cli-soft-cache",
             Self::Transportation => ".buaa-cli-transportation-cache",
             Self::Physics => ".buaa-cli-physics-cache",
+            Self::Sce => ".buaa-cli-sce-cache",
         }
     }
 
@@ -542,6 +560,10 @@ impl SourceProfile {
                 url.host_str() == Some("physics.buaa.edu.cn")
                     && url.query().is_none()
                     && physics_path_allowed(url.path())
+            Self::Sce => {
+                url.host_str() == Some("sce.buaa.edu.cn")
+                    && url.query().is_none()
+                    && sce_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -772,6 +794,8 @@ impl ArchiveClient {
         Self::open_profile(mode, SourceProfile::Transportation)
     pub(crate) fn open_physics(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Physics)
+    pub(crate) fn open_sce(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Sce)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
