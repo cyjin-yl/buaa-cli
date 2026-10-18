@@ -1,5 +1,11 @@
 # Development status
 
+## Directory-bound HSS Humanities and Social Sciences notices
+
+The official directory's visible member 人文社会科学学院 (source order30) retains the exact literal/resolved `http://www.hss.buaa.edu.cn/`; this adapter does not silently upgrade it to HTTPS. A bounded public read through the approved proxy observed the root-declared `xwzx1/tzgg.htm` 通知公告 board. Its source view is `div.n_right > ul.list > li`, with one direct `a` whose child `span` carries an ISO date; the board advertises display page2 as `xwzx1/tzgg/1.htm` through its legacy 下页/尾页 links. Selected originals are declared as `/info/1103/<digits>.htm`. The first retained page has20 rows and the advertised second page has one row; no later page is inferred.
+
+The adapter preserves source order and date/title separation, rejects foreign/query/credential/noncanonical URLs before transport, and binds the board through the retained root declaration. The observed article structure is one `div.n_con`/`form[name=_newscontent_fromname]`/`div.contain_con`, direct `h2`, centered `发布日期：YYYY-MM-DD` caption and one `#vsb_content > .v_news_content` body. The selected current original is source-declared PDF/image-only (`showVsbpdfIframe` plus `vsb_pdf_image_data`) with three sibling JSP PDF hints; output is `embedded_document` with `assets_fetched=false`, `ocr_performed=false`, and no attachment retrieval. No HTTPS equivalence, OCR, attachment download, complete history or campus write is claimed. Offline/native verification and acceptance evidence remain with the parent integration.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.
