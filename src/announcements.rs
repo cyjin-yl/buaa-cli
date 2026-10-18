@@ -36,9 +36,10 @@ mod scse;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
 pub(crate) mod soft;
-pub(crate) mod transportation,
+pub(crate) mod transportation;
 pub(crate) mod sce;
 pub(crate) mod sse;
+pub(crate) mod wrj;
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -152,7 +153,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld and ME source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld, ME and Wrj source binding",
     )
 }
 
@@ -758,6 +759,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("sem") => return sem::list(mode, &query),
         Some("fld") => return fld::list(mode, &query),
         Some("me") => return me::list(mode, &query),
+        Some("wrj") => return wrj::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -896,6 +898,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("www.me.buaa.edu.cn") => {
             return me::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("wrj.buaa.edu.cn") => {
+            return wrj::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -971,6 +976,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "me" {
         return me::surface(mode, page);
+    }
+    if college == "wrj" {
+        return wrj::surface(mode, page);
     }
     if college == "scse" {
         return scse::surface(mode, page);
@@ -1065,6 +1073,9 @@ fn describe_college_surface(
             | "sce"
             | "sse"
             | "fld"
+            | "sem"
+            | "me"
+            | "wrj"
     ) {
         college_html(response)?
     } else {
@@ -1479,6 +1490,30 @@ pub fn schema() -> Value {
     );
     output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
         r"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|transportation[.]buaa[.]edu[.]cn/info/1058)/[0-9]{1,10}[.]htm$"
+    );
+    output["college_source"]["input"]["description"] = json!(
+        "Fixed public pages for reviewed directory-bound college sources, including transportation and Wrj; source roots must declare selected notice boards. Wrj binds the exact Unmanned Systems Research Institute member and root-declared xwgg/tzgg.htm board, preserving separate literal HTTP and HTTPS observations."
+    );
+    output["list"]["input"]["description"] = json!(
+        "Optional JSON object selecting one reviewed college board. college=wrj selects Unmanned Systems Research Institute notices (tzgg), with source YYYY-MM-DD dates, direct line1 titles and source-advertised page ordinals only; no automatic traversal or inferred URLs."
+    );
+    output["list"]["input"]["properties"]["college"]["enum"] = json!([
+        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
+        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
+        "me", "wrj", Value::Null
+    ]);
+    output["list"]["input"]["allOf"]
+        .as_array_mut()
+        .expect("announcement list schema allOf")
+        .push(json!({
+            "if":{"required":["college"],"properties":{"college":{"const":"wrj"}}},
+            "then":{"properties":{"category":{"enum":["tzgg",null]}}}
+        }));
+    output["article"]["input"]["description"] = json!(
+        "Reviewed HTTPS article URLs include Wrj notices in category 1008. Wrj articles must be HTTPS canonical /info/1008/<digits>.htm URLs declared by the retained xwgg/tzgg.htm listing; source_page defaults to 1 and selects only source-advertised ordinals."
+    );
+    output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
+        r"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/[0-9]{1,10}|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008)/[0-9]{1,10}[.]htm$"
     );
     output
 }

@@ -209,6 +209,9 @@ pub(crate) fn me_path_allowed(path: &str) -> bool {
             && id.bytes().all(|byte| byte.is_ascii_digit())
     })
 }
+pub(crate) const WRJ_ROOT_URL: &str = "https://wrj.buaa.edu.cn/";
+pub(crate) const WRJ_NOTICES_URL: &str = "https://wrj.buaa.edu.cn/xwgg/tzgg.htm";
+const WRJ_ROBOTS_URL: &str = "https://wrj.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -238,30 +241,30 @@ pub(crate) fn transportation_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") { return true; }
     path.strip_prefix("/xwdt/gggs/").or_else(|| path.strip_prefix("/info/1058/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
+
 pub(crate) fn physics_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") {
-        return true;
-    }
-    path.strip_prefix("/index/tzgg/")
-        .or_else(|| path.strip_prefix("/info/1252/"))
+    if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") { return true; }
+    path.strip_prefix("/index/tzgg/").or_else(|| path.strip_prefix("/info/1252/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 pub(crate) fn sse_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/xwdt/gsgg/tzgg.htm") {
-        return true;
-    }
-    path.strip_prefix("/xwdt/gsgg/tzgg/")
-        .or_else(|| path.strip_prefix("/info/1078/"))
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gsgg/tzgg.htm") { return true; }
+    path.strip_prefix("/xwdt/gsgg/tzgg/").or_else(|| path.strip_prefix("/info/1078/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 pub(crate) fn sem_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/xwdt/tzgg.htm") {
-        return true;
-    }
-    path.strip_prefix("/xwdt/tzgg/")
-        .or_else(|| path.strip_prefix("/info/1024/"))
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/tzgg.htm") { return true; }
+    path.strip_prefix("/xwdt/tzgg/").or_else(|| path.strip_prefix("/info/1024/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 pub(crate) fn fld_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/xwzx/zxtz.htm") {
-        return true;
-    }
-    path.strip_prefix("/xwzx/zxtz/")
-        .or_else(|| path.strip_prefix("/info/1011/"))
+    if matches!(path, "/" | "/robots.txt" | "/xwzx/zxtz.htm") { return true; }
+    path.strip_prefix("/xwzx/zxtz/").or_else(|| path.strip_prefix("/info/1011/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+pub(crate) fn wrj_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwgg/tzgg.htm") { return true; }
+    path.strip_prefix("/xwgg/tzgg/").or_else(|| path.strip_prefix("/info/1008/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -472,6 +475,7 @@ enum SourceProfile {
     Sem,
     Fld,
     Me,
+    Wrj,
 }
 
 impl SourceProfile {
@@ -501,6 +505,7 @@ impl SourceProfile {
             Self::Sem => SEM_ROBOTS_URL,
             Self::Fld => FLD_ROBOTS_URL,
             Self::Me => ME_ROBOTS_URL,
+            Self::Wrj => WRJ_ROBOTS_URL,
         }
     }
 
@@ -530,6 +535,7 @@ impl SourceProfile {
             Self::Sem => ".buaa-cli-sem-cache",
             Self::Fld => ".buaa-cli-fld-cache",
             Self::Me => ".buaa-cli-me-cache",
+            Self::Wrj => ".buaa-cli-wrj-cache",
         }
     }
 
@@ -626,30 +632,27 @@ impl SourceProfile {
             }
             Self::Transportation => {
                 url.host_str() == Some("transportation.buaa.edu.cn") && url.query().is_none() && transportation_path_allowed(url.path())
+            }
             Self::Physics => {
-                url.host_str() == Some("physics.buaa.edu.cn")
-                    && url.query().is_none()
-                    && physics_path_allowed(url.path())
+                url.host_str() == Some("physics.buaa.edu.cn") && url.query().is_none() && physics_path_allowed(url.path())
+            }
             Self::Sce => {
-                url.host_str() == Some("sce.buaa.edu.cn")
-                    && url.query().is_none()
-                    && sce_path_allowed(url.path())
+                url.host_str() == Some("sce.buaa.edu.cn") && url.query().is_none() && sce_path_allowed(url.path())
+            }
             Self::Sse => {
-                url.host_str() == Some("sse.buaa.edu.cn")
-                    && url.query().is_none()
-                    && sse_path_allowed(url.path())
+                url.host_str() == Some("sse.buaa.edu.cn") && url.query().is_none() && sse_path_allowed(url.path())
+            }
             Self::Sem => {
-                url.host_str() == Some("sem.buaa.edu.cn")
-                    && url.query().is_none()
-                    && sem_path_allowed(url.path())
+                url.host_str() == Some("sem.buaa.edu.cn") && url.query().is_none() && sem_path_allowed(url.path())
+            }
             Self::Fld => {
-                url.host_str() == Some("fld.buaa.edu.cn")
-                    && url.query().is_none()
-                    && fld_path_allowed(url.path())
+                url.host_str() == Some("fld.buaa.edu.cn") && url.query().is_none() && fld_path_allowed(url.path())
+            }
             Self::Me => {
-                url.host_str() == Some("www.me.buaa.edu.cn")
-                    && url.query().is_none()
-                    && me_path_allowed(url.path())
+                url.host_str() == Some("www.me.buaa.edu.cn") && url.query().is_none() && me_path_allowed(url.path())
+            }
+            Self::Wrj => {
+                url.host_str() == Some("wrj.buaa.edu.cn") && url.query().is_none() && wrj_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -878,18 +881,34 @@ impl ArchiveClient {
 
     pub(crate) fn open_transportation(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Transportation)
+    }
+
     pub(crate) fn open_physics(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Physics)
+    }
+
     pub(crate) fn open_sce(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sce)
+    }
+
     pub(crate) fn open_sse(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sse)
+    }
+
     pub(crate) fn open_sem(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sem)
+    }
+
     pub(crate) fn open_fld(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Fld)
+    }
+
     pub(crate) fn open_me(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Me)
+    }
+
+    pub(crate) fn open_wrj(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Wrj)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
