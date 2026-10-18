@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory-bound 航空科学与工程学院 announcements (`college=ase`, `category=tzgg`) over the source-declared `/zhxw/tzgg.htm` board. Preserve the official directory's literal/resolved `http://www.ase.buaa.edu.cn/` identity alongside a deliberate canonical `https://ase.buaa.edu.cn/` observation; parse source-ordered `txtList` rows, split `MM-DD`/year dates, advertised pagination and declared `/info/1052/` or `/info/1285/` articles. Keep images, tables and attachment bytes unfetched and report degraded article text as `partial_text`; reject unadvertised, foreign, query-bearing and noncanonical URLs before transport.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
