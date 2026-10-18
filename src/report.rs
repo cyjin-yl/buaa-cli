@@ -2,7 +2,6 @@
 //! Never fabricates an Issue URL; fails closed when `gh` is unavailable.
 
 use serde_json::{Value, json};
-use std::io::Write;
 use std::process::{Command, Stdio};
 
 const REPO: &str = "cyjin-yl/buaa-cli";
@@ -47,7 +46,7 @@ fn gh_create_issue(title: &str, body: &str, labels: &[String]) -> Result<String,
         args.push("--label".into());
         args.push(l.clone());
     }
-    let mut child = Command::new("gh")
+    let child = Command::new("gh")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -114,7 +113,7 @@ pub fn report(input: &str) -> Result<Value, crate::net::Error> {
         })
         .unwrap_or_default();
 
-    let url = gh_create_issue(&title, &body, &labels).map_err(|e| unavailable())?;
+    let url = gh_create_issue(&title, &body, &labels).map_err(|_e| unavailable())?;
 
     Ok(json!({
         "schema_version": 1,
