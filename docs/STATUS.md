@@ -77,6 +77,12 @@ The retained official directory identifies visible 仪器科学与光电工程�
 
 Synthetic coverage exercises inert-row exclusion, source-order and ambiguous-date handling, owned article title/date/body extraction, allowlisted path boundaries, foreign/query-bearing URL rejection, and deliberate HTTP-versus-HTTPS identity separation. This branch contains implementation/docs only; no campus write, authentication, guessed route, source fallback, or acceptance-manifest mutation is claimed.
 
+## Directory-bound ASE aviation-science notices
+
+The official directory currently exposes visible 航空科学与工程学院 with the exact literal/resolved `http://www.ase.buaa.edu.cn/` member. Its root declares `https://ase.buaa.edu.cn/`-equivalent navigation only through the deliberate canonical HTTPS observation used by this adapter; the directory HTTP identity is retained in attribution and is not upgraded or aliased. Public reconnaissance observed the root-declared `/zhxw/tzgg.htm` notice board, ten source-ordered `div.txtList` rows, split `MM-DD`/year dates, advertised `/zhxw/tzgg/<ordinal>.htm` pages and `/info/1052/` or `/info/1285/` article links. The canonical article uses `div.arc-tit > h1`, one `发布时间：YYYY-MM-DD` header span and one `#vsb_content_2 > div.v_news_content` body.
+
+The implementation adds `college=ase`, category `tzgg`, root/notices surfaces, source-advertised pagination and selected board-declared articles. URL admission is HTTPS-only on `ase.buaa.edu.cn`, with no query, credentials, custom port, fragment or unadvertised path; the shared production governor/cache profile remains the only transport path. Synthetic listing/article fixtures preserve source order, split dates, scoped body text and explicit image/table `partial_text` boundaries. No locked build, native CLI gate, cache oracle or formal online acceptance is claimed in this worktree; those checks remain parent integration work. No attachments, images, tables, OCR, complete history or campus writes are implied.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

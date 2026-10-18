@@ -159,11 +159,17 @@ pub(crate) const SCE_NOTICES_URL: &str = "https://sce.buaa.edu.cn/xwzx/xyxw.htm"
 const SCE_ROBOTS_URL: &str = "https://sce.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sce_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/xwzx/xyxw.htm") {
-        return true;
-    }
-    path.strip_prefix("/xwzx/xyxw/")
-        .or_else(|| path.strip_prefix("/info/1013/"))
+    if matches!(path, "/" | "/robots.txt" | "/xwzx/xyxw.htm") { return true; }
+    path.strip_prefix("/xwzx/xyxw/").or_else(|| path.strip_prefix("/info/1013/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+pub(crate) const ASE_ROOT_URL: &str = "https://ase.buaa.edu.cn/";
+pub(crate) const ASE_NOTICES_URL: &str = "https://ase.buaa.edu.cn/zhxw/tzgg.htm";
+const ASE_ROBOTS_URL: &str = "https://ase.buaa.edu.cn/robots.txt";
+
+pub(crate) fn ase_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/zhxw/tzgg.htm") { return true; }
+    path.strip_prefix("/zhxw/tzgg/").or_else(|| path.strip_prefix("/info/1052/")).or_else(|| path.strip_prefix("/info/1285/")
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -495,6 +501,7 @@ enum SourceProfile {
     Me,
     Wrj,
     Yqgdxy,
+    Ase,
 }
 
 impl SourceProfile {
@@ -526,6 +533,7 @@ impl SourceProfile {
             Self::Me => ME_ROBOTS_URL,
             Self::Wrj => WRJ_ROBOTS_URL,
             Self::Yqgdxy => YQGDXY_ROBOTS_URL,
+            Self::Ase => ASE_ROBOTS_URL,
         }
     }
 
@@ -557,6 +565,7 @@ impl SourceProfile {
             Self::Me => ".buaa-cli-me-cache",
             Self::Wrj => ".buaa-cli-wrj-cache",
             Self::Yqgdxy => ".buaa-cli-yqgdxy-cache",
+            Self::Ase => ".buaa-cli-ase-cache",
         }
     }
 
@@ -677,6 +686,9 @@ impl SourceProfile {
             }
             Self::Yqgdxy => {
                 url.host_str() == Some("yqgdxy.buaa.edu.cn") && url.query().is_none() && yqgdxy_path_allowed(url.path())
+            }
+            Self::Ase => {
+                url.host_str() == Some("ase.buaa.edu.cn") && url.query().is_none() && ase_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -937,6 +949,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_yqgdxy(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Yqgdxy)
+    }
+
+    pub(crate) fn open_ase(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Ase)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
