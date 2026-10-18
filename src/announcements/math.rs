@@ -1,10 +1,9 @@
 //! 数学科学学院: exact-directory-bound current notice board.
 use super::{
-    ListingDocument, ListingEntry, ListQuery, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
-    bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, inert_element,
-    invalid_article, invalid_list, is_http, parse_iso_date, retrieval, table_article_output,
-    unavailable,
+    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, bind_college_board,
+    college_directory_attribution, college_html, describe_college_surface, element_text,
+    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
+    parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, MATH_NOTICES_URL, MATH_ROOT_URL, math_path_allowed,
@@ -77,8 +76,7 @@ fn parse_math_date(raw: &str) -> Option<String> {
 pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
     let title = document
         .select(&Selector::parse("head > title").map_err(|_| unavailable())?)
-        .filter(|node| !inert_element(*node))
-        .next()
+        .find(|node| !inert_element(*node))
         .map(element_text)
         .unwrap_or_default();
     if title.len() > MAX_TEXT {
@@ -87,13 +85,16 @@ pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocume
     let views = Selector::parse("div.list_main > div.list_main_right > div.list_box > ul")
         .map_err(|_| unavailable())?;
     let mut views = document.select(&views).filter(|node| !inert_element(*node));
-    let primary = views.next().filter(|_| views.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "Math notices require one list_main/list_box view",
-            file!(),
-            line!(),
-        )
-    })?;
+    let primary = views
+        .next()
+        .filter(|_| views.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "Math notices require one list_main/list_box view",
+                file!(),
+                line!(),
+            )
+        })?;
     let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
     let anchors = Selector::parse(":scope > a").map_err(|_| unavailable())?;
     let dates = Selector::parse(":scope > span").map_err(|_| unavailable())?;
@@ -103,13 +104,16 @@ pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocume
             return Err(unavailable());
         }
         let mut links = row.select(&anchors).filter(|node| !inert_element(*node));
-        let anchor = links.next().filter(|_| links.next().is_none()).ok_or_else(|| {
-            failed_contract(
-                "Math notice row requires one direct title link",
-                file!(),
-                line!(),
-            )
-        })?;
+        let anchor = links
+            .next()
+            .filter(|_| links.next().is_none())
+            .ok_or_else(|| {
+                failed_contract(
+                    "Math notice row requires one direct title link",
+                    file!(),
+                    line!(),
+                )
+            })?;
         let title = element_text(anchor);
         if title.is_empty() || title.len() > MAX_TEXT {
             return Err(failed_contract(
@@ -259,16 +263,19 @@ fn math_publication_date(raw: &str) -> Option<String> {
 }
 
 pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
-    let forms = Selector::parse("div.icontent > div.c-content > form")
-        .map_err(|_| unavailable())?;
+    let forms =
+        Selector::parse("div.icontent > div.c-content > form").map_err(|_| unavailable())?;
     let mut forms = document.select(&forms).filter(|node| !inert_element(*node));
-    let primary = forms.next().filter(|_| forms.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "Math article requires one icontent/c-content form",
-            file!(),
-            line!(),
-        )
-    })?;
+    let primary = forms
+        .next()
+        .filter(|_| forms.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "Math article requires one icontent/c-content form",
+                file!(),
+                line!(),
+            )
+        })?;
     let headings = Selector::parse(":scope > h1.c-title").map_err(|_| unavailable())?;
     let mut headings = primary
         .select(&headings)
@@ -286,9 +293,7 @@ pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
             )
         })?;
     let dates = Selector::parse(":scope > div.other-s").map_err(|_| unavailable())?;
-    let mut dates = primary
-        .select(&dates)
-        .filter(|node| !inert_element(*node));
+    let mut dates = primary.select(&dates).filter(|node| !inert_element(*node));
     let published_at = dates
         .next()
         .filter(|_| dates.next().is_none())
@@ -296,20 +301,71 @@ pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
     let bodies = Selector::parse(":scope > div#vsb_content.nr-info > div.v_news_content")
         .map_err(|_| unavailable())?;
     let mut bodies = primary.select(&bodies).filter(|node| !inert_element(*node));
-    let body = bodies.next().filter(|_| bodies.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "Math article requires one owned vsb_content/nr-info/v_news_content body",
-            file!(),
-            line!(),
-        )
-    })?;
-    table_article_output(
-        body,
-        title,
-        Some("1294".into()),
-        published_at,
-        "unique icontent/c-content form; direct c-title and other-s publication header; scoped vsb_content.nr-info/v_news_content paragraphs and separate ordered flat tables; code and fallback payloads excluded",
-    )
+    let body = bodies
+        .next()
+        .filter(|_| bodies.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "Math article requires one owned vsb_content/nr-info/v_news_content body",
+                file!(),
+                line!(),
+            )
+        })?;
+    let paragraphs_selector = Selector::parse("p").map_err(|_| unavailable())?;
+    let paragraphs: Vec<String> = body
+        .select(&paragraphs_selector)
+        .filter(|node| !inert_element(*node))
+        .map(element_text)
+        .filter(|text| !text.is_empty())
+        .collect();
+    let row_selector = Selector::parse("table tr").map_err(|_| unavailable())?;
+    let cell_selector = Selector::parse(":scope > th, :scope > td").map_err(|_| unavailable())?;
+    let mut tables = Vec::new();
+    let table_selector = Selector::parse("table").map_err(|_| unavailable())?;
+    let mut table_rows = 0usize;
+    let mut table_cells = 0usize;
+    for (table_index, table) in body.select(&table_selector).enumerate() {
+        let mut rows = Vec::new();
+        for (row_index, row) in table.select(&row_selector).enumerate() {
+            let cells: Vec<Value> = row
+                .select(&cell_selector)
+                .map(|cell| {
+                    table_cells += 1;
+                    json!({"header": cell.value().name() == "th", "text": element_text(cell)})
+                })
+                .collect();
+            if !cells.is_empty() {
+                table_rows += 1;
+                rows.push(json!({"source_order": row_index + 1, "cells": cells}));
+            }
+        }
+        tables.push(json!({"source_order": table_index + 1, "caption": Value::Null, "rows": rows}));
+    }
+    if paragraphs.len() + table_rows > super::MAX_BODY_PARAGRAPHS {
+        return Err(unavailable());
+    }
+    let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
+    let attachment_hints: Vec<Value> = body
+        .select(&links)
+        .filter(|node| !inert_element(*node))
+        .filter_map(|node| {
+            node.value()
+                .attr("href")
+                .map(|href| json!({"href": href, "text": element_text(node), "fetched": false}))
+        })
+        .take(super::MAX_ATTACHMENT_HINTS)
+        .collect();
+    let has_images = Selector::parse("img").map_err(|_| unavailable())?;
+    let images = body.select(&has_images).any(|node| !inert_element(node));
+    let partial = !attachment_hints.is_empty() || images || !tables.is_empty();
+    Ok(json!({
+        "schema_version":1,"type":"announcements_article","result":if partial {"partial_text"} else {"full_text"},
+        "publisher":PUBLISHER,"college":"math","category":"1294","title":title,
+        "published_at":published_at,"body_paragraph_count":paragraphs.len(),"body_paragraphs":paragraphs,
+        "body_table_count":tables.len(),"body_table_row_count":table_rows,"body_table_cell_count":table_cells,"body_tables":tables,
+        "attachments":{"found":!attachment_hints.is_empty(),"hints":attachment_hints,"hints_truncated":false,"note":"source-declared links only; never fetched"},
+        "completeness":{"scope":"single_math_article_page","body_source":"unique icontent/c-content form and scoped v_news_content paragraphs; executable/fallback markup excluded","table_representation":"source cells only; no inferred spans or visual reconstruction","image_content_present":images,"missing_nonparagraph_content":if partial {json!("image/table/attachment content is not reconstructed or downloaded")} else {Value::Null}},
+    }))
 }
 
 #[cfg(test)]
@@ -336,11 +392,7 @@ mod tests {
 
     #[test]
     fn listing_uses_the_single_list_box_and_keeps_ambiguous_dates_unknown() {
-        let output = parse_listing(
-            &list_html(),
-            &Url::parse(MATH_NOTICES_URL).unwrap(),
-        )
-        .unwrap();
+        let output = parse_listing(&list_html(), &Url::parse(MATH_NOTICES_URL).unwrap()).unwrap();
         let observed: Vec<_> = output
             .entries
             .iter()
@@ -362,7 +414,12 @@ mod tests {
                     None,
                     Some("https://math.buaa.edu.cn/info/1294/42.htm")
                 ),
-                (2, "External reference", None, Some("https://external.example/notice")),
+                (
+                    2,
+                    "External reference",
+                    None,
+                    Some("https://external.example/notice")
+                ),
                 (
                     3,
                     "Older source row",
@@ -379,10 +436,16 @@ mod tests {
         let output = parse_article(&article_html("2026-10-12", body)).unwrap();
         assert_eq!(output["title"], "Original inline heading");
         assert_eq!(output["published_at"], "2026-10-12");
-        assert_eq!(output["body_paragraphs"], json!(["Source inline paragraph.", "2001-01-01"]));
-        assert_eq!(output["body_tables"][0]["rows"][0]["cells"], json!([
-            {"header":true,"text":"Header"}, {"header":false,"text":"Cell"}
-        ]));
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["Source inline paragraph.", "2001-01-01"])
+        );
+        assert_eq!(
+            output["body_tables"][0]["rows"][0]["cells"],
+            json!([
+                {"header":true,"text":"Header"}, {"header":false,"text":"Cell"}
+            ])
+        );
         for date in ["", "2026-02-29", "2026-10-12"] {
             let html = if date.is_empty() {
                 article_html("", body)
@@ -394,7 +457,7 @@ mod tests {
                 article_html(date, body)
             };
             let output = parse_article(&html).unwrap();
-            assert_eq!(output["published_at"], if date == "2026-10-12" { Value::Null } else { Value::Null });
+            assert_eq!(output["published_at"], Value::Null);
         }
     }
 
