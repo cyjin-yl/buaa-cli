@@ -247,6 +247,9 @@ pub(crate) fn yqgdxy_path_allowed(path: &str) -> bool {
 }
 pub(crate) const SA_ROOT_URL: &str = "https://www.sa.buaa.edu.cn/";
 const SA_ROBOTS_URL: &str = "https://www.sa.buaa.edu.cn/robots.txt";
+pub(crate) const BME_ROOT_URL: &str = "https://bme.buaa.edu.cn/";
+pub(crate) const BME_NOTICES_URL: &str = "https://bme.buaa.edu.cn/newsList.aspx?catID=13";
+const BME_ROBOTS_URL: &str = "https://bme.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -299,11 +302,28 @@ pub(crate) fn fld_path_allowed(path: &str) -> bool {
 
 pub(crate) fn wrj_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwgg/tzgg.htm") { return true; }
-    path.strip_prefix("/xwgg/tzgg/").or_else(|| path.strip_prefix("/info/1008/"))
-        .and_then(|stem| stem.strip_suffix(".htm"))
-        .is_some_and(|stem| {
-            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
-        })
+    path.strip_prefix("/xwgg/tzgg/").or_else(|| path.strip_prefix("/info/1008/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+pub(crate) fn bme_path_allowed(path: &str) -> bool {
+    matches!(path, "/" | "/robots.txt" | "/newsList.aspx" | "/newsInfo.aspx")
+}
+
+fn bme_query_allowed(path: &str, query: Option<&str>) -> bool {
+    let Some(query) = query else { return matches!(path, "/" | "/robots.txt"); };
+    if query.bytes().any(|byte| byte == b'%' || byte.is_ascii_control()) { return false; }
+    let fields = query.split('&').collect::<Vec<_>>();
+    match path {
+        "/newsList.aspx" => fields.len() == 1 && fields[0] == "catID=13",
+        "/newsInfo.aspx" => fields.len() == 3 && fields[0] == "catID=13"
+            && fields[1].strip_prefix("subcatID=").is_some_and(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
+            && fields[2].strip_prefix("curID=").is_some_and(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit())),
+        _ => false,
+    }
+}
+
+pub(crate) fn bme_url_allowed(url: &Url) -> bool {
+    url.scheme() == "https" && url.host_str() == Some("bme.buaa.edu.cn") && url.username().is_empty() && url.password().is_none() && url.port().is_none() && url.fragment().is_none() && bme_path_allowed(url.path()) && bme_query_allowed(url.path(), url.query())
 }
 
 pub(crate) fn mse_path_allowed(path: &str) -> bool {
@@ -519,6 +539,7 @@ enum SourceProfile {
     Ase,
     Sa,
     Hss,
+    Bme,
 }
 
 impl SourceProfile {
@@ -553,6 +574,7 @@ impl SourceProfile {
             Self::Ase => ASE_ROBOTS_URL,
             Self::Sa => SA_ROBOTS_URL,
             Self::Hss => HSS_ROBOTS_URL,
+            Self::Bme => BME_ROBOTS_URL,
         }
     }
 
@@ -587,6 +609,7 @@ impl SourceProfile {
             Self::Ase => ".buaa-cli-ase-cache",
             Self::Sa => ".buaa-cli-sa-cache",
             Self::Hss => ".buaa-cli-hss-cache",
+            Self::Bme => ".buaa-cli-bme-cache",
         }
     }
 
@@ -719,7 +742,10 @@ impl SourceProfile {
                 url.host_str() == Some("www.sa.buaa.edu.cn") && url.query().is_none() && sa_path_allowed(url.path())
             }
             Self::Hss => {
-                url.host_str() == Some("www.hss.buaa.edu.cn") && hss_path_allowed(url.path())
+                url.host_str() == Some("www.hss.buaa.edu.cn") && url.query().is_none() && hss_path_allowed(url.path())
+            }
+            Self::Bme => {
+                bme_url_allowed(&url)
             }
         };
         if common_invalid || !allowed {
@@ -992,6 +1018,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_hss(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Hss)
+    }
+
+    pub(crate) fn open_bme(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Bme)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -3954,5 +3984,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(second["captures"][0]["capture_timestamp"], "20240701000000");
+    }
+
+    #[test]
+    fn bme_profile_allows_only_declared_query_shapes() {
+        let root = Url::parse(BME_ROOT_URL).unwrap();
+        let board = Url::parse(BME_NOTICES_URL).unwrap();
+        let article = Url::parse(
+            "https://bme.buaa.edu.cn/newsInfo.aspx?catID=13&subcatID=46&curID=14781",
+        )
+        .unwrap();
+        assert!(bme_url_allowed(&root));
+        assert!(bme_url_allowed(&board));
+        assert!(bme_url_allowed(&article));
+        for raw in [
+            "https://bme.buaa.edu.cn/news.aspx?catID=13&subcatID=46",
+            "https://bme.buaa.edu.cn/newsList.aspx?catID=14",
+            "https://bme.buaa.edu.cn/newsList.aspx?catID=13&extra=1",
+            "https://bme.buaa.edu.cn/newsInfo.aspx?catID=13&curID=14781&subcatID=46",
+            "https://bme.buaa.edu.cn/newsInfo.aspx?catID=13&subcatID=46&curID=14781&x=1",
+            "https://bme.buaa.edu.cn/newsInfo.aspx?catID=13&subcatID=46&curID=bad",
+            "https://user:pass@bme.buaa.edu.cn/newsList.aspx?catID=13",
+            "https://bme.buaa.edu.cn/newsList.aspx?catID=13#fragment",
+        ] {
+            assert!(!bme_url_allowed(&Url::parse(raw).unwrap()), "{raw}");
+        }
     }
 }

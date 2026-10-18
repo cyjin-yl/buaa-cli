@@ -43,6 +43,7 @@ pub(crate) mod sse;
 pub(crate) mod wrj;
 pub(crate) mod yqgdxy;
 pub(crate) mod ase;
+pub(crate) mod bme;
 pub(crate) mod sa;
 pub(crate) mod zfai;
 
@@ -157,7 +158,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, HSS, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld, ME, Wrj, Yqgdxy and ASE source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, HSS, BME, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld, ME, Wrj, Yqgdxy and ASE source binding",
     )
 }
 
@@ -767,6 +768,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("yqgdxy") => return yqgdxy::list(mode, &query),
         Some("ase") => return ase::list(mode, &query),
         Some("hss") => return hss::list(mode, &query),
+        Some("bme") => return bme::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -917,6 +919,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("www.hss.buaa.edu.cn") => {
             return hss::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("bme.buaa.edu.cn") => {
+            return bme::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -1004,6 +1009,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "hss" {
         return hss::surface(mode, page);
+    }
+    if college == "bme" {
+        return bme::surface(mode, page);
     }
     if college == "sa" {
         return sa::surface(mode, page);
@@ -1107,6 +1115,7 @@ fn describe_college_surface(
             | "yqgdxy"
             | "ase"
             | "hss"
+            | "bme"
             | "sa"
     ) {
         college_html(response)?
@@ -1618,6 +1627,27 @@ pub fn schema() -> Value {
     );
     output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
         r"^(?:https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/[0-9]{1,10}|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008|yqgdxy[.]buaa[.]edu[.]cn/info/1053|ase[.]buaa[.]edu[.]cn/info/(1052|1285))/[0-9]{1,10}[.]htm$|^http://www[.]hss[.]buaa[.]edu[.]cn/info/1103/[0-9]{1,10}[.]htm$)"
+    );
+    output["college_source"]["input"]["description"] = json!(
+        "Fixed public pages for reviewed directory-bound college sources, including Biomedical Engineering. BME preserves the exact literal HTTP directory identity and separate HTTPS observation; its root-declared newsList.aspx?catID=13 information portal is selected-only and ASP.NET postback pagination is not followed."
+    );
+    output["list"]["input"]["properties"]["college"]["enum"] = json!([
+        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "bme", "zfai", "iiif", "mse",
+        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
+        "me", "wrj", "yqgdxy", "ase", Value::Null
+    ]);
+    output["list"]["input"]["allOf"]
+        .as_array_mut()
+        .expect("announcement list schema allOf")
+        .push(json!({
+            "if":{"required":["college"],"properties":{"college":{"const":"bme"}}},
+            "then":{"properties":{"category":{"enum":["information",null]}}}
+        }));
+    output["article"]["input"]["description"] = json!(
+        "Reviewed BME article URLs are newsInfo.aspx?catID=13&subcatID=<digits>&curID=<digits> declarations from the retained information portal; source_page is 1 only. BME preserves exact numeric query parameters and rejects postback or foreign variants."
+    );
+    output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
+        r"^(?:https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/[0-9]{1,10}|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008|yqgdxy[.]buaa[.]edu[.]cn/info/1053|ase[.]buaa[.]edu[.]cn/info/(1052|1285))/[0-9]{1,10}[.]htm$|^http://www[.]hss[.]buaa[.]edu[.]cn/info/1103/[0-9]{1,10}[.]htm$|^https?://bme[.]buaa[.]edu[.]cn/newsInfo[.]aspx[?]catID=13&subcatID=[0-9]{1,10}&curID=[0-9]{1,10}$)"
     );
     output
 }
