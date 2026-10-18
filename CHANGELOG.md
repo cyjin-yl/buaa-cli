@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add exact-directory-bound Astronautics-college source metadata (`college-source sa root`) with root/robots-only HTTPS admission. Public HTTP reconnaissance identifies the college's declared notice paths, but the selected HTTPS endpoint is currently blocked by certificate-host mismatch; preserve the exact HTTP directory identity and keep the adapter surface-only rather than falling back to HTTP, guessing routes or claiming notice/article coverage.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
