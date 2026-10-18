@@ -131,6 +131,21 @@ const H3I_ROBOTS_URL: &str = "https://h3i.buaa.edu.cn/robots.txt";
 pub(crate) const ZFAI_ROOT_URL: &str = "https://zfai.buaa.edu.cn/";
 pub(crate) const ZFAI_NOTICES_URL: &str = "https://zfai.buaa.edu.cn/xxgg1.htm";
 const ZFAI_ROBOTS_URL: &str = "https://zfai.buaa.edu.cn/robots.txt";
+pub(crate) const IIIF_ROOT_URL: &str = "https://iiif.buaa.edu.cn/";
+pub(crate) const IIIF_NOTICES_URL: &str = "https://iiif.buaa.edu.cn/xwgg/tzgg.htm";
+const IIIF_ROBOTS_URL: &str = "https://iiif.buaa.edu.cn/robots.txt";
+
+pub(crate) fn iiif_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwgg/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwgg/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1186/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn zfai_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xxgg1.htm") {
@@ -298,6 +313,7 @@ enum SourceProfile {
     Shenyuan,
     H3i,
     Zfai,
+    Iiif,
 }
 
 impl SourceProfile {
@@ -314,6 +330,7 @@ impl SourceProfile {
             Self::Shenyuan => SHENYUAN_ROBOTS_URL,
             Self::H3i => H3I_ROBOTS_URL,
             Self::Zfai => ZFAI_ROBOTS_URL,
+            Self::Iiif => IIIF_ROBOTS_URL,
         }
     }
 
@@ -330,6 +347,7 @@ impl SourceProfile {
             Self::Shenyuan => ".buaa-cli-shenyuan-cache",
             Self::H3i => ".buaa-cli-h3i-cache",
             Self::Zfai => ".buaa-cli-zfai-cache",
+            Self::Iiif => ".buaa-cli-iiif-cache",
         }
     }
 
@@ -397,6 +415,11 @@ impl SourceProfile {
                 url.host_str() == Some("zfai.buaa.edu.cn")
                     && url.query().is_none()
                     && zfai_path_allowed(url.path())
+            }
+            Self::Iiif => {
+                url.host_str() == Some("iiif.buaa.edu.cn")
+                    && url.query().is_none()
+                    && iiif_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -597,6 +620,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_zfai(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Zfai)
+    }
+
+    pub(crate) fn open_iiif(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Iiif)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -2990,6 +3017,310 @@ mod tests {
         assert_eq!(cached.response.sha256, hash(ROOT));
         assert_eq!(
             crate::announcements::zfai::article_with_client(
+                client,
+                CacheMode::Offline,
+                &target,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn iiif_article_refreshes_only_declared_original_from_selected_page() {
+        const ARTICLE: &str = r#"<div class="main"><div class="kuaiXun"><div class="kuaiXun-con"><form><div class="title"><h3>Original source title</h3><div>[发表时间]：2026-09-09</div></div><div class="single-content" id="vsb_content"><div class="v_news_content"><p>Original source paragraph.</p><img src="poster.png"></div></div></form></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1186/42.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Iiif;
+        for (url, body) in [
+            (IIIF_ROOT_URL, br#"<a href="xwgg/tzgg.htm">Fixture notice board</a>"# as &[u8]),
+            (IIIF_NOTICES_URL, br#"<div class="main"><div class="wape-right"><div class="pb_sys_common"><span class="p_no"><a href="tzgg/8.htm">2</a></span></div></div></div>"# as &[u8]),
+            ("https://iiif.buaa.edu.cn/xwgg/tzgg/8.htm", br#"<div class="main"><div class="wape-right"><ul class="ss"><li><a href="../../info/1186/42.htm">Distinct listing heading</a><span>2026-09-09</span></li></ul></div></div>"# as &[u8]),
+        ] {
+            seed(&client, url, body, false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(
+            &client,
+            IIIF_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let undeclared = Url::parse("https://iiif.buaa.edu.cn/info/1186/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::iiif::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://iiif.buaa.edu.cn/info/1186/42.htm").unwrap();
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Iiif;
+        let output = crate::announcements::iiif::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Original source title");
+        assert_eq!(output["published_at"], "2026-09-09");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Original source paragraph."])
+        );
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(
+            output["source_listing"]["source_url"],
+            "https://iiif.buaa.edu.cn/xwgg/tzgg/8.htm"
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Iiif;
+        let cached = crate::announcements::iiif::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
+        assert_eq!(cached["title"], "Original source title");
+        assert_eq!(
+            cached["body_paragraphs"],
+            serde_json::json!(["Original source paragraph."])
+        );
+        assert_eq!(cached["result"], "partial_text");
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn rescue_iiif_discovery_retains_admitted_failures_and_rejects_unadmitted_sources() {
+        const LISTING: &[u8] = br#"<div class="main"><div class="wape-right"><ul class="ss"><li><a href="../info/1186/99.htm">Different declared heading</a><span>2026-09-09</span></li></ul></div></div>"#;
+        for (headers, body, retained, expected) in [
+            (
+                "Content-Type: text/html\r\n",
+                b"<title>Admitted unsupported layout</title>".as_slice(),
+                true,
+                "unavailable",
+            ),
+            ("Content-Type: text/html\r\n", LISTING, true, "unsupported"),
+            (
+                "Content-Type: application/json\r\n",
+                LISTING,
+                false,
+                "unavailable",
+            ),
+            (
+                "Content-Type: text/html\r\n",
+                b"<base href='https://foreign.example/'><p>Unsupported base</p>".as_slice(),
+                false,
+                "unavailable",
+            ),
+            (
+                "Content-Type: text/html\r\n",
+                b"\xff".as_slice(),
+                false,
+                "unavailable",
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /xwgg/tzgg.htm "));
+                assert!(!request.to_ascii_lowercase().contains("cookie:"));
+                reply(socket, 200, headers, body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Iiif;
+            seed(
+                &client,
+                IIIF_ROOT_URL,
+                br#"<a href="xwgg/tzgg.htm">Notice board</a>"#,
+                false,
+            );
+            let root = Url::parse(IIIF_ROOT_URL).unwrap();
+            let mut entry = client.load(&root).unwrap().unwrap();
+            entry
+                .response
+                .headers
+                .insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+            seed(
+                &client,
+                IIIF_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let target = Url::parse("https://iiif.buaa.edu.cn/info/1186/42.htm").unwrap();
+            assert_eq!(
+                crate::announcements::iiif::article_with_client(
+                    client,
+                    CacheMode::PreferCache,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
+                expected
+            );
+            let mut client = fixture.client(CacheMode::Offline, &server);
+            client.profile = SourceProfile::Iiif;
+            let cached = client.load(&Url::parse(IIIF_NOTICES_URL).unwrap()).unwrap();
+            assert_eq!(cached.is_some(), retained);
+            if let Some(cached) = cached {
+                assert_eq!(cached.response.body, body);
+                assert_eq!(cached.response.sha256, hash(body));
+            }
+            assert_eq!(
+                crate::announcements::iiif::article_with_client(
+                    client,
+                    CacheMode::Offline,
+                    &target,
+                    1,
+                    serde_json::json!({})
+                )
+                .unwrap_err()
+                .code,
+                if retained { expected } else { "offline_miss" }
+            );
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn rescue_iiif_missing_ordinal_retains_the_admitted_board() {
+        const BOARD: &[u8] = b"<title>Notice board without another ordinal</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwgg/tzgg.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BOARD);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Iiif;
+        seed(
+            &client,
+            IIIF_ROOT_URL,
+            br#"<a href="xwgg/tzgg.htm">Notice board</a>"#,
+            false,
+        );
+        let mut root = client
+            .load(&Url::parse(IIIF_ROOT_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        root.response
+            .headers
+            .insert("content-type".into(), "text/html".into());
+        client.save(&root).unwrap();
+        seed(
+            &client,
+            IIIF_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse("https://iiif.buaa.edu.cn/info/1186/42.htm").unwrap();
+        assert_eq!(
+            crate::announcements::iiif::article_with_client(
+                client,
+                CacheMode::PreferCache,
+                &target,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Iiif;
+        let cached = client
+            .load(&Url::parse(IIIF_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.response.body, BOARD);
+        assert_eq!(cached.response.sha256, hash(BOARD));
+        assert_eq!(
+            crate::announcements::iiif::article_with_client(
+                client,
+                CacheMode::Offline,
+                &target,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn rescue_iiif_missing_root_declaration_retains_the_admitted_root() {
+        const ROOT: &[u8] = b"<title>Source root without the reviewed board</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET / HTTP/1.1"));
+            reply(socket, 200, "Content-Type: text/html\r\n", ROOT);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Iiif;
+        seed(
+            &client,
+            IIIF_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let target = Url::parse("https://iiif.buaa.edu.cn/info/1186/42.htm").unwrap();
+        assert_eq!(
+            crate::announcements::iiif::article_with_client(
+                client,
+                CacheMode::PreferCache,
+                &target,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Iiif;
+        let cached = client
+            .load(&Url::parse(IIIF_ROOT_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached.response.body, ROOT);
+        assert_eq!(cached.response.sha256, hash(ROOT));
+        assert_eq!(
+            crate::announcements::iiif::article_with_client(
                 client,
                 CacheMode::Offline,
                 &target,
