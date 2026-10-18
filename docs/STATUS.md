@@ -1,5 +1,11 @@
 # Development status
 
+## Directory-bound SEM economics and management notices
+
+The SEM adapter binds the authoritative directory member `经济管理学院` with its exact listed/resolved `http://sem.buaa.edu.cn/` identity, then deliberately observes `https://sem.buaa.edu.cn/` separately; this is not a silent HTTP upgrade or protocol-equivalence claim. Public read-only reconnaissance found the root-declared notice board `https://sem.buaa.edu.cn/xwdt/tzgg.htm` (`通知公告`). The board uses one active `ul.d-newsU5` list, direct `a.inner` rows with `div.text > h4.tit` headings, and split `div.date > div.t1` month-day plus `div.t2` slash-year dates. Its first page advertises `tzgg/<ordinal>.htm` pages and includes both own-site `/info/1024/<id>.htm` notices and external WeChat links; external destinations remain metadata only.
+
+`college=sem` is implemented for root/notices surface snapshots, `category=tzgg` listings with inclusive date/title filters and source-advertised page selection, and canonical `/info/1024/` articles declared by the selected listing. Article extraction binds one `d-detail1`/news-content form, direct `h1.tit`/publication metadata and one `vsb_content/v_news_content` body. Embedded viewers, images, tables and source-declared sibling JSP files remain unfetched and are reported as `partial_text` or `attachment_only`; no prose is invented from scripts or PDF previews. Query, credential, foreign-host, wrong-category, unadvertised and undeclared URLs fail before transport. Synthetic listing/date, duplicate-board, article-body/attachment, attachment-only-viewer and URL-admission cases are included in the adapter module. No history completion, attachment download, campus mutation or all-college coverage is claimed; native build/test evidence remains a parent integration gate.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

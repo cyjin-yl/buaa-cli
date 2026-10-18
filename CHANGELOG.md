@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory-bound Economics and Management College announcements (`college=sem`, `category=tzgg`) with the root-declared `/xwdt/tzgg.htm` board, source-advertised pagination, split month/day-year dates and canonical `/info/1024/` article binding. Preserve the exact listed HTTP member and deliberate separate HTTPS observation; keep WeChat/external links as unfetched hints, retain article attachments/viewers as `partial_text`/`attachment_only`, and reject foreign/query/undeclared routes before transport. Add bounded SEM source admission, surface snapshots, CLI help/schema wiring and synthetic listing/article/URL tests; no guessed routes, attachment downloads, history completion or campus writes.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
