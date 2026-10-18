@@ -115,6 +115,23 @@ const SCSE_ROBOTS_URL: &str = "https://scse.buaa.edu.cn/robots.txt";
 pub(crate) const IC_ROOT_URL: &str = "https://ic.buaa.edu.cn/";
 pub(crate) const IC_NOTICES_URL: &str = "https://ic.buaa.edu.cn/tzgg.htm";
 const IC_ROBOTS_URL: &str = "https://ic.buaa.edu.cn/robots.txt";
+pub(crate) const AVIATION_ROOT_URL: &str = "https://aviation.buaa.edu.cn/";
+pub(crate) const AVIATION_NOTICES_URL: &str = "https://aviation.buaa.edu.cn/xsgz1/tzgg.htm";
+pub(crate) const AVIATION_PUBLIC_NOTICES_URL: &str = "https://aviation.buaa.edu.cn/gkgs.htm";
+const AVIATION_ROBOTS_URL: &str = "https://aviation.buaa.edu.cn/robots.txt";
+
+pub(crate) fn aviation_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xsgz1/tzgg.htm" | "/gkgs.htm") {
+        return true;
+    }
+    path.strip_prefix("/info/1061/")
+        .or_else(|| path.strip_prefix("/xsgz1/tzgg/"))
+        .or_else(|| path.strip_prefix("/gkgs/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn ic_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/tzgg.htm") {
@@ -217,6 +234,7 @@ enum SourceProfile {
     Spoc,
     Scse,
     Ic,
+    Aviation,
 }
 
 impl SourceProfile {
@@ -228,6 +246,7 @@ impl SourceProfile {
             Self::Spoc => SPOC_ROBOTS_URL,
             Self::Scse => SCSE_ROBOTS_URL,
             Self::Ic => IC_ROBOTS_URL,
+            Self::Aviation => AVIATION_ROBOTS_URL,
         }
     }
 
@@ -239,6 +258,7 @@ impl SourceProfile {
             Self::Spoc => ".buaa-cli-spoc-cache",
             Self::Scse => ".buaa-cli-scse-cache",
             Self::Ic => ".buaa-cli-ic-cache",
+            Self::Aviation => ".buaa-cli-aviation-cache",
         }
     }
 
@@ -281,6 +301,11 @@ impl SourceProfile {
                 url.host_str() == Some("ic.buaa.edu.cn")
                     && url.query().is_none()
                     && ic_path_allowed(url.path())
+            }
+            Self::Aviation => {
+                url.host_str() == Some("aviation.buaa.edu.cn")
+                    && url.query().is_none()
+                    && aviation_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -461,6 +486,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_ic(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Ic)
+    }
+
+    pub(crate) fn open_aviation(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Aviation)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -912,11 +941,11 @@ impl ArchiveClient {
                 .is_some_and(|value| !valid_header(value))
             || cached.revalidated_at_unix_ms.is_some() != cached.revalidation_status.is_some()
             || cached.revalidation_status.is_some_and(|status| {
-                !matches!(status, 200 | 304 | 404 | 410)
-                    && !(status == cached.status
+                !(matches!(status, 200 | 304 | 404 | 410)
+                    || (status == cached.status
                         && self
                             .profile
-                            .has_attributed_archive_error(url, status, &cached.headers))
+                            .has_attributed_archive_error(url, status, &cached.headers)))
             })
         {
             return Err(corrupt_cache());
@@ -1637,6 +1666,151 @@ mod tests {
         assert_eq!(server.count(), 0);
     }
 
+    #[test]
+    fn college_root_without_a_board_retains_exact_admitted_html() {
+        const BODY: &[u8] = b"<title>Changed root</title><p>No reviewed board.</p>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET / "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.ic_client(CacheMode::PreferCache, &server);
+        seed(&client, IC_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let mut attribution = serde_json::json!({});
+        assert_eq!(
+            crate::announcements::bind_college_board(
+                &client,
+                IC_ROOT_URL,
+                IC_NOTICES_URL,
+                &mut attribution
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert!(attribution.get("root_retrieval").is_none());
+        let root = Url::parse(IC_ROOT_URL).unwrap();
+        let retained = client.load(&root).unwrap().unwrap().response;
+        assert_eq!(retained.body, BODY);
+        assert_eq!(retained.sha256, hash(BODY));
+        let offline = client.with_cache_mode(CacheMode::Offline);
+        assert_eq!(
+            crate::announcements::bind_college_board(
+                &offline,
+                IC_ROOT_URL,
+                IC_NOTICES_URL,
+                &mut attribution
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn college_ordinal_discovery_rejects_unadmitted_sources_without_caching() {
+        for (headers, body) in [
+            (
+                "Content-Type: application/json\r\n",
+                b"<title>Not HTML</title>".as_slice(),
+            ),
+            (
+                "Content-Type: text/html-unknown\r\n",
+                b"<title>Not HTML</title>".as_slice(),
+            ),
+            ("", b"<title>Untyped</title>".as_slice()),
+            (
+                "Content-Type: text/html\r\n",
+                b"<base href=\"https://foreign.example/\"><title>Unreviewed base</title>"
+                    .as_slice(),
+            ),
+            ("Content-Type: text/html\r\n", b"\xff".as_slice()),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /tzgg.htm "));
+                reply(socket, 200, headers, body);
+            });
+            let client = fixture.ic_client(CacheMode::PreferCache, &server);
+            seed(&client, IC_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            let url = Url::parse(IC_NOTICES_URL).unwrap();
+            assert_eq!(
+                client
+                    .get(&url, false, |response| {
+                        crate::announcements::advertised_page_url(
+                            response,
+                            &url,
+                            2,
+                            "div.pb_sys_common span.p_no a[href]",
+                            |_| true,
+                        )
+                    })
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+            assert!(client.load(&url).unwrap().is_none());
+            let offline = client.with_cache_mode(CacheMode::Offline);
+            assert_eq!(
+                offline.get(&url, false, |_| Ok(())).unwrap_err().code,
+                "offline_miss"
+            );
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn college_ordinal_layout_and_surface_errors_retain_exact_originals() {
+        let fixture = Fixture::new();
+        let body = format!("<title>{}</title>", "x".repeat(513)).into_bytes();
+        let original = body.clone();
+        let server = Server::new(move |socket, request| {
+            assert!(request.starts_with("GET /tzgg.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", &body);
+        });
+        let client = fixture.ic_client(CacheMode::PreferCache, &server);
+        seed(&client, IC_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let url = Url::parse(IC_NOTICES_URL).unwrap();
+        assert_eq!(
+            client
+                .get(&url, false, |response| {
+                    crate::announcements::advertised_page_url(
+                        response,
+                        &url,
+                        2,
+                        "div.pb_sys_common span.p_no a[href]",
+                        |_| true,
+                    )
+                })
+                .unwrap()
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let retained = client.load(&url).unwrap().unwrap().response;
+        assert_eq!(retained.body, original);
+        assert_eq!(retained.sha256, hash(&original));
+        let offline = client.with_cache_mode(CacheMode::Offline);
+        assert_eq!(
+            offline
+                .get(&url, false, |response| {
+                    let document = crate::announcements::college_html(response)?;
+                    Ok(crate::announcements::describe_college_surface(
+                        response,
+                        &document,
+                        "ic",
+                        serde_json::json!({}),
+                    ))
+                })
+                .unwrap()
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
     fn seed_ic_sources(client: &ArchiveClient) {
         for (url,body) in [
             (IC_ROOT_URL,br#"<a href="tzgg.htm">Fixture notices</a>"# as &[u8]),
@@ -1750,6 +1924,118 @@ mod tests {
     }
 
     #[test]
+    fn aviation_article_uses_advertised_source_page_and_refreshes_only_the_target() {
+        const ARTICLE: &[u8] = br#"<div class="body mh"><div class="moudle"><div class="right"><div class="items"><div><form><div class="title">Fixture policy</div><div class="v_news_content"><p>Source policy paragraph.</p></div></form></div></div></div></div></div><div class="mbody ph"><div class="items"><form><div class="v_news_content"><p>Not extra prose.</p></div></form></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1061/42.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(socket, 200, "Content-Type: text/html\r\n", ARTICLE);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Aviation;
+        for (url, body) in [
+            (AVIATION_ROOT_URL, br#"<a href="gkgs.htm">Fixture public notices</a>"# as &[u8]),
+            (AVIATION_PUBLIC_NOTICES_URL, br#"<div class="pb_sys_common"><span class="p_no"><a href="gkgs/7.htm">2</a></span></div>"# as &[u8]),
+            ("https://aviation.buaa.edu.cn/gkgs/7.htm", br#"<title>Fixture notices</title><div class="body mh"><div class="moudle"><div class="right"><div class="items"><div class="item"><div class="r"><a href="../info/1061/42.htm"><div class="title">Fixture policy</div></a></div></div></div></div></div></div>"# as &[u8]),
+        ] {
+            seed(&client, url, body, false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(
+            &client,
+            AVIATION_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let undeclared = Url::parse("https://aviation.buaa.edu.cn/info/1061/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::aviation::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://aviation.buaa.edu.cn/info/1061/42.htm").unwrap();
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Aviation;
+        let output = crate::announcements::aviation::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Fixture policy");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
+        assert_eq!(
+            output["source_listing"]["source_url"],
+            "https://aviation.buaa.edu.cn/gkgs/7.htm"
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Aviation;
+        let cached = crate::announcements::aviation::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(cached["retrieval"]["response_body_sha256"], hash(ARTICLE));
+        assert_eq!(
+            cached["body_paragraphs"],
+            serde_json::json!(["Source policy paragraph."])
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn aviation_listing_errors_retain_admitted_source_without_fetching_an_article() {
+        for (body, page, expected) in [
+            (b"<title>Changed listing</title>".as_slice(), 1, "unavailable"),
+            (b"<title>No ordinal</title>".as_slice(), 2, "unavailable"),
+            (br#"<div class="body mh"><div class="moudle"><div class="right"><div class="items"><div class="item"><div class="r"><a href="info/1061/99.htm"><div class="title">Other fixture</div></a></div></div></div></div></div></div>"#.as_slice(), 1, "unsupported"),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /gkgs.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Aviation;
+            seed(&client, AVIATION_ROOT_URL, br#"<a href="gkgs.htm">Fixture public notices</a>"#, false);
+            let root = Url::parse(AVIATION_ROOT_URL).unwrap();
+            let mut entry = client.load(&root).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+            seed(&client, AVIATION_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            let target = Url::parse("https://aviation.buaa.edu.cn/info/1061/42.htm").unwrap();
+            assert_eq!(crate::announcements::aviation::article_with_client(client, CacheMode::PreferCache, &target, page, serde_json::json!({})).unwrap_err().code, expected);
+            let mut offline = fixture.client(CacheMode::Offline, &server);
+            offline.profile = SourceProfile::Aviation;
+            let retained = offline.load(&Url::parse(AVIATION_PUBLIC_NOTICES_URL).unwrap()).unwrap().unwrap().response;
+            assert_eq!(retained.body, body);
+            assert_eq!(retained.sha256, hash(body));
+            assert_eq!(crate::announcements::aviation::article_with_client(offline, CacheMode::Offline, &target, page, serde_json::json!({})).unwrap_err().code, expected);
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
     fn offline_and_prefer_cache_make_no_observation_or_governor_state() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _| panic!("offline operation contacted the network"));
@@ -1843,14 +2129,8 @@ mod tests {
         });
         let client = fixture.organization_client(CacheMode::PreferCache, &server);
         let url = Url::parse(ORGANIZATIONS_URL).unwrap();
-        let count = client
-            .get(&url, false, |response| {
-                Ok(crate::organizations::parse_html(&response.body)?
-                    .entries
-                    .len())
-            })
-            .unwrap();
-        assert_eq!(count, 1);
+        let output = crate::organizations::list_with_client(&client).unwrap();
+        assert_eq!(output["completeness"]["entry_count"], 1);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
         assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_secs(5));
@@ -1873,6 +2153,94 @@ mod tests {
             );
         }
         assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn official_directory_admission_refuses_untyped_prefix_mime_and_active_base() {
+        const BODY: &[u8] = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='http://rse.buaa.edu.cn'>Fixture</a></div></div></html>";
+        for (headers, body) in [
+            ("", BODY.to_vec()),
+            ("Content-Type: text/html-unknown\r\n", BODY.to_vec()),
+            (
+                "Content-Type: text/html\r\n",
+                [b"<base href='https://foreign.example/'>".as_slice(), BODY].concat(),
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+                reply(socket, 200, headers, &body);
+            });
+            let client = fixture.organization_client(CacheMode::PreferCache, &server);
+            seed(
+                &client,
+                ORGANIZATIONS_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            assert_eq!(
+                crate::organizations::list_with_client(&client)
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+            assert!(
+                client
+                    .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(server.count(), 1);
+            assert_eq!(
+                crate::organizations::list_with_client(&client.with_cache_mode(CacheMode::Offline))
+                    .unwrap_err()
+                    .code,
+                "offline_miss"
+            );
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn official_directory_layout_failure_retains_exact_admitted_original() {
+        const BODY: &[u8] = b"<html><title>Changed directory</title><main>No reviewed directory layout</main></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html; charset=utf-8\r\n",
+                BODY,
+            );
+        });
+        let client = fixture.organization_client(CacheMode::PreferCache, &server);
+        seed(
+            &client,
+            ORGANIZATIONS_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        assert_eq!(
+            crate::organizations::list_with_client(&client)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        let original = client
+            .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(original.response.body, BODY);
+        assert_eq!(original.response.sha256, hash(BODY));
+        assert_eq!(server.count(), 1);
+        assert_eq!(
+            crate::organizations::list_with_client(&client.with_cache_mode(CacheMode::Offline))
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
     }
 
     #[test]

@@ -201,7 +201,7 @@ fn copy_new(mut source: File, output: &OutputTarget, spec: &ReleaseSpec) -> Resu
         // must not be published under the pinned identity.
         target.seek(SeekFrom::Start(0)).map_err(|_| unavailable())?;
         let mut digest = Sha256::new();
-        let mut reader = target.take(spec.bytes);
+        let mut reader = (&mut target).take(spec.bytes);
         std::io::copy(&mut reader, &mut digest).map_err(|_| unavailable())?;
         if format!("{:x}", digest.finalize()) != spec.sha256 {
             return Err(conflict());
@@ -975,7 +975,8 @@ mod tests {
         let directory = governor::open_directory(&out_dir, false, false).unwrap();
         let path = out_dir.join("victim.zip");
         fs::write(&path, b"synthetic-template-zip").unwrap();
-        let metadata = fs::metadata(&path).unwrap();
+        let original = File::open(&path).unwrap();
+        let metadata = original.metadata().unwrap();
         let id = (metadata.dev(), metadata.ino());
         let name = CString::new("victim.zip").unwrap();
 
@@ -995,5 +996,6 @@ mod tests {
         // A missing name is not ours.
         fs::remove_file(&path).unwrap();
         assert!(!name_still_ours(&directory, &name, id));
+        drop(original);
     }
 }
