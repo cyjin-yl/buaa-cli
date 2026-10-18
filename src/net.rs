@@ -254,6 +254,9 @@ const BME_ROBOTS_URL: &str = "https://bme.buaa.edu.cn/robots.txt";
 pub(crate) const YGY_ROOT_URL: &str = "https://ygy.buaa.edu.cn/";
 pub(crate) const YGY_NOTICES_URL: &str = "https://ygy.buaa.edu.cn/tzgg/yggg.htm";
 const YGY_ROBOTS_URL: &str = "https://ygy.buaa.edu.cn/robots.txt";
+pub(crate) const CST_ROOT_URL: &str = "https://cst.buaa.edu.cn/";
+pub(crate) const CST_NOTICES_URL: &str = "https://cst.buaa.edu.cn/index/tzgg.htm";
+const CST_ROBOTS_URL: &str = "https://cst.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -422,6 +425,18 @@ pub(crate) fn ic_path_allowed(path: &str) -> bool {
     })
 }
 
+pub(crate) fn cst_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1102/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
 pub(crate) fn scse_document_path_allowed(path: &str) -> bool {
     let Some(tail) = path.strip_prefix("/__local/") else {
         return false;
@@ -535,6 +550,7 @@ enum SourceProfile {
     Hss,
     Bme,
     Ygy,
+    Cst,
 }
 
 impl SourceProfile {
@@ -571,6 +587,7 @@ impl SourceProfile {
             Self::Hss => HSS_ROBOTS_URL,
             Self::Bme => BME_ROBOTS_URL,
             Self::Ygy => YGY_ROBOTS_URL,
+            Self::Cst => CST_ROBOTS_URL,
         }
     }
 
@@ -607,6 +624,7 @@ impl SourceProfile {
             Self::Hss => ".buaa-cli-hss-cache",
             Self::Bme => ".buaa-cli-bme-cache",
             Self::Ygy => ".buaa-cli-ygy-cache",
+            Self::Cst => ".buaa-cli-cst-cache",
         }
     }
 
@@ -744,6 +762,9 @@ impl SourceProfile {
             Self::Bme => bme_url_allowed(&url),
             Self::Ygy => {
                 url.host_str() == Some("ygy.buaa.edu.cn") && url.query().is_none() && ygy_path_allowed(url.path())
+            }
+            Self::Cst => {
+                url.host_str() == Some("cst.buaa.edu.cn") && url.query().is_none() && cst_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -1024,6 +1045,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_ygy(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Ygy)
+    }
+
+    pub(crate) fn open_cst(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Cst)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
