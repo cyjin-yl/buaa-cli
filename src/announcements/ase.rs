@@ -130,9 +130,10 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
                     line!(),
                 )
             })?;
-        let title = row
-            .select(&headings)
+        let mut row_headings = row.select(&headings);
+        let title = row_headings
             .next()
+            .filter(|_| row_headings.next().is_none())
             .map(element_text)
             .filter(|value| !value.is_empty() && value.len() <= MAX_TEXT)
             .ok_or_else(|| {
