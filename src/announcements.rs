@@ -42,6 +42,7 @@ pub(crate) mod sse;
 pub(crate) mod wrj;
 pub(crate) mod yqgdxy;
 pub(crate) mod ase;
+pub(crate) mod sa;
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -996,6 +997,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "ase" {
         return ase::surface(mode, page);
     }
+    if college == "sa" {
+        return sa::surface(mode, page);
+    }
     if college == "scse" {
         return scse::surface(mode, page);
     }
@@ -1094,6 +1098,7 @@ fn describe_college_surface(
             | "wrj"
             | "yqgdxy"
             | "ase"
+            | "sa"
     ) {
         college_html(response)?
     } else {
@@ -1580,6 +1585,9 @@ pub fn schema() -> Value {
     );
     output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
         r"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/[0-9]{1,10}|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008|yqgdxy[.]buaa[.]edu[.]cn/info/1053|ase[.]buaa[.]edu[.]cn/info/(1052|1285))/[0-9]{1,10}[.]htm$"
+    );
+    output["college_source"]["input"]["description"] = json!(
+        "Fixed public pages for reviewed directory-bound college sources, including Astronautics. Source roots must declare selected notice boards; college-source sa root is root/robots-only while the selected HTTPS endpoint remains explicitly blocked by certificate-host mismatch, with no HTTP fallback or guessed notice route."
     );
     output
 }
