@@ -169,6 +169,9 @@ pub(crate) fn sce_path_allowed(path: &str) -> bool {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
         })
 }
+pub(crate) const SSE_ROOT_URL: &str = "https://sse.buaa.edu.cn/";
+pub(crate) const SSE_NOTICES_URL: &str = "https://sse.buaa.edu.cn/xwdt/gsgg/tzgg.htm";
+const SSE_ROBOTS_URL: &str = "https://sse.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -204,6 +207,12 @@ pub(crate) fn physics_path_allowed(path: &str) -> bool {
     }
     path.strip_prefix("/index/tzgg/")
         .or_else(|| path.strip_prefix("/info/1252/"))
+pub(crate) fn sse_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gsgg/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwdt/gsgg/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1078/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -410,6 +419,7 @@ enum SourceProfile {
     Transportation,
     Physics,
     Sce,
+    Sse,
 }
 
 impl SourceProfile {
@@ -435,6 +445,7 @@ impl SourceProfile {
             Self::Transportation => TRANSPORTATION_ROBOTS_URL,
             Self::Physics => PHYSICS_ROBOTS_URL,
             Self::Sce => SCE_ROBOTS_URL,
+            Self::Sse => SSE_ROBOTS_URL,
         }
     }
 
@@ -460,6 +471,7 @@ impl SourceProfile {
             Self::Transportation => ".buaa-cli-transportation-cache",
             Self::Physics => ".buaa-cli-physics-cache",
             Self::Sce => ".buaa-cli-sce-cache",
+            Self::Sse => ".buaa-cli-sse-cache",
         }
     }
 
@@ -564,6 +576,10 @@ impl SourceProfile {
                 url.host_str() == Some("sce.buaa.edu.cn")
                     && url.query().is_none()
                     && sce_path_allowed(url.path())
+            Self::Sse => {
+                url.host_str() == Some("sse.buaa.edu.cn")
+                    && url.query().is_none()
+                    && sse_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -796,6 +812,8 @@ impl ArchiveClient {
         Self::open_profile(mode, SourceProfile::Physics)
     pub(crate) fn open_sce(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sce)
+    pub(crate) fn open_sse(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Sse)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -1613,6 +1631,28 @@ mod tests {
 
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     const TARGET: &str = "https://web.archive.org/web/20240102030405id_/https://www.buaa.edu.cn/";
+
+    #[test]
+    fn sse_profile_admits_only_declared_board_and_article_namespaces() {
+        for raw in [
+            "https://sse.buaa.edu.cn/",
+            "https://sse.buaa.edu.cn/robots.txt",
+            "https://sse.buaa.edu.cn/xwdt/gsgg/tzgg.htm",
+            "https://sse.buaa.edu.cn/xwdt/gsgg/tzgg/2.htm",
+            "https://sse.buaa.edu.cn/info/1078/42.htm",
+        ] {
+            assert!(SourceProfile::Sse.validate_url(&Url::parse(raw).unwrap()).is_ok());
+        }
+        for raw in [
+            "http://sse.buaa.edu.cn/",
+            "https://sse.buaa.edu.cn/xwdt/gsgg/cgzq.htm",
+            "https://sse.buaa.edu.cn/info/1093/42.htm",
+            "https://sse.buaa.edu.cn/info/1078/42.htm?query=1",
+            "https://foreign.example/info/1078/42.htm",
+        ] {
+            assert!(SourceProfile::Sse.validate_url(&Url::parse(raw).unwrap()).is_err());
+        }
+    }
 
     struct Fixture(PathBuf);
 

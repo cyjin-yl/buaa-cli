@@ -35,6 +35,7 @@ pub(crate) mod shenyuan;
 pub(crate) mod soft;
 pub(crate) mod transportation,
 pub(crate) mod sce;
+pub(crate) mod sse;
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -148,7 +149,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics and Sce source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce and Sse source binding",
     )
 }
 
@@ -750,6 +751,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("transportation") => return transportation::list(mode, &query),
         Some("physics") => return physics::list(mode, &query),
         Some("sce") => return sce::list(mode, &query),
+        Some("sse") => return sse::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -873,6 +875,8 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
             return physics::article(mode, raw_url, query.source_page.unwrap_or(1));
         Some("sce.buaa.edu.cn") => {
             return sce::article(mode, raw_url, query.source_page.unwrap_or(1));
+        Some("sse.buaa.edu.cn") => {
+            return sse::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
         _ => {}
     }
@@ -936,6 +940,8 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
         return transportation::surface(mode, page);
     if college == "physics" {
         return physics::surface(mode, page);
+    if college == "sse" {
+        return sse::surface(mode, page);
     }
     if college == "scse" {
         return scse::surface(mode, page);
@@ -1028,6 +1034,7 @@ fn describe_college_surface(
             | "soft"
             | "physics"
             | "sce"
+            | "sse"
     ) {
         college_html(response)?
     } else {
@@ -1373,6 +1380,32 @@ pub fn schema() -> Value {
             }
         },
     });
+    output["college_source"]["input"]["description"] = json!(
+        "announcements college-source scse|ic|aviation|beijing|shenyuan|h3i|zfai|iiif|mse|sepe|sse [root|notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed directory-bound public pages only. SSE binds the exact Space and Earth sciences member and its root-declared xwdt/gsgg/tzgg.htm notice board, preserving the literal HTTP directory identity and separate HTTPS observation. No guessed route or protocol alias."
+    );
+    output["list"]["input"]["description"] = json!(
+        "Optional JSON object. college=sse selects the Space and Earth sciences notices board (tzgg), with source YYYY.MM.DD dates, direct h3 headings, direct p excerpts and source-advertised page ordinals only. Other college and university-wide selectors retain their documented scopes; no automatic traversal or inferred URLs."
+    );
+    output["list"]["input"]["properties"]["college"]["enum"] = json!([
+        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
+        "sepe", "sse", null
+    ]);
+    output["list"]["input"]["allOf"]
+        .as_array_mut()
+        .expect("announcement list schema allOf")
+        .push(json!({
+            "if":{"required":["college"],"properties":{"college":{"const":"sse"}}},
+            "then":{"properties":{"category":{"enum":["tzgg",null]}}}
+        }));
+    output["article"]["input"]["description"] = json!(
+        "JSON object with url and optional source_page. SSE articles must be HTTPS, canonical /info/1078/<digits>.htm URLs declared by the retained xwdt/gsgg/tzgg.htm board; source_page defaults to 1 and later ordinals must be advertised. Query, credentials, custom ports, fragments, foreign hosts and undeclared articles are rejected."
+    );
+    output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
+        "^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|sse[.]buaa[.]edu[.]cn/info/1078)/[0-9]{1,10}[.]htm$"
+    );
+    output["article"]["output"]["description"] = json!(
+        "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. SSE uses one direct art-tit/date header and one scoped vsb_content/v_news_content body; images, tables and attachment bytes remain explicit partial/unfetched content."
+    );
     output["article"]["output"]["properties"] = json!({
         "body_tables": {
             "type":"array","maxItems":MAX_ENTRIES,
