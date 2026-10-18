@@ -1,5 +1,25 @@
 # Development status
 
+## Directory-bound Software-college notices
+
+The official directory records the visible `软件学院` member as the exact
+literal/resolved `http://soft.buaa.edu.cn/`. The selected HTTPS observation
+retains that HTTP identity and is not a protocol alias. The HTTPS homepage
+declares `/xwdt/gggs.htm`; that section declares the selected
+`/xwdt/gggs/tzgg.htm` 通知公告 board. The adapter binds both declarations
+before reading the source-ordered `nymain/notice-list` rows, and only accepts
+source-advertised `/xwdt/gggs/tzgg/<digits>.htm` pages plus declared
+`/info/1095/<digits>.htm` originals.
+
+`college=soft` with `category=tzgg` supports inclusive date/title filters,
+`college-source soft root|notices`, and selected source-page article reads.
+Article extraction uses the unique `art-main`/`art-tit`/`v_news_content` scope;
+source-declared JSP files are unfetched hints, while image and table content
+remains explicit `partial_text`. Credentials, queries, fragments, custom
+ports, foreign hosts, guessed routes and automatic page traversal are
+rejected. The live source currently exposes one page; no complete history or
+all-college coverage is claimed.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.
