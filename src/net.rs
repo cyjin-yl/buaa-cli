@@ -148,6 +148,9 @@ const MATH_ROBOTS_URL: &str = "https://math.buaa.edu.cn/robots.txt";
 pub(crate) const SOFT_ROOT_URL: &str = "https://soft.buaa.edu.cn/";
 pub(crate) const SOFT_NOTICES_URL: &str = "https://soft.buaa.edu.cn/xwdt/gggs/tzgg.htm";
 const SOFT_ROBOTS_URL: &str = "https://soft.buaa.edu.cn/robots.txt";
+pub(crate) const TRANSPORTATION_ROOT_URL: &str = "https://transportation.buaa.edu.cn/";
+pub(crate) const TRANSPORTATION_NOTICES_URL: &str = "https://transportation.buaa.edu.cn/xwdt/gggs.htm";
+const TRANSPORTATION_ROBOTS_URL: &str = "https://transportation.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -164,25 +167,19 @@ pub(crate) fn sepe_path_allowed(path: &str) -> bool {
 }
 
 pub(crate) fn math_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/index/xygg.htm") {
-        return true;
-    }
-    path.strip_prefix("/info/1294/")
-        .and_then(|stem| stem.strip_suffix(".htm"))
-        .is_some_and(|stem| {
-            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
-        })
+    if matches!(path, "/" | "/robots.txt" | "/index/xygg.htm") { return true; }
+    path.strip_prefix("/info/1294/").and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 pub(crate) fn soft_path_allowed(path: &str) -> bool {
-    if matches!(
-        path,
-        "/" | "/robots.txt" | "/xwdt/gggs.htm" | "/xwdt/gggs/tzgg.htm"
-    ) {
-        return true;
-    }
-    path.strip_prefix("/xwdt/gggs/tzgg/")
-        .or_else(|| path.strip_prefix("/info/1095/"))
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm" | "/xwdt/gggs/tzgg.htm") { return true; }
+    path.strip_prefix("/xwdt/gggs/tzgg/").or_else(|| path.strip_prefix("/info/1095/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+pub(crate) fn transportation_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") { return true; }
+    path.strip_prefix("/xwdt/gggs/").or_else(|| path.strip_prefix("/info/1058/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+}
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -386,6 +383,7 @@ enum SourceProfile {
     Sepe,
     Math,
     Soft,
+    Transportation,
 }
 
 impl SourceProfile {
@@ -408,6 +406,7 @@ impl SourceProfile {
             Self::Sepe => SEPE_ROBOTS_URL,
             Self::Math => MATH_ROBOTS_URL,
             Self::Soft => SOFT_ROBOTS_URL,
+            Self::Transportation => TRANSPORTATION_ROBOTS_URL,
         }
     }
 
@@ -430,6 +429,7 @@ impl SourceProfile {
             Self::Sepe => ".buaa-cli-sepe-cache",
             Self::Math => ".buaa-cli-math-cache",
             Self::Soft => ".buaa-cli-soft-cache",
+            Self::Transportation => ".buaa-cli-transportation-cache",
         }
     }
 
@@ -519,14 +519,13 @@ impl SourceProfile {
                     && sepe_path_allowed(url.path())
             }
             Self::Math => {
-                url.host_str() == Some("math.buaa.edu.cn")
-                    && url.query().is_none()
-                    && math_path_allowed(url.path())
+                url.host_str() == Some("math.buaa.edu.cn") && url.query().is_none() && math_path_allowed(url.path())
             }
             Self::Soft => {
-                url.host_str() == Some("soft.buaa.edu.cn")
-                    && url.query().is_none()
-                    && soft_path_allowed(url.path())
+                url.host_str() == Some("soft.buaa.edu.cn") && url.query().is_none() && soft_path_allowed(url.path())
+            }
+            Self::Transportation => {
+                url.host_str() == Some("transportation.buaa.edu.cn") && url.query().is_none() && transportation_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -751,6 +750,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_soft(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Soft)
+    }
+
+    pub(crate) fn open_transportation(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Transportation)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {

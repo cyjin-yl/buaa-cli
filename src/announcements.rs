@@ -32,6 +32,7 @@ mod scse;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
 pub(crate) mod soft;
+pub(crate) mod transportation,
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -145,7 +146,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe and Soft source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe, Soft and Transportation source binding",
     )
 }
 
@@ -744,6 +745,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("mse") => return mse::list(mode, &query),
         Some("sepe") => return sepe::list(mode, &query),
         Some("soft") => return soft::list(mode, &query),
+        Some("transportation") => return transportation::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -861,6 +863,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("soft.buaa.edu.cn") => {
             return soft::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("transportation.buaa.edu.cn") => {
+            return transportation::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -918,6 +923,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "soft" {
         return soft::surface(mode, page);
+    }
+    if college == "transportation" {
+        return transportation::surface(mode, page);
     }
     if college == "scse" {
         return scse::surface(mode, page);
@@ -1373,6 +1381,25 @@ pub fn schema() -> Value {
         "body_table_row_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS},
         "body_table_cell_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS * MAX_ENTRIES}
     });
+    output["college_source"]["input"]["description"] = json!(
+        "Fixed public pages for reviewed directory-bound college sources, including transportation; source roots must declare selected notice boards."
+    );
+    output["list"]["input"]["description"] = json!(
+        "Optional JSON object. college=transportation selects the directory-bound Transportation Science and Engineering public notices (gggs); page ordinals must be source-advertised and dates/title filters are inclusive."
+    );
+    output["list"]["input"]["properties"]["college"]["enum"] = json!([
+        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
+        "sepe", "transportation", Value::Null
+    ]);
+    output["list"]["input"]["allOf"][0]["if"]["properties"]["college"]["enum"] = json!([
+        "scse", "beijing", "mse", "sepe", "transportation"
+    ]);
+    output["article"]["input"]["description"] = json!(
+        "Reviewed HTTPS article URLs include Transportation notices in category 1058. Transportation articles must be declared by the retained notice listing; source_page defaults to 1 and selects only source-advertised ordinals."
+    );
+    output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
+        r"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|transportation[.]buaa[.]edu[.]cn/info/1058)/[0-9]{1,10}[.]htm$"
+    );
     output
 }
 
