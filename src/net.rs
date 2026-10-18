@@ -142,6 +142,9 @@ const RSE_ROBOTS_URL: &str = "https://rse.buaa.edu.cn/robots.txt";
 pub(crate) const SEPE_ROOT_URL: &str = "https://sepe.buaa.edu.cn/";
 pub(crate) const SEPE_NOTICES_URL: &str = "https://sepe.buaa.edu.cn/xwdt/gggs.htm";
 const SEPE_ROBOTS_URL: &str = "https://sepe.buaa.edu.cn/robots.txt";
+pub(crate) const MATH_ROOT_URL: &str = "https://math.buaa.edu.cn/";
+pub(crate) const MATH_NOTICES_URL: &str = "https://math.buaa.edu.cn/index/xygg.htm";
+const MATH_ROBOTS_URL: &str = "https://math.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -151,6 +154,17 @@ pub(crate) fn sepe_path_allowed(path: &str) -> bool {
         .or_else(|| path.strip_prefix("/info/1078/"))
         .or_else(|| path.strip_prefix("/info/1093/"))
         .or_else(|| path.strip_prefix("/info/1080/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn math_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/index/xygg.htm") {
+        return true;
+    }
+    path.strip_prefix("/info/1294/")
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -352,6 +366,7 @@ enum SourceProfile {
     Mse,
     Rse,
     Sepe,
+    Math,
 }
 
 impl SourceProfile {
@@ -372,6 +387,7 @@ impl SourceProfile {
             Self::Mse => MSE_ROBOTS_URL,
             Self::Rse => RSE_ROBOTS_URL,
             Self::Sepe => SEPE_ROBOTS_URL,
+            Self::Math => MATH_ROBOTS_URL,
         }
     }
 
@@ -392,6 +408,7 @@ impl SourceProfile {
             Self::Mse => ".buaa-cli-mse-cache",
             Self::Rse => ".buaa-cli-rse-cache",
             Self::Sepe => ".buaa-cli-sepe-cache",
+            Self::Math => ".buaa-cli-math-cache",
         }
     }
 
@@ -479,6 +496,11 @@ impl SourceProfile {
                 url.host_str() == Some("sepe.buaa.edu.cn")
                     && url.query().is_none()
                     && sepe_path_allowed(url.path())
+            }
+            Self::Math => {
+                url.host_str() == Some("math.buaa.edu.cn")
+                    && url.query().is_none()
+                    && math_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -695,6 +717,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_sepe(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sepe)
+    }
+
+    pub(crate) fn open_math(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Math)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
