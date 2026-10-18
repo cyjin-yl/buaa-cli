@@ -21,15 +21,23 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 pub(crate) mod aviation;
+pub(crate) mod beijing;
+pub(crate) mod h3i;
 pub(crate) mod ic;
+pub(crate) mod iiif;
+pub(crate) mod mse;
+pub(crate) mod rse;
 mod scse;
+pub(crate) mod sepe;
+pub(crate) mod shenyuan;
+pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
 const MAX_HTML: usize = 2 * 1024 * 1024;
 const MAX_ENTRIES: usize = 256;
 const MAX_TEXT: usize = 512;
 const MAX_HREF: usize = 4096;
-const MAX_BODY_PARAGRAPHS: usize = 512;
+const MAX_BODY_PARAGRAPHS: usize = 1024;
 const MAX_PARAGRAPH: usize = 8 * 1024;
 const MAX_ATTACHMENT_HINTS: usize = 32;
 const DEFAULT_CATEGORY: &str = "tzgg";
@@ -135,7 +143,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC and aviation source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai and Iiif source binding",
     )
 }
 
@@ -194,6 +202,7 @@ pub(crate) fn advertised_page_url(
     base: &Url,
     page: u32,
     ordinal_links: &str,
+<<<<<<< HEAD
     allowed_page: impl Fn(&Url) -> bool,
 ) -> Result<Result<Url, Error>, Error> {
     let document = college_html(response)?;
@@ -213,6 +222,15 @@ fn advertised_page_url_document(
     ordinal_links: &str,
     allowed_page: impl Fn(&Url) -> bool,
 ) -> Result<Url, Error> {
+=======
+    allowed_page: impl Fn(&Url) -> bool,
+) -> Result<Url, Error> {
+    if bytes.is_empty() || bytes.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
+    let document = Html::parse_document(text);
+>>>>>>> work/sepe-full-stacked
     let selector = Selector::parse(ordinal_links).map_err(|_| unavailable())?;
     let mut selected = None;
     for link in document.select(&selector) {
@@ -315,6 +333,23 @@ fn parse_iso_date(raw: &str) -> Option<String> {
     let month: u32 = raw[5..7].parse().ok()?;
     let day: u32 = raw[8..10].parse().ok()?;
     let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    Some(date.format("%Y-%m-%d").to_string())
+}
+
+fn parse_chinese_publication_date(raw: &str) -> Option<String> {
+    let raw = raw.strip_prefix("日期：")?.trim().strip_suffix('日')?;
+    let (year, tail) = raw.split_once('年')?;
+    let (month, day) = tail.split_once('月')?;
+    if year.len() != 4
+        || !(1..=2).contains(&month.len())
+        || !(1..=2).contains(&day.len())
+        || ![year, month, day]
+            .into_iter()
+            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return None;
+    }
+    let date = NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, day.parse().ok()?)?;
     Some(date.format("%Y-%m-%d").to_string())
 }
 
@@ -467,7 +502,8 @@ fn parse_article_document(document: &Html, url: &Url) -> Result<ArticleDocument,
         })
         .and_then(|raw| parse_iso_date(&raw));
 
-    let (paragraphs, attachment_hints, attachments_found) = article_body(document.root_element())?;
+    let (paragraphs, attachment_hints, attachments_found) =
+        article_body(document.root_element(), false)?;
     Ok(ArticleDocument {
         title,
         category: article_category_from_url(url),
@@ -478,7 +514,39 @@ fn parse_article_document(document: &Html, url: &Url) -> Result<ArticleDocument,
     })
 }
 
-fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
+fn article_body(
+    document: ElementRef<'_>,
+    has_other_source_text: bool,
+) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
+    let paragraphs = article_paragraphs(document, has_other_source_text)?;
+    let link_selector = Selector::parse("div.v_news_content a[href]").map_err(|_| unavailable())?;
+    let mut attachment_hints: Vec<Value> = Vec::new();
+    let mut attachments_found = false;
+    for anchor in document.select(&link_selector) {
+        if inert_element(anchor) {
+            continue;
+        }
+        let Some(href) = anchor.value().attr("href") else {
+            continue;
+        };
+        if !is_document_href(href) {
+            continue;
+        }
+        attachments_found = true;
+        if attachment_hints.len() < MAX_ATTACHMENT_HINTS {
+            attachment_hints.push(json!({
+                "href": href,
+                "text": active_element_text(anchor),
+            }));
+        }
+    }
+    Ok((paragraphs, attachment_hints, attachments_found))
+}
+
+fn article_paragraphs(
+    document: ElementRef<'_>,
+    has_other_source_text: bool,
+) -> Result<Vec<String>, Error> {
     let body_selector = Selector::parse("div.v_news_content p").map_err(|_| unavailable())?;
     let mut paragraphs: Vec<String> = Vec::new();
     for paragraph in document.select(&body_selector) {
@@ -502,7 +570,7 @@ fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bo
         }
         paragraphs.push(text);
     }
-    if paragraphs.is_empty() {
+    if paragraphs.is_empty() && !has_other_source_text {
         return Err(failed_contract(
             "article must contain at least one v_news_content paragraph",
             file!(),
@@ -510,29 +578,32 @@ fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bo
         ));
     }
 
-    let link_selector = Selector::parse("div.v_news_content a[href]").map_err(|_| unavailable())?;
-    let mut attachment_hints: Vec<Value> = Vec::new();
-    let mut attachments_found = false;
-    for anchor in document.select(&link_selector) {
+    Ok(paragraphs)
+}
+
+fn declared_jsp_attachment_hints(scope: ElementRef<'_>) -> Result<(Vec<Value>, bool), Error> {
+    let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
+    let mut hints = Vec::new();
+    let mut hints_truncated = false;
+    for anchor in scope.select(&links) {
         if inert_element(anchor) {
             continue;
         }
-        let Some(href) = anchor.value().attr("href") else {
-            continue;
-        };
-        if !is_document_href(href) {
+        let href = anchor.value().attr("href").unwrap_or_default();
+        let name = element_text(anchor);
+        if !href.starts_with("/system/_content/download.jsp?") || !is_document_href(&name) {
             continue;
         }
-        attachments_found = true;
-        if attachment_hints.len() < MAX_ATTACHMENT_HINTS {
-            attachment_hints.push(json!({
-                "href": href,
-                "text": active_element_text(anchor),
-            }));
+        if href.len() > MAX_HREF || name.len() > MAX_TEXT {
+            return Err(unavailable());
         }
+        if hints.len() == MAX_ATTACHMENT_HINTS {
+            hints_truncated = true;
+            break;
+        }
+        hints.push(json!({"href":href,"text":name,"fetched":false}));
     }
-
-    Ok((paragraphs, attachment_hints, attachments_found))
+    Ok((hints, hints_truncated))
 }
 
 fn article_category_from_url(url: &Url) -> Option<String> {
@@ -686,6 +757,13 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("scse") => return scse::list(mode, &query),
         Some("ic") => return ic::list(mode, &query),
         Some("aviation") => return aviation::list(mode, &query),
+        Some("beijing") => return beijing::list(mode, &query),
+        Some("shenyuan") => return shenyuan::list(mode, &query),
+        Some("h3i") => return h3i::list(mode, &query),
+        Some("zfai") => return zfai::list(mode, &query),
+        Some("iiif") => return iiif::list(mode, &query),
+        Some("mse") => return mse::list(mode, &query),
+        Some("sepe") => return sepe::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -717,13 +795,21 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         let prefix = format!("/{category}/");
         discovery_client.get(&latest, false, |response| {
             advertised_page_url(
+<<<<<<< HEAD
                 response,
+=======
+                &response.body,
+>>>>>>> work/sepe-full-stacked
                 &latest,
                 page,
                 "div.pb_sys_common span.p_no a[href]",
                 |url| is_list_source_url(url.as_str()) && url.path().starts_with(&prefix),
             )
+<<<<<<< HEAD
         })??
+=======
+        })?
+>>>>>>> work/sepe-full-stacked
     };
     let client = discovery_client.with_cache_mode(mode);
     client.get(&url, false, move |response| {
@@ -777,21 +863,41 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         .as_deref()
         .filter(|url| !url.trim().is_empty())
         .ok_or_else(invalid_article)?;
-    if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("ic.buaa.edu.cn")) {
-        return ic::article(mode, raw_url, query.source_page.unwrap_or(1));
-    }
-    if Url::parse(raw_url).is_ok_and(|url| url.host_str() == Some("aviation.buaa.edu.cn")) {
-        return aviation::article(mode, raw_url, query.source_page.unwrap_or(1));
+    let parsed = Url::parse(raw_url).map_err(|_| invalid_article())?;
+    match parsed.host_str() {
+        Some("ic.buaa.edu.cn") => {
+            return ic::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("aviation.buaa.edu.cn") => {
+            return aviation::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("beijing.buaa.edu.cn") => {
+            return beijing::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("hc.buaa.edu.cn") => {
+            return shenyuan::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("h3i.buaa.edu.cn") => {
+            return h3i::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("zfai.buaa.edu.cn") => {
+            return zfai::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("iiif.buaa.edu.cn") => {
+            return iiif::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("mse.buaa.edu.cn") => {
+            return mse::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("sepe.buaa.edu.cn") => {
+            return sepe::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        _ => {}
     }
     if query.source_page.is_some() {
         return Err(invalid_article());
     }
-    if Url::parse(raw_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .as_deref()
-        == Some("scse.buaa.edu.cn")
-    {
+    if parsed.host_str() == Some("scse.buaa.edu.cn") {
         return scse::article(mode, raw_url);
     }
     let url = resolve_article_url(raw_url)?;
@@ -817,6 +923,33 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "aviation" {
         return aviation::surface(mode, page);
     }
+<<<<<<< HEAD
+=======
+    if college == "beijing" {
+        return beijing::surface(mode, page);
+    }
+    if college == "shenyuan" {
+        return shenyuan::surface(mode, page);
+    }
+    if college == "h3i" {
+        return h3i::surface(mode, page);
+    }
+    if college == "zfai" {
+        return zfai::surface(mode, page);
+    }
+    if college == "iiif" {
+        return iiif::surface(mode, page);
+    }
+    if college == "mse" {
+        return mse::surface(mode, page);
+    }
+    if college == "rse" {
+        return rse::surface(mode, page);
+    }
+    if college == "sepe" {
+        return sepe::surface(mode, page);
+    }
+>>>>>>> work/sepe-full-stacked
     if college == "scse" {
         return scse::surface(mode, page);
     }
@@ -864,7 +997,8 @@ fn source_html(bytes: &[u8]) -> Result<Html, Error> {
 fn college_directory_attribution(
     directory: &Value,
     name: &str,
-    root: &str,
+    listed_root: &str,
+    resolved_root: &str,
 ) -> Result<Value, Error> {
     let mut members = directory["entries"]
         .as_array()
@@ -872,11 +1006,11 @@ fn college_directory_attribution(
         .iter()
         .filter(|member| {
             member["name"] == name
-                && member["resolved_http_url"] == root
+                && member["resolved_http_url"] == resolved_root
                 && member["hidden_in_source"] == false
         });
     let member = members.next().ok_or_else(unavailable)?;
-    if members.next().is_some() || member["listed_href"] != root {
+    if members.next().is_some() || member["listed_href"] != listed_root {
         return Err(unavailable());
     }
     Ok(
@@ -890,6 +1024,30 @@ pub(crate) fn describe_college_surface(
     college: &str,
     attribution: Value,
 ) -> Result<Value, Error> {
+<<<<<<< HEAD
+=======
+    if response.status != 200 || response.body.len() > MAX_HTML {
+        return Err(unavailable());
+    }
+    let document = if matches!(
+        college,
+        "computer_science"
+            | "ic"
+            | "aviation"
+            | "beijing"
+            | "shenyuan"
+            | "h3i"
+            | "zfai"
+            | "iiif"
+            | "mse"
+            | "rse"
+            | "sepe"
+    ) {
+        college_html(response)?
+    } else {
+        Html::parse_document(std::str::from_utf8(&response.body).map_err(|_| unavailable())?)
+    };
+>>>>>>> work/sepe-full-stacked
     let title_selector = Selector::parse("title").map_err(|_| unavailable())?;
     let title = document
         .select(&title_selector)
@@ -975,6 +1133,125 @@ pub(crate) fn bind_college_board(
     Ok(())
 }
 
+/// Source-ordered `nymain/notice-list` layout observed at Mse and Sepe.
+fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
+    let titles = Selector::parse("title").map_err(|_| unavailable())?;
+    let title = document
+        .select(&titles)
+        .next()
+        .map(element_text)
+        .unwrap_or_default();
+    if title.len() > MAX_TEXT {
+        return Err(unavailable());
+    }
+    let views = Selector::parse("div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul")
+        .map_err(|_| unavailable())?;
+    let mut views = document.select(&views).filter(|node| !inert_element(*node));
+    let primary = views
+        .next()
+        .filter(|_| views.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "college notices require one nymain/notice-list view",
+                file!(),
+                line!(),
+            )
+        })?;
+    let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
+    let anchors = Selector::parse(":scope > a").map_err(|_| unavailable())?;
+    let headings = Selector::parse(":scope > h3").map_err(|_| unavailable())?;
+    let summaries = Selector::parse(":scope > p").map_err(|_| unavailable())?;
+    let dates = Selector::parse(":scope > span").map_err(|_| unavailable())?;
+    let mut entries = Vec::new();
+    for row in primary.select(&rows) {
+        if entries.len() == MAX_ENTRIES {
+            return Err(unavailable());
+        }
+        let mut links = row.select(&anchors);
+        let anchor = links
+            .next()
+            .filter(|_| links.next().is_none())
+            .ok_or_else(|| {
+                failed_contract(
+                    "college notice row requires one direct a link",
+                    file!(),
+                    line!(),
+                )
+            })?;
+        let mut row_headings = anchor.select(&headings);
+        let title = row_headings
+            .next()
+            .filter(|_| row_headings.next().is_none())
+            .map(element_text)
+            .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
+            .ok_or_else(|| {
+                failed_contract(
+                    "college notice row requires one direct h3 heading",
+                    file!(),
+                    line!(),
+                )
+            })?;
+        let listed_href = anchor.value().attr("href");
+        if listed_href
+            .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
+        {
+            return Err(unavailable());
+        }
+        let mut row_summaries = anchor.select(&summaries);
+        let summary = row_summaries
+            .next()
+            .map(element_text)
+            .filter(|text| !text.is_empty());
+        if row_summaries.next().is_some()
+            || summary
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_PARAGRAPH)
+        {
+            return Err(unavailable());
+        }
+        let mut row_dates = anchor.select(&dates);
+        let date = row_dates
+            .next()
+            .filter(|_| row_dates.next().is_none())
+            .and_then(|node| {
+                let raw = element_text(node);
+                let mut bytes: [u8; 10] = raw.trim().as_bytes().try_into().ok()?;
+                if bytes[4] != b'.' || bytes[7] != b'.' {
+                    return None;
+                }
+                bytes[4] = b'-';
+                bytes[7] = b'-';
+                parse_iso_date(std::str::from_utf8(&bytes).ok()?)
+            });
+        let (resolved_http_url, link_kind) = match listed_href {
+            None => (None, "missing"),
+            Some(raw) => match base.join(raw) {
+                Ok(url) if is_http(&url) => (Some(url.to_string()), "http"),
+                Ok(_) => (None, "non_http"),
+                Err(_) => (None, "invalid"),
+            },
+        };
+        entries.push(ListingEntry {
+            source_order: entries.len() + 1,
+            title,
+            date,
+            category_label: Some("公告公示".into()),
+            summary,
+            listed_href: listed_href.map(str::to_owned),
+            resolved_http_url,
+            link_kind,
+        });
+    }
+    if entries.is_empty() {
+        return Err(failed_contract(
+            "college notice view has no source rows",
+            file!(),
+            line!(),
+        ));
+    }
+    Ok(ListingDocument { title, entries })
+}
+
 pub fn history(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
         return Err(invalid_history());
@@ -1054,32 +1331,33 @@ pub fn schema() -> Value {
         .map(|(slug, _)| json!(slug))
         .chain(std::iter::once(Value::Null))
         .collect();
-    json!({
+    let mut output = json!({
         "document": {
             "input":{"type":"object","additionalProperties":false,"required":["article_url"],"properties":{"article_url":{"type":"string","description":"Reviewed HTTPS SCSE notice article; the viewer must declare exactly one supported original PDF."}}},
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic [root|notices] [--online|--refresh], or aviation [root|notices|public-notices] [--online|--refresh]; fixed public pages only. ic and aviation bind the retained authoritative directory; selected boards must be declared by their retained root. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse and sepe bind the retained authoritative directory; selected boards must be declared by their retained root. Mse, Rse and Sepe preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs). IC/aviation boards bind the directory and retained root. Aviation returns desktop rows only and preserves unfetched external links. Page defaults to 1; later ordinals must be source-advertised. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg); college=mse selects Materials-college public notices (gggs); college=sepe selects Energy-college public notices (gggs). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe boards bind the directory and retained root. Mse and Sepe keep their exact HTTP member and explicit separate HTTPS observation. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date. Mse and Sepe reuse one scoped nymain/notice-list view, direct a/h3 headings, a/p excerpts bounded by the existing 8-KiB paragraph limit, and direct a/span YYYY.MM.DD dates. Absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i accepts page1 only; retained Sepe page1 declares no later ordinal, so page2 is unavailable, not inferred. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic","aviation",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse","sepe",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "until": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "match": {"type": ["string","null"]}
                 },
-                "allOf":[{"if":{"required":["college"],"properties":{"college":{"const":"scse"}}},
+                "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse","sepe"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
-                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"const":"ic"}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}}]
+                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
@@ -1089,14 +1367,15 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, or canonical aviation public notice in category 1061. IC/aviation articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. Other sources reject a non-null source_page. External links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, Mse board-declared notice in category 1061/1058, or Sepe board-declared notice in category 1078/1093/1080. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i accepts source_page1 only; retained Sepe page1 declares no later ordinal. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse and Sepe publication require one direct art-tit/p/span.date 日期：YYYY年MM月DD日. Mse includes supported flat-table text separately. Sepe retains scoped source paragraphs and reports nonparagraph table text, images or unfetched sibling-file contents as partial_text; pure-image/table-only/empty Sepe bodies remain unavailable under shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061)/[0-9]{1,10}[.]htm$"}}}}]
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080))/[0-9]{1,10}[.]htm$"}}}},
+                    {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://h3i[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. College image/PDF-preview pages explicitly return embedded_document or partial_text rather than fabricated full text; preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Sepe retains active source-declared JSP file hints within art-main, including siblings outside its text body; the observed55-paragraph original has three unfetched file hints and remains partial_text. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {
@@ -1109,12 +1388,69 @@ pub fn schema() -> Value {
                 "description": "Parsed snapshot with asserted provenance and SHA-256 byte binding.",
             }
         },
-    })
+    });
+    output["article"]["output"]["properties"] = json!({
+        "body_tables": {
+            "type":"array","maxItems":MAX_ENTRIES,
+            "description":"Mse source tables only; normalized text is derived from original HTML whose retrieval hash remains unchanged. Arrays preserve table/row/cell source order. Span attributes are DOM-decoded source strings and omitted when absent, not inferred defaults.",
+            "items": {
+                "type":"object","additionalProperties":false,"required":["source_order","caption","rows"],
+                "properties": {
+                    "source_order":{"type":"integer","minimum":1,"maximum":MAX_ENTRIES},
+                    "caption":{"type":["string","null"],"maxLength":MAX_PARAGRAPH},
+                    "rows":{"type":"array","maxItems":MAX_BODY_PARAGRAPHS,"items":{
+                        "type":"object","additionalProperties":false,"required":["cells"],
+                        "properties":{"cells":{"type":"array","maxItems":MAX_ENTRIES,"items":{
+                            "type":"object","additionalProperties":false,"required":["header","text"],
+                            "properties":{"header":{"type":"boolean","description":"True only for an original th cell."},"text":{"type":"string","maxLength":MAX_PARAGRAPH},"rowspan":{"type":"string","maxLength":MAX_TEXT},"colspan":{"type":"string","maxLength":MAX_TEXT}}
+                        }}}
+                    }}
+                }
+            }
+        },
+        "body_table_count":{"type":"integer","minimum":0,"maximum":MAX_ENTRIES},
+        "body_table_row_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS},
+        "body_table_cell_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS * MAX_ENTRIES}
+    });
+    output
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_identity_preserves_distinct_declared_literal_and_resolved_root() {
+        let mut directory = json!({"entries":[{
+            "name":"Fixture Reliability Institute",
+            "listed_href":"http://rse.buaa.edu.cn",
+            "resolved_http_url":"http://rse.buaa.edu.cn/",
+            "hidden_in_source":false
+        }]});
+        let attribution = college_directory_attribution(
+            &directory,
+            "Fixture Reliability Institute",
+            "http://rse.buaa.edu.cn",
+            "http://rse.buaa.edu.cn/",
+        )
+        .unwrap();
+        assert_eq!(
+            attribution["member"]["listed_href"],
+            "http://rse.buaa.edu.cn"
+        );
+        directory["entries"][0]["listed_href"] = "http://rse.buaa.edu.cn/".into();
+        assert_eq!(
+            college_directory_attribution(
+                &directory,
+                "Fixture Reliability Institute",
+                "http://rse.buaa.edu.cn",
+                "http://rse.buaa.edu.cn/",
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+    }
 
     fn listing_html() -> String {
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>通知公告-新闻网</title></head><body>
@@ -1215,13 +1551,18 @@ mod tests {
 
     #[test]
     fn pagination_uses_advertised_ordinals_not_filename_numbers() {
+<<<<<<< HEAD
         let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span></div>"#;
         let document = source_html(html).unwrap();
+=======
+        let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/1.htm">253</a></span><span class="p_no"><a href="tzgg/252.htm">2</a></span></div>"#;
+>>>>>>> work/sepe-full-stacked
         let base = latest_listing_url("tzgg").unwrap();
         let allowed =
             |url: &Url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/");
         let selector = "div.pb_sys_common span.p_no a[href]";
         assert_eq!(
+<<<<<<< HEAD
             advertised_page_url_document(&document, &base, 2, selector, allowed)
                 .unwrap()
                 .path(),
@@ -1237,19 +1578,83 @@ mod tests {
             advertised_page_url_document(&document, &base, 6, selector, allowed)
                 .unwrap_err()
                 .code,
+=======
+            advertised_page_url(
+                html,
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                allowed
+            )
+            .unwrap()
+            .path(),
+            "/tzgg/252.htm"
+        );
+        assert_eq!(
+            advertised_page_url(
+                html,
+                &base,
+                253,
+                "div.pb_sys_common span.p_no a[href]",
+                allowed
+            )
+            .unwrap()
+            .path(),
+            "/tzgg/1.htm"
+        );
+        assert_eq!(
+            advertised_page_url(
+                html,
+                &base,
+                6,
+                "div.pb_sys_common span.p_no a[href]",
+                allowed
+            )
+            .unwrap_err()
+            .code,
+>>>>>>> work/sepe-full-stacked
             "unavailable"
         );
         let foreign = br#"<div class="pb_sys_common"><span class="p_no"><a href="https://evil.example/tzgg/252.htm">2</a></span></div>"#;
         assert_eq!(
+<<<<<<< HEAD
             advertised_page_url_document(
                 &source_html(foreign).unwrap(),
                 &base,
                 2,
                 selector,
+=======
+            advertised_page_url(
+                foreign,
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+>>>>>>> work/sepe-full-stacked
                 allowed
             )
             .unwrap_err()
             .code,
+<<<<<<< HEAD
+=======
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn pagination_rejects_conflicting_ordinal_destinations() {
+        let html = br#"<div class="pb_sys_common"><span class="p_no"><a href="tzgg/252.htm">2</a></span><span class="p_no"><a href="tzgg/251.htm">2</a></span></div>"#;
+        let base = latest_listing_url("tzgg").unwrap();
+        assert_eq!(
+            advertised_page_url(
+                html,
+                &base,
+                2,
+                "div.pb_sys_common span.p_no a[href]",
+                |url| is_list_source_url(url.as_str()) && url.path().starts_with("/tzgg/")
+            )
+            .unwrap_err()
+            .code,
+>>>>>>> work/sepe-full-stacked
             "unavailable"
         );
     }
