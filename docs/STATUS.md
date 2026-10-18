@@ -1,5 +1,11 @@
 # Development status
 
+## Directory-bound BME information announcements
+
+The retained official-directory member35 is 生物与医学工程学院 under 医工交叉学科群, with exact literal/resolved `http://bme.buaa.edu.cn/`. The selected HTTPS observation is deliberately separate (`https://bme.buaa.edu.cn/`), not an alias or silent protocol upgrade. The HTTPS root declares `newsList.aspx?catID=13` as its 信息公告 portal; the portal's active `table#DataList1` contains source category cells (`div.posTit`) and `ul > li` rows with bracketed ISO dates, full `a[title]` headings, visible anchor excerpts and declared `newsInfo.aspx?catID=13&subcatID=<digits>&curID=<digits>` article URLs.
+
+The adapter preserves portal source order and title/excerpt distinction, accepts only the exact BME host and query shapes above, and scopes article extraction to one active `div.newsInfo`, direct `div.newsInfoTit > h3`, and its direct body. Paragraphs and bounded flat table captions/rows/cells are retained; image/document contents remain unfetched and produce `partial_text`. The portal's later page controls are ASP.NET `__doPostBack` declarations rather than independent GET URLs, so only the retained page 1 is supported; no postback, guessed page, category route, attachment, history, all-college crawl or campus write is claimed. Synthetic listing, URL-boundary and article/table tests are included; native build/test proof and external publication remain separate gates.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.
