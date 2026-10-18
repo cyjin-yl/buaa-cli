@@ -111,7 +111,7 @@
     {
       "id": "spoc",
       "title": "SPOC materials/video/PPT/subtitles",
-      "status": "blocked",
+      "status": "partial-live-verified",
       "acceptance": "Authorized course inventory and byte-verified downloads with provenance; never fabricate attendance or course completion.",
       "sources": [
         "https://github.com/peter-erer/buaa-spoc-helper",
@@ -154,7 +154,12 @@
           "source_review_receipt": "https://github.com/cyjin-yl/buaa-cli/pull/88#issuecomment-5968049624",
           "merged_runtime_receipt": "https://github.com/cyjin-yl/buaa-cli/issues/87#issuecomment-5968147258"
         },
-        "tests": "Historical public-page-only regression receipt, predating script support: sanitized structural facts omit body/field names; non-200 and non-HTML are rejected, as are oversized titles, unsafe action control characters and over-cap form counts. The old aggregate count is not current evidence; current_base_reconciliation records the corrected 214-library/19-CLI source gate and script regression proof."
+        "tests": "Historical public-page-only regression receipt, predating script support: sanitized structural facts omit body/field names; non-200 and non-HTML are rejected, as are oversized titles, unsafe action control characters and over-cap form counts. The old aggregate count is not current evidence; current_base_reconciliation records the corrected 214-library/19-CLI source gate and script regression proof.",
+        "online_surface_2026-10-18": {
+          "command": "buaa spoc surface --online",
+          "result": "HTTP 200, body bytes/hash, content-type text/html; charset=utf-8",
+          "scope": "public surface only; script/material still contract-blocked"
+        }
       }
     },
     {
@@ -1991,6 +1996,26 @@
           "verification_limits": "MIME/header/EOF framing and own observed byte hash, not an external published checksum, publisher signature or document safety scan.",
           "quality_gate": "180 library + 18 CLI passes, 2 ignored; locked offline build, strict all-target clippy and fmt clean.",
           "remaining": "Other attachments/college sources, full historical coverage and rights-reviewed recording/Life inventory. No other attachment or derived preview was retrieved."
+        },
+        "sepe_full_stacked_2026-10-18": {
+          "branch": "work/sepe-full-stacked",
+          "commit": "2658996",
+          "colleges": [
+            "aviation",
+            "beijing",
+            "shenyuan",
+            "h3i",
+            "zfai",
+            "iiif",
+            "mse",
+            "rse",
+            "sepe",
+            "scse",
+            "ic"
+          ],
+          "verification": "cache-only college-source root/notices all exit 0 (rse notices exit 2 root-only per schema)",
+          "native_gates": "fmt0 clippy0 all tests pass",
+          "scope": "11 colleges current-announcement surface; remaining ~29 colleges pending"
         }
       }
     },
@@ -2106,7 +2131,13 @@
           "complete_history": false,
           "scope": "One exact-URL 1997 index query. CDX capture_body_sha256 remains null; the second capture's resource bytes were not retrieved. No all-college or complete-history inference."
         },
-        "limits": "Live proof covers one exact homepage replay, one bounded dated CDX search and earlier index pagination; Wayback archived error-status behavior remains offline-tested only. Publication dates remain unknown, and a local byte hash does not authenticate the archive or publisher. No direct campus-origin request. General TimeGate/TimeMap crawling, announcement-source replay/extraction and Life/transcript integration are not implemented by this adapter."
+        "limits": "Live proof covers one exact homepage replay, one bounded dated CDX search and earlier index pagination; Wayback archived error-status behavior remains offline-tested only. Publication dates remain unknown, and a local byte hash does not authenticate the archive or publisher. No direct campus-origin request. General TimeGate/TimeMap crawling, announcement-source replay/extraction and Life/transcript integration are not implemented by this adapter.",
+        "online_lookup_2026-10-18": {
+          "command": "buaa archive lookup --online",
+          "input": "{\"url\":\"https://news.buaa.edu.cn/tzgg.htm\"}",
+          "result": "captures found via CDX, http 200, mimetype text/html",
+          "scope": "CDX lookup only; capture has encoding boundary"
+        }
       }
     },
     {
