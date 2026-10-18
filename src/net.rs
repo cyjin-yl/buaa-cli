@@ -147,17 +147,23 @@ const SA_ROBOTS_URL: &str = "https://www.sa.buaa.edu.cn/robots.txt";
 pub(crate) const ASE_ROOT_URL: &str = "https://www.ase.buaa.edu.cn/";
 const ASE_ROBOTS_URL: &str = "https://www.ase.buaa.edu.cn/robots.txt";
 pub(crate) const DEPT3_ROOT_URL: &str = "https://dept3.buaa.edu.cn/";
-pub(crate) const DEPT3_NOTICES_URL: &str = "https://dept3.buaa.edu.cn/xwzx/xygg.htm";
+pub(crate) const DEPT3_NOTICES_URL: &str = "https://dept3.buaa.edu.cn/xwdt/gggs/tzgg.htm";
 const DEPT3_ROBOTS_URL: &str = "https://dept3.buaa.edu.cn/robots.txt";
 
 pub(crate) fn dept3_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/xwzx/xygg.htm") {
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs/tzgg.htm") {
         return true;
     }
-    path.strip_prefix("/info/1302/")
-        .and_then(|stem| stem.strip_suffix(".htm"))
-        .is_some_and(|stem| {
-            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+    ["/info/1093/", "/info/1014/"]
+        .into_iter()
+        .any(|prefix| {
+            path.strip_prefix(prefix)
+                .and_then(|stem| stem.strip_suffix(".htm"))
+                .is_some_and(|stem| {
+                    !stem.is_empty()
+                        && stem.len() <= 10
+                        && stem.bytes().all(|byte| byte.is_ascii_digit())
+                })
         })
 }
 
@@ -2848,10 +2854,10 @@ mod tests {
 
     #[test]
     fn dept3_article_observes_only_a_retained_board_declaration() {
-        const ARTICLE: &str = r#"<h1>Unrelated heading</h1><div class="main1"><form><div><h1>Original source heading</h1><div>2026-05-18</div><div><div class="v_news_content"><p>Source <em>inline</em> paragraph.</p></div></div><p>Outside body prose</p></div></form></div>"#;
+        const ARTICLE: &str = r#"<h1>Unrelated heading</h1><form><div class="art-main"><div class="art-tit cont-tit d"><h3>Original source heading</h3><p><span class="date">日期：2026年05月18日</span></p></div><div class="art-body-box"><div class="art-body d article"><div id="vsb_content"><div class="v_news_content"><p>Source <em>inline</em> paragraph.</p></div></div></div></div><p>Outside body prose</p></div></form>"#;
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
-            assert!(request.starts_with("GET /info/1302/42.htm "));
+            assert!(request.starts_with("GET /info/1014/42.htm "));
             let headers = request.to_ascii_lowercase();
             assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
             reply(
@@ -2864,8 +2870,8 @@ mod tests {
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         client.profile = SourceProfile::Dept3;
         for (url, body) in [
-            (DEPT3_ROOT_URL, br#"<a href="xwzx/xygg.htm">Fixture board</a>"# as &[u8]),
-            (DEPT3_NOTICES_URL, br#"<div class="main"><div class="text-list"><ul><li><span class="time">2026&#24180;05&#26376;18&#26085;</span><div class="title"><a href="../info/1302/42.htm">Distinct listing teaser</a></div></li><li><div class="title"><a href="https://external.example/notice">External reference</a></div></li></ul></div></div>"# as &[u8]),
+            (DEPT3_ROOT_URL, br#"<a href="xwdt/gggs/tzgg.htm">Fixture board</a>"# as &[u8]),
+            (DEPT3_NOTICES_URL, br#"<div class="notice-list"><div><ul><li><a href="../../info/1014/42.htm"><span>2026.05.18</span><h3>Distinct listing teaser</h3><p>Excerpt</p></a></li><li><a href="https://external.example/notice"><span>2026.04.16</span><h3>External reference</h3><p>External excerpt</p></a></li></ul></div></div>"# as &[u8]),
         ] {
             seed(&client, url, body, false);
             let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
@@ -2881,14 +2887,14 @@ mod tests {
         assert_eq!(
             client
                 .snapshot(
-                    &Url::parse("https://dept3.buaa.edu.cn/info/1065/42.htm").unwrap(),
+                    &Url::parse("https://dept3.buaa.edu.cn/info/1302/42.htm").unwrap(),
                     false
                 )
                 .unwrap_err()
                 .code,
             "egress_denied"
         );
-        let undeclared = Url::parse("https://dept3.buaa.edu.cn/info/1302/99.htm").unwrap();
+        let undeclared = Url::parse("https://dept3.buaa.edu.cn/info/1014/99.htm").unwrap();
         assert_eq!(
             crate::announcements::dept3::article_with_client(
                 client,
@@ -2903,7 +2909,7 @@ mod tests {
         assert_eq!(server.count(), 0);
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         client.profile = SourceProfile::Dept3;
-        let target = Url::parse("https://dept3.buaa.edu.cn/info/1302/42.htm").unwrap();
+        let target = Url::parse("https://dept3.buaa.edu.cn/info/1014/42.htm").unwrap();
         let output = crate::announcements::dept3::article_with_client(
             client,
             CacheMode::Revalidate,

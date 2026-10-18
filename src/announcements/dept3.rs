@@ -1,9 +1,10 @@
 //! 自动化科学与电气工程学院: exact HTTP identity, separate HTTPS observation.
 use super::{
-    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, bind_college_board,
+    ListQuery, ListingDocument, MAX_TEXT, article_category_from_url, bind_college_board,
     college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
-    parse_chinese_date, parse_iso_date, retrieval, table_article_output, unavailable,
+    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
+    parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval,
+    table_article_output, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, DEPT3_NOTICES_URL, DEPT3_ROOT_URL, Error, dept3_path_allowed,
@@ -63,97 +64,14 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
 }
 
 pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
-    let titles = Selector::parse("title").map_err(|_| unavailable())?;
-    let title = document
-        .select(&titles)
-        .next()
-        .map(element_text)
-        .unwrap_or_default();
-    if title.len() > MAX_TEXT {
-        return Err(unavailable());
-    }
-    let containers = Selector::parse("div.main > div.text-list > ul").map_err(|_| unavailable())?;
-    let mut containers = document
-        .select(&containers)
-        .filter(|node| !inert_element(*node));
-    let primary = containers
-        .next()
-        .filter(|_| containers.next().is_none())
-        .ok_or_else(|| {
-            failed_contract(
-                "Dept3 notices require one main/text-list view",
-                file!(),
-                line!(),
-            )
-        })?;
-    let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
-    let anchors = Selector::parse(":scope > div.title > a").map_err(|_| unavailable())?;
-    let dates = Selector::parse(":scope > span.time").map_err(|_| unavailable())?;
-    let mut entries = Vec::new();
-    for row in primary.select(&rows).filter(|node| !inert_element(*node)) {
-        if entries.len() == MAX_ENTRIES {
-            return Err(unavailable());
-        }
-        let mut links = row.select(&anchors).filter(|node| !inert_element(*node));
-        let anchor = links
-            .next()
-            .filter(|_| links.next().is_none())
-            .ok_or_else(|| {
-                failed_contract("Dept3 notice row requires one title link", file!(), line!())
-            })?;
-        let title = element_text(anchor);
-        if title.is_empty() || title.len() > MAX_TEXT {
-            return Err(failed_contract(
-                "Dept3 notice link requires source text",
-                file!(),
-                line!(),
-            ));
-        }
-        let listed_href = anchor.value().attr("href");
-        if listed_href
-            .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
-        {
-            return Err(unavailable());
-        }
-        let mut row_dates = row.select(&dates).filter(|node| !inert_element(*node));
-        let date = row_dates
-            .next()
-            .filter(|_| row_dates.next().is_none())
-            .and_then(|node| parse_chinese_date(&element_text(node)));
-        let (resolved_http_url, link_kind) = match listed_href {
-            None => (None, "missing"),
-            Some(raw) => match base.join(raw) {
-                Ok(url) if is_http(&url) => (Some(url.to_string()), "http"),
-                Ok(_) => (None, "non_http"),
-                Err(_) => (None, "invalid"),
-            },
-        };
-        entries.push(ListingEntry {
-            source_order: entries.len() + 1,
-            title,
-            date,
-            category_label: Some("学院公告".into()),
-            summary: None,
-            listed_href: listed_href.map(str::to_owned),
-            resolved_http_url,
-            link_kind,
-        });
-    }
-    if entries.is_empty() {
-        return Err(failed_contract(
-            "Dept3 notice view has no source rows",
-            file!(),
-            line!(),
-        ));
-    }
-    Ok(ListingDocument { title, entries })
+    parse_notice_list(document, base)
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     if query
         .category
         .as_deref()
-        .is_some_and(|category| category != "xygg")
+        .is_some_and(|category| category != "tzgg")
         || query.page.is_some_and(|page| page != 1)
     {
         return Err(invalid_list());
@@ -176,10 +94,10 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         let entries: Vec<_> = document.entries.iter()
             .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
         Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
-            "publisher":PUBLISHER,"college":"dept3","category":"xygg","listing_label":"学院公告","page":1,
+            "publisher":PUBLISHER,"college":"dept3","category":"tzgg","listing_label":"通知公告","page":1,
             "document_title":document.title,"filters":{"since":since,"until":until,"match":query.r#match},
             "entries":entries,"entry_count":entries.len(),"directory_attribution":attribution,
-            "completeness":{"scope":"single_college_selected_page","pagination":"retained board declares only page1; no later ordinal is admitted or automatically traversed","other_colleges":"not_covered","dates":"source YYYY年MM月DD日; missing, invalid or ambiguous stays null","summaries":"not supplied by this source view; not reconstructed","external_links":"retained listing references only; never fetched"},
+            "completeness":{"scope":"single_college_selected_page","pagination":"retained board declares only page1; no later ordinal is admitted or automatically traversed","other_colleges":"not_covered","dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null","summaries":"source direct a/p excerpt; not original full text","external_links":"retained listing references only; never fetched"},
             "retrieval":retrieval(response)}))
     })
 }
@@ -188,7 +106,7 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
     let target = Url::parse(raw).map_err(|_| invalid_article())?;
     if raw != target.as_str()
         || !plain_url(&target)
-        || !target.path().starts_with("/info/1302/")
+        || !target.path().starts_with("/info/")
         || source_page != 1
     {
         return Err(invalid_article());
@@ -224,6 +142,9 @@ pub(crate) fn article_with_client(
         .get(target, false, |response| {
             let document = college_html(response)?;
             Ok(parse_article(&document).map(|mut output| {
+                output["category"] = article_category_from_url(target)
+                    .map(Value::String)
+                    .unwrap_or(Value::Null);
                 output["retrieval"] = retrieval(response);
                 output["publisher"] = json!(PUBLISHER);
                 output["college"] = json!("dept3");
@@ -235,22 +156,21 @@ pub(crate) fn article_with_client(
 }
 
 pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
-    let views = Selector::parse("div.main1 > form > div").map_err(|_| unavailable())?;
-    let mut views = document.select(&views).filter(|node| !inert_element(*node));
-    let primary = views
+    let mains = Selector::parse("form > div.art-main").map_err(|_| unavailable())?;
+    let mut mains = document.select(&mains).filter(|node| !inert_element(*node));
+    let main = mains
         .next()
-        .filter(|_| views.next().is_none())
+        .filter(|_| mains.next().is_none())
         .ok_or_else(|| {
             failed_contract(
-                "Dept3 article requires one main1/form view",
+                "Dept3 article requires one direct art-main container",
                 file!(),
                 line!(),
             )
         })?;
-    let headings = Selector::parse(":scope > h1").map_err(|_| unavailable())?;
-    let mut headings = primary
-        .select(&headings)
-        .filter(|node| !inert_element(*node));
+    let headings = Selector::parse(":scope > div.art-tit.cont-tit > h3")
+        .map_err(|_| unavailable())?;
+    let mut headings = main.select(&headings);
     let title = headings
         .next()
         .filter(|_| headings.next().is_none())
@@ -258,29 +178,29 @@ pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
         .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
         .ok_or_else(|| {
             failed_contract(
-                "Dept3 article requires one direct h1 original heading",
+                "Dept3 article requires one direct art-tit/h3 original heading",
                 file!(),
                 line!(),
             )
         })?;
-    let dates = Selector::parse(":scope > h1 + div").map_err(|_| unavailable())?;
-    let mut dates = primary.select(&dates).filter(|node| !inert_element(*node));
+    let dates = Selector::parse(":scope > div.art-tit.cont-tit > p > span.date")
+        .map_err(|_| unavailable())?;
+    let mut dates = main.select(&dates);
     let published_at = dates
         .next()
         .filter(|_| dates.next().is_none())
-        .filter(|node| {
-            node.children()
-                .all(|child| child.value().as_element().is_none())
-        })
-        .and_then(|node| parse_iso_date(&element_text(node)));
-    let bodies = Selector::parse(":scope > div > div.v_news_content").map_err(|_| unavailable())?;
-    let mut bodies = primary.select(&bodies).filter(|node| !inert_element(*node));
+        .and_then(|node| parse_chinese_publication_date(&element_text(node)));
+    let bodies = Selector::parse(
+        ":scope > div.art-body-box > div.art-body.article > div#vsb_content > div.v_news_content",
+            )
+    .map_err(|_| unavailable())?;
+    let mut bodies = main.select(&bodies).filter(|node| !inert_element(*node));
     let body = bodies
         .next()
         .filter(|_| bodies.next().is_none())
         .ok_or_else(|| {
             failed_contract(
-                "Dept3 article requires one scoped v_news_content body",
+                "Dept3 article requires one scoped art-body/vsb_content/v_news_content body",
                 file!(),
                 line!(),
             )
@@ -288,9 +208,9 @@ pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
     table_article_output(
         body,
         title,
-        Some("1302".into()),
+        None,
         published_at,
-        "unique main1/form view, direct h1 original heading and adjacent ISO date; scoped v_news_content source paragraphs and separate ordered flat-table captions/rows/cells; code and fallback payloads excluded",
+        "unique form/art-main view, direct art-tit/h3 original heading and date span; scoped art-body/vsb_content/v_news_content source paragraphs and separate ordered flat-table captions/rows/cells; code and fallback payloads excluded",
     )
 }
 
@@ -301,17 +221,17 @@ mod tests {
 
     fn article_html(header: &str, body: &str) -> String {
         format!(
-            r#"<h1>Unrelated heading</h1><div class="main1"><form><div><h1>Original <em>source</em> heading</h1>{header}<div><div class="v_news_content">{body}</div></div><table><tr><td>Outside body table</td></tr></table><p>Outside body prose</p></div></form></div>"#
+            r#"<h1>Unrelated heading</h1><form><div class="art-main"><div class="art-tit cont-tit d"><h3>Original <em>source</em> heading</h3><p>{header}</p></div><div class="art-body-box"><div class="art-body d article"><div id="vsb_content"><div class="v_news_content">{body}</div></div></div></div><table><tr><td>Outside body table</td></tr></table><p>Outside body prose</p></div></form>"#
         )
     }
 
     #[test]
     fn listing_keeps_external_rows_and_unknown_dates_without_inert_copies() {
-        let html = r#"<title>Synthetic notices</title><ul><li>Unrelated navigation</li></ul><div class="main"><div class="text-list"><ul>
-<li><span class="time">2024年02月29日</span><div class="title"><a href="../info/1302/42.htm">Before <em>inside</em> after<script>not text</script></a></div></li>
-<li><span class="time">2023年02月29日</span><div class="title"><a href="https://external.example/notice">External reference</a></div></li>
-<li><span class="time">2026年05月18日</span><span class="time">2026年04月16日</span><div class="title"><a href="../info/1302/43.htm">Ambiguous publication</a></div></li>
-</ul></div></div><template><div class="main"><div class="text-list"><ul><li><div class="title"><a href="../info/1302/99.htm">Inactive copy</a></div></li></ul></div></div></template>"#;
+        let html = r#"<title>Synthetic notices</title><ul><li>Unrelated navigation</li></ul><div class="notice-list"><div><ul>
+<li><a href="../info/1014/42.htm"><span>2024.02.29</span><h3>Before <em>inside</em> after<script>not text</script></h3><p>Distinct excerpt</p></a></li>
+<li><a href="https://external.example/notice"><span>2023.02.29</span><h3>External reference</h3><p>External excerpt</p></a></li>
+<li><a href="../info/1093/43.htm"><span>2026.05.18</span><span>2026.04.16</span><h3>Ambiguous publication</h3><p>Ambiguous excerpt</p></a></li>
+</ul></div></div><template><div class="notice-list"><div><ul><li><a href="../info/1014/99.htm"><span>2026.01.01</span><h3>Inactive copy</h3></a></li></ul></div></div></template>"#;
         let parsed = parse_listing(
             &Html::parse_document(html),
             &Url::parse(DEPT3_NOTICES_URL).unwrap(),
@@ -334,7 +254,7 @@ mod tests {
                 (
                     "Before inside after",
                     Some("2024-02-29"),
-                    Some("https://dept3.buaa.edu.cn/info/1302/42.htm")
+                    Some("https://dept3.buaa.edu.cn/info/1014/42.htm")
                 ),
                 (
                     "External reference",
@@ -344,7 +264,7 @@ mod tests {
                 (
                     "Ambiguous publication",
                     None,
-                    Some("https://dept3.buaa.edu.cn/info/1302/43.htm")
+                    Some("https://dept3.buaa.edu.cn/info/1093/43.htm")
                 ),
             ]
         );
@@ -361,7 +281,7 @@ mod tests {
     fn article_date_and_source_text_cannot_be_taken_from_body_or_siblings() {
         let body = "<p>Before <em>inline</em> after.<script>not prose</script></p><p>2030-01-01</p><table><tr><td>Source cell</td></tr></table><img src='poster.png'><template><p>Inactive body</p></template>";
         let output = parse_article(&Html::parse_document(&article_html(
-            "<div>2026-05-18</div>",
+            "<span class=\"date\">日期：2026年05月18日</span>",
             body,
         )))
         .unwrap();
@@ -389,18 +309,18 @@ mod tests {
     #[test]
     fn history_preserves_http_assertion_and_does_not_turn_it_into_retrieval() {
         let html = article_html(
-            "<div>1997-06-10</div>",
+            "<span class=\"date\">日期：1997年06月10日</span>",
             "<p>Original <em>inline</em> text.</p>",
         );
         let mut input = json!({"kind":"article","html":STANDARD.encode(&html),"provenance":{
-            "source_url":"http://dept3.buaa.edu.cn/info/1302/42.htm","capture_timestamp":"20000102030405"
+            "source_url":"http://dept3.buaa.edu.cn/info/1014/42.htm","capture_timestamp":"20000102030405"
         }});
         let output = crate::announcements::history(&input.to_string()).unwrap();
         assert_eq!(output["published_at"], "1997-06-10");
         assert_eq!(output["body_paragraphs"], json!(["Original inline text."]));
         assert_eq!(
             output["provenance"]["source_url"],
-            "http://dept3.buaa.edu.cn/info/1302/42.htm"
+            "http://dept3.buaa.edu.cn/info/1014/42.htm"
         );
         assert_eq!(output["provenance"]["status"], "operator_asserted");
         assert_eq!(
@@ -410,7 +330,7 @@ mod tests {
         assert!(output.get("directory_attribution").is_none());
         assert!(output.get("source_listing").is_none());
         assert!(output["retrieval"].get("fetched_at_unix_ms").is_none());
-        input["provenance"]["source_url"] = json!("http://dept3.buaa.edu.cn/info/1065/42.htm");
+        input["provenance"]["source_url"] = json!("http://dept3.buaa.edu.cn/info/1302/42.htm");
         assert_eq!(
             crate::announcements::history(&input.to_string())
                 .unwrap_err()

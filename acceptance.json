@@ -604,7 +604,7 @@
         "dept3_directory_bound_current_source": {
           "issue": null,
           "pr": null,
-          "status": "local-current-source-and-native-text-verified-unreviewed",
+          "status": "current-source-selector-adapter-implemented-native-verification-pending",
           "base_head": "a895c1b89e2d7a425308063fdbe999f5f68d2e14",
           "owned_worktree": ".worktrees/dept3-announcements",
           "source_files": [
@@ -623,21 +623,31 @@
             "current_directory_is_not_historical_era_authority": true
           },
           "source_contract": {
-            "board_uri": "https://dept3.buaa.edu.cn/xwzx/xygg.htm",
-            "root_anchor_source_order": 5,
-            "literal_board_href": "xwzx/xygg.htm",
-            "category": "xygg",
+            "board_uri": "https://dept3.buaa.edu.cn/xwdt/gggs/tzgg.htm",
+            "root_anchor_source_order": null,
+            "literal_board_href": "xwdt/gggs/tzgg.htm",
+            "category": "tzgg",
             "page_and_article_source_page": 1,
             "board_rows": 5,
-            "external_rows_unfetched": 1,
+            "external_rows_unfetched": 0,
             "later_page_declarations": 0,
-            "listing_template": "one active main/text-list ul; direct li/div.title/a and li/span.time Chinese dates",
-            "article_namespace": "/info/1302/<1..10-digit-id>.htm; exact canonical HTTPS and retained board membership",
-            "excluded": "Root news-category1065, separate undergraduate/student-work boards, arbitrary URLs/aliases/query/credentials/ports/fragments, unadvertised later pages; no automatic traversal",
-            "article_template": "one active main1/form view, direct h1 original title, adjacent plain ISO-date div and scoped v_news_content; missing/invalid dates remain null without body-date fallback",
+            "listing_template": "one active nymain/notice-list view; direct ul/li/a with direct h3 headings, span YYYY.MM.DD dates and p excerpts",
+            "article_namespace": "/info/1093/<1..10-digit-id>.htm or /info/1014/<1..10-digit-id>.htm; exact canonical HTTPS and retained board membership",
+            "excluded": "Old /xwzx/xygg.htm and category1302, arbitrary URLs/aliases/query/credentials/ports/fragments, unadvertised later pages and other root boards; no automatic traversal",
+            "article_template": "one active form/art-main view, direct art-tit/cont-tit/h3 original title, direct span.date Chinese date and scoped art-body/vsb_content/v_news_content; missing/invalid dates remain null without body-date fallback",
             "text_policy": "Reuse shared source-ordered paragraph/flat-table extraction and existing2-MiB HTML/1024 combined paragraph-row/256 table-cell/8-KiB text/512-byte span bounds; no invented grid/spans, OCR or file/image download"
           },
-          "observed_originals": {
+          "current_public_reconnaissance": {
+            "method": "bounded read-only curl GETs through the approved shared proxy; no credentials, campus writes or source fallback",
+            "root": {"uri":"https://dept3.buaa.edu.cn/","http_status":200,"bytes":49140,"sha256":"ad0217758ba70f1b1264de70dd539d16d40ebb393409af13ab657e1e0a5b60f3","declares_board":"xwdt/gggs/tzgg.htm"},
+            "board": {"uri":"https://dept3.buaa.edu.cn/xwdt/gggs/tzgg.htm","http_status":200,"bytes":24791,"sha256":"c3b3394bd3effe9d4d6465e072aca6fdcbb6d4fb52e04b788e9faf119ace7ed3","rows":5,"later_page_declarations":0},
+            "articles": [
+              {"uri":"https://dept3.buaa.edu.cn/info/1014/1183.htm","http_status":200,"bytes":34531,"sha256":"b41850ffcde433f0a1c23437f4466b7289be3ffabc4c4893beaa1a68079ac82c"},
+              {"uri":"https://dept3.buaa.edu.cn/info/1093/2664.htm","http_status":200,"bytes":31013,"sha256":"8a98a1f71a7d86912d10e4e9e9531d8c66230b040b237cead0ec96d48b7a806d"}
+            ],
+            "native_governor_proof": "pending parent-owned offline/native verification; reconnaissance does not claim a production governor receipt"
+          },
+          "superseded_observed_originals": {
             "robots": {
               "http_status": 404,
               "bytes": 1693,
