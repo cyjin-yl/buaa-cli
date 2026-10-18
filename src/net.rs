@@ -142,6 +142,9 @@ const RSE_ROBOTS_URL: &str = "https://rse.buaa.edu.cn/robots.txt";
 pub(crate) const SEPE_ROOT_URL: &str = "https://sepe.buaa.edu.cn/";
 pub(crate) const SEPE_NOTICES_URL: &str = "https://sepe.buaa.edu.cn/xwdt/gggs.htm";
 const SEPE_ROBOTS_URL: &str = "https://sepe.buaa.edu.cn/robots.txt";
+pub(crate) const FLD_ROOT_URL: &str = "https://fld.buaa.edu.cn/";
+pub(crate) const FLD_NOTICES_URL: &str = "https://fld.buaa.edu.cn/xwzx/zxtz.htm";
+const FLD_ROBOTS_URL: &str = "https://fld.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -151,6 +154,18 @@ pub(crate) fn sepe_path_allowed(path: &str) -> bool {
         .or_else(|| path.strip_prefix("/info/1078/"))
         .or_else(|| path.strip_prefix("/info/1093/"))
         .or_else(|| path.strip_prefix("/info/1080/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn fld_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwzx/zxtz.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwzx/zxtz/")
+        .or_else(|| path.strip_prefix("/info/1011/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -352,6 +367,7 @@ enum SourceProfile {
     Mse,
     Rse,
     Sepe,
+    Fld,
 }
 
 impl SourceProfile {
@@ -372,6 +388,7 @@ impl SourceProfile {
             Self::Mse => MSE_ROBOTS_URL,
             Self::Rse => RSE_ROBOTS_URL,
             Self::Sepe => SEPE_ROBOTS_URL,
+            Self::Fld => FLD_ROBOTS_URL,
         }
     }
 
@@ -392,6 +409,7 @@ impl SourceProfile {
             Self::Mse => ".buaa-cli-mse-cache",
             Self::Rse => ".buaa-cli-rse-cache",
             Self::Sepe => ".buaa-cli-sepe-cache",
+            Self::Fld => ".buaa-cli-fld-cache",
         }
     }
 
@@ -479,6 +497,11 @@ impl SourceProfile {
                 url.host_str() == Some("sepe.buaa.edu.cn")
                     && url.query().is_none()
                     && sepe_path_allowed(url.path())
+            }
+            Self::Fld => {
+                url.host_str() == Some("fld.buaa.edu.cn")
+                    && url.query().is_none()
+                    && fld_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -695,6 +718,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_sepe(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sepe)
+    }
+
+    pub(crate) fn open_fld(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Fld)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {

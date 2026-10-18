@@ -1,5 +1,13 @@
 # Development status
 
+## Directory-bound Fld foreign-languages notices
+
+The `fld` adapter binds the visible official-directory member `外国语学院` whose literal and resolved identity is `http://fld.buaa.edu.cn/`. It deliberately observes `https://fld.buaa.edu.cn/` separately and requires that root to declare `https://fld.buaa.edu.cn/xwzx/zxtz.htm` before listing or article reads. The selected board is `college=fld`, `category=zxtz`; source rows use the complete `title` attribute, direct `YYYY-MM-DD` row dates and canonical `/info/1011/<id>.htm` declarations. Later pages are selected only from active `div.fanyxh a[href]` ordinal links, never guessed.
+
+The article contract is the reviewed `div.ljkm23` layout: direct `mch3` title, `mch3sh` `发布时间：YYYY-MM-DD` metadata and one `#vsb_content > .v_news_content` body. Source-declared `showVsbpdfIframe` originals and `vsb_pdf_image_data` previews remain unfetched `embedded_document` metadata; no PDF/image download or OCR is implied. Listing/article/surface selector drift returns governed response bytes as base64 `raw_html` with `content_type`, byte length and `fallback_reason`; foreign, query, credential, custom-port and fragment routes are rejected before transport.
+
+Focused synthetic parser coverage is included in `src/announcements/fld.rs` for source title/date/link preservation, PDF-only embedded-document handling and foreign/query URL rejection. Native build, online governed source capture, cache-only replay, capability evidence and independent review remain owner-side gates; no deployment, merge or campus mutation is claimed here.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

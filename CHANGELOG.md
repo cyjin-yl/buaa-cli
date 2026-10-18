@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add exact-directory/root/list-bound Foreign-languages-college notices (`college=fld`, `category=zxtz`) for the root-declared `xwzx/zxtz.htm` board. Preserve the directory's literal HTTP member and deliberate separate HTTPS observation, source title attributes/order/dates, selected source-advertised page ordinals and canonical `/info/1011/` article declarations. Parse the reviewed `ljkm23` article title/header/body and retain source-declared PDF/preview paths as unfetched embedded-document metadata; selector drift returns base64 HTML with a machine-readable fallback reason. Foreign/query/credential routes fail closed; no attachment download, OCR or inferred route is claimed.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
