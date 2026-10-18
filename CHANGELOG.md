@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add exact-directory-bound Space and Earth sciences announcements (`college-source sse`, `college=sse`, category `tzgg`) from the root-declared `xwdt/gsgg/tzgg.htm` board. Preserve the literal HTTP directory identity and deliberate HTTPS observation, source-ordered `nymain/notice-list` rows, dotted dates, direct excerpts, advertised-page-only pagination and canonical `/info/1078/` originals. Scope article extraction to the direct `art-main` header/body, retain unfetched JSP attachment hints and report images/tables as partial content. Reject foreign, credentialed, queried, undeclared or guessed URLs before transport; no attachment download, OCR, history completion, campus write or protocol alias.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.

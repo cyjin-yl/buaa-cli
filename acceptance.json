@@ -606,6 +606,16 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "sse_slice": {
+          "issue": null,
+          "pr": null,
+          "status": "local-unclaimed-live-source-observed",
+          "command": "announcements college-source sse [root|notices]; announcements list with college=sse/category=tzgg; announcements article for a board-declared canonical /info/1078/ original. Default offline; explicit online/refresh uses the shared governor and selected-only source refresh.",
+          "authority": "Official-directory member26 空间与地球科学学院 retains literal/resolved http://sse.buaa.edu.cn/. Selected https://sse.buaa.edu.cn/ is a deliberate separate observation, not an upgrade, alias or protocol-equivalence claim. The root declares xwdt/gsgg/tzgg.htm (公告公示/通知公告).",
+          "selectors": "Listing uses one active div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul with direct li > a > span/h3/p fields. Pagination is accepted only from source-advertised span.p_no a[href] under xwdt/gsgg/tzgg/. Articles require one direct art-main, art-tit h3, art-tit span.date 日期：YYYY年MM月DD日 and #vsb_content > .v_news_content body.",
+          "bounded_proxy_discovery": "Approved-proxy structural reads observed robots HTTP404, root HTTP200, board HTTP200 and one board-declared /info/1078/ article HTTP200. Originals remain private; no personal prose, attachment bytes or raw response is committed. Native shared-governor online proof, cache/original equality, full quality gate and exact-head review remain separate.",
+          "limits": "No later page was advertised by the retained board. Other categories, complete history, attachment download/OCR, authenticated services, campus writes and protocol/host fallback remain unsupported; undeclared, credentialed, queried, foreign and guessed URLs fail before transport."
+        },
         "sepe_slice": {
           "issue": null,
           "pr": null,

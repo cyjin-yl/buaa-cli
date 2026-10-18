@@ -201,6 +201,16 @@ printf '%s\n' '{"college":"sepe","since":"2026-09-09","until":"2026-09-30"}' | .
 printf '%s\n' '{"url":"https://sepe.buaa.edu.cn/info/1078/2634.htm"}' | ./target/debug/buaa announcements article
 ```
 
+空间与地球科学学院 preserves the official directory's literal/resolved `http://sse.buaa.edu.cn/` member and deliberately observes `https://sse.buaa.edu.cn/` separately. Its root-declared `xwdt/gsgg/tzgg.htm` board is available as `announcements college-source sse [root|notices]`; `{"college":"sse"}` selects `tzgg` rows with source `YYYY.MM.DD` dates, direct headings/excerpts and source-advertised page ordinals only. Canonical `/info/1078/` articles are checked against the retained board before the direct original header/body is parsed. Query, credential, foreign, undeclared and guessed URLs are refused before transport; images, tables and attachment bytes remain explicit partial/unfetched content.
+
+```sh
+# Cache-only source metadata and notice listing; no network request.
+./target/debug/buaa announcements college-source sse notices
+printf '%s\n' '{"college":"sse","category":"tzgg","since":"2026-09-01"}' | ./target/debug/buaa announcements list
+# Keep original article output private; source declaration is required.
+printf '%s\n' '{"url":"https://sse.buaa.edu.cn/info/1078/2820.htm"}' | ./target/debug/buaa announcements article
+```
+
 Shared text reads retain at most 1,024 nonempty source paragraphs, each at most 8 KiB, from HTML bounded to 2 MiB. Mse counts paragraphs plus table rows against the same1,024-block budget, with at most256 tables/cells per row,8-KiB normalized row/caption text and512-byte declared span strings. Paragraph-wrapped cells remain in `body_paragraphs` as well as the separate table records; there is no inferred paragraph/table interleaving or visual layout. Overflow is an error rather than truncation; no URL/source-specific allowance exists. The previous 512-paragraph limit rejected a legitimate 795-paragraph table notice; a synthetic 1,024/1,025 boundary reproduced red before the shared limit correction and passes green. This does not relax request, authentication or account-safety limits.
 
 Some computer-college policies are image/PDF-preview pages. They return `embedded_document` or `partial_text`, not invented plaintext: preview scripts are excluded, OCR is not performed, and attachment/preview paths are unverified hints, never downloads. Historical SCSE listing bytes stay offline and operator-asserted, including original HTTP source URLs. Colleges beyond the individually observed slices and complete historical coverage remain unimplemented.
