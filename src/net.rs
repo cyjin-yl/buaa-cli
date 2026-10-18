@@ -142,6 +142,24 @@ const RSE_ROBOTS_URL: &str = "https://rse.buaa.edu.cn/robots.txt";
 pub(crate) const SEPE_ROOT_URL: &str = "https://sepe.buaa.edu.cn/";
 pub(crate) const SEPE_NOTICES_URL: &str = "https://sepe.buaa.edu.cn/xwdt/gggs.htm";
 const SEPE_ROBOTS_URL: &str = "https://sepe.buaa.edu.cn/robots.txt";
+pub(crate) const IAI_ROOT_URL: &str = "https://iai.buaa.edu.cn/";
+pub(crate) const IAI_NOTICES_URL: &str = "https://iai.buaa.edu.cn/index/tzgg.htm";
+const IAI_ROBOTS_URL: &str = "https://iai.buaa.edu.cn/robots.txt";
+pub(crate) const EE_ROOT_URL: &str = "https://www.ee.buaa.edu.cn/";
+pub(crate) const EE_NOTICES_URL: &str = "https://www.ee.buaa.edu.cn/index/tzgg.htm";
+const EE_ROBOTS_URL: &str = "https://www.ee.buaa.edu.cn/robots.txt";
+
+pub(crate) fn ee_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1062/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -151,6 +169,18 @@ pub(crate) fn sepe_path_allowed(path: &str) -> bool {
         .or_else(|| path.strip_prefix("/info/1078/"))
         .or_else(|| path.strip_prefix("/info/1093/"))
         .or_else(|| path.strip_prefix("/info/1080/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn iai_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/index.htm" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1024/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -352,6 +382,8 @@ enum SourceProfile {
     Mse,
     Rse,
     Sepe,
+    Iai,
+    Ee,
 }
 
 impl SourceProfile {
@@ -372,6 +404,8 @@ impl SourceProfile {
             Self::Mse => MSE_ROBOTS_URL,
             Self::Rse => RSE_ROBOTS_URL,
             Self::Sepe => SEPE_ROBOTS_URL,
+            Self::Iai => IAI_ROBOTS_URL,
+            Self::Ee => EE_ROBOTS_URL,
         }
     }
 
@@ -392,6 +426,8 @@ impl SourceProfile {
             Self::Mse => ".buaa-cli-mse-cache",
             Self::Rse => ".buaa-cli-rse-cache",
             Self::Sepe => ".buaa-cli-sepe-cache",
+            Self::Iai => ".buaa-cli-iai-cache",
+            Self::Ee => ".buaa-cli-ee-cache",
         }
     }
 
@@ -479,6 +515,16 @@ impl SourceProfile {
                 url.host_str() == Some("sepe.buaa.edu.cn")
                     && url.query().is_none()
                     && sepe_path_allowed(url.path())
+            }
+            Self::Iai => {
+                url.host_str() == Some("iai.buaa.edu.cn")
+                    && url.query().is_none()
+                    && iai_path_allowed(url.path())
+            }
+            Self::Ee => {
+                url.host_str() == Some("www.ee.buaa.edu.cn")
+                    && url.query().is_none()
+                    && ee_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -695,6 +741,14 @@ impl ArchiveClient {
 
     pub(crate) fn open_sepe(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sepe)
+    }
+
+    pub(crate) fn open_iai(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Iai)
+    }
+
+    pub(crate) fn open_ee(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Ee)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {

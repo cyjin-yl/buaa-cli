@@ -1,5 +1,11 @@
 # Development status
 
+## Artificial Intelligence college announcements
+
+The `iai` adapter binds the official-directory member 人工智能学院 while preserving its exact literal/resolved `http://iai.buaa.edu.cn/` identity. The source is deliberately observed over HTTPS at `https://iai.buaa.edu.cn/`; this is recorded as a separate observation, not an alias or silent protocol upgrade. The retained root declares `index/tzgg.htm` (通知公告), whose `mainBox/listText` direct `li > a + i` rows preserve source order, canonical `YYYY-MM-DD` dates and `/info/1024/<id>.htm` article links. The board's current pagination widget advertises no later ordinal, so page 2 and beyond remain unavailable rather than inferred.
+
+IAI root/notices surfaces, listing filters and selected article reads use a dedicated allowlisted network profile and the shared directory/governor/cache policy. The observed article layout is `mainBox/nry2/form`, `show01/h5`, `show01/date/s`, and `vsb_content/show02/v_news_content`; source-declared `showVsbpdfIframe`/`vsb_pdf_image_data` content is reported as `embedded_document` or `partial_text` without fetching PDF/preview assets or fabricating text. No all-college/history/attachment/OCR or campus-write claim is made.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

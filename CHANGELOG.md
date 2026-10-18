@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory/root/list-bound Artificial Intelligence college announcements (`college=iai`, `category=tzgg`) from the root-declared `index/tzgg.htm` board. Preserve the directory's exact HTTP identity and deliberate HTTPS observation, source-ordered `listText` rows with `YYYY-MM-DD` dates, selected canonical `/info/1024/` articles and source-declared PDF/image viewer content as `embedded_document` without fabricated text. The board advertises no later page; unreviewed pages, articles and URLs remain unavailable.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
