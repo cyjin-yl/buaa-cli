@@ -1,5 +1,13 @@
 # Development status
 
+## Directory-bound Yqgdxy instrument-science notices
+
+The retained official directory identifies visible 仪器科学与光电工程学院 with literal and resolved `http://yqgdxy.buaa.edu.cn/`. The adapter preserves that HTTP identity while selecting the HTTPS root separately; it follows only the root-declared `/tzgg.htm` notice board. The board uses one `div.nymain > div.ny-right > div.text-list > ul` view with direct row anchors and ISO-date spans. Later pages are selected only through the unique `div.pagination span.p_no` ordinal declaration; no filename arithmetic or automatic traversal is used.
+
+`announcements list` accepts `{"college":"yqgdxy","category":"tzgg"}` and preserves source order, literal/resolved links, and unknown dates. `announcements article` accepts only HTTPS same-host `/info/1053/<digits>.htm` URLs declared by the selected board page. The article parser requires one owned `nymain/art-main` form, direct `art-tit/h3`, a unique leaf `日期：YYYY-MM-DD` span, and one scoped `art-body/v_news_content`; body links are hints only and no linked bytes are fetched. `college-source yqgdxy root|notices` exposes bounded source metadata with graceful retrieval facts.
+
+Synthetic coverage exercises inert-row exclusion, source-order and ambiguous-date handling, owned article title/date/body extraction, allowlisted path boundaries, foreign/query-bearing URL rejection, and deliberate HTTP-versus-HTTPS identity separation. This branch contains implementation/docs only; no campus write, authentication, guessed route, source fallback, or acceptance-manifest mutation is claimed.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.
