@@ -172,6 +172,9 @@ pub(crate) fn sce_path_allowed(path: &str) -> bool {
 pub(crate) const SSE_ROOT_URL: &str = "https://sse.buaa.edu.cn/";
 pub(crate) const SSE_NOTICES_URL: &str = "https://sse.buaa.edu.cn/xwdt/gsgg/tzgg.htm";
 const SSE_ROBOTS_URL: &str = "https://sse.buaa.edu.cn/robots.txt";
+pub(crate) const SEM_ROOT_URL: &str = "https://sem.buaa.edu.cn/";
+pub(crate) const SEM_NOTICES_URL: &str = "https://sem.buaa.edu.cn/xwdt/tzgg.htm";
+const SEM_ROBOTS_URL: &str = "https://sem.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -213,6 +216,12 @@ pub(crate) fn sse_path_allowed(path: &str) -> bool {
     }
     path.strip_prefix("/xwdt/gsgg/tzgg/")
         .or_else(|| path.strip_prefix("/info/1078/"))
+pub(crate) fn sem_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwdt/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1024/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -420,6 +429,7 @@ enum SourceProfile {
     Physics,
     Sce,
     Sse,
+    Sem,
 }
 
 impl SourceProfile {
@@ -446,6 +456,7 @@ impl SourceProfile {
             Self::Physics => PHYSICS_ROBOTS_URL,
             Self::Sce => SCE_ROBOTS_URL,
             Self::Sse => SSE_ROBOTS_URL,
+            Self::Sem => SEM_ROBOTS_URL,
         }
     }
 
@@ -472,6 +483,7 @@ impl SourceProfile {
             Self::Physics => ".buaa-cli-physics-cache",
             Self::Sce => ".buaa-cli-sce-cache",
             Self::Sse => ".buaa-cli-sse-cache",
+            Self::Sem => ".buaa-cli-sem-cache",
         }
     }
 
@@ -580,6 +592,10 @@ impl SourceProfile {
                 url.host_str() == Some("sse.buaa.edu.cn")
                     && url.query().is_none()
                     && sse_path_allowed(url.path())
+            Self::Sem => {
+                url.host_str() == Some("sem.buaa.edu.cn")
+                    && url.query().is_none()
+                    && sem_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -814,6 +830,8 @@ impl ArchiveClient {
         Self::open_profile(mode, SourceProfile::Sce)
     pub(crate) fn open_sse(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sse)
+    pub(crate) fn open_sem(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Sem)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
