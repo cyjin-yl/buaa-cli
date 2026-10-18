@@ -6,6 +6,14 @@ grant. The SPOC acceptance item stays **blocked** on the verified current
 course/session/material read contract, accessible authorized course inventory
 and private credential delivery. Source declarations do not establish these facts.
 
+The 2026-10-17 issue/discussion and linked-PR recheck confirms that the public
+surface/script slices are already merged (PR68/PR88), while issue42 contains no
+owner-approved authenticated read contract or rights-cleared course inventory.
+No duplicate contract-only adapter PR is needed. The exact remaining inputs are
+approved course/session/material routes, pagination and integrity/rate bounds,
+an authorized original/derived inventory and private credential delivery. This
+recheck performs no login, client-bundle execution or new campus observation.
+
 `buaa spoc surface` and `buaa spoc script` are read-only contract tooling, not
 authenticated adapters. They observe fixed public pages and one explicitly
 selected, source-declared public script through the same shared governor and

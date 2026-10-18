@@ -122,6 +122,7 @@
       "blocker": "Governed public entry and source-bound JavaScript observation are verified, including one private immutable app bundle and offline metadata reuse. This is public contract evidence, not an authenticated service. A verified current course/session/material read contract, accessible authorized course inventory and private credential delivery are still required. No course/media endpoint or download permission is inferred from script bytes or historical catalog links.",
       "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/42",
       "evidence": {
+        "contract_recheck_2026_10_17": "Live issue/discussion and linked-PR reads confirm public surface/script slices already merged in PR68/PR88; no approved course/session/material read contract or rights-cleared inventory is supplied. Exact routes/session/pagination/integrity/limits, bounded original/derived rights inventory and private credential delivery remain required. No login, script execution, new campus read, duplicate public-source PR or remote-adapter claim.",
         "command": "buaa spoc surface [root|entry] [--online|--refresh]; buaa spoc script [--online|--refresh] with source-declared JSON URL on stdin",
         "observation": "2026-09-28 governed public-surface read (one in flight, shared raised 60-second interval, TLS on, no cookies/redirects/proxy/retry): robots.txt HTTP 200 (998 B); root / HTTP 200 (377 B, sha256 373cd4cd521ae2c33d27ce647d416b6a4d44523e100fa8503fd7f984af355243, no title, no server-rendered form); entry /spocnew/ HTTP 200 (2173 B, sha256 5b6709aa5aafd07227e9348c619a5b0e07bff36059fc0ea33e8c1e6c897cdf9f, title 智学北航, no server-rendered form). INCO middleware; newSpoc session cookie.",
         "contract_draft": "docs/SPOC.md (current authenticated course/session/material read contract unverified; one public bundle is retained privately, but source bytes alone do not establish endpoint/session compatibility or material rights)",
@@ -601,6 +602,51 @@
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "rse_root_slice": {
+          "issue": "https://github.com/cyjin-yl/buaa-cli/issues/109",
+          "status": "root-metadata-observed-notices-blocked",
+          "stack_base": "PR108 exact e049becd1d655ec2fae0a7194dfe77a27592967d; owned work/rse-announcements, dependent on unmerged108/106/104/102/100/98/96/94; no root-main or deployed claim",
+          "command": "announcements college-source rse [root] [--online|--refresh]; fixed root metadata only, no Rse list/article adapter or notice route",
+          "authority": "Visible official-directory member2 可靠性与系统工程学院 under 航空航天学科群; exact literal http://rse.buaa.edu.cn and resolved http://rse.buaa.edu.cn/. Original directory HTML SHA f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9 differs from derived50-entry JSON SHA9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d. Ordinal is not an academic school code. Selected HTTPS root is an explicit separate observation, not an alias, silent upgrade or verified protocol equivalence.",
+          "strict_identity_change": "Existing shared authority helper now requires both independently declared literal and resolved strings, without normalizing either. Eight existing callers retain their same expected root pair. AST migrated9 parsed calls; three macro-contained test calls were migrated manually. Existing hidden/ambiguous/nonliteral refusals remain intact; no shim or Rse-specific URL normalization.",
+          "authority_repair_2026_10_17": "Require exact explicit text/html for directory authority; reject active bases before resolving members and propagate literal ancestor hiding into hidden_in_source without dropping records. Admitted layout-drift originals are retained under the same lease through nested results while the caller still fails; MIME/base/UTF-8/size failures remain outer and uncached. Synthetic parser-to-pair and actual isolated-loopback consumers cover the changes. No new campus read or parent-owned Rse implementation; this frontier does not close109.",
+          "authority_repair_verification_2026_10_17": "Exact30f0706 detached test-only baseline red0/3 exit101/74.24s for absent MIME,active base,hidden ancestor. Corrected gate ran only at producer-bearing b6d504fe419f58188b7999540f909dbf62786c26,not final frontier-only head: formatter0/2.08s,native build0/14.98s,13 focused directory tests+2 existing CLI cases pass,strict all-target clippy0/23.86s,fmtcheck0/1.60s; native help/schema/capabilities0. PrMaterials3f review correctly requires actual ready94→108 producer-bearing ancestor,final-head proof and renewed review before integration; current head is not green. Layout retention consumer proves exact admitted bytes/hash and offline reuse over real isolated loopback; invalid admission remains uncached. No full suite/campus observation/trusted CI/independent new-head approval.",
+          "robots": {
+            "url": "https://rse.buaa.edu.cn/robots.txt",
+            "http_status": 404,
+            "content_type": "text/html",
+            "response_body_byte_length": 1693,
+            "response_body_sha256": "29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407",
+            "fetched_at_unix_ms": 1791132999894
+          },
+          "selected_https_root": {
+            "url": "https://rse.buaa.edu.cn/",
+            "http_status": 200,
+            "content_type": "text/html;charset=utf-8",
+            "response_body_byte_length": 69,
+            "response_body_sha256": "9212275e4121fd941be9567fbcc2910d70fc0d1ec399a76ad33dc997b4c097e1",
+            "fetched_at_unix_ms": 1791133286158,
+            "document_title": null,
+            "source_anchor_count": 0,
+            "same_host_path_hints": 0,
+            "hints_truncated": false,
+            "announcement_adapter_verified": false,
+            "publication_date": "unknown"
+          },
+          "governed_proof": "Exactly2 deliberate public GETs under the same permanent production governor; first source command exited8 after robots before the absent root. Selected root was read only after a fresh full-deadline preflight. Native cached root0/0.04s preserves the exact literal/resolved member and original69-byte hash/timestamp. Private original cache files independently match hashes and remain0700/0600/currentUID/singlelink. Current governor fingerprint omitted;60,000/900,000-ms floors, disarmed auth, no latch/pending/failures. Earlier Mse delivery proof remains historical, not current governor state.",
+          "affected_proof": "Real root offline refusal reached an actual cache miss, not fabricated metadata. Strict declared-pair regression red101/62.89s then green0/24.07s; separate old IC nonliteral and hidden/ambiguity cases pass0/0.45s and0/0.22s. Actual existing Mse cached article0/0.75s equals its entire339-row/2331-cell output and attribution with unchanged governor bytes. Fresh owned native build0/82.08s; no artifact copy, parent overwrite, chmod, host build or extra full-suite run. Final metadata/source-check/UI proof is recorded separately.",
+          "bounded_feature_check": {
+            "status": "completed_no_concrete_findings",
+            "prompt_characters": 14509,
+            "main_bound_rse_module_sha256": "7a60a339ab895cb19a7af3e7b3ee6ccbff36d94e4355117414eceac8f7bae71a",
+            "main_bound_announcements_sha256": "79438a15965d02c60e3a0a79c6401eaf56a4eb5405f2877f660960a5fbac11eb",
+            "main_bound_net_sha256": "3cdc498923fd3d234b1b6643fe16e76e259b3e1cd91c2e793b27abd53eb3af92",
+            "scope": "One stateless no-tool completion received complete public Rse module and complete changed shared identity/surface/HTML/profile/factory sections. Omitted legacy bodies, caller/test migrations, transport/lease internals, docs/acceptance, external dependencies, actual origins/cache/rights/permissions/CI were not independently inspected. Main supplies bytes and observations; not checkout/SHA/runtime/platform approval.",
+            "input_correction": "Prompt misstated the unchanged common MAX_URL as4096; actual code uses16*1024. Rse still admits only fixed short root/robots paths; no route, URL-policy or authority expansion follows. No generic re-review or independent final-head approval is inferred."
+          },
+          "blocker": "The selected HTTPS root is69-byte HTML with one h1 and no title, source links, navigation or active notice-board declaration. Metadata success is not a working announcement service. Need a usable retained-root-declared current board or an explicit reviewed current source contract before listing or original-text extraction. No guessed index/notice/article route, alias, HTTP fallback or protocol-equivalence assertion; original/history stay missing. Rse notice/original tasks remain blocked, not completed or dropped.",
+          "safety_and_scope": "No auth, campus write, automatic retry, separate governor/account key or cookie/redirect/TLS/robots/challenge/proxy bypass. Root/robots HTTPS only; no Rse notice/list/article capability is advertised. Legitimate owner-controlled read/write scope remains included, current campus-write intent none and assignment submission stays with owner. No subagent/peer revival. Exact-head independent approval, trusted CI and explicit maintainer stack/source-contract decisions remain external; no selfmerge/issue closure, root-main or Pages deployment. Full non-VPN/every-college/attachments/history goal remains active."
+        },
         "mse_table_text_slice": {
           "final_behavioral_gate_after_test_retirement_20261017": {
             "code_proof_head": "d38ae9175a5b42c4d3ac20280d09a14afb6afd38",
@@ -2305,6 +2351,7 @@
       "sources": [],
       "evidence": {
         "access": "Authorized repository read access confirmed; no private source or credential contents copied into public project.",
+        "contract_recheck_2026_10_17": "Current issue/discussion, merged PR75 and scoped local source inspection still establish only exact HEAD/GET inspector,256-KiB SHA-256 and finally closure. Registered private Life operations do not authorize buaa-cli downloads. Explicit HTTPS/authentication/immutability/byte-budget approval, exact rights-cleared original/derived inventory and private credential delivery remain absent. No credentials/session/private rows/operational defaults/media/object-store request/private-code execution or copy.",
         "storage_interface_draft": {
           "upstream_head": "af59427c7f6bac3382b5989b811b69872f4de928",
           "review_issue": "https://github.com/cyjin-yl/buaa-cli/issues/74",
@@ -2331,7 +2378,11 @@
       "status": "blocked",
       "acceptance": "Real manifest/discovery/read/write/stream integration; default read-only and same cross-process governor.",
       "sources": [],
-      "blocker": "Authoritative source mount absent; both unauthenticated and authenticated repository API requests returned404. Current Go contract remains inaccessible here."
+      "blocker": "2026-10-17: actual container lacks /references and /references/skills-fs; both public and authenticated authoritative repository API reads still return404. Pinned napcat consumer fragment/mount docs are not the licensed current Go engine or a versioned discovery/read/write/stream/error/cancellation contract. Scoped Life/research sources supply no replacement or owner-approved BUAA safe-space manifest. Require the accessible reviewed engine/reference revision, provider manifest/contract and authorized mount/test environment; no compatible provider is claimed.",
+      "blocker_issues": [
+        "https://github.com/cyjin-yl/buaa-cli/issues/17",
+        "https://github.com/cyjin-yl/buaa-cli/issues/19"
+      ]
     },
     {
       "id": "contribution",
