@@ -30,8 +30,9 @@ const ORGANIZATIONS_ROBOTS_URL: &str = "https://www.buaa.edu.cn/robots.txt";
 const ANNOUNCEMENTS_ROBOTS_URL: &str = "https://news.buaa.edu.cn/robots.txt";
 /// Section listing slugs served by the news center. The university-wide
 /// notice/announcement section is `tzgg` (通知公告); the rest are news
-/// sections. College subdomains are intentionally out of scope: each runs a
-/// different CMS layout, so a single parser cannot cover them safely.
+/// sections. College subdomains use separate explicit profiles because each
+/// runs a different CMS layout; no single parser or domain-wide crawl is
+/// implied.
 const ANNOUNCEMENT_CATEGORIES: &[&str] = &[
     "tzgg", "zhxw", "ztxw", "bhrw", "xyfc_new", "kjzx_new", "mtbh_new", "gybh_new", "spxw1",
     "wyyd_new",
@@ -250,6 +251,9 @@ const SA_ROBOTS_URL: &str = "https://www.sa.buaa.edu.cn/robots.txt";
 pub(crate) const BME_ROOT_URL: &str = "https://bme.buaa.edu.cn/";
 pub(crate) const BME_NOTICES_URL: &str = "https://bme.buaa.edu.cn/newsList.aspx?catID=13";
 const BME_ROBOTS_URL: &str = "https://bme.buaa.edu.cn/robots.txt";
+pub(crate) const YGY_ROOT_URL: &str = "https://ygy.buaa.edu.cn/";
+pub(crate) const YGY_NOTICES_URL: &str = "https://ygy.buaa.edu.cn/tzgg/yggg.htm";
+const YGY_ROBOTS_URL: &str = "https://ygy.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -269,61 +273,51 @@ pub(crate) fn math_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/index/xygg.htm") { return true; }
     path.strip_prefix("/info/1294/").and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
 pub(crate) fn soft_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm" | "/xwdt/gggs/tzgg.htm") { return true; }
     path.strip_prefix("/xwdt/gggs/tzgg/").or_else(|| path.strip_prefix("/info/1095/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
 pub(crate) fn transportation_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") { return true; }
     path.strip_prefix("/xwdt/gggs/").or_else(|| path.strip_prefix("/info/1058/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
 pub(crate) fn physics_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") { return true; }
     path.strip_prefix("/index/tzgg/").or_else(|| path.strip_prefix("/info/1252/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
 pub(crate) fn sse_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gsgg/tzgg.htm") { return true; }
     path.strip_prefix("/xwdt/gsgg/tzgg/").or_else(|| path.strip_prefix("/info/1078/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
 pub(crate) fn sem_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/tzgg.htm") { return true; }
     path.strip_prefix("/xwdt/tzgg/").or_else(|| path.strip_prefix("/info/1024/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
 pub(crate) fn fld_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwzx/zxtz.htm") { return true; }
     path.strip_prefix("/xwzx/zxtz/").or_else(|| path.strip_prefix("/info/1011/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
 pub(crate) fn wrj_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwgg/tzgg.htm") { return true; }
     path.strip_prefix("/xwgg/tzgg/").or_else(|| path.strip_prefix("/info/1008/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
-
-pub(crate) fn bme_path_allowed(path: &str) -> bool {
-    matches!(path, "/" | "/robots.txt" | "/newsList.aspx" | "/newsInfo.aspx")
-}
-
+pub(crate) fn bme_path_allowed(path: &str) -> bool { matches!(path, "/" | "/robots.txt" | "/newsList.aspx" | "/newsInfo.aspx") }
 fn bme_query_allowed(path: &str, query: Option<&str>) -> bool {
     let Some(query) = query else { return matches!(path, "/" | "/robots.txt"); };
     if query.bytes().any(|byte| byte == b'%' || byte.is_ascii_control()) { return false; }
     let fields = query.split('&').collect::<Vec<_>>();
     match path {
         "/newsList.aspx" => fields.len() == 1 && fields[0] == "catID=13",
-        "/newsInfo.aspx" => fields.len() == 3 && fields[0] == "catID=13"
-            && fields[1].strip_prefix("subcatID=").is_some_and(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit()))
-            && fields[2].strip_prefix("curID=").is_some_and(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit())),
+        "/newsInfo.aspx" => fields.len() == 3 && fields[0] == "catID=13" && fields[1].strip_prefix("subcatID=").is_some_and(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit())) && fields[2].strip_prefix("curID=").is_some_and(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_digit())),
         _ => false,
     }
 }
-
 pub(crate) fn bme_url_allowed(url: &Url) -> bool {
     url.scheme() == "https" && url.host_str() == Some("bme.buaa.edu.cn") && url.username().is_empty() && url.password().is_none() && url.port().is_none() && url.fragment().is_none() && bme_path_allowed(url.path()) && bme_query_allowed(url.path(), url.query())
+}
+pub(crate) fn ygy_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/tzgg/yggg.htm") { return true; }
+    path.strip_prefix("/tzgg/yggg/").or_else(|| path.strip_prefix("/info/1004/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 pub(crate) fn mse_path_allowed(path: &str) -> bool {
@@ -540,6 +534,7 @@ enum SourceProfile {
     Sa,
     Hss,
     Bme,
+    Ygy,
 }
 
 impl SourceProfile {
@@ -575,6 +570,7 @@ impl SourceProfile {
             Self::Sa => SA_ROBOTS_URL,
             Self::Hss => HSS_ROBOTS_URL,
             Self::Bme => BME_ROBOTS_URL,
+            Self::Ygy => YGY_ROBOTS_URL,
         }
     }
 
@@ -610,6 +606,7 @@ impl SourceProfile {
             Self::Sa => ".buaa-cli-sa-cache",
             Self::Hss => ".buaa-cli-hss-cache",
             Self::Bme => ".buaa-cli-bme-cache",
+            Self::Ygy => ".buaa-cli-ygy-cache",
         }
     }
 
@@ -744,8 +741,9 @@ impl SourceProfile {
             Self::Hss => {
                 url.host_str() == Some("www.hss.buaa.edu.cn") && url.query().is_none() && hss_path_allowed(url.path())
             }
-            Self::Bme => {
-                bme_url_allowed(&url)
+            Self::Bme => bme_url_allowed(&url),
+            Self::Ygy => {
+                url.host_str() == Some("ygy.buaa.edu.cn") && url.query().is_none() && ygy_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -1022,6 +1020,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_bme(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Bme)
+    }
+
+    pub(crate) fn open_ygy(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Ygy)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
