@@ -247,6 +247,23 @@ pub(crate) fn me_path_allowed(path: &str) -> bool {
             && id.bytes().all(|byte| byte.is_ascii_digit())
     })
 }
+
+pub(crate) const EE_ROOT_URL: &str = "https://www.ee.buaa.edu.cn/";
+pub(crate) const EE_NOTICES_URL: &str = "https://www.ee.buaa.edu.cn/index/tzgg.htm";
+const EE_ROBOTS_URL: &str = "https://www.ee.buaa.edu.cn/robots.txt";
+
+pub(crate) fn ee_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+}
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1062/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
 pub(crate) const WRJ_ROOT_URL: &str = "https://wrj.buaa.edu.cn/";
 pub(crate) const WRJ_NOTICES_URL: &str = "https://wrj.buaa.edu.cn/xwgg/tzgg.htm";
 const WRJ_ROBOTS_URL: &str = "https://wrj.buaa.edu.cn/robots.txt";
@@ -574,6 +591,7 @@ enum SourceProfile {
     Ygy,
     Cst,
     Dept3,
+    Ee,
 }
 
 impl SourceProfile {
@@ -612,6 +630,7 @@ impl SourceProfile {
             Self::Ygy => YGY_ROBOTS_URL,
             Self::Cst => CST_ROBOTS_URL,
             Self::Dept3 => DEPT3_ROBOTS_URL,
+            Self::Ee => EE_ROBOTS_URL,
         }
     }
 
@@ -650,6 +669,7 @@ impl SourceProfile {
             Self::Ygy => ".buaa-cli-ygy-cache",
             Self::Cst => ".buaa-cli-cst-cache",
             Self::Dept3 => ".buaa-cli-dept3-cache",
+            Self::Ee => ".buaa-cli-ee-cache",
         }
     }
 
@@ -793,6 +813,9 @@ impl SourceProfile {
             }
             Self::Dept3 => {
                 url.host_str() == Some("dept3.buaa.edu.cn") && url.query().is_none() && dept3_path_allowed(url.path())
+            }
+            Self::Ee => {
+                url.host_str() == Some("www.ee.buaa.edu.cn") && url.query().is_none() && ee_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -1081,6 +1104,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_dept3(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Dept3)
+    }
+
+    pub(crate) fn open_ee(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Ee)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
