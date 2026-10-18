@@ -473,7 +473,8 @@ fn parse_article_document(document: &Html, url: &Url) -> Result<ArticleDocument,
         })
         .and_then(|raw| parse_iso_date(&raw));
 
-    let (paragraphs, attachment_hints, attachments_found) = article_body(document.root_element())?;
+    let (paragraphs, attachment_hints, attachments_found) =
+        article_body(document.root_element(), false)?;
     Ok(ArticleDocument {
         title,
         category: article_category_from_url(url),
@@ -484,7 +485,10 @@ fn parse_article_document(document: &Html, url: &Url) -> Result<ArticleDocument,
     })
 }
 
-fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
+fn article_body(
+    document: ElementRef<'_>,
+    has_other_source_text: bool,
+) -> Result<(Vec<String>, Vec<Value>, bool), Error> {
     let body_selector = Selector::parse("div.v_news_content p").map_err(|_| unavailable())?;
     let mut paragraphs: Vec<String> = Vec::new();
     for paragraph in document.select(&body_selector) {
@@ -508,7 +512,7 @@ fn article_body(document: ElementRef<'_>) -> Result<(Vec<String>, Vec<Value>, bo
         }
         paragraphs.push(text);
     }
-    if paragraphs.is_empty() {
+    if paragraphs.is_empty() && !has_other_source_text {
         return Err(failed_contract(
             "article must contain at least one v_news_content paragraph",
             file!(),
@@ -1114,7 +1118,7 @@ pub fn schema() -> Value {
         .map(|(slug, _)| json!(slug))
         .chain(std::iter::once(Value::Null))
         .collect();
-    json!({
+    let mut output = json!({
         "document": {
             "input":{"type":"object","additionalProperties":false,"required":["article_url"],"properties":{"article_url":{"type":"string","description":"Reviewed HTTPS SCSE notice article; the viewer must declare exactly one supported original PDF."}}},
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
@@ -1150,7 +1154,7 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, or Mse board-declared notice in category 1061/1058. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse requires one active direct art-tit header owner; its direct h3 heading and p/span.date 日期：YYYY年MM月DD日 publication facts are selected only within that owner. Competing headers refuse, while absent, invalid or duplicated date slots stay unknown; unextracted table text outside paragraphs, images or attachment contents produce partial_text. Pure-image/table-only/empty bodies remain unavailable under the unchanged shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, or Mse board-declared notice in category 1061/1058. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i has no reviewed later-page declaration and accepts source_page1 only. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse requires one active direct art-tit header owner; its direct h3 heading and p/span.date 日期：YYYY年MM月DD日 publication facts are selected only within that owner. Competing headers refuse, while absent, invalid or duplicated date slots stay unknown; source text with unfetched images or document attachments produces partial_text. Supported flat Mse table-only text is readable within the existing bounds; empty/nontext or pure-image bodies refuse, and unsupported nested/unowned table layouts fail closed. Other sources retain their existing source-specific paragraph/table/image admission limits and reject a non-null source_page where unsupported. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
                 "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058))/[0-9]{1,10}[.]htm$"}}}},
@@ -1158,7 +1162,7 @@ pub fn schema() -> Value {
             },
             "output": {
                 "type": "object",
-                "description": "Source paragraph text excluding code/fallback markup, publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. College unextracted image/PDF/table content explicitly produces embedded_document or partial_text rather than fabricated full text. Mse reports table text outside source paragraphs as missing; table-only/empty bodies remain unavailable. Preview/attachment bytes are never fetched and OCR is not performed.",
+                "description": "Partial output schema projection: only the optional Mse table extension below is typed; common paragraph, publication, attachment, completeness and retrieval fields remain descriptive, not a complete output validator. Source paragraph text excludes code/fallback markup and retains original publication facts and attachment hints. Text reads retain at most 1024 nonempty source paragraphs, at most 8 KiB each, from a document bounded to 2 MiB; overflow is an error, never silent truncation. Mse additionally returns separate source-ordered flat-table captions, rows and cells with explicitly present span attributes, without expanding spans or inventing grid positions. Mse counts paragraphs plus table rows under the same 1024 text-block budget, at most 256 tables/cells per row and 8 KiB of normalized text per row. Its ordinary table-only text is readable; empty/nontext bodies remain unavailable, unsupported nested/unowned table layouts fail closed, and unfetched image/attachment content stays partial. Other college table/PDF/image limits remain source-specific. Preview/attachment bytes are never fetched and OCR is not performed.",
             }
         },
         "history": {
@@ -1171,7 +1175,31 @@ pub fn schema() -> Value {
                 "description": "Parsed snapshot with asserted provenance and SHA-256 byte binding.",
             }
         },
-    })
+    });
+    output["article"]["output"]["properties"] = json!({
+        "body_tables": {
+            "type":"array","maxItems":MAX_ENTRIES,
+            "description":"Mse source tables only; normalized text is derived from original HTML whose retrieval hash remains unchanged. Arrays preserve table/row/cell source order. Span attributes are DOM-decoded source strings and omitted when absent, not inferred defaults.",
+            "items": {
+                "type":"object","additionalProperties":false,"required":["source_order","caption","rows"],
+                "properties": {
+                    "source_order":{"type":"integer","minimum":1,"maximum":MAX_ENTRIES},
+                    "caption":{"type":["string","null"],"maxLength":MAX_PARAGRAPH},
+                    "rows":{"type":"array","maxItems":MAX_BODY_PARAGRAPHS,"items":{
+                        "type":"object","additionalProperties":false,"required":["cells"],
+                        "properties":{"cells":{"type":"array","maxItems":MAX_ENTRIES,"items":{
+                            "type":"object","additionalProperties":false,"required":["header","text"],
+                            "properties":{"header":{"type":"boolean","description":"True only for an original th cell."},"text":{"type":"string","maxLength":MAX_PARAGRAPH},"rowspan":{"type":"string","maxLength":MAX_TEXT},"colspan":{"type":"string","maxLength":MAX_TEXT}}
+                        }}}
+                    }}
+                }
+            }
+        },
+        "body_table_count":{"type":"integer","minimum":0,"maximum":MAX_ENTRIES},
+        "body_table_row_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS},
+        "body_table_cell_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS * MAX_ENTRIES}
+    });
+    output
 }
 
 #[cfg(test)]
