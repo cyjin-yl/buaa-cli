@@ -1,6 +1,15 @@
 ## Development status
 
 ## Directory-bound Chemistry college news
+## 2026-10-18: Dept3 current board contract
+
+Read-only public reconnaissance through the shared proxy found that the current HTTPS root `https://dept3.buaa.edu.cn/` declares the exact board `https://dept3.buaa.edu.cn/xwdt/gggs/tzgg.htm` (labels 公告公示/通知公告). The old `/xwzx/xygg.htm` route and category1302 contract are no longer admitted. The selected HTTPS root remains a deliberate observation of the official directory's exact literal/resolved HTTP identity `http://dept3.buaa.edu.cn/`; it is not an upgrade, alias or academic school-code assertion.
+
+The board is one active `nymain/notice-list` view with direct `ul > li > a` rows, direct `span` dotted dates (`YYYY.MM.DD`), direct `h3` source headings and direct `p` excerpts. Its pagination declares only ordinal1, so the adapter accepts `category=tzgg`, page1 only and never infers later pages. The five current source rows link to two source-declared article namespaces, `/info/1093/<id>.htm` and `/info/1014/<id>.htm`; external references remain retained listing links and are never fetched.
+
+Declared articles use one `form > div.art-main`, direct `div.art-tit.cont-tit > h3` heading, direct `span.date` Chinese publication metadata and one scoped `art-body-box/art-body/#vsb_content/v_news_content` body. Shared bounded paragraph/table extraction preserves source order; images and attachment contents remain unfetched and degraded output stays `partial_text` when applicable. History admissions, schema, help, dispatch and network path allowlists use the same exact board/article declarations. The earlier Dept3 section below records the superseded route and is retained as historical evidence only.
+
+## Directory-bound Dept3 Automation notices
 
 The Chemistry adapter binds the non-hidden official-directory member `化学学院` at the exact listed/resolved HTTP root `http://sce.buaa.edu.cn/` and deliberately observes the HTTPS root separately. The retained root declares the active `xwzx/xyxw.htm` 学院新闻 board; the adapter does not infer the adjacent notification, research or student routes. Listing rows are the source-ordered direct rows under one active `.fy-list > ul`, with direct `YYYY-MM-DD` date spans and article anchors. Later pages are selected only when the retained pager advertises the requested board path; no ordinal traversal or guessed URL is used.
 

@@ -46,6 +46,7 @@ pub(crate) mod yqgdxy;
 pub(crate) mod ase;
 pub(crate) mod bme;
 pub(crate) mod cst;
+pub(crate) mod dept3;
 pub(crate) mod sa;
 pub(crate) mod zfai;
 
@@ -160,7 +161,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, HSS, BME, YGY, CST, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld, ME, Wrj, Yqgdxy and ASE source binding",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, HSS, BME, YGY, CST, Dept3, Zfai, Iiif, Mse, Sepe, Soft, Transportation, Physics, Sce, Sse, Sem, Fld, ME, Wrj, Yqgdxy and ASE source binding",
     )
 }
 
@@ -773,6 +774,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("bme") => return bme::list(mode, &query),
         Some("ygy") => return ygy::list(mode, &query),
         Some("cst") => return cst::list(mode, &query),
+        Some("dept3") => return dept3::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -932,6 +934,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("cst.buaa.edu.cn") => {
             return cst::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("dept3.buaa.edu.cn") => {
+            return dept3::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -1028,6 +1033,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "cst" {
         return cst::surface(mode, page);
+    }
+    if college == "dept3" {
+        return dept3::surface(mode, page);
     }
     if college == "sa" {
         return sa::surface(mode, page);
@@ -1134,6 +1142,7 @@ fn describe_college_surface(
             | "bme"
             | "ygy"
             | "cst"
+            | "dept3"
             | "sa"
     ) {
         college_html(response)?
@@ -1708,6 +1717,27 @@ pub fn schema() -> Value {
     );
     output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
         r"^(?:https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/[0-9]{1,10}|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008|yqgdxy[.]buaa[.]edu[.]cn/info/1053|ase[.]buaa[.]edu[.]cn/info/(1052|1285))/[0-9]{1,10}[.]htm$|^http://www[.]hss[.]buaa[.]edu[.]cn/info/1103/[0-9]{1,10}[.]htm$|^https?://bme[.]buaa[.]edu[.]cn/newsInfo[.]aspx[?]catID=13&subcatID=[0-9]{1,10}&curID=[0-9]{1,10}$|^https://ygy[.]buaa[.]edu[.]cn/info/1004/[0-9]{1,10}[.]htm$|^https://cst[.]buaa[.]edu[.]cn/info/1102/[0-9]{1,10}[.]htm$)"
+    );
+    output["college_source"]["input"]["description"] = json!(
+        "Fixed public pages for reviewed directory-bound college sources, including Automation. Dept3 preserves the exact literal HTTP directory identity and separate HTTPS observation; its current root-declared xwdt/gggs/tzgg.htm board is page1-only and category-1102/1093/1014 article routes are followed only when declared."
+    );
+    output["list"]["input"]["properties"]["college"]["enum"] = json!([
+        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "bme", "ygy", "cst", "dept3", "zfai", "iiif", "mse",
+        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
+        "me", "wrj", "yqgdxy", "ase", Value::Null
+    ]);
+    output["list"]["input"]["allOf"]
+        .as_array_mut()
+        .expect("announcement list schema allOf")
+        .push(json!({
+            "if":{"required":["college"],"properties":{"college":{"const":"dept3"}}},
+            "then":{"properties":{"category":{"enum":["tzgg",null]},"page":{"enum":[1,null]}}}
+        }));
+    output["article"]["input"]["description"] = json!(
+        "Reviewed Dept3 article URLs are HTTPS canonical /info/1093/<digits>.htm or /info/1014/<digits>.htm originals declared by xwdt/gggs/tzgg.htm; source_page is 1 only and no undeclared or later page is inferred."
+    );
+    output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] = json!(
+        r"^(?:https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/[0-9]{1,10}|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008|yqgdxy[.]buaa[.]edu[.]cn/info/1053|ase[.]buaa[.]edu[.]cn/info/(1052|1285))/[0-9]{1,10}[.]htm$|^http://www[.]hss[.]buaa[.]edu[.]cn/info/1103/[0-9]{1,10}[.]htm$|^https?://bme[.]buaa[.]edu[.]cn/newsInfo[.]aspx[?]catID=13&subcatID=[0-9]{1,10}&curID=[0-9]{1,10}$|^https://ygy[.]buaa[.]edu[.]cn/info/1004/[0-9]{1,10}[.]htm$|^https://cst[.]buaa[.]edu[.]cn/info/1102/[0-9]{1,10}[.]htm$|^https://dept3[.]buaa[.]edu[.]cn/info/(1093|1014)/[0-9]{1,10}[.]htm$)"
     );
     output
 }

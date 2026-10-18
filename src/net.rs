@@ -185,6 +185,28 @@ pub(crate) fn hss_path_allowed(path: &str) -> bool {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
         })
 }
+
+pub(crate) const DEPT3_ROOT_URL: &str = "https://dept3.buaa.edu.cn/";
+pub(crate) const DEPT3_NOTICES_URL: &str = "https://dept3.buaa.edu.cn/xwdt/gggs/tzgg.htm";
+const DEPT3_ROBOTS_URL: &str = "https://dept3.buaa.edu.cn/robots.txt";
+
+pub(crate) fn dept3_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs/tzgg.htm") {
+        return true;
+    }
+    ["/info/1093/", "/info/1014/"]
+        .into_iter()
+        .any(|prefix| {
+            path.strip_prefix(prefix)
+                .and_then(|stem| stem.strip_suffix(".htm"))
+                .is_some_and(|stem| {
+                    !stem.is_empty()
+                        && stem.len() <= 10
+                        && stem.bytes().all(|byte| byte.is_ascii_digit())
+                })
+        })
+}
+
 pub(crate) const SSE_ROOT_URL: &str = "https://sse.buaa.edu.cn/";
 pub(crate) const SSE_NOTICES_URL: &str = "https://sse.buaa.edu.cn/xwdt/gsgg/tzgg.htm";
 const SSE_ROBOTS_URL: &str = "https://sse.buaa.edu.cn/robots.txt";
@@ -551,6 +573,7 @@ enum SourceProfile {
     Bme,
     Ygy,
     Cst,
+    Dept3,
 }
 
 impl SourceProfile {
@@ -588,6 +611,7 @@ impl SourceProfile {
             Self::Bme => BME_ROBOTS_URL,
             Self::Ygy => YGY_ROBOTS_URL,
             Self::Cst => CST_ROBOTS_URL,
+            Self::Dept3 => DEPT3_ROBOTS_URL,
         }
     }
 
@@ -625,6 +649,7 @@ impl SourceProfile {
             Self::Bme => ".buaa-cli-bme-cache",
             Self::Ygy => ".buaa-cli-ygy-cache",
             Self::Cst => ".buaa-cli-cst-cache",
+            Self::Dept3 => ".buaa-cli-dept3-cache",
         }
     }
 
@@ -765,6 +790,9 @@ impl SourceProfile {
             }
             Self::Cst => {
                 url.host_str() == Some("cst.buaa.edu.cn") && url.query().is_none() && cst_path_allowed(url.path())
+            }
+            Self::Dept3 => {
+                url.host_str() == Some("dept3.buaa.edu.cn") && url.query().is_none() && dept3_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -1049,6 +1077,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_cst(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Cst)
+    }
+
+    pub(crate) fn open_dept3(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Dept3)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
@@ -3006,6 +3038,7 @@ mod tests {
     }
 
     #[test]
+
     fn offline_and_prefer_cache_make_no_observation_or_governor_state() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _| panic!("offline operation contacted the network"));
