@@ -153,6 +153,7 @@ pub(crate) const YQGDXY_ROOT_URL: &str = "https://yqgdxy.buaa.edu.cn/";
 pub(crate) const YQGDXY_NOTICES_URL: &str = "https://yqgdxy.buaa.edu.cn/tzgg.htm";
 const YQGDXY_ROBOTS_URL: &str = "https://yqgdxy.buaa.edu.cn/robots.txt";
 pub(crate) const MATH_ROOT_URL: &str = "https://math.buaa.edu.cn/";
+pub(crate) const MATH_NOTICES_URL: &str = "https://math.buaa.edu.cn/index/xygg.htm";
 const MATH_ROBOTS_URL: &str = "https://math.buaa.edu.cn/robots.txt";
 
 pub(crate) fn yqgdxy_path_allowed(path: &str) -> bool {
@@ -175,6 +176,17 @@ pub(crate) fn dept3_path_allowed(path: &str) -> bool {
         return true;
     }
     path.strip_prefix("/info/1302/")
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn math_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/index/xygg.htm") {
+        return true;
+    }
+    path.strip_prefix("/info/1294/")
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -598,7 +610,7 @@ impl SourceProfile {
             Self::Math => {
                 url.host_str() == Some("math.buaa.edu.cn")
                     && url.query().is_none()
-                    && matches!(url.path(), "/" | "/robots.txt")
+                    && math_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -2980,7 +2992,7 @@ mod tests {
     }
 
     #[test]
-    fn math_root_probe_refuses_undeclared_surfaces_before_transport() {
+    fn math_profile_allows_reviewed_board_and_article_only() {
         const BODY: &[u8] = b"<html><title>Synthetic root only</title></html>";
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
@@ -2992,9 +3004,20 @@ mod tests {
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         client.profile = SourceProfile::Math;
         for raw in [
+            MATH_ROOT_URL,
+            MATH_NOTICES_URL,
+            "https://math.buaa.edu.cn/info/1294/42.htm",
+        ] {
+            SourceProfile::Math
+                .validate_url(&Url::parse(raw).unwrap())
+                .unwrap();
+        }
+        for raw in [
             "https://math.buaa.edu.cn/unreviewed-board.htm",
+            "https://math.buaa.edu.cn/index/xygg/2.htm",
             "https://math.buaa.edu.cn/?page=1",
             "http://math.buaa.edu.cn/",
+            "https://math.buaa.edu.cn/info/1293/42.htm",
             "https://www.math.buaa.edu.cn/",
         ] {
             assert_eq!(

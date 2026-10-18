@@ -1,6 +1,14 @@
 # Development status
 
-## Math exact source transport frontier
+## Math current notice adapter
+
+The current exact-directory-bound Math adapter preserves visible directory member23 数学科学学院 under 理科学科群 with literal/resolved `http://math.buaa.edu.cn/`; the selected `https://math.buaa.edu.cn/` source remains a separate deliberate observation, not a protocol upgrade or alias. The root's active 学院公告 declaration is `index/xygg.htm`, admitted as `https://math.buaa.edu.cn/index/xygg.htm` and not inferred from neighboring routes.
+
+The observed board has one `div.list_main > div.list_main_right > div.list_box > ul` view. Its direct `li > a` rows retain source order, direct `span` `YYYY/MM/DD` dates, literal/resolved links and no reconstructed summary; the board exposes only page1. The observed canonical article namespace is `https://math.buaa.edu.cn/info/1294/<1..10-digit-id>.htm`. Its one `div.icontent > div.c-content > form` owns direct `h1.c-title`, `div.other-s` publication metadata (`发布日期：YYYY-MM-DD`) and `div#vsb_content.nr-info > div.v_news_content` body content. Article URLs must be declared by the retained board before retrieval; foreign hosts, query/fragment/credential URLs, other namespaces and unadvertised pages remain refused.
+
+The implementation is source-bound and cache-first through the shared Math profile (`robots.txt`, root, board and canonical1294 articles only), with exact HTTP directory attribution kept separate from HTTPS retrieval attribution. Synthetic parser coverage defends direct list/article ownership, inert/foreign copies, source order, slash-date validation, ambiguous dates, article header/body boundaries and unadvertised URL rejection. Build, online cache receipts and exact-head integration remain parent verification work; no campus write, authentication, attachment download, OCR, full-history or all-college claim is made here.
+
+## Math prior source transport frontier (historical)
 
 Local `work/math-announcements` starts at `b8073d6964a568ab1dd54c3c8574e85ab3d69c4c`. Four Rust files change: source transport, announcement dispatch/schema, the new Math root probe and CLI discovery. Visible official-directory member23 is 数学科学学院 under 理科学科群, with exact literal/resolved `http://math.buaa.edu.cn/`. Selected `https://math.buaa.edu.cn/` is separate, not an upgrade, alias, academic school code or historical-era authority. The derived directory JSON SHA-256 remains `9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d`; independently retained original HTML SHA-256 is `f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9`. Their observation timestamps remain distinct; equal original bytes do not equate metadata timestamps. Parent worktrees/binaries/root-main remain untouched; fresh owned `target/native`, no copied artifacts/chmod/host build.
 

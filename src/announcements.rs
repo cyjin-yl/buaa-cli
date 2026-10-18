@@ -170,7 +170,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page must bind a supported college article to its source-advertised notice page",
+        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page must bind a supported college article to its source-advertised notice page (Math uses index/xygg.htm and page1)",
     )
 }
 
@@ -939,6 +939,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("sepe") => return sepe::list(mode, &query),
         Some("dept3") => return dept3::list(mode, &query),
         Some("yqgdxy") => return yqgdxy::list(mode, &query),
+        Some("math") => return math::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -1055,6 +1056,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         }
         Some("yqgdxy.buaa.edu.cn") => {
             return yqgdxy::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("math.buaa.edu.cn") => {
+            return math::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
         _ => {}
     }
@@ -1541,6 +1545,13 @@ fn notice_history_college(raw: &str, url: &Url) -> Option<&'static str> {
         {
             Some("yqgdxy")
         }
+        Some("math.buaa.edu.cn")
+            if url.scheme() == "https"
+                && path == "/index/xygg.htm"
+                && crate::net::math_path_allowed(path) =>
+        {
+            Some("math")
+        }
         _ => None,
     }
 }
@@ -1579,6 +1590,13 @@ fn article_history_college(raw: &str, url: &Url) -> Option<&'static str> {
             if path.starts_with("/info/1053/") && crate::net::yqgdxy_path_allowed(path) =>
         {
             Some("yqgdxy")
+        }
+        Some("math.buaa.edu.cn")
+            if url.scheme() == "https"
+                && path.starts_with("/info/1294/")
+                && crate::net::math_path_allowed(path) =>
+        {
+            Some("math")
         }
         _ => None,
     }
@@ -1659,6 +1677,7 @@ pub fn history(input: &str) -> Result<Value, Error> {
             "beijing" => (beijing::parse_article(&source), beijing::PUBLISHER),
             "dept3" => (dept3::parse_article(&source), dept3::PUBLISHER),
             "yqgdxy" => (yqgdxy::parse_article(&source), yqgdxy::PUBLISHER),
+            "math" => (math::parse_article(&source), math::PUBLISHER),
             _ => return Err(invalid_history()),
         };
         let mut output = document.map_err(|_| invalid_history())?;
@@ -1745,6 +1764,11 @@ pub fn history(input: &str) -> Result<Value, Error> {
                     yqgdxy::parse_listing(&source, &base),
                     yqgdxy::PUBLISHER,
                     "通知公告（历史快照）",
+                ),
+                "math" => (
+                    math::parse_listing(&source, &base),
+                    math::PUBLISHER,
+                    "学院公告（历史快照）",
                 ),
                 _ => return Err(invalid_history()),
             };
@@ -1910,6 +1934,35 @@ pub fn schema() -> Value {
             }
         },
     });
+    output["college_source"]["input"]["description"] = json!("announcements college-source supports fixed public pages for the selected college. Math admits root or the root-declared index/xygg.htm notice board; its exact HTTP directory identity and separately selected HTTPS observation remain distinct, and linked hints are never followed.");
+    output["list"]["input"]["properties"]["college"]["enum"] = json!(["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse","sepe","dept3","yqgdxy","math",null]);
+    output["list"]["input"]["description"] = json!("Optional JSON object. Math selects the exact root-declared xygg board, one retained page, direct list_box rows with source YYYY/MM/DD dates, and no summary reconstruction; later pages are not inferred. Other college source contracts remain as described by their adapters.");
+    if let Some(all_of) = output["list"]["input"]["allOf"].as_array_mut() {
+        all_of.push(json!({"if":{"required":["college"],"properties":{"college":{"const":"math"}}},"then":{"properties":{"category":{"enum":["xygg",null]},"page":{"enum":[1,null]}}}}));
+    }
+    let article_pattern = output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"]
+        .as_str()
+        .unwrap_or_default()
+        .replace(
+            "yqgdxy[.]buaa[.]edu[.]cn/info/1053)",
+            "yqgdxy[.]buaa[.]edu[.]cn/info/1053|math[.]buaa[.]edu[.]cn/info/1294)",
+        );
+    output["article"]["input"]["allOf"][0]["then"]["properties"]["url"]["pattern"] =
+        article_pattern.into();
+    if let Some(all_of) = output["article"]["input"]["allOf"].as_array_mut() {
+        all_of.push(json!({"if":{"required":["url"],"properties":{"url":{"pattern":"^https://math[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}));
+    }
+    output["article"]["input"]["description"] = json!("JSON object with url and optional source_page. Math accepts only source-declared HTTPS info/1294 articles, requires the selected article to occur on index/xygg.htm, and parses direct c-title, other-s publication metadata and the owned vsb_content.nr-info/v_news_content body. Missing, invalid or ambiguous dates stay unknown; body dates are not promoted.");
+    let history_article_pattern = output["history"]["input"]["allOf"][0]["then"]["properties"]["provenance"]["properties"]["source_url"]["pattern"]
+        .as_str()
+        .unwrap_or_default()
+        .replace(
+            "yqgdxy[.]buaa[.]edu[.]cn/info/1053)",
+            "yqgdxy[.]buaa[.]edu[.]cn/info/1053|math[.]buaa[.]edu[.]cn/info/1294)",
+        );
+    output["history"]["input"]["allOf"][0]["then"]["properties"]["provenance"]["properties"]["source_url"]["pattern"] =
+        history_article_pattern.into();
+    output["history"]["input"]["description"] = json!("Fully offline operator-asserted UTF-8 original. Math listing history admits only the exact HTTPS index/xygg.htm board and Math article history only HTTPS info/1294 numeric articles; current directory attribution and archive headers are not inferred.");
     output["article"]["output"]["properties"] = json!({
         "body_tables": {
             "type":"array","maxItems":MAX_ENTRIES,
