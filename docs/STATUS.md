@@ -1,5 +1,13 @@
 # Development status
 
+## Directory-bound CST 网络空间安全学院 notices
+
+The reviewed public source is `https://cst.buaa.edu.cn/`, selected separately from the official-directory member's exact literal `http://cst.buaa.edu.cn` (resolved directory root `http://cst.buaa.edu.cn/`). The root actively declares `index/tzgg.htm` as 通知公告. The adapter therefore binds `college=cst`, `category=tzgg`, and exposes only the root and that declared board; no guessed index, search, dynamic, or attachment route is admitted.
+
+Public read-only reconnaissance through the shared proxy observed robots `404` (1693 bytes, SHA-256 `29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407`), HTTPS root `200` (38235 bytes, SHA-256 `1d03ee24029caf2a6191ea9970fffc5f35f841d9d23f35d47bbb1225fa84ebe3`), declared board `200` (27454 bytes, SHA-256 `adf3d6f199ba34f5a13005442a1c8e4bbb320f4292e87296ae662efd43462a2e`) and one board-declared category-1102 article `https://cst.buaa.edu.cn/info/1102/5379.htm` `200` (32419 bytes, SHA-256 `c5af4743ea99cb457deb7a167d3cd65c96f905bcb4bb554fd5911ae36ab49027`). These retained observations are public-source facts, not immutable publisher or rights certificates; raw originals remain outside the repository.
+
+The board uses `div.text-list > ul > li` rows, `div.text-ldata > div > p` month/day plus `span` year, and `div.text-linfo > h3` title / `p` excerpt. Seven source rows were observed, including a source duplicate for one article; source order is retained and no later ordinal is advertised. Articles use one `div.art-main`, direct `div.art-tit.cont-tit > h3`, `发布日期：YYYY-MM-DD`, and one `#vsb_content > .v_news_content` body. The adapter preserves active paragraphs and document-link hints without downloading attachments, rejects ambiguous containers and foreign/query/credential URLs, and keeps missing/invalid dates unknown. Full history, all-college coverage, image/OCR/table reconstruction, later pages and campus writes remain out of scope.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

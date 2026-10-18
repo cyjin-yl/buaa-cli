@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory/root/list-bound 网络空间安全学院 notices (`college=cst`, `category=tzgg`) at the reviewed HTTPS board `index/tzgg.htm`. Preserve the exact official-directory HTTP identity (`http://cst.buaa.edu.cn`) and deliberate HTTPS observation, source row order, split month/day-year dates, title/excerpt separation and one-page source declaration. Read only board-declared category-1102 articles with direct `art-tit` publication metadata and `vsb_content/v_news_content` paragraphs; reject foreign/query/credential URLs, undeclared articles and unreviewed later pages. Attachments remain unfetched hints; history, complete crawl and campus writes are not claimed.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
