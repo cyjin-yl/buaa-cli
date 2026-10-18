@@ -1,5 +1,13 @@
 # Development status
 
+## Directory-bound Physics college notices
+
+The retained official directory member25 is 物理学院 with exact literal/resolved `http://physics.buaa.edu.cn/`; the selected `https://physics.buaa.edu.cn/` observation is kept separate and is not an HTTP upgrade or alias. Credential-free public reconnaissance through the approved proxy observed a 24,601-byte HTTPS root, which actively declares `index/tzgg.htm` as 通知公告. The retained board is 14,566 bytes, advertises 26 total source rows and an ordinal link `index/tzgg/1.htm`; selected article paths are `/info/1252/<digits>.htm`.
+
+The adapter binds the retained directory identity, root-declared board, source-ordered `ul.news-ul > li` rows with direct `a`/`span` ISO dates, advertised `div.pb_sys_common span.p_no a[href]` pagination, and original `div.article-tt`, `div.article-sm` (`发布时间：YYYY-MM-DD`) and nested `div.article-txt div.v_news_content` content. URL admission is HTTPS-only, credential/query/fragment/port-free and limited to robots, root, board, advertised board pages and category1252 originals. No guessed route, automatic traversal, attachment download or campus write is enabled. Public reconnaissance hashes: root `31ef8ad1e908888b3d15460ff6f4c5f4c3805d58ba3d619a2bbc3e21d12f0872`, board `90fffa5a28bb734803bc15ab38c68c5fff407192a9c7ffd608228214a3f053a8`, selected article `be17adc3ad361827aac0e76ef057937147295df7635c670056012c70734ca8d7`; these are source observations, not native governor/cache proof.
+
+`announcements college-source physics [root|notices]`, `announcements list` with `college=physics`/`category=tzgg`, and declared-board `announcements article` are wired through the existing shared governor/cache and directory attribution. Synthetic parser tests cover source order/date filters, inert/foreign pagination refusal, original publication/body scope, ambiguous body refusal and URL boundaries. Full offline/native verification and exact-head publication remain parent-agent gates.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

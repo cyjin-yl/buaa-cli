@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add the directory-bound Physics college notices adapter (`college=physics`, category `tzgg`) for `physics.buaa.edu.cn`. Preserve the directory's exact HTTP identity and deliberate separate HTTPS observation; bind only the root-declared `index/tzgg.htm` board, source-advertised pagination, category-1252 originals, ISO dates and article-owned title/publication/body selectors. Reject foreign/query/credential/noncanonical paths and ambiguous layouts; keep attachment bytes, automatic traversal, history completion and campus writes out of scope.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
