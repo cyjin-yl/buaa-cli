@@ -30,8 +30,9 @@ const ORGANIZATIONS_ROBOTS_URL: &str = "https://www.buaa.edu.cn/robots.txt";
 const ANNOUNCEMENTS_ROBOTS_URL: &str = "https://news.buaa.edu.cn/robots.txt";
 /// Section listing slugs served by the news center. The university-wide
 /// notice/announcement section is `tzgg` (通知公告); the rest are news
-/// sections. College subdomains are intentionally out of scope: each runs a
-/// different CMS layout, so a single parser cannot cover them safely.
+/// sections. College subdomains use separate explicit profiles because each
+/// runs a different CMS layout; no single parser or domain-wide crawl is
+/// implied.
 const ANNOUNCEMENT_CATEGORIES: &[&str] = &[
     "tzgg", "zhxw", "ztxw", "bhrw", "xyfc_new", "kjzx_new", "mtbh_new", "gybh_new", "spxw1",
     "wyyd_new",
@@ -142,6 +143,9 @@ const RSE_ROBOTS_URL: &str = "https://rse.buaa.edu.cn/robots.txt";
 pub(crate) const SEPE_ROOT_URL: &str = "https://sepe.buaa.edu.cn/";
 pub(crate) const SEPE_NOTICES_URL: &str = "https://sepe.buaa.edu.cn/xwdt/gggs.htm";
 const SEPE_ROBOTS_URL: &str = "https://sepe.buaa.edu.cn/robots.txt";
+pub(crate) const YGY_ROOT_URL: &str = "https://ygy.buaa.edu.cn/";
+pub(crate) const YGY_NOTICES_URL: &str = "https://ygy.buaa.edu.cn/tzgg/yggg.htm";
+const YGY_ROBOTS_URL: &str = "https://ygy.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -151,6 +155,18 @@ pub(crate) fn sepe_path_allowed(path: &str) -> bool {
         .or_else(|| path.strip_prefix("/info/1078/"))
         .or_else(|| path.strip_prefix("/info/1093/"))
         .or_else(|| path.strip_prefix("/info/1080/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn ygy_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/tzgg/yggg.htm") {
+        return true;
+    }
+    path.strip_prefix("/tzgg/yggg/")
+        .or_else(|| path.strip_prefix("/info/1004/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -352,6 +368,7 @@ enum SourceProfile {
     Mse,
     Rse,
     Sepe,
+    Ygy,
 }
 
 impl SourceProfile {
@@ -372,6 +389,7 @@ impl SourceProfile {
             Self::Mse => MSE_ROBOTS_URL,
             Self::Rse => RSE_ROBOTS_URL,
             Self::Sepe => SEPE_ROBOTS_URL,
+            Self::Ygy => YGY_ROBOTS_URL,
         }
     }
 
@@ -392,6 +410,7 @@ impl SourceProfile {
             Self::Mse => ".buaa-cli-mse-cache",
             Self::Rse => ".buaa-cli-rse-cache",
             Self::Sepe => ".buaa-cli-sepe-cache",
+            Self::Ygy => ".buaa-cli-ygy-cache",
         }
     }
 
@@ -479,6 +498,11 @@ impl SourceProfile {
                 url.host_str() == Some("sepe.buaa.edu.cn")
                     && url.query().is_none()
                     && sepe_path_allowed(url.path())
+            }
+            Self::Ygy => {
+                url.host_str() == Some("ygy.buaa.edu.cn")
+                    && url.query().is_none()
+                    && ygy_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -695,6 +719,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_sepe(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Sepe)
+    }
+
+    pub(crate) fn open_ygy(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Ygy)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {

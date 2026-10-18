@@ -602,10 +602,18 @@
       "acceptance": "Faculty/college/date filters, full text and attachments, conditional incremental reads.",
       "sources": [
         "https://news.buaa.edu.cn/tzgg.htm",
-        "https://news.buaa.edu.cn/zhxw.htm"
+        "https://news.buaa.edu.cn/zhxw.htm",
+        "https://ygy.buaa.edu.cn/tzgg/yggg.htm"
       ],
       "evidence": {
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
+        "ygy_slice": {
+          "status": "local-unclaimed-source-observed-adapter-added",
+          "commands": "announcements college-source ygy [root|notices]; announcements list with college=ygy/category=yggg; announcements article for a selected retained-board-declared canonical /info/1004/ original. Default offline; explicit online/refresh uses the same production governor, cache-first authority discovery and selected-only refresh.",
+          "authority": "Visible official-directory member 医学科学与工程学院 under 医工交叉学科群; exact literal http://ygy.buaa.edu.cn and resolved http://ygy.buaa.edu.cn/. Selected https://ygy.buaa.edu.cn/ is explicitly separate, not an upgrade, alias or verified protocol equivalent. Root declares tzgg/yggg.htm 医工公告; active 下页 links advertise yggg/2.htm and then yggg/1.htm (three source pages total). Listing rows expose MM-DD without a year, so canonical dates remain null rather than inferred.",
+          "selectors": "ul.list1 > li with div.li-r > a/p, split div.li-l > p.p1/p2; article div.content > h1, div.time and div.content-detail > div.v_news_content. Active source-declared JSP attachment links are hints only; images/tables and attachment bytes are not fetched.",
+          "limits": "Public discovery is recorded without claiming governed native/cache acceptance proof, complete history, all-college traversal, attachment retrieval, issue/PR, merge, deployment or campus mutation. Full online verification remains owner-controlled under the production governor."
+        },
         "sepe_slice": {
           "issue": null,
           "pr": null,

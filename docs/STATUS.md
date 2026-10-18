@@ -1,5 +1,11 @@
 # Development status
 
+## Directory-bound YGY medical science and engineering notices
+
+Public read-only reconnaissance through the shared proxy confirmed `https://ygy.buaa.edu.cn/` (HTTP 200), its active root-declared `https://ygy.buaa.edu.cn/tzgg/yggg.htm` 医工公告 board, three source-advertised board pages (`yggg.htm`, `yggg/2.htm`, `yggg/1.htm`), and canonical article links under `/info/1004/`. The captured root directory snapshot binds the visible member `医学科学与工程学院` to literal `http://ygy.buaa.edu.cn` and resolved `http://ygy.buaa.edu.cn/`; the selected HTTPS source is retained as a deliberate separate observation, not a protocol upgrade or alias. `ul.list1 > li` rows use `div.li-l > p.p1/p2` month/day values without a year, so the adapter preserves `date: null` rather than inferring dates. Article selectors are one active `div.content`, direct `h1` and `div.time`, and one `div.content-detail > div.v_news_content`; source-declared JSP attachment links, images and tables remain unfetched and are reported as partial content.
+
+The implementation is local and unclaimed on `work/ygy-announcements-20261018`; no issue/PR, merge, deployment, campus mutation or governed native acceptance proof is claimed here. Full online/cache proof remains owner-controlled and must use the production governor and private originals; source history, all-college traversal and attachment retrieval remain out of scope.
+
 ## Directory-bound Sepe energy notices
 
 Local `work/sepe-announcements` starts at unmerged PR110 source `30f07060a2be4fc6a13f39c4207195776f60d9e9`. **No Sepe issue/PR, push, approval, merge or deployment is claimed.** The first PR110 reviews request failed with GitHub API quota403 at `2026-10-04T18:16:08Z`; no subsequent GitHub call, quota polling or alternate identity/proxy/anonymous fallback. External readiness is unavailable; private local status is retained while implementation advances.

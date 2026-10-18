@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add directory/root/list-bound 医学科学与工程学院 notices (`college=ygy`, `category=yggg`) from the root-declared `tzgg/yggg.htm` board. Preserve the exact listed HTTP directory identity and separate HTTPS observation, source-ordered `list1` rows, direct summaries, source-advertised numbered pages and canonical `/info/1004/` articles. The listing exposes month/day without a year, so canonical dates stay null rather than inferred; article text is scoped to the original `content-detail/v_news_content` body and attachments/images/tables remain unfetched partial content.
+
 <<<<<<< HEAD
 - Admit announcement/discovery HTML once before parsing; preserve admitted originals on board, ordinal, layout and undeclared-article errors without caching invalid MIME, UTF-8 or active-base sources. Reject conflicting advertised ordinals while permitting identical responsive links. Add a credential-free public Rust workflow whose verification runs with loopback only; dependency/toolchain acquisition is separate and private CI remains inactive.
 - Harden the shared official-directory producer's active identity text, ancestor-hidden flags, exact MIME/base admission and layout-failure retention. Bind aviation row heading/link identity and require one desktop article heading/body; ambiguous publication headers remain unknown instead of choosing the first date.
