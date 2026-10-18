@@ -134,6 +134,22 @@ const ZFAI_ROBOTS_URL: &str = "https://zfai.buaa.edu.cn/robots.txt";
 pub(crate) const IIIF_ROOT_URL: &str = "https://iiif.buaa.edu.cn/";
 pub(crate) const IIIF_NOTICES_URL: &str = "https://iiif.buaa.edu.cn/xwgg/tzgg.htm";
 const IIIF_ROBOTS_URL: &str = "https://iiif.buaa.edu.cn/robots.txt";
+pub(crate) const MSE_ROOT_URL: &str = "https://mse.buaa.edu.cn/";
+pub(crate) const MSE_NOTICES_URL: &str = "https://mse.buaa.edu.cn/xwdt/gggs.htm";
+const MSE_ROBOTS_URL: &str = "https://mse.buaa.edu.cn/robots.txt";
+
+pub(crate) fn mse_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwdt/gggs/")
+        .or_else(|| path.strip_prefix("/info/1061/"))
+        .or_else(|| path.strip_prefix("/info/1058/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) fn iiif_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwgg/tzgg.htm") {
@@ -314,6 +330,7 @@ enum SourceProfile {
     H3i,
     Zfai,
     Iiif,
+    Mse,
 }
 
 impl SourceProfile {
@@ -331,6 +348,7 @@ impl SourceProfile {
             Self::H3i => H3I_ROBOTS_URL,
             Self::Zfai => ZFAI_ROBOTS_URL,
             Self::Iiif => IIIF_ROBOTS_URL,
+            Self::Mse => MSE_ROBOTS_URL,
         }
     }
 
@@ -348,6 +366,7 @@ impl SourceProfile {
             Self::H3i => ".buaa-cli-h3i-cache",
             Self::Zfai => ".buaa-cli-zfai-cache",
             Self::Iiif => ".buaa-cli-iiif-cache",
+            Self::Mse => ".buaa-cli-mse-cache",
         }
     }
 
@@ -420,6 +439,11 @@ impl SourceProfile {
                 url.host_str() == Some("iiif.buaa.edu.cn")
                     && url.query().is_none()
                     && iiif_path_allowed(url.path())
+            }
+            Self::Mse => {
+                url.host_str() == Some("mse.buaa.edu.cn")
+                    && url.query().is_none()
+                    && mse_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -626,6 +650,10 @@ impl ArchiveClient {
         Self::open_profile(mode, SourceProfile::Iiif)
     }
 
+    pub(crate) fn open_mse(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Mse)
+    }
+
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
         let home = governor::identity_home().map_err(|_| cache_error())?;
         let _home = governor::open_directory(&home, false, false).map_err(|_| cache_error())?;
@@ -813,7 +841,7 @@ impl ArchiveClient {
             Ok(value) => value,
             Err(error) => {
                 lease
-                    .finish(Outcome::Success)
+                    .finish_without_request()
                     .map_err(|_| governor_error())?;
                 return Err(error);
             }
@@ -1489,6 +1517,12 @@ mod tests {
         fn ic_client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
             let mut client = self.client(mode, server);
             client.profile = SourceProfile::Ic;
+            client
+        }
+
+        fn mse_client(&self, mode: CacheMode, server: &Server) -> ArchiveClient {
+            let mut client = self.client(mode, server);
+            client.profile = SourceProfile::Mse;
             client
         }
 
@@ -3122,6 +3156,365 @@ mod tests {
         assert_eq!(server.count(), 1);
     }
 
+    fn seed_mse_root(client: &ArchiveClient) {
+        seed(
+            client,
+            MSE_ROOT_URL,
+            br#"<a href="xwdt/gggs.htm">Fixture notice board</a>"#,
+            false,
+        );
+        let root = Url::parse(MSE_ROOT_URL).unwrap();
+        let mut entry = client.load(&root).unwrap().unwrap();
+        entry
+            .response
+            .headers
+            .insert("content-type".into(), "text/html".into());
+        client.save(&entry).unwrap();
+        seed(client, MSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+    }
+
+    #[test]
+    fn mse_listing_layout_refusal_retains_exact_original_for_offline_repair() {
+        const BODY: &[u8] = b"<title>Fixture changed listing layout</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        let query = serde_json::from_str(r#"{"college":"mse"}"#).unwrap();
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::PreferCache,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let retained = client
+            .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, BODY);
+        assert_eq!(retained.response.sha256, hash(BODY));
+        assert_eq!(retained.response.status, 200);
+        assert_eq!(retained.response.headers["content-type"], "text/html");
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::Offline,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_missing_ordinal_retains_latest_original_without_inferred_request() {
+        const BODY: &[u8] = b"<title>Fixture has no requested ordinal</title>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        let query = serde_json::from_str(r#"{"college":"mse","page":2}"#).unwrap();
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::PreferCache,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let retained = client
+            .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, BODY);
+        assert_eq!(retained.response.sha256, hash(BODY));
+        assert_eq!(
+            crate::announcements::mse::list_with_client(
+                client,
+                CacheMode::Offline,
+                &query,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_membership_refusal_retains_exact_listing_without_fetching_article() {
+        const BODY: &[u8] = br#"<div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul><li><a href="../info/1061/41.htm"><h3>Another source entry</h3></a></li></ul></div></div></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        let target = Url::parse("https://mse.buaa.edu.cn/info/1061/42.htm").unwrap();
+        assert_eq!(
+            crate::announcements::mse::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &target,
+                1,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let retained = client
+            .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, BODY);
+        assert_eq!(retained.response.sha256, hash(BODY));
+        assert!(client.load(&target).unwrap().is_none());
+        assert_eq!(
+            crate::announcements::mse::article_with_client(
+                client,
+                CacheMode::Offline,
+                &target,
+                1,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_listing_and_discovery_reject_unadmitted_originals_without_caching() {
+        for page in [1, 2] {
+            for (headers, body) in [
+                (
+                    "Content-Type: application/json\r\n",
+                    b"<title>Wrong MIME</title>" as &[u8],
+                ),
+                (
+                    "Content-Type: text/html\r\n",
+                    b"<base href='https://other.invalid/'><title>Active base</title>" as &[u8],
+                ),
+                ("Content-Type: text/html\r\n", b"\xff" as &[u8]),
+            ] {
+                let fixture = Fixture::new();
+                let server = Server::new(move |socket, request| {
+                    assert!(request.starts_with("GET /xwdt/gggs.htm "));
+                    reply(socket, 200, headers, body);
+                });
+                let client = fixture.mse_client(CacheMode::PreferCache, &server);
+                seed_mse_root(&client);
+                let query =
+                    serde_json::from_value(serde_json::json!({"college":"mse","page":page}))
+                        .unwrap();
+                assert_eq!(
+                    crate::announcements::mse::list_with_client(
+                        client,
+                        CacheMode::PreferCache,
+                        &query,
+                        None,
+                        None,
+                        serde_json::json!({}),
+                    )
+                    .unwrap_err()
+                    .code,
+                    "unavailable"
+                );
+                let client = fixture.mse_client(CacheMode::Offline, &server);
+                assert!(
+                    client
+                        .load(&Url::parse(MSE_NOTICES_URL).unwrap())
+                        .unwrap()
+                        .is_none()
+                );
+                assert_eq!(
+                    crate::announcements::mse::list_with_client(
+                        client,
+                        CacheMode::Offline,
+                        &query,
+                        None,
+                        None,
+                        serde_json::json!({}),
+                    )
+                    .unwrap_err()
+                    .code,
+                    "offline_miss"
+                );
+                assert_eq!(server.count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn mse_list_refreshes_only_selected_advertised_page_and_reuses_whole_output() {
+        const LATEST: &[u8] = br#"<div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"#;
+        const BODY: &[u8] = br#"<div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul><li><a href="../../info/1061/41.htm"><span>2026.09.21</span><h3>First source title</h3><p>Whole first excerpt.</p></a></li><li><a href="../../info/1058/42.htm"><span>2026.09.15</span><h3>Second source title</h3><p>Whole second excerpt.</p></a></li></ul></div></div></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /xwdt/gggs/8.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client = fixture.mse_client(CacheMode::PreferCache, &server);
+        seed_mse_root(&client);
+        seed(&client, MSE_NOTICES_URL, LATEST, false);
+        let latest = Url::parse(MSE_NOTICES_URL).unwrap();
+        let mut entry = client.load(&latest).unwrap().unwrap();
+        entry
+            .response
+            .headers
+            .insert("content-type".into(), "text/html".into());
+        client.save(&entry).unwrap();
+        let query = serde_json::from_str(r#"{"college":"mse","page":2}"#).unwrap();
+        let first = crate::announcements::mse::list_with_client(
+            client,
+            CacheMode::Revalidate,
+            &query,
+            Some("2026-09-15".into()),
+            Some("2026-09-21".into()),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(first["entry_count"], 2);
+        assert_eq!(first["entries"][0]["title"], "First source title");
+        assert_eq!(first["entries"][1]["title"], "Second source title");
+        assert_eq!(first["entries"][0]["summary"], "Whole first excerpt.");
+        assert_eq!(first["entries"][1]["summary"], "Whole second excerpt.");
+        assert_eq!(first["retrieval"]["response_body_sha256"], hash(BODY));
+        let client = fixture.mse_client(CacheMode::Offline, &server);
+        let cached = crate::announcements::mse::list_with_client(
+            client,
+            CacheMode::Offline,
+            &query,
+            Some("2026-09-15".into()),
+            Some("2026-09-21".into()),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let mut expected = first;
+        expected["retrieval"]["cache_status"] = "hit".into();
+        assert_eq!(cached, expected);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_article_refreshes_only_board_declared_original_from_advertised_page() {
+        const ARTICLE: &str = r#"<div class="nymain"><div class="w16"><div class="ny-right"><form><div class="art-main"><div class="art-tit"><h3>Original source title</h3><p><span class="date">日期：2026年09月21日</span></p></div><div class="art-body-box"><div class="art-body"><div class="ar_article" id="vsb_content"><div class="v_news_content"><table><tr><td>Unextracted source cell.</td></tr></table><p>Original source paragraph.</p></div></div></div></div></div></form></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1058/42.htm "));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                ARTICLE.as_bytes(),
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Mse;
+        for (url, body) in [
+            (MSE_ROOT_URL, br#"<a href="xwdt/gggs.htm">Fixture notice board</a>"# as &[u8]),
+            (MSE_NOTICES_URL, br#"<div class="nymain"><div class="ny-right"><div class="notice-list"><div><div class="pagestyle"><span class="p_no"><a href="gggs/8.htm">2</a></span></div></div></div></div></div>"# as &[u8]),
+            ("https://mse.buaa.edu.cn/xwdt/gggs/8.htm", br#"<div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul><li><a href="../../info/1061/41.htm"><h3>Different listed category</h3></a></li><li><a href="../../info/1058/42.htm"><span>2026.09.21</span><h3>Distinct listing teaser</h3></a></li></ul></div></div></div></div></div>"# as &[u8]),
+        ] {
+            seed(&client, url, body, false);
+            let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+            entry.response.headers.insert("content-type".into(), "text/html".into());
+            client.save(&entry).unwrap();
+        }
+        seed(&client, MSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let undeclared = Url::parse("https://mse.buaa.edu.cn/info/1058/99.htm").unwrap();
+        assert_eq!(
+            crate::announcements::mse::article_with_client(
+                client,
+                CacheMode::Revalidate,
+                &undeclared,
+                2,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let target = Url::parse("https://mse.buaa.edu.cn/info/1058/42.htm").unwrap();
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Mse;
+        let output = crate::announcements::mse::article_with_client(
+            client,
+            CacheMode::Revalidate,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["title"], "Original source title");
+        assert_eq!(output["published_at"], "2026-09-21");
+        assert_eq!(
+            output["body_paragraphs"],
+            serde_json::json!(["Original source paragraph."])
+        );
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(
+            output["source_listing"]["source_url"],
+            "https://mse.buaa.edu.cn/xwdt/gggs/8.htm"
+        );
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Mse;
+        let cached = crate::announcements::mse::article_with_client(
+            client,
+            CacheMode::Offline,
+            &target,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            cached["retrieval"]["response_body_sha256"],
+            hash(ARTICLE.as_bytes())
+        );
+        assert_eq!(
+            cached["body_paragraphs"],
+            serde_json::json!(["Original source paragraph."])
+        );
+        assert_eq!(cached["result"], "partial_text");
+        assert_eq!(server.count(), 1);
+    }
+
     #[test]
     fn rescue_iiif_discovery_retains_admitted_failures_and_rejects_unadmitted_sources() {
         const LISTING: &[u8] = br#"<div class="main"><div class="wape-right"><ul class="ss"><li><a href="../info/1186/99.htm">Different declared heading</a><span>2026-09-09</span></li></ul></div></div>"#;
@@ -3885,6 +4278,68 @@ mod tests {
         assert_eq!(status.consecutive_network_failures, 1);
         assert!(status.cooldown_wait > Duration::from_secs(29));
         assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn mse_cache_reload_failure_preserves_shared_network_backoff() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1061/42.htm "));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: 10\r\n\r\nab").unwrap();
+        });
+        let mut client = fixture.client(CacheMode::Revalidate, &server);
+        client.profile = SourceProfile::Mse;
+        seed(&client, MSE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let target = Url::parse("https://mse.buaa.edu.cn/info/1061/42.htm").unwrap();
+        assert_eq!(
+            client.snapshot(&target, false).unwrap_err().code,
+            "network_error"
+        );
+        let governor = fixture.governor();
+        assert_eq!(governor.status().unwrap().consecutive_network_failures, 1);
+        assert_eq!(server.count(), 1);
+
+        // Expire only this isolated fixture's timers, never failure history.
+        let expire_synthetic_waits = || {
+            let path = fixture.0.join("governor/state.json");
+            let mut state: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            state["next_request_ms"] = serde_json::json!(0);
+            state["cooldown_until_ms"] = serde_json::json!(0);
+            fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
+        };
+        expire_synthetic_waits();
+        seed(&client, target.as_str(), b"retained source", false);
+        client.load(&target).unwrap().unwrap();
+        let cache_path = fixture.0.join("cache").join(cache_name(&target));
+        fs::write(&cache_path, b"{broken cache").unwrap();
+        // Deterministically simulate a cache change after get's initial load,
+        // before the real fetch's under-lease re-load; no scheduling race.
+        let error = client
+            .fetch(
+                &target,
+                false,
+                &governor,
+                &client.http_client().unwrap(),
+                |_| Ok(()),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "cache_invalid");
+        assert_eq!(server.count(), 1);
+        let retained = governor.status().unwrap();
+        assert_eq!(retained.consecutive_network_failures, 1);
+        assert!(!retained.request_wait.is_zero());
+
+        fs::remove_file(cache_path).unwrap();
+        expire_synthetic_waits();
+        assert_eq!(
+            client.snapshot(&target, false).unwrap_err().code,
+            "network_error"
+        );
+        let next_failure = governor.status().unwrap();
+        assert_eq!(next_failure.consecutive_network_failures, 2);
+        assert!(next_failure.cooldown_wait > Duration::from_secs(59));
+        assert_eq!(server.count(), 2);
     }
 
     #[test]
