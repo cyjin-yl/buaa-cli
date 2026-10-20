@@ -33,6 +33,26 @@ Resolution is bounded to 16 ancestry hops, 64 loaded asset IDs and 128 retained 
 
 `hash_verification` is always `catalog_declared_not_blob_verified`. Bucket/key fields are catalog locators, not proof that an object was fetched or exists. This command does not verify or disclose object-store credentials and does not reconstruct missing originals or history.
 
+## Native classroom subtitles — supplied import
+
+`buaa recordings subtitles` imports one explicitly selected timed track from an already retained, operator-authorized classroom-native response. It performs no network request, authentication, media download, transcription, catalog write or attendance/completion action. The original response remains caller-owned and is never persisted or reconstructed by the command.
+
+The strict input contains `authorized`, `format: "classroom-native-v1"`, the exact response as Base64, its lowercase SHA-256, and both native selection fields: `sub_id` and `resource_guid`. Exactly one track must match both values. An empty source `resource_guid` remains an explicit missing association; the importer does not borrow an identifier from another response or invent a media link. The envelope must be successful (`status: 200`, `data.code: 0`) and the selected `all_content` array must be valid in full.
+
+All selected cues are validated before any successful output. Current support is non-negative integer `BeginSec`/`EndSec` values converted with checked multiplication to milliseconds; fractional or string times, inverted intervals, malformed late cues and oversized text fail closed rather than being rounded, truncated or partially emitted. Cue order, repeated/overlapping intervals, exact text/translation, whitespace and escaped controls are preserved without sorting, deduplication, speaker/language inference or fallback to unsegmented transcript text. The original-byte hash and exported-segment hash are separate; the latter is computed from the actual compact JSON `segments` value in output field order.
+
+Bounds are 4 MiB decoded input, 256 tracks, 20,000 selected cues, 256-byte identifiers and 8 KiB text/translation fields. Successful stdout may contain private text and identifiers, so it must not be forwarded to logs, issues or third-party models. These interfaces establish neither publisher authenticity, media-byte integrity nor course rights.
+
+## Governed native subtitle GET
+
+`buaa recordings subtitles --online` and `--refresh` use only the reviewed fixed-origin transcript GET, with a protected-stdin existing session and the same process-shared governor/cache policy as other adapters. The request is constructed from the numeric `sub_id`; arbitrary URLs, methods and header maps are rejected. The cookie is validated as cookie pairs, marked sensitive, delivered only to the transcript target (never robots, redirects or another origin), scoped into a private cache namespace, and excluded from cache/output/report diagnostics. There is no password/master-key input, login, refresh, redirect following, automatic retry, media fetch or catalog write.
+
+Fresh HTTP status, JSON MIME, body budget and application success are admitted before immutable-byte comparison. An indeterminate/denied/redirected session latches the shared safety outcome and does not replace a retained original. A valid application response whose selected layout is malformed is retained privately for a cache-only parser correction but still returns an error. The online original hash covers the raw HTTP body, not a constructed wrapper; a cache hit or `304` does not imply recording media retrieval. The current source/runtime gate remains pending parent validation, and no accepted authenticated target response is claimed here.
+
+## Required playback and subtitle services — not implemented
+
+The restored subtitle paths normalize supplied/native timed data only; they are not a player. **Player launch, seeking, controlled stop/exit, actual audio/video playback and replay subtitle synchronization are UNIMPLEMENTED.** No mpv/VLC launcher or player-facing delivery path exists. **Live playback, current audio/video, reconnect/stop lifecycle and governed playlist/fragment/key/range scheduling are UNIMPLEMENTED.** The `recording-subtitle-service` capability is therefore only partial-offline: native/local track selection and actual rendered subtitle cues, synchronization, lifecycle and live updates remain UNIMPLEMENTED and unverified. A JSON schema/discovery entry is not evidence of rendered output or a usable replay/live service.
+
 ## Object-storage interface facts — source-only draft
 
 Authorized, authenticated repository reads pinned the Life source to `af59427c7f6bac3382b5989b811b69872f4de928`. A structural Python AST inspection, not execution of the private implementation, found S3-compatible `HeadObject(Bucket, Key)` and `GetObject(Bucket, Key)` operations. The read inspector delegates to existence and digest helpers; the digest helper streams `Body` in 262,144-byte chunks, computes SHA-256 and closes the stream in a `finally` block. The same source also contains a `PutObject` operation in a separate workflow; it is explicitly excluded from this proposed read-only integration. No source code, operational default, endpoint, credential configuration, catalog row or media bytes were copied into this project.

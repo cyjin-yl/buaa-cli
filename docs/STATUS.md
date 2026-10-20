@@ -14,6 +14,27 @@ and link label rather than a filename-derived ordinal; missing/conflicting
 ordinal errors remain nested until `ArchiveClient::get` has retained the
 admitted listing response. Native build/tests, cache-only proof and online
 verification are pending; no completion or current-source claim is made.
+## 2026-10-20: Native subtitle capability cutover
+
+The omitted native subtitle capabilities were restored from the authoritative
+source worktree into the integrated transport without copying private source
+receipts or credentials. `recordings-native-subtitles` is represented as
+implemented-offline: supplied input is permission-gated, bound to the exact
+original bytes, selects one `(sub_id, resource_guid)` pair, validates every
+cue, preserves source order/text/translation and hashes the emitted segment
+value. `recordings-native-subtitles-online` is represented as
+implemented-offline for its fixed-source existing-session adapter: URL/cookie
+scope, fresh JSON/application admission, immutable raw-body provenance,
+session-scoped cache and the permanent shared governor are wired; current
+online/native runtime validation remains a parent gate.
+
+The restored regressions and schemas are synthetic/offline source consumers;
+this entry does not claim online verification, accepted authenticated target
+bytes, media rights, catalog writes or publication. Replay and live playback
+remain pending. Player launch, seek, controlled stop/exit, actual audio/video,
+player-facing subtitle delivery, rendered cues, synchronization and live
+subtitle updates are still unimplemented; JSON import/schema discovery does
+not satisfy those acceptance items.
 
 ## Directory-bound Chemistry college news
 ## 2026-10-18: Dept3 current board contract

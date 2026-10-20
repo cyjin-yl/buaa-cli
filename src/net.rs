@@ -84,6 +84,33 @@ pub(crate) const ORGANIZATIONS_URL: &str = "https://www.buaa.edu.cn/jgsz/jxkyjg0
 const SPOC_ROBOTS_URL: &str = "https://spoc.buaa.edu.cn/robots.txt";
 pub(crate) const SPOC_ROOT_URL: &str = "https://spoc.buaa.edu.cn/";
 pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
+pub(crate) const CLASSROOM_ORIGIN: &str = "https://classroom.msa.buaa.edu.cn";
+pub(crate) const CLASSROOM_TRANSCRIPT_PATH: &str =
+    "/courseapi/v3/web-socket/search-trans-result";
+const CLASSROOM_ROBOTS_URL: &str = "https://classroom.msa.buaa.edu.cn/robots.txt";
+
+fn classroom_transcript_url_allowed(url: &Url) -> bool {
+    if url.path() != CLASSROOM_TRANSCRIPT_PATH {
+        return false;
+    }
+    let mut format = false;
+    let mut lesson = false;
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "format" if !format && value == "json" => format = true,
+            "sub_id"
+                if !lesson
+                    && !value.is_empty()
+                    && value.len() <= 20
+                    && value.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                lesson = true
+            }
+            _ => return false,
+        }
+    }
+    format && lesson
+}
 
 fn spoc_script_path_allowed(path: &str) -> bool {
     let Some(file) = path
@@ -643,6 +670,7 @@ enum SourceProfile {
     Organizations,
     Announcements,
     Spoc,
+    Classroom,
     Scse,
     Ic,
     Aviation,
@@ -681,6 +709,7 @@ impl SourceProfile {
             Self::Organizations => ORGANIZATIONS_ROBOTS_URL,
             Self::Announcements => ANNOUNCEMENTS_ROBOTS_URL,
             Self::Spoc => SPOC_ROBOTS_URL,
+            Self::Classroom => CLASSROOM_ROBOTS_URL,
             Self::Scse => SCSE_ROBOTS_URL,
             Self::Ic => IC_ROBOTS_URL,
             Self::Aviation => AVIATION_ROBOTS_URL,
@@ -719,6 +748,7 @@ impl SourceProfile {
             Self::Organizations => ".buaa-cli-organizations-cache",
             Self::Announcements => ".buaa-cli-announcements-cache",
             Self::Spoc => ".buaa-cli-spoc-cache",
+            Self::Classroom => ".buaa-cli-classroom-cache",
             Self::Scse => ".buaa-cli-scse-cache",
             Self::Ic => ".buaa-cli-ic-cache",
             Self::Aviation => ".buaa-cli-aviation-cache",
@@ -781,6 +811,11 @@ impl SourceProfile {
                     && url.query().is_none()
                     && (matches!(url.path(), "/" | "/spocnew/" | "/robots.txt")
                         || spoc_script_path_allowed(url.path()))
+            }
+            Self::Classroom => {
+                url.host_str() == Some("classroom.msa.buaa.edu.cn")
+                    && ((url.path() == "/robots.txt" && url.query().is_none())
+                        || classroom_transcript_url_allowed(url))
             }
             Self::Scse => {
                 url.host_str() == Some("scse.buaa.edu.cn")
@@ -1073,6 +1108,84 @@ pub struct ArchiveClient {
     test_governor: Option<std::path::PathBuf>,
 }
 
+/// A fixed-origin credential consumer. The cookie cannot be passed to another
+/// source or to robots; separate credential scopes never share private bodies.
+pub(crate) struct ClassroomClient {
+    source: ArchiveClient,
+    cookie: reqwest::header::HeaderValue,
+}
+
+fn valid_session_cookie(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 16 * 1024
+        && value.split(';').all(|pair| {
+            let Some((name, value)) = pair.trim_matches(' ').split_once('=') else {
+                return false;
+            };
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+            {
+                return false;
+            }
+            let value = if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+                &value[1..value.len() - 1]
+            } else {
+                value
+            };
+            value.bytes().all(
+                |byte| matches!(byte, 0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e),
+            )
+        })
+}
+
+impl ClassroomClient {
+    pub(crate) fn open(mode: CacheMode, cookie: &str) -> Result<Self, Error> {
+        if !valid_session_cookie(cookie) {
+            return Err(Error::new(
+                "invalid_input",
+                "classroom session input is invalid",
+            ));
+        }
+        let mut cookie = reqwest::header::HeaderValue::from_str(cookie)
+            .map_err(|_| Error::new("invalid_input", "classroom session input is invalid"))?;
+        cookie.set_sensitive(true);
+        let scope = hash(cookie.as_bytes());
+        let home = governor::identity_home().map_err(|_| cache_error())?;
+        let base = home.join(SourceProfile::Classroom.cache_directory());
+        let _base = governor::open_directory(&base, true, true).map_err(|_| cache_error())?;
+        let directory =
+            governor::open_directory(&base.join(scope), true, true).map_err(|_| cache_error())?;
+        Ok(Self {
+            source: ArchiveClient {
+                mode,
+                profile: SourceProfile::Classroom,
+                directory,
+                #[cfg(test)]
+                test_route: None,
+                #[cfg(test)]
+                test_governor: None,
+            },
+            cookie,
+        })
+    }
+
+    pub(crate) fn get<T>(
+        &self,
+        url: &Url,
+        process: impl FnOnce(&Response) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.source
+            .get_with_cookie(url, true, Some(&self.cookie), |_, _| false, process)
+    }
+}
+
+struct RequestSession<'a> {
+    http: &'a Client,
+    cookie: Option<&'a reqwest::header::HeaderValue>,
+}
+
 impl ArchiveClient {
     /// Retain source/cache identity while switching the selected request's
     /// policy after cache-first reference discovery.
@@ -1262,7 +1375,26 @@ impl ArchiveClient {
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.get_with_cookie(url, immutable, None, is_attributed_archive_status, process)
+    }
+
+    fn get_with_cookie<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        cookie: Option<&reqwest::header::HeaderValue>,
+        is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        process: impl FnOnce(&Response) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         self.profile.validate_url(url)?;
+        if cookie.is_some()
+            != (self.profile == SourceProfile::Classroom && classroom_transcript_url_allowed(url))
+        {
+            return Err(Error::new(
+                "permission",
+                "credential request scope is not allowed",
+            ));
+        }
         let cached = self.load(url)?;
         if self.mode != CacheMode::Revalidate {
             if let Some(entry) = cached {
@@ -1287,7 +1419,10 @@ impl ArchiveClient {
             url,
             immutable,
             &governor,
-            &http,
+            RequestSession {
+                http: &http,
+                cookie,
+            },
             is_attributed_archive_status,
             process,
         )
@@ -1381,7 +1516,14 @@ impl ArchiveClient {
         http: &Client,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        self.fetch_with_archive_status(url, immutable, governor, http, |_, _| false, process)
+        self.fetch_with_archive_status(
+            url,
+            immutable,
+            governor,
+            RequestSession { http, cookie: None },
+            |_, _| false,
+            process,
+        )
     }
 
     fn fetch_with_archive_status<T>(
@@ -1389,7 +1531,7 @@ impl ArchiveClient {
         url: &Url,
         immutable: bool,
         governor: &Governor,
-        http: &Client,
+        session: RequestSession<'_>,
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
@@ -1404,7 +1546,15 @@ impl ArchiveClient {
             }
         };
         let request_url = self.request_url(url);
-        let mut request = http.get(request_url).header("Accept-Encoding", "identity");
+        let mut request = session
+            .http
+            .get(request_url)
+            .header("Accept-Encoding", "identity");
+        if let Some(cookie) = session.cookie {
+            request = request
+                .header(reqwest::header::COOKIE, cookie)
+                .header(reqwest::header::ACCEPT, "application/json");
+        }
         if let Some(entry) = &cached {
             if let Some(etag) = &entry.etag {
                 request = request.header("If-None-Match", etag);
@@ -1436,6 +1586,12 @@ impl ArchiveClient {
             .iter()
             .any(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"));
         let mut attributed_archive_status = false;
+        let body_budget =
+            if self.profile == SourceProfile::Classroom && classroom_transcript_url_allowed(url) {
+                crate::recordings::subtitles::MAX_BODY
+            } else {
+                MAX_BODY
+            };
         let result = (|| {
             let headers = collect_headers(raw.headers())?;
             attributed_archive_status = (400..=599).contains(&status)
@@ -1476,29 +1632,36 @@ impl ArchiveClient {
             }
             if raw
                 .content_length()
-                .is_some_and(|length| length > MAX_BODY as u64)
+                .is_some_and(|length| length > body_budget as u64)
             {
                 return Err(body_limit());
             }
             let mut body = Vec::new();
             raw.by_ref()
-                .take(MAX_BODY as u64 + 1)
+                .take(body_budget as u64 + 1)
                 .read_to_end(&mut body)
                 .map_err(|_| network_error())?;
-            if body.len() > MAX_BODY {
+            if body.len() > body_budget {
                 return Err(body_limit());
             }
-            // Immutable originals retain their original headers. Validate the
-            // fresh script response before those headers can hide MIME drift.
-            if status == 200
-                && self.profile == SourceProfile::Spoc
-                && spoc_script_path_allowed(url.path())
-            {
-                crate::spoc::validate_script(
-                    status,
-                    headers.get("content-type").map(String::as_str),
-                    body.len(),
-                )?;
+            // Validate fresh metadata before retained immutable headers can
+            // hide MIME drift. Cached output repeats the same admission policy.
+            if status == 200 {
+                let content_type = headers.get("content-type").map(String::as_str);
+                match self.profile {
+                    SourceProfile::Classroom if classroom_transcript_url_allowed(url) => {
+                        crate::recordings::subtitles::validate_http_metadata(
+                            status,
+                            content_type,
+                            body.len(),
+                        )?;
+                        crate::recordings::subtitles::validate_http_application(&body)?;
+                    }
+                    SourceProfile::Spoc if spoc_script_path_allowed(url.path()) => {
+                        crate::spoc::validate_script(status, content_type, body.len())?;
+                    }
+                    _ => {}
+                }
             }
             let now = unix_ms()?;
             let mut entry = if status == 304 {
@@ -1573,6 +1736,10 @@ impl ArchiveClient {
         let network_failure = result
             .as_ref()
             .is_err_and(|error| error.code == "network_error");
+        let session_rejected = session.cookie.is_some()
+            && result
+                .as_ref()
+                .is_err_and(|error| matches!(error.code, "auth_latched" | "redirect_refused"));
         // A validated Memento error status belongs to the archived resource, not
         // the current source. The independent challenge/body facts still apply.
         // Dropping an unread response cancels it before releasing shared ownership.
@@ -1584,11 +1751,17 @@ impl ArchiveClient {
             lease.finish(Outcome::Http {
                 status,
                 retry_after: retry_after.as_deref(),
-                challenge,
+                challenge: challenge || session_rejected,
                 network_failure,
             })
         };
         finished.map_err(|_| governor_error())?;
+        if session_rejected {
+            return Err(Error::new(
+                "auth_latched",
+                "classroom session requires deliberate safety review",
+            ));
+        }
         result
     }
 
@@ -2107,6 +2280,27 @@ mod tests {
             client
         }
 
+        fn classroom_client(
+            &self,
+            mode: CacheMode,
+            server: &Server,
+            value: &str,
+        ) -> ClassroomClient {
+            let mut source = self.client(mode, server);
+            source.profile = SourceProfile::Classroom;
+            let _base =
+                governor::open_directory(&self.0.join("classroom-cache"), true, true).unwrap();
+            source.directory = governor::open_directory(
+                &self.0.join("classroom-cache").join(hash(value.as_bytes())),
+                true,
+                true,
+            )
+            .unwrap();
+            let mut cookie = reqwest::header::HeaderValue::from_str(value).unwrap();
+            cookie.set_sensitive(true);
+            ClassroomClient { source, cookie }
+        }
+
         fn governor(&self) -> Governor {
             Governor::isolated_for_test(&self.0.join("governor")).unwrap()
         }
@@ -2224,6 +2418,272 @@ mod tests {
     fn seed_robots(client: &ArchiveClient) {
         seed(client, ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
     }
+
+    const CLASSROOM_TEST_URL: &str = "https://classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42";
+    const CLASSROOM_TEST_BODY: &[u8] = br#"{"code":0,"msg":"","total":1,"list":[{"sub_id":"42","resource_guid":"","all_content":[{"BeginSec":0,"EndSec":3,"Text":"First <not markup>","TransText":""},{"BeginSec":2,"EndSec":4,"Text":"Second","TransText":"translated"}],"trans_content":"not a timing source"}]}"#;
+
+    fn classroom_track(response: &Response) -> Result<Result<serde_json::Value, Error>, Error> {
+        crate::recordings::subtitles::process_http(response, "42", "")
+    }
+
+    #[test]
+    fn classroom_session_input_is_cookie_pairs_not_password_or_header_injection() {
+        for valid in [
+            "session=opaque-value",
+            "session=a==; other=",
+            "same=a; same=b",
+            "session=\"quoted-value\"",
+        ] {
+            assert!(valid_session_cookie(valid));
+        }
+        for invalid in [
+            "",
+            "not-a-cookie",
+            "=value",
+            "a=b; broken",
+            "a=b\r\nAuthorization: leaked",
+            "a=b\\c",
+            "a=b,c",
+            "a=\"unclosed",
+            "a=non ascii 字",
+        ] {
+            assert!(!valid_session_cookie(invalid));
+        }
+    }
+
+    #[test]
+    fn classroom_cookie_is_target_only_and_cached_bodies_are_session_scoped() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            if request.starts_with("GET /robots.txt ") {
+                assert!(!request.to_ascii_lowercase().contains("cookie:"));
+                reply(socket, 404, "", b"no robots");
+            } else {
+                assert!(request.starts_with(
+                    "GET /courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42 "
+                ));
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("cookie: session=synthetic-secret")
+                );
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: application/json; charset=utf-8\r\n",
+                    CLASSROOM_TEST_BODY,
+                );
+            }
+        });
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=synthetic-secret");
+        let first = client.get(&url, classroom_track).unwrap().unwrap();
+        assert_eq!(
+            first["segments"],
+            serde_json::json!([
+                {"source_order":1,"start_ms":0,"end_ms":3000,"text":"First <not markup>","translation":""},
+                {"source_order":2,"start_ms":2000,"end_ms":4000,"text":"Second","translation":"translated"},
+            ])
+        );
+        assert_eq!(first["original"]["sha256"], hash(CLASSROOM_TEST_BODY));
+        assert_eq!(first["original"]["hash_scope"], "entire_http_response_body");
+        assert_eq!(
+            first["provenance"]["resource_guid_status"],
+            "absent_in_native_track"
+        );
+        let (robots_at, _) = server.requests.recv().unwrap();
+        let (target_at, _) = server.requests.recv().unwrap();
+        assert!(target_at.duration_since(robots_at) >= Duration::from_secs(5));
+        let before = fs::read(fixture.0.join("governor/state.json")).unwrap();
+        let cached = client.get(&url, classroom_track).unwrap().unwrap();
+        assert_eq!(cached["segments"], first["segments"]);
+        assert_eq!(cached["original"], first["original"]);
+        assert_eq!(cached["network_access"], false);
+        assert_eq!(cached["source_objects_fetched"], false);
+        assert_eq!(
+            client.source.get(&url, true, |_| Ok(())).unwrap_err().code,
+            "permission"
+        );
+        let other = fixture.classroom_client(CacheMode::Offline, &server, "session=another-account");
+        assert_eq!(
+            other.get(&url, classroom_track).unwrap_err().code,
+            "offline_miss"
+        );
+        for rejected in [
+            "https://spoc.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42",
+            "https://classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&format=json&sub_id=42",
+            "https://classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42&extra=1",
+            CLASSROOM_ROBOTS_URL,
+        ] {
+            assert!(
+                client
+                    .get(&Url::parse(rejected).unwrap(), classroom_track)
+                    .is_err()
+            );
+        }
+        assert_eq!(server.count(), 2);
+        assert_eq!(
+            before,
+            fs::read(fixture.0.join("governor/state.json")).unwrap()
+        );
+        for file in fs::read_dir(
+            fixture
+                .0
+                .join("classroom-cache")
+                .join(hash(b"session=synthetic-secret")),
+        )
+        .unwrap()
+        {
+            let bytes = fs::read(file.unwrap().path()).unwrap();
+            assert!(!String::from_utf8_lossy(&bytes).contains("synthetic-secret"));
+        }
+    }
+
+    #[test]
+    fn classroom_application_rejection_latches_without_replacing_original() {
+        let fixture = Fixture::new();
+        let mut targets = 0;
+        let server = Server::new(move |socket, _| {
+            targets += 1;
+            let body = if targets == 1 {
+                CLASSROOM_TEST_BODY
+            } else {
+                br#"{"code":401,"msg":"private rejection detail"}"#
+            };
+            reply(socket, 200, "Content-Type: application/json\r\n", body);
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=private-test");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        client.get(&url, classroom_track).unwrap().unwrap();
+        let original = client.source.load(&url).unwrap().unwrap().response;
+        let refresh =
+            fixture.classroom_client(CacheMode::Revalidate, &server, "session=private-test");
+        let error = refresh.get(&url, classroom_track).unwrap_err();
+        assert_eq!(error.code, "auth_latched");
+        assert!(!error.message.contains("private rejection detail"));
+        assert!(fixture.governor().status().unwrap().safety_latched);
+        let retained = refresh.source.load(&url).unwrap().unwrap().response;
+        assert_eq!(retained.body, original.body);
+        assert_eq!(retained.headers, original.headers);
+        assert_eq!(retained.fetched_at_unix_ms, original.fetched_at_unix_ms);
+        assert_eq!(
+            retained.revalidated_at_unix_ms,
+            original.revalidated_at_unix_ms
+        );
+        assert_eq!(retained.revalidation_status, original.revalidation_status);
+        assert_eq!(
+            refresh.get(&url, classroom_track).unwrap_err().code,
+            "safety_latched"
+        );
+        assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn classroom_empty_success_cannot_lose_indeterminate_session_latch() {
+        for mime in ["application/json", "text/html"] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(socket, 200, &format!("Content-Type: {mime}\r\n"), b"");
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=empty-reply");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            assert_eq!(
+                client.get(&url, classroom_track).unwrap_err().code,
+                "auth_latched"
+            );
+            assert!(fixture.governor().status().unwrap().safety_latched);
+            assert!(client.source.load(&url).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn classroom_equal_bytes_cannot_hide_fresh_html_mime_or_cache_layout_failures() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                CLASSROOM_TEST_BODY,
+            )
+        });
+        let client =
+            fixture.classroom_client(CacheMode::Revalidate, &server, "session=fresh-metadata");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed(
+            &client.source,
+            CLASSROOM_TEST_URL,
+            CLASSROOM_TEST_BODY,
+            true,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        let mut original = client.source.load(&url).unwrap().unwrap();
+        original
+            .response
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        client.source.save(&original).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "auth_latched"
+        );
+        let after = client.source.load(&url).unwrap().unwrap().response;
+        assert_eq!(after.body, original.response.body);
+        assert_eq!(after.headers, original.response.headers);
+        assert_eq!(after.revalidated_at_unix_ms, None);
+        assert_eq!(server.count(), 1);
+
+        let layout_fixture = Fixture::new();
+        const CHANGED: &[u8] =
+            br#"{"code":0,"list":[{"sub_id":"42","resource_guid":"","all_content":"layout changed"}]}"#;
+        let layout_server = Server::new(|socket, _| {
+            reply(socket, 200, "Content-Type: application/json\r\n", CHANGED)
+        });
+        let layout =
+            layout_fixture.classroom_client(CacheMode::PreferCache, &layout_server, "session=layout");
+        seed(
+            &layout.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        assert_eq!(
+            layout.get(&url, classroom_track).unwrap().unwrap_err().code,
+            "invalid_input"
+        );
+        assert_eq!(
+            layout.source.load(&url).unwrap().unwrap().response.body,
+            CHANGED
+        );
+        assert_eq!(
+            layout.get(&url, classroom_track).unwrap().unwrap_err().code,
+            "invalid_input"
+        );
+        assert_eq!(layout_server.count(), 1);
+        assert!(!layout_fixture.governor().status().unwrap().safety_latched);
+    }
+
 
     fn seed_spoc_html(client: &ArchiveClient, body: &[u8]) {
         seed(client, SPOC_ENTRY_URL, body, false);
