@@ -1,0 +1,28 @@
+#!/bin/sh
+# One Cargo process per native project UID, across all worktrees.
+set -eu
+
+uid=$(id -u)
+owner_home=$(getent passwd "$uid" | cut -d: -f6)
+case "$owner_home" in
+    /*) ;;
+    *) printf '%s\n' 'Cannot resolve the current UID home for the Cargo lock.' >&2; exit 1 ;;
+esac
+
+worktree=$(pwd -P)
+while [ ! -e "$worktree/.git" ]; do
+    if [ "$worktree" = / ]; then
+        printf '%s\n' 'Run cargo-locked inside the target Git worktree.' >&2
+        exit 1
+    fi
+    worktree=$(dirname "$worktree")
+done
+target=$(realpath -m "${CARGO_TARGET_DIR:-$worktree/target}")
+case "$target" in
+    "$worktree"/*) ;;
+    *) printf '%s\n' 'CARGO_TARGET_DIR must belong to this worktree.' >&2; exit 1 ;;
+esac
+
+umask 077
+exec flock --exclusive "$owner_home/.buaa-cli-cargo.lock" \
+    env CARGO_TARGET_DIR="$target" cargo "$@"

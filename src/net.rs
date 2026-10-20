@@ -145,6 +145,9 @@ const SEPE_ROBOTS_URL: &str = "https://sepe.buaa.edu.cn/robots.txt";
 pub(crate) const MATH_ROOT_URL: &str = "https://math.buaa.edu.cn/";
 pub(crate) const MATH_NOTICES_URL: &str = "https://math.buaa.edu.cn/index/xygg.htm";
 const MATH_ROBOTS_URL: &str = "https://math.buaa.edu.cn/robots.txt";
+pub(crate) const IAI_ROOT_URL: &str = "https://iai.buaa.edu.cn/";
+pub(crate) const IAI_NOTICES_URL: &str = "https://iai.buaa.edu.cn/index/tzgg.htm";
+const IAI_ROBOTS_URL: &str = "https://iai.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -165,6 +168,18 @@ pub(crate) fn math_path_allowed(path: &str) -> bool {
         return true;
     }
     path.strip_prefix("/info/1294/")
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn iai_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/index.htm" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1024/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -367,6 +382,7 @@ enum SourceProfile {
     Rse,
     Sepe,
     Math,
+    Iai,
 }
 
 impl SourceProfile {
@@ -388,6 +404,7 @@ impl SourceProfile {
             Self::Rse => RSE_ROBOTS_URL,
             Self::Sepe => SEPE_ROBOTS_URL,
             Self::Math => MATH_ROBOTS_URL,
+            Self::Iai => IAI_ROBOTS_URL,
         }
     }
 
@@ -409,6 +426,7 @@ impl SourceProfile {
             Self::Rse => ".buaa-cli-rse-cache",
             Self::Sepe => ".buaa-cli-sepe-cache",
             Self::Math => ".buaa-cli-math-cache",
+            Self::Iai => ".buaa-cli-iai-cache",
         }
     }
 
@@ -501,6 +519,11 @@ impl SourceProfile {
                 url.host_str() == Some("math.buaa.edu.cn")
                     && url.query().is_none()
                     && math_path_allowed(url.path())
+            }
+            Self::Iai => {
+                url.host_str() == Some("iai.buaa.edu.cn")
+                    && url.query().is_none()
+                    && iai_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -721,6 +744,10 @@ impl ArchiveClient {
 
     pub(crate) fn open_math(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Math)
+    }
+
+    pub(crate) fn open_iai(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Iai)
     }
 
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
