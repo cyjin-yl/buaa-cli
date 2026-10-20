@@ -9,8 +9,9 @@
 use super::{
     ArticleDocument, ListQuery, MAX_BODY_PARAGRAPHS, MAX_ENTRIES, MAX_HREF, MAX_PARAGRAPH,
     MAX_TEXT, article_output, bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, invalid_article,
-    invalid_list, retrieval, unavailable,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    invalid_article, invalid_list, is_admitted_html, is_safe_public_fallback, retrieval,
+    unavailable,
 };
 use crate::net::{
     ArchiveClient, BME_NOTICES_URL, BME_ROOT_URL, CacheMode, Error, Response, bme_url_allowed,
@@ -24,8 +25,8 @@ const PUBLISHER: &str = "北京航空航天大学生物与医学工程学院";
 const CATEGORY: &str = "information";
 const CATEGORY_LABEL: &str = "信息公告";
 const DOCUMENT_EXTENSIONS: &[&str] = &[
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".rar", ".txt",
-    ".wps", ".ofd",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".rar", ".txt", ".wps",
+    ".ofd",
 ];
 
 fn plain_url(url: &Url) -> bool {
@@ -64,7 +65,19 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "bme", attribution)
+            if !is_admitted_html(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "bme", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) if is_safe_public_fallback(response) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "bme",
+                    "bme_surface_selector_contract",
+                )),
+                Err(error) => Err(error),
+            }
         })
 }
 
@@ -101,14 +114,29 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     let (client, mut attribution) = bound_client(mode)?;
     bind_college_board(&client, BME_ROOT_URL, BME_NOTICES_URL, &mut attribution)?;
     let target = listing_url(page)?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+    let result: Result<Value, Error> = client.with_cache_mode(mode).get(&target, false, |response| {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &target) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
+                    response,
+                    "announcements_list",
+                    "bme",
+                    "bme_listing_selector_contract",
+                );
+                value["category"] = json!(CATEGORY);
+                value["page"] = json!(page);
+                return Ok(Ok(value));
+            }
+            Err(error) => return Err(error),
+        };
         let entries: Vec<_> = document
             .entries
             .iter()
             .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
             .collect();
-        Ok(json!({
+        Ok(Ok(json!({
             "schema_version": 1,
             "type": "announcements_list",
             "result": "listing_snapshot",
@@ -130,8 +158,9 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
                 "summaries": "source visible anchor text; title attributes retain the source full heading when present"
             },
             "retrieval": retrieval(response)
-        }))
-    })
+        })))
+    })?;
+    result
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<super::ListingDocument, Error> {
@@ -145,7 +174,9 @@ fn parse_listing(document: &Html, base: &Url) -> Result<super::ListingDocument, 
         return Err(unavailable());
     }
     let tables = Selector::parse("table#DataList1").map_err(|_| unavailable())?;
-    let mut tables = document.select(&tables).filter(|table| !super::inert_element(*table));
+    let mut tables = document
+        .select(&tables)
+        .filter(|table| !super::inert_element(*table));
     let table = tables.next().ok_or_else(|| {
         failed_contract(
             "Bme information portal requires one active DataList1 table",
@@ -167,8 +198,14 @@ fn parse_listing(document: &Html, base: &Url) -> Result<super::ListingDocument, 
     let anchors = Selector::parse(":scope > a").map_err(|_| unavailable())?;
     let dates = Selector::parse(":scope > span").map_err(|_| unavailable())?;
     let mut entries = Vec::new();
-    for row in table.select(&rows).filter(|row| !super::inert_element(*row)) {
-        for cell in row.select(&cells).filter(|cell| !super::inert_element(*cell)) {
+    for row in table
+        .select(&rows)
+        .filter(|row| !super::inert_element(*row))
+    {
+        for cell in row
+            .select(&cells)
+            .filter(|cell| !super::inert_element(*cell))
+        {
             let mut category_nodes = cell.select(&category_titles);
             let category_node = category_nodes.next().ok_or_else(|| {
                 failed_contract(
@@ -233,8 +270,8 @@ fn parse_listing(document: &Html, base: &Url) -> Result<super::ListingDocument, 
                         line!(),
                     ));
                 }
-                let summary = (visible_title != title && !visible_title.is_empty())
-                    .then_some(visible_title);
+                let summary =
+                    (visible_title != title && !visible_title.is_empty()).then_some(visible_title);
                 let mut row_dates = item.select(&dates);
                 let date = row_dates
                     .next()
@@ -245,9 +282,9 @@ fn parse_listing(document: &Html, base: &Url) -> Result<super::ListingDocument, 
                         super::parse_iso_date(trimmed)
                     });
                 let listed_href = anchor.value().attr("href");
-                if listed_href.is_some_and(|href| {
-                    href.len() > MAX_HREF || href.chars().any(char::is_control)
-                }) {
+                if listed_href
+                    .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
+                {
                     return Err(unavailable());
                 }
                 let (resolved_http_url, link_kind) = match listed_href {
@@ -305,31 +342,68 @@ fn article_with_client(
 ) -> Result<Value, Error> {
     bind_college_board(&client, BME_ROOT_URL, BME_NOTICES_URL, &mut attribution)?;
     let source = listing_url(1)?;
-    let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+    let listing_result: Result<Value, Error> = client.get(&source, false, |response| {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &source) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "bme",
+                    "bme_listing_selector_contract",
+                )));
+            }
+            Err(error) => return Err(error),
+        };
         if !document
             .entries
             .iter()
             .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
         {
-            return Err(Error::new(
+            return Ok(Err(Error::new(
                 "unsupported",
                 "retained Bme information portal does not declare the selected article",
-            ));
+            )));
         }
-        Ok(retrieval(response))
+        Ok(Ok(retrieval(response)))
     })?;
-    client
-        .with_cache_mode(mode)
-        .get(target, false, |response| {
-            let document = college_html(response)?;
-            let mut value = normalize(response, &document)?;
-            value["publisher"] = json!(PUBLISHER);
-            value["college"] = json!("bme");
-            value["directory_attribution"] = attribution;
-            value["source_listing"] = listing;
-            Ok(value)
-        })
+    let listing = listing_result?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained BME listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_article",
+                    "bme",
+                    "bme_article_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut value = match normalize(response, &document) {
+            Ok(value) => value,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "bme",
+                "bme_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        value["publisher"] = json!(PUBLISHER);
+        value["college"] = json!("bme");
+        value["directory_attribution"] = attribution.clone();
+        value["source_listing"] = listing.clone();
+        Ok(value)
+    })
 }
 
 struct SourceTables {
@@ -350,7 +424,10 @@ fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
         cell_count: 0,
         has_text: false,
     };
-    for table in body.select(&tables).filter(|table| !super::inert_element(*table)) {
+    for table in body
+        .select(&tables)
+        .filter(|table| !super::inert_element(*table))
+    {
         if output.values.len() == MAX_ENTRIES
             || table
                 .select(&tables)
@@ -377,7 +454,10 @@ fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
         }
         output.has_text |= caption.as_ref().is_some_and(|value| !value.is_empty());
         let mut source_rows = Vec::new();
-        for row in table.select(&rows).filter(|row| !super::inert_element(*row)) {
+        for row in table
+            .select(&rows)
+            .filter(|row| !super::inert_element(*row))
+        {
             if output.row_count == MAX_BODY_PARAGRAPHS {
                 return Err(failed_contract(
                     "Bme table rows exceed the reviewed text budget",
@@ -387,7 +467,10 @@ fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
             }
             let mut source_cells = Vec::new();
             let mut row_bytes = 0usize;
-            for cell in row.select(&cells).filter(|cell| !super::inert_element(*cell)) {
+            for cell in row
+                .select(&cells)
+                .filter(|cell| !super::inert_element(*cell))
+            {
                 if source_cells.len() == MAX_ENTRIES {
                     return Err(failed_contract(
                         "Bme table row exceeds the reviewed cell budget",
@@ -443,7 +526,9 @@ fn is_document_href(href: &str) -> bool {
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let infos = Selector::parse("div.newsInfo").map_err(|_| unavailable())?;
-    let mut infos = document.select(&infos).filter(|node| !super::inert_element(*node));
+    let mut infos = document
+        .select(&infos)
+        .filter(|node| !super::inert_element(*node));
     let info = infos.next().ok_or_else(|| {
         failed_contract(
             "Bme article requires one active newsInfo container",
@@ -549,9 +634,9 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         ));
     }
     let url = Url::parse(&response.url).map_err(|_| unavailable())?;
-    let category = url.query_pairs().find_map(|(key, value)| {
-        (key == "subcatID").then(|| value.into_owned())
-    });
+    let category = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "subcatID").then(|| value.into_owned()));
     let mut output = article_output(
         response,
         ArticleDocument {
@@ -577,9 +662,8 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     output["completeness"]["image_content_present"] = json!(has_images);
     if has_images || attachments_found {
         output["result"] = json!("partial_text");
-        output["completeness"]["missing_nonparagraph_content"] = json!(
-            "image text and attachment contents are not reconstructed or downloaded"
-        );
+        output["completeness"]["missing_nonparagraph_content"] =
+            json!("image text and attachment contents are not reconstructed or downloaded");
     }
     Ok(output)
 }
@@ -608,11 +692,20 @@ mod tests {
         let parsed = parse_listing(&listing(), &base).unwrap();
         assert_eq!(parsed.entries.len(), 3);
         assert_eq!(parsed.entries[0].source_order, 1);
-        assert_eq!(parsed.entries[0].category_label.as_deref(), Some("通知公告"));
+        assert_eq!(
+            parsed.entries[0].category_label.as_deref(),
+            Some("通知公告")
+        );
         assert_eq!(parsed.entries[0].title, "完整公告标题");
-        assert_eq!(parsed.entries[0].summary.as_deref(), Some("完整公告标题..."));
+        assert_eq!(
+            parsed.entries[0].summary.as_deref(),
+            Some("完整公告标题...")
+        );
         assert_eq!(parsed.entries[0].date.as_deref(), Some("2026-10-11"));
-        assert_eq!(parsed.entries[2].category_label.as_deref(), Some("综合信息"));
+        assert_eq!(
+            parsed.entries[2].category_label.as_deref(),
+            Some("综合信息")
+        );
         assert_eq!(parsed.entries[2].date.as_deref(), Some("2026-03-16"));
         let filtered = parsed
             .entries
@@ -647,9 +740,15 @@ mod tests {
         let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
         assert_eq!(output["title"], "Original heading");
         assert_eq!(output["published_at"], Value::Null);
-        assert_eq!(output["body_paragraphs"], json!(["Paragraph one.", "Cell B"]));
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["Paragraph one.", "Cell B"])
+        );
         assert_eq!(output["body_table_count"], 1);
-        assert_eq!(output["body_tables"][0]["rows"][1]["cells"][0]["text"], "Cell A");
+        assert_eq!(
+            output["body_tables"][0]["rows"][1]["cells"][0]["text"],
+            "Cell A"
+        );
         assert_eq!(output["result"], "partial_text");
         assert_eq!(output["attachments"]["found"], true);
     }
@@ -661,7 +760,10 @@ mod tests {
             r#"<table id="DataList1"><tr><td><div class="posTit">通知公告</div><ul><li><span>[2026-01-01]</span><a href="https://foreign.example/article" title="Foreign">Foreign</a></li></ul></td></tr></table>"#,
         );
         let parsed = parse_listing(&document, &base).unwrap();
-        assert_eq!(parsed.entries[0].resolved_http_url, Some("https://foreign.example/article".into()));
+        assert_eq!(
+            parsed.entries[0].resolved_http_url,
+            Some("https://foreign.example/article".into())
+        );
         assert_eq!(parsed.entries[0].link_kind, "out_of_scope");
         assert_eq!(listing_url(2).unwrap_err().code, "unsupported");
     }

@@ -6,10 +6,10 @@
 
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, article_body,
-    article_category_from_url,
-    article_output, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, inert_element,
-    invalid_article, invalid_list, parse_iso_date, retrieval, unavailable,
+    article_category_from_url, article_output, college_directory_attribution, college_html,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    inert_element, invalid_article, invalid_list, is_admitted_html, is_safe_public_fallback,
+    parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, SCE_NOTICES_URL, SCE_ROOT_URL, sce_path_allowed,
@@ -43,12 +43,8 @@ fn plain_url(url: &Url) -> bool {
 fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
     let cache_mode = discovery_mode(mode);
     let directory = crate::organizations::list(cache_mode)?;
-    let mut attribution = college_directory_attribution(
-        &directory,
-        "化学学院",
-        LISTED_ROOT_URL,
-        LISTED_ROOT_URL,
-    )?;
+    let mut attribution =
+        college_directory_attribution(&directory, "化学学院", LISTED_ROOT_URL, LISTED_ROOT_URL)?;
     attribution["selected_https_root"] = SCE_ROOT_URL.into();
     attribution["selection_relation"] = "deliberate separate HTTPS observation; the exact listed HTTP identity and original directory provenance are preserved, not upgraded or aliased".into();
     Ok((ArchiveClient::open_sce(cache_mode)?, attribution))
@@ -94,21 +90,29 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "sce", attribution)
+            if !is_admitted_html(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "sce", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) if is_safe_public_fallback(response) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "sce",
+                    "sce_surface_selector_contract",
+                )),
+                Err(error) => Err(error),
+            }
         })
 }
 
-fn advertised_sce_page_url(
-    bytes: &[u8],
-    base: &Url,
-    page: u32,
-) -> Result<Url, Error> {
+fn advertised_sce_page_url(bytes: &[u8], base: &Url, page: u32) -> Result<Url, Error> {
     if bytes.is_empty() || bytes.len() > super::MAX_HTML {
         return Err(unavailable());
     }
     let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
     let document = Html::parse_document(text);
-    let links = Selector::parse("table.headStyle16sn2e3sl5 a[href]").map_err(|_| unavailable())?;
+    let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
     let mut selected = None;
     for link in document.select(&links) {
         let raw = link.value().attr("href").ok_or_else(unavailable)?;
@@ -223,16 +227,18 @@ fn parse_listing_document(document: &Html, base: &Url) -> Result<ListingDocument
             ));
         }
         let listed_href = anchor.value().attr("href");
-        if listed_href.is_some_and(|href| {
-            href.len() > MAX_HREF || href.chars().any(char::is_control)
-        }) {
+        if listed_href
+            .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
+        {
             return Err(failed_contract(
                 "Chemistry listing href exceeds the reviewed source budget",
                 file!(),
                 line!(),
             ));
         }
-        let listed_href = listed_href.filter(|href| !href.is_empty()).map(str::to_owned);
+        let listed_href = listed_href
+            .filter(|href| !href.is_empty())
+            .map(str::to_owned);
         let mut row_dates = row.select(&dates);
         let date = row_dates
             .next()
@@ -294,7 +300,23 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
         let base = Url::parse(&response.url).map_err(|_| unavailable())?;
-        let document = parse_listing_document(&college_html(response)?, &base)?;
+        let document = match college_html(response)
+            .and_then(|html| parse_listing_document(&html, &base))
+        {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
+                    response,
+                    "announcements_list",
+                    "sce",
+                    "sce_listing_selector_contract",
+                );
+                value["category"] = json!("xyxw");
+                value["page"] = json!(page);
+                return Ok(value);
+            }
+            Err(error) => return Err(error),
+        };
         let entries: Vec<&ListingEntry> = document
             .entries
             .iter()
@@ -322,10 +344,7 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
 
 fn resolve_article(raw: &str) -> Result<Url, Error> {
     let url = Url::parse(raw).map_err(|_| invalid_article())?;
-    if raw != url.as_str()
-        || !plain_url(&url)
-        || !url.path().starts_with("/info/1013/")
-    {
+    if raw != url.as_str() || !plain_url(&url) || !url.path().starts_with("/info/1013/") {
         return Err(invalid_article());
     }
     Ok(url)
@@ -340,7 +359,9 @@ fn parse_sce_date(raw: &str) -> Option<String> {
 
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
     let containers = Selector::parse("div.c-content").map_err(|_| unavailable())?;
-    let mut containers = document.select(&containers).filter(|node| !inert_element(*node));
+    let mut containers = document
+        .select(&containers)
+        .filter(|node| !inert_element(*node));
     let content = containers
         .next()
         .filter(|_| containers.next().is_none())
@@ -372,10 +393,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
         .filter(|_| metadata.next().is_none())
         .map(element_text);
     let published_at = published_at_raw.as_deref().and_then(parse_sce_date);
-    let bodies = Selector::parse(
-        ":scope > div.nr-info > div#vsb_content > div.v_news_content",
-    )
-    .map_err(|_| unavailable())?;
+    let bodies = Selector::parse(":scope > div.nr-info > div#vsb_content > div.v_news_content")
+        .map_err(|_| unavailable())?;
     let mut bodies = content.select(&bodies);
     let body = bodies
         .next()
@@ -421,9 +440,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     output["completeness"]["image_content_present"] = json!(has_images);
     if has_images || has_attachments {
         output["result"] = json!("partial_text");
-        output["completeness"]["missing_nonparagraph_content"] = json!(
-            "image text and attachment contents are not reconstructed or downloaded"
-        );
+        output["completeness"]["missing_nonparagraph_content"] =
+            json!("image text and attachment contents are not reconstructed or downloaded");
     }
     Ok(output)
 }
@@ -448,7 +466,19 @@ pub(crate) fn article_with_client(
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
         let base = Url::parse(&response.url).map_err(|_| unavailable())?;
-        let document = parse_listing_document(&college_html(response)?, &base)?;
+        let document =
+            match college_html(response).and_then(|html| parse_listing_document(&html, &base)) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_list",
+                        "sce",
+                        "sce_listing_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
         if !document
             .entries
             .iter()
@@ -461,16 +491,41 @@ pub(crate) fn article_with_client(
         }
         Ok(retrieval(response))
     })?;
-    client
-        .with_cache_mode(mode)
-        .get(target, false, |response| {
-            let document = college_html(response)?;
-            normalize(response, &document).map(|mut value| {
-                value["directory_attribution"] = attribution;
-                value["source_listing"] = listing;
-                value
-            })
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained Chemistry listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_article",
+                    "sce",
+                    "sce_article_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut value = match normalize(response, &document) {
+            Ok(value) => value,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "sce",
+                "sce_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        Ok({
+            value["directory_attribution"] = attribution;
+            value["source_listing"] = listing;
+            value
         })
+    })
 }
 
 #[cfg(test)]
@@ -502,21 +557,21 @@ mod tests {
             <li><span>bad-date</span><a href="../info/1013/43.htm">Unknown date remains null</a></li>
         </ul></div>"#,
         );
-        let parsed = parse_listing_document(
-            &document,
-            &Url::parse(SCE_NOTICES_URL).unwrap(),
-        )
-        .unwrap();
+        let parsed =
+            parse_listing_document(&document, &Url::parse(SCE_NOTICES_URL).unwrap()).unwrap();
         assert_eq!(parsed.entries[0].date.as_deref(), Some("2026-09-29"));
         assert_eq!(parsed.entries[1].date, None);
         assert_eq!(parsed.entries[0].source_order, 1);
-        assert_eq!(parsed.entries[0].resolved_http_url.as_deref(), Some("https://sce.buaa.edu.cn/info/1013/42.htm"));
+        assert_eq!(
+            parsed.entries[0].resolved_http_url.as_deref(),
+            Some("https://sce.buaa.edu.cn/info/1013/42.htm")
+        );
     }
 
     #[test]
     fn chemistry_pager_accepts_only_advertised_board_paths() {
         let base = Url::parse(SCE_NOTICES_URL).unwrap();
-        let body = br#"<table class="headStyle16sn2e3sl5"><a href="xyxw/30.htm">下页</a><a href="xyxw/1.htm">尾页</a></table>"#;
+        let body = r#"<table class="headStyle16sn2e3sl5"><a href="xyxw/30.htm">下页</a><a href="xyxw/1.htm">尾页</a></table>"#.as_bytes();
         assert_eq!(
             advertised_sce_page_url(body, &base, 30).unwrap().path(),
             "/xwzx/xyxw/30.htm"

@@ -1,9 +1,10 @@
 //! 数学科学学院: exact-directory-bound current notice board.
 use super::{
-    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, bind_college_board,
-    college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
-    parse_iso_date, retrieval, unavailable,
+    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, active_element_text,
+    article_paragraphs, bind_college_board, college_directory_attribution, college_html,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    inert_element, invalid_article, invalid_list, is_document_href, is_http,
+    is_safe_public_fallback, parse_iso_date, retrieval, source_tables, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, MATH_NOTICES_URL, MATH_ROOT_URL, math_path_allowed,
@@ -58,7 +59,18 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "math", attribution)
+            if !is_safe_public_fallback(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "math", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "math",
+                    "math_surface_selector_contract",
+                )),
+            }
         })
 }
 
@@ -185,7 +197,21 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, MATH_ROOT_URL, MATH_NOTICES_URL, &mut attribution)?;
     let target = Url::parse(MATH_NOTICES_URL).map_err(|_| unavailable())?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &target)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
+                    response,
+                    "announcements_list",
+                    "math",
+                    "math_listing_selector_contract",
+                );
+                value["category"] = json!("xygg");
+                value["page"] = json!(1);
+                return Ok(value);
+            }
+            Err(error) => return Err(error),
+        };
         let entries: Vec<_> = document
             .entries
             .iter()
@@ -223,33 +249,70 @@ pub(crate) fn article_with_client(
 ) -> Result<Value, Error> {
     bind_college_board(&client, MATH_ROOT_URL, MATH_NOTICES_URL, &mut attribution)?;
     let source = Url::parse(MATH_NOTICES_URL).map_err(|_| unavailable())?;
-    let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+    let listing_result: Result<Value, Error> = client.get(&source, false, |response| {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &source) {
+            Ok(document) => document,
+            Err(_) => {
+                return Ok(Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "math",
+                    "math_listing_selector_contract",
+                )));
+            }
+        };
         if !document
             .entries
             .iter()
             .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
         {
-            return Err(Error::new(
+            return Ok(Err(Error::new(
                 "unsupported",
                 "retained Math notice page does not declare the selected article",
-            ));
+            )));
         }
-        Ok(retrieval(response))
+        Ok(Ok(retrieval(response)))
     })?;
+    let listing = listing_result?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained Math listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
-            let document = college_html(response)?;
-            Ok(parse_article(&document).map(|mut output| {
-                output["retrieval"] = retrieval(response);
-                output["publisher"] = json!(PUBLISHER);
-                output["college"] = json!("math");
-                output["directory_attribution"] = attribution;
-                output["source_listing"] = listing;
-                output
-            }))
-        })?
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "math",
+                        "math_article_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut output = match parse_article(&document) {
+                Ok(output) => output,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "math",
+                    "math_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            output["retrieval"] = retrieval(response);
+            output["publisher"] = json!(PUBLISHER);
+            output["college"] = json!("math");
+            output["directory_attribution"] = attribution.clone();
+            output["source_listing"] = listing.clone();
+            Ok(output)
+        })
 }
 
 fn math_publication_date(raw: &str) -> Option<String> {
@@ -311,59 +374,43 @@ pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
                 line!(),
             )
         })?;
-    let paragraphs_selector = Selector::parse("p").map_err(|_| unavailable())?;
-    let paragraphs: Vec<String> = body
-        .select(&paragraphs_selector)
-        .filter(|node| !inert_element(*node))
-        .map(element_text)
-        .filter(|text| !text.is_empty())
-        .collect();
-    let row_selector = Selector::parse("table tr").map_err(|_| unavailable())?;
-    let cell_selector = Selector::parse(":scope > th, :scope > td").map_err(|_| unavailable())?;
-    let mut tables = Vec::new();
-    let table_selector = Selector::parse("table").map_err(|_| unavailable())?;
-    let mut table_rows = 0usize;
-    let mut table_cells = 0usize;
-    for (table_index, table) in body.select(&table_selector).enumerate() {
-        let mut rows = Vec::new();
-        for (row_index, row) in table.select(&row_selector).enumerate() {
-            let cells: Vec<Value> = row
-                .select(&cell_selector)
-                .map(|cell| {
-                    table_cells += 1;
-                    json!({"header": cell.value().name() == "th", "text": element_text(cell)})
-                })
-                .collect();
-            if !cells.is_empty() {
-                table_rows += 1;
-                rows.push(json!({"source_order": row_index + 1, "cells": cells}));
-            }
-        }
-        tables.push(json!({"source_order": table_index + 1, "caption": Value::Null, "rows": rows}));
-    }
-    if paragraphs.len() + table_rows > super::MAX_BODY_PARAGRAPHS {
-        return Err(unavailable());
+    let tables = source_tables(body)?;
+    let paragraphs = article_paragraphs(body, tables.has_text)?;
+    if paragraphs.len() + tables.row_count > super::MAX_BODY_PARAGRAPHS {
+        return Err(failed_contract(
+            "Math article paragraphs and table rows exceed the reviewed text budget",
+            file!(),
+            line!(),
+        ));
     }
     let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
-    let attachment_hints: Vec<Value> = body
-        .select(&links)
-        .filter(|node| !inert_element(*node))
-        .filter_map(|node| {
-            node.value()
-                .attr("href")
-                .map(|href| json!({"href": href, "text": element_text(node), "fetched": false}))
-        })
-        .take(super::MAX_ATTACHMENT_HINTS)
-        .collect();
+    let mut attachment_hints = Vec::new();
+    let mut attachments_found = false;
+    for node in body.select(&links).filter(|node| !inert_element(*node)) {
+        let Some(href) = node.value().attr("href") else {
+            continue;
+        };
+        if !is_document_href(href) {
+            continue;
+        }
+        attachments_found = true;
+        if attachment_hints.len() < super::MAX_ATTACHMENT_HINTS {
+            attachment_hints.push(json!({
+                "href": href,
+                "text": active_element_text(node),
+                "fetched": false,
+            }));
+        }
+    }
     let has_images = Selector::parse("img").map_err(|_| unavailable())?;
     let images = body.select(&has_images).any(|node| !inert_element(node));
-    let partial = !attachment_hints.is_empty() || images || !tables.is_empty();
+    let partial = attachments_found || images || !tables.values.is_empty();
     Ok(json!({
         "schema_version":1,"type":"announcements_article","result":if partial {"partial_text"} else {"full_text"},
         "publisher":PUBLISHER,"college":"math","category":"1294","title":title,
         "published_at":published_at,"body_paragraph_count":paragraphs.len(),"body_paragraphs":paragraphs,
-        "body_table_count":tables.len(),"body_table_row_count":table_rows,"body_table_cell_count":table_cells,"body_tables":tables,
-        "attachments":{"found":!attachment_hints.is_empty(),"hints":attachment_hints,"hints_truncated":false,"note":"source-declared links only; never fetched"},
+        "body_table_count":tables.values.len(),"body_table_row_count":tables.row_count,"body_table_cell_count":tables.cell_count,"body_tables":tables.values,
+        "attachments":{"found":attachments_found,"hints":attachment_hints,"hints_truncated":attachments_found && attachment_hints.len() == super::MAX_ATTACHMENT_HINTS,"note":"source-declared links only; never fetched"},
         "completeness":{"scope":"single_math_article_page","body_source":"unique icontent/c-content form and scoped v_news_content paragraphs; executable/fallback markup excluded","table_representation":"source cells only; no inferred spans or visual reconstruction","image_content_present":images,"missing_nonparagraph_content":if partial {json!("image/table/attachment content is not reconstructed or downloaded")} else {Value::Null}},
     }))
 }

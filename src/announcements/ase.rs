@@ -96,8 +96,8 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
         .map(element_text)
         .filter(|value| !value.is_empty() && value.len() <= MAX_TEXT)
         .ok_or_else(|| failed_contract("ASE listing requires a bounded title", file!(), line!()))?;
-    let lists = Selector::parse("div.nycontent > div.wp > div.txtList > ul")
-        .map_err(|_| unavailable())?;
+    let lists =
+        Selector::parse("div.nycontent > div.wp > div.txtList > ul").map_err(|_| unavailable())?;
     let mut lists = document.select(&lists).filter(|node| !inert_element(*node));
     let list = lists
         .next()
@@ -112,7 +112,8 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
     let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
     let anchors = Selector::parse(":scope > a[href]").map_err(|_| unavailable())?;
     let headings = Selector::parse(":scope > a > div.txt > div.h4").map_err(|_| unavailable())?;
-    let summaries = Selector::parse(":scope > a > div.txt > div.desc").map_err(|_| unavailable())?;
+    let summaries =
+        Selector::parse(":scope > a > div.txt > div.desc").map_err(|_| unavailable())?;
     let dates = Selector::parse(":scope > a > div.time").map_err(|_| unavailable())?;
     let mut entries = Vec::new();
     for row in list.select(&rows) {
@@ -170,7 +171,11 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
             None => (None, "missing"),
             Some(raw) => match base.join(raw) {
                 Ok(url) if matches!(url.scheme(), "http" | "https") => {
-                    let kind = if url.scheme() == "https" { "https" } else { "http" };
+                    let kind = if url.scheme() == "https" {
+                        "https"
+                    } else {
+                        "http"
+                    };
                     (Some(url.to_string()), kind)
                 }
                 Ok(_) => (None, "non_http"),
@@ -238,37 +243,39 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     let (client, mut attribution) = bound_client(mode)?;
     bind_college_board(&client, ASE_ROOT_URL, ASE_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
-        let entries: Vec<_> = document
-            .entries
-            .iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
-            .collect();
-        Ok(json!({
-            "schema_version": 1,
-            "type": "announcements_list",
-            "result": "listing_snapshot",
-            "publisher": PUBLISHER,
-            "college": "ase",
-            "category": "tzgg",
-            "listing_label": "通知公告",
-            "page": page,
-            "document_title": document.title,
-            "filters": {"since": since, "until": until, "match": query.r#match},
-            "entries": entries,
-            "entry_count": entries.len(),
-            "directory_attribution": attribution,
-            "completeness": {
-                "scope": "single_college_selected_notice_page",
-                "pagination": "source_advertised_ordinal_only; no automatic traversal",
-                "other_colleges": "not_covered",
-                "dates": "source MM-DD plus year; missing or malformed stays null",
-                "summaries": "source direct excerpt; not original full text",
-            },
-            "retrieval": retrieval(response),
-        }))
-    })
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let document = parse_listing(&college_html(response)?, &target)?;
+            let entries: Vec<_> = document
+                .entries
+                .iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
+                .collect();
+            Ok(json!({
+                "schema_version": 1,
+                "type": "announcements_list",
+                "result": "listing_snapshot",
+                "publisher": PUBLISHER,
+                "college": "ase",
+                "category": "tzgg",
+                "listing_label": "通知公告",
+                "page": page,
+                "document_title": document.title,
+                "filters": {"since": since, "until": until, "match": query.r#match},
+                "entries": entries,
+                "entry_count": entries.len(),
+                "directory_attribution": attribution,
+                "completeness": {
+                    "scope": "single_college_selected_notice_page",
+                    "pagination": "source_advertised_ordinal_only; no automatic traversal",
+                    "other_colleges": "not_covered",
+                    "dates": "source MM-DD plus year; missing or malformed stays null",
+                    "summaries": "source direct excerpt; not original full text",
+                },
+                "retrieval": retrieval(response),
+            }))
+        })
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -297,16 +304,18 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
         }
         Ok(retrieval(response))
     })?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = college_html(response)?;
-        Ok(normalize(response, &document).map(|mut value| {
-            value["publisher"] = json!(PUBLISHER);
-            value["college"] = json!("ase");
-            value["directory_attribution"] = attribution;
-            value["source_listing"] = listing;
-            value
-        }))
-    })?
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let document = college_html(response)?;
+            Ok(normalize(response, &document).map(|mut value| {
+                value["publisher"] = json!(PUBLISHER);
+                value["college"] = json!("ase");
+                value["directory_attribution"] = attribution;
+                value["source_listing"] = listing;
+                value
+            }))
+        })?
 }
 
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
@@ -352,10 +361,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 .or_else(|| raw.strip_prefix("发布时间:"))
                 .and_then(parse_iso_date)
         });
-    let bodies = Selector::parse(
-        ":scope > div.arc-con > div#vsb_content_2 > div.v_news_content",
-    )
-    .map_err(|_| unavailable())?;
+    let bodies = Selector::parse(":scope > div.arc-con > div#vsb_content_2 > div.v_news_content")
+        .map_err(|_| unavailable())?;
     let mut bodies = form.select(&bodies).filter(|node| !inert_element(*node));
     let body = bodies
         .next()
@@ -437,7 +444,10 @@ mod tests {
         assert_eq!(listing.entries.len(), 2);
         assert_eq!(listing.entries[0].source_order, 1);
         assert_eq!(listing.entries[0].date.as_deref(), Some("2026-06-03"));
-        assert_eq!(listing.entries[1].resolved_http_url.as_deref(), Some("https://ase.buaa.edu.cn/info/1285/43.htm"));
+        assert_eq!(
+            listing.entries[1].resolved_http_url.as_deref(),
+            Some("https://ase.buaa.edu.cn/info/1285/43.htm")
+        );
     }
 
     #[test]

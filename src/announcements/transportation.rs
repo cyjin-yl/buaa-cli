@@ -346,7 +346,10 @@ mod tests {
         assert_eq!(output["published_at"], Value::Null);
         assert_eq!(
             output["body_paragraphs"],
-            json!(["Body date 2026-10-18 is not publication metadata.", "Source cell paragraph."])
+            json!([
+                "Body date 2026-10-18 is not publication metadata.",
+                "Source cell paragraph."
+            ])
         );
         assert_eq!(output["result"], "partial_text");
         assert_eq!(output["completeness"]["image_content_present"], true);

@@ -151,7 +151,7 @@ fn call(script: &str, offset: &mut usize) -> Result<String, Error> {
     Ok(path)
 }
 
-pub(super) fn declarations(script: &str) -> Result<Vec<String>, Error> {
+pub(crate) fn declarations(script: &str) -> Result<Vec<String>, Error> {
     if !script.contains("showVsbpdfIframe") {
         return Ok(Vec::new());
     }

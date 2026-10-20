@@ -3,8 +3,8 @@ use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     advertised_page_url, article_body, article_output, bind_college_board,
     college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, invalid_article, invalid_list, is_http, parse_iso_date,
-    retrieval, unavailable,
+    entry_in_scope, failed_contract, html_fallback, invalid_article, invalid_list,
+    is_admitted_html, is_http, is_safe_public_fallback, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, PHYSICS_NOTICES_URL, PHYSICS_ROOT_URL, Response,
@@ -39,12 +39,8 @@ fn plain_url(url: &Url) -> bool {
 fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
     let source_mode = source_mode(mode);
     let directory = crate::organizations::list(source_mode)?;
-    let mut attribution = college_directory_attribution(
-        &directory,
-        "物理学院",
-        LISTED_ROOT_URL,
-        LISTED_ROOT_URL,
-    )?;
+    let mut attribution =
+        college_directory_attribution(&directory, "物理学院", LISTED_ROOT_URL, LISTED_ROOT_URL)?;
     attribution["selected_https_root"] = PHYSICS_ROOT_URL.into();
     attribution["selection_relation"] =
         "deliberate separate HTTPS observation; the exact listed HTTP identity and original directory provenance are preserved, not upgraded or aliased".into();
@@ -59,12 +55,31 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     };
     let (client, mut attribution) = bound_client(mode)?;
     if page == "notices" {
-        bind_college_board(&client, PHYSICS_ROOT_URL, PHYSICS_NOTICES_URL, &mut attribution)?;
+        bind_college_board(
+            &client,
+            PHYSICS_ROOT_URL,
+            PHYSICS_NOTICES_URL,
+            &mut attribution,
+        )?;
     }
     let target = Url::parse(raw).map_err(|_| unavailable())?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        describe_college_surface(response, "physics", attribution)
-    })
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            if !is_admitted_html(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "physics", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) if is_safe_public_fallback(response) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "physics",
+                    "physics_surface_selector_contract",
+                )),
+                Err(error) => Err(error),
+            }
+        })
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
@@ -98,13 +113,16 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
             return Err(unavailable());
         }
         let mut row_anchors = row.select(&anchors);
-        let anchor = row_anchors.next().filter(|_| row_anchors.next().is_none()).ok_or_else(|| {
-            failed_contract(
-                "Physics notice row requires one direct anchor",
-                file!(),
-                line!(),
-            )
-        })?;
+        let anchor = row_anchors
+            .next()
+            .filter(|_| row_anchors.next().is_none())
+            .ok_or_else(|| {
+                failed_contract(
+                    "Physics notice row requires one direct anchor",
+                    file!(),
+                    line!(),
+                )
+            })?;
         let title = element_text(anchor);
         if title.is_empty() || title.len() > MAX_TEXT {
             return Err(failed_contract(
@@ -193,10 +211,29 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         .map(|raw| parse_iso_date(raw).ok_or_else(invalid_list))
         .transpose()?;
     let (client, mut attribution) = bound_client(mode)?;
-    bind_college_board(&client, PHYSICS_ROOT_URL, PHYSICS_NOTICES_URL, &mut attribution)?;
+    bind_college_board(
+        &client,
+        PHYSICS_ROOT_URL,
+        PHYSICS_NOTICES_URL,
+        &mut attribution,
+    )?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &target)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
+                    response,
+                    "announcements_list",
+                    "physics",
+                    "physics_listing_selector_contract",
+                );
+                value["category"] = json!("tzgg");
+                value["page"] = json!(page);
+                return Ok(value);
+            }
+            Err(error) => return Err(error),
+        };
         let entries: Vec<&ListingEntry> = document
             .entries
             .iter()
@@ -248,10 +285,26 @@ pub(crate) fn article_with_client(
     source_page: u32,
     mut attribution: Value,
 ) -> Result<Value, Error> {
-    bind_college_board(&client, PHYSICS_ROOT_URL, PHYSICS_NOTICES_URL, &mut attribution)?;
+    bind_college_board(
+        &client,
+        PHYSICS_ROOT_URL,
+        PHYSICS_NOTICES_URL,
+        &mut attribution,
+    )?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &source)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "physics",
+                    "physics_listing_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         if !document
             .entries
             .iter()
@@ -264,16 +317,45 @@ pub(crate) fn article_with_client(
         }
         Ok(retrieval(response))
     })?;
-    client.with_cache_mode(mode).get(target, false, |response| {
-        let document = college_html(response)?;
-        Ok(normalize(response, &document).map(|mut output| {
-            output["publisher"] = json!(PUBLISHER);
-            output["college"] = json!("physics");
-            output["directory_attribution"] = attribution;
-            output["source_listing"] = listing;
-            output
-        }))
-    })?
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained Physics listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
+    client
+        .with_cache_mode(mode)
+        .get(target, false, |response| {
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "physics",
+                        "physics_article_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut output = match normalize(response, &document) {
+                Ok(output) => output,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "physics",
+                    "physics_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            Ok({
+                output["publisher"] = json!(PUBLISHER);
+                output["college"] = json!("physics");
+                output["directory_attribution"] = attribution.clone();
+                output["source_listing"] = listing.clone();
+                output
+            })
+        })
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
@@ -311,12 +393,12 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         .filter_map(|token| token.strip_prefix("发布时间："));
     let published_at = publication_tokens
         .next()
-        .map(|raw| parse_iso_date(raw.trim()))
-        .flatten();
+        .and_then(|raw| parse_iso_date(raw.trim()));
     if publication_tokens.next().is_some() {
         return Err(unavailable());
     }
-    let bodies = Selector::parse("div.article-txt div.v_news_content").map_err(|_| unavailable())?;
+    let bodies =
+        Selector::parse("div.article-txt div.v_news_content").map_err(|_| unavailable())?;
     let mut bodies = document.select(&bodies);
     let body = bodies.next().ok_or_else(|| {
         failed_contract(
@@ -450,7 +532,9 @@ mod tests {
 
     #[test]
     fn url_admission_rejects_queries_and_foreign_paths() {
-        assert!(plain_url(&Url::parse("https://physics.buaa.edu.cn/").unwrap()));
+        assert!(plain_url(
+            &Url::parse("https://physics.buaa.edu.cn/").unwrap()
+        ));
         assert!(plain_url(
             &Url::parse("https://physics.buaa.edu.cn/info/1252/42.htm").unwrap()
         ));

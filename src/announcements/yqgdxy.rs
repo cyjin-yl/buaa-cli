@@ -5,15 +5,14 @@
 //! directory value, follows only the root-declared `/tzgg.htm` board, and
 //! resolves later pages from the board's own pagination links.
 use super::{
-    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF,
-    MAX_TEXT, advertised_page_url, article_body, article_output, bind_college_board,
+    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
+    advertised_page_url, article_body, article_output, bind_college_board,
     college_directory_attribution, college_html, describe_college_surface, element_text,
     entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
     parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
-    ArchiveClient, CacheMode, Error, YQGDXY_NOTICES_URL, YQGDXY_ROOT_URL,
-    yqgdxy_path_allowed,
+    ArchiveClient, CacheMode, Error, YQGDXY_NOTICES_URL, YQGDXY_ROOT_URL, yqgdxy_path_allowed,
 };
 use scraper::{Html, Selector};
 use serde_json::{Value, json};
@@ -211,38 +210,40 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         &mut attribution,
     )?;
     let target = listing_url(&client, page)?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
-        let entries: Vec<_> = document
-            .entries
-            .iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
-            .collect();
-        Ok(json!({
-            "schema_version":1,
-            "type":"announcements_list",
-            "result":"listing_snapshot",
-            "publisher":PUBLISHER,
-            "college":"yqgdxy",
-            "category":"tzgg",
-            "listing_label":"通知公告",
-            "page":page,
-            "document_title":document.title,
-            "filters":{"since":since,"until":until,"match":query.r#match},
-            "entries":entries,
-            "entry_count":entries.len(),
-            "directory_attribution":attribution,
-            "completeness":{
-                "scope":"single_college_selected_page",
-                "pagination":"source_advertised_ordinal_only; no automatic traversal",
-                "other_colleges":"not_covered",
-                "dates":"source YYYY-MM-DD; missing, invalid or ambiguous stays null",
-                "summaries":"not supplied by this source view; not reconstructed",
-                "external_links":"retained listing references only; never fetched"
-            },
-            "retrieval":retrieval(response)
-        }))
-    })
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let document = parse_listing(&college_html(response)?, &target)?;
+            let entries: Vec<_> = document
+                .entries
+                .iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
+                .collect();
+            Ok(json!({
+                "schema_version":1,
+                "type":"announcements_list",
+                "result":"listing_snapshot",
+                "publisher":PUBLISHER,
+                "college":"yqgdxy",
+                "category":"tzgg",
+                "listing_label":"通知公告",
+                "page":page,
+                "document_title":document.title,
+                "filters":{"since":since,"until":until,"match":query.r#match},
+                "entries":entries,
+                "entry_count":entries.len(),
+                "directory_attribution":attribution,
+                "completeness":{
+                    "scope":"single_college_selected_page",
+                    "pagination":"source_advertised_ordinal_only; no automatic traversal",
+                    "other_colleges":"not_covered",
+                    "dates":"source YYYY-MM-DD; missing, invalid or ambiguous stays null",
+                    "summaries":"not supplied by this source view; not reconstructed",
+                    "external_links":"retained listing references only; never fetched"
+                },
+                "retrieval":retrieval(response)
+            }))
+        })
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -417,8 +418,18 @@ mod tests {
                     Some("2024-02-29"),
                     Some("https://yqgdxy.buaa.edu.cn/info/1053/42.htm")
                 ),
-                (2, "External reference", None, Some("https://external.example/notice")),
-                (3, "Older source record", None, Some("https://yqgdxy.buaa.edu.cn/info/1053/43.htm")),
+                (
+                    2,
+                    "External reference",
+                    None,
+                    Some("https://external.example/notice")
+                ),
+                (
+                    3,
+                    "Older source record",
+                    None,
+                    Some("https://yqgdxy.buaa.edu.cn/info/1053/43.htm")
+                ),
             ]
         );
     }
@@ -435,18 +446,25 @@ mod tests {
         assert_eq!(document.published_at.as_deref(), Some("2024-02-29"));
         assert_eq!(
             document.paragraphs,
-            vec!["Source inline paragraph.".to_string(), "2001-01-01".to_string()]
+            vec![
+                "Source inline paragraph.".to_string(),
+                "2001-01-01".to_string()
+            ]
         );
         for dates in [
             "",
             "<span>日期：2023-02-29</span>",
             "<span>日期：2024-02-29</span><span>日期：2025-01-01</span>",
         ] {
-            let document = parse_article(&Html::parse_document(&article_html(dates, body))).unwrap();
+            let document =
+                parse_article(&Html::parse_document(&article_html(dates, body))).unwrap();
             assert_eq!(document.published_at, None);
             assert_eq!(
                 document.paragraphs,
-                vec!["Source inline paragraph.".to_string(), "2001-01-01".to_string()]
+                vec![
+                    "Source inline paragraph.".to_string(),
+                    "2001-01-01".to_string()
+                ]
             );
         }
         let duplicate = format!("{html}{html}", html = article_html("", body));
@@ -472,7 +490,9 @@ mod tests {
         ] {
             assert!(!crate::net::yqgdxy_path_allowed(path));
         }
-        assert!(!plain_url(&Url::parse("http://yqgdxy.buaa.edu.cn/info/1053/1.htm").unwrap()));
+        assert!(!plain_url(
+            &Url::parse("http://yqgdxy.buaa.edu.cn/info/1053/1.htm").unwrap()
+        ));
         assert!(!plain_url(
             &Url::parse("https://yqgdxy.buaa.edu.cn/info/1053/1.htm?x=1").unwrap()
         ));

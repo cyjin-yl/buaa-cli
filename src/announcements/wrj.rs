@@ -81,10 +81,9 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
         return Err(unavailable());
     }
 
-    let views = Selector::parse(
-        "div.main > div.w90 > div.main-right > div.content > div.txt-list > ul",
-    )
-    .map_err(|_| unavailable())?;
+    let views =
+        Selector::parse("div.main > div.w90 > div.main-right > div.content > div.txt-list > ul")
+            .map_err(|_| unavailable())?;
     let mut views = document.select(&views).filter(|node| !inert_element(*node));
     let primary = views
         .next()
@@ -109,13 +108,16 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
             ));
         }
         let mut anchors = row.select(&anchors);
-        let anchor = anchors.next().filter(|_| anchors.next().is_none()).ok_or_else(|| {
-            failed_contract(
-                "Wrj notice row requires one direct line1 anchor",
-                file!(),
-                line!(),
-            )
-        })?;
+        let anchor = anchors
+            .next()
+            .filter(|_| anchors.next().is_none())
+            .ok_or_else(|| {
+                failed_contract(
+                    "Wrj notice row requires one direct line1 anchor",
+                    file!(),
+                    line!(),
+                )
+            })?;
         let title = element_text(anchor);
         if title.is_empty() || title.len() > MAX_TEXT {
             return Err(failed_contract(
@@ -125,11 +127,7 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
             ));
         }
         let listed_href = anchor.value().attr("href").ok_or_else(|| {
-            failed_contract(
-                "Wrj notice row requires a source href",
-                file!(),
-                line!(),
-            )
+            failed_contract("Wrj notice row requires a source href", file!(), line!())
         })?;
         if listed_href.is_empty()
             || listed_href.len() > MAX_HREF
@@ -288,8 +286,8 @@ fn publication_date(raw: &str) -> Option<String> {
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
-    let forms = Selector::parse("form[name=\"_newscontent_fromname\"]")
-        .map_err(|_| unavailable())?;
+    let forms =
+        Selector::parse("form[name=\"_newscontent_fromname\"]").map_err(|_| unavailable())?;
     let mut forms = document.select(&forms).filter(|node| !inert_element(*node));
     let main = forms
         .next()
@@ -316,7 +314,8 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
             )
         })?;
 
-    let date_selector = Selector::parse(":scope > div.art-itro > span").map_err(|_| unavailable())?;
+    let date_selector =
+        Selector::parse(":scope > div.art-itro > span").map_err(|_| unavailable())?;
     let publication_spans: Vec<_> = main
         .select(&date_selector)
         .filter(|node| element_text(*node).starts_with("发布时间："))
@@ -325,10 +324,9 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         .then(|| publication_date(&element_text(publication_spans[0])))
         .flatten();
 
-    let bodies = Selector::parse(
-        ":scope > div.article > div[id^=\"vsb_content_\"] > div.v_news_content",
-    )
-    .map_err(|_| unavailable())?;
+    let bodies =
+        Selector::parse(":scope > div.article > div[id^=\"vsb_content_\"] > div.v_news_content")
+            .map_err(|_| unavailable())?;
     let mut bodies = main.select(&bodies).filter(|node| !inert_element(*node));
     let body = bodies
         .next()
@@ -419,7 +417,10 @@ mod tests {
         let html = Html::parse_document(listing_html());
         let document = parse_listing(&html, &base).unwrap();
         assert_eq!(document.entries.len(), 1);
-        assert_eq!(document.entries[0].title, "北航无人系统研究院卓越百人博士后岗位招聘通知");
+        assert_eq!(
+            document.entries[0].title,
+            "北航无人系统研究院卓越百人博士后岗位招聘通知"
+        );
         assert_eq!(document.entries[0].date.as_deref(), Some("2026-07-29"));
         assert_eq!(
             document.entries[0].resolved_http_url.as_deref(),
@@ -436,17 +437,26 @@ mod tests {
         );
         let base = Url::parse(WRJ_NOTICES_URL).unwrap();
         let document = Html::parse_document(&html);
-        assert_eq!(parse_listing(&document, &base).unwrap_err().code, "unavailable");
+        assert_eq!(
+            parse_listing(&document, &base).unwrap_err().code,
+            "unavailable"
+        );
     }
 
     #[test]
     fn wrj_article_uses_publication_span_and_jsp_hints() {
-        let response = article_response("<p>First source paragraph.</p><p>Second source paragraph.</p>", "发布时间：2026-07-29");
+        let response = article_response(
+            "<p>First source paragraph.</p><p>Second source paragraph.</p>",
+            "发布时间：2026-07-29",
+        );
         let document = college_html(&response).unwrap();
         let output = normalize(&response, &document).unwrap();
         assert_eq!(output["title"], "Original article heading");
         assert_eq!(output["published_at"], "2026-07-29");
-        assert_eq!(output["body_paragraphs"], json!(["First source paragraph.", "Second source paragraph."]));
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["First source paragraph.", "Second source paragraph."])
+        );
         assert_eq!(output["result"], "partial_text");
         assert_eq!(output["attachments"]["hints"][0]["text"], "附件.docx");
     }

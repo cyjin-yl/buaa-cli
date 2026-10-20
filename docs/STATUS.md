@@ -1,5 +1,20 @@
 ## Development status
 
+## 2026-10-20: Public fallback and HSS retention correction
+
+The shared raw-HTML fallback boundary now admits only status-200, bounded,
+UTF-8 `text/html` responses without active `<base>` semantics or structural
+authentication/password, CSRF, CAPTCHA and challenge attributes. BME, FLD and
+HSS downstream selector fallbacks use that admission while source-admission and
+article-binding failures remain outside raw serialization. HSS `showVsbpdfIframe` and preview declarations are parsed
+without execution; inactive/commented/string preview text cannot authorize an
+embedded document, preview paths remain derived metadata, and conflicting
+original declarations fail. HSS later pages require an explicit source ordinal
+and link label rather than a filename-derived ordinal; missing/conflicting
+ordinal errors remain nested until `ArchiveClient::get` has retained the
+admitted listing response. Native build/tests, cache-only proof and online
+verification are pending; no completion or current-source claim is made.
+
 ## Directory-bound Chemistry college news
 ## 2026-10-18: Dept3 current board contract
 
@@ -100,9 +115,9 @@ The adapter preserves the directory HTTP identity and selects `https://www.sa.bu
 
 ## Directory-bound HSS Humanities and Social Sciences notices
 
-The official directory's visible member 人文社会科学学院 (source order30) retains the exact literal/resolved `http://www.hss.buaa.edu.cn/`; this adapter does not silently upgrade it to HTTPS. A bounded public read through the approved proxy observed the root-declared `xwzx1/tzgg.htm` 通知公告 board. Its source view is `div.n_right > ul.list > li`, with one direct `a` whose child `span` carries an ISO date; the board advertises display page2 as `xwzx1/tzgg/1.htm` through its legacy 下页/尾页 links. Selected originals are declared as `/info/1103/<digits>.htm`. The first retained page has20 rows and the advertised second page has one row; no later page is inferred.
+The official directory's visible member 人文社会科学学院 (source order30) retains the exact literal/resolved `http://www.hss.buaa.edu.cn/` as directory metadata. Transport is HTTPS-only: the adapter selects `https://www.hss.buaa.edu.cn/` as a separate candidate and never uses the literal HTTP identity for egress. A bounded public read through the approved proxy observed the root-declared `xwzx1/tzgg.htm` 通知公告 board. Its source view is `div.n_right > ul.list > li`, with one direct `a` whose child `span` carries an ISO date; the board advertises display page2 as `xwzx1/tzgg/1.htm` through its legacy 下页/尾页 links. Selected originals are declared as `/info/1103/<digits>.htm`. The first retained page has20 rows and the advertised second page has one row; no later page is inferred. A usable validated HTTPS response is required before listing/article bytes are admitted.
 
-The adapter preserves source order and date/title separation, rejects foreign/query/credential/noncanonical URLs before transport, and binds the board through the retained root declaration. The observed article structure is one `div.n_con`/`form[name=_newscontent_fromname]`/`div.contain_con`, direct `h2`, centered `发布日期：YYYY-MM-DD` caption and one `#vsb_content > .v_news_content` body. The selected current original is source-declared PDF/image-only (`showVsbpdfIframe` plus `vsb_pdf_image_data`) with three sibling JSP PDF hints; output is `embedded_document` with `assets_fetched=false`, `ocr_performed=false`, and no attachment retrieval. No HTTPS equivalence, OCR, attachment download, complete history or campus write is claimed. Offline/native verification and acceptance evidence remain with the parent integration.
+The adapter preserves source order and date/title separation, rejects foreign/query/credential/noncanonical URLs before transport, and binds the board through the retained root declaration. The historical source observation described one `div.n_con`/`form[name=_newscontent_fromname]`/`div.contain_con`, direct `h2`, centered `发布日期：YYYY-MM-DD` caption and one `#vsb_content > .v_news_content` body. That HTTP observation is metadata only; the adapter admits bytes only from the separate HTTPS candidate, so no current original/document bytes are asserted until HTTPS validation succeeds. No plaintext HTTP egress, OCR, attachment download, complete history or campus write is claimed. Offline/native verification and acceptance evidence remain with the parent integration.
 
 ## Directory-bound BME information announcements
 

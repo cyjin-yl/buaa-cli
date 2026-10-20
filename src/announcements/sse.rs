@@ -12,8 +12,9 @@ use super::{
     ArticleDocument, ListQuery, MAX_TEXT, advertised_page_url, article_category_from_url,
     article_output, article_paragraphs, bind_college_board, college_directory_attribution,
     college_html, declared_jsp_attachment_hints, describe_college_surface, entry_in_scope,
-    failed_contract, inert_element, invalid_article, invalid_list, parse_chinese_publication_date,
-    parse_iso_date, parse_notice_list, retrieval, unavailable,
+    failed_contract, html_fallback, inert_element, invalid_article, invalid_list, is_admitted_html,
+    is_safe_public_fallback, parse_chinese_publication_date, parse_iso_date, parse_notice_list,
+    retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, SSE_NOTICES_URL, SSE_ROOT_URL, sse_path_allowed,
@@ -68,7 +69,19 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "sse", attribution)
+            if !is_admitted_html(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "sse", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) if is_safe_public_fallback(response) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "sse",
+                    "sse_surface_selector_contract",
+                )),
+                Err(error) => Err(error),
+            }
         })
 }
 
@@ -112,37 +125,54 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     let (client, mut attribution) = bound_client(mode)?;
     bind_college_board(&client, SSE_ROOT_URL, SSE_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_notice_list(&college_html(response)?, &target)?;
-        let entries: Vec<_> = document
-            .entries
-            .iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
-            .collect();
-        Ok(json!({
-            "schema_version":1,
-            "type":"announcements_list",
-            "result":"listing_snapshot",
-            "publisher":PUBLISHER,
-            "college":"sse",
-            "category":"tzgg",
-            "listing_label":"通知公告",
-            "page":page,
-            "document_title":document.title,
-            "filters":{"since":since,"until":until,"match":query.r#match},
-            "entries":entries,
-            "entry_count":entries.len(),
-            "directory_attribution":attribution,
-            "completeness":{
-                "scope":"single_college_selected_page",
-                "pagination":"source_advertised_ordinal_only; no automatic traversal",
-                "other_colleges":"not_covered",
-                "dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null",
-                "summaries":"source direct a/p excerpt; not original full text"
-            },
-            "retrieval":retrieval(response)
-        }))
-    })
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let document =
+                match college_html(response).and_then(|html| parse_notice_list(&html, &target)) {
+                    Ok(document) => document,
+                    Err(_) if is_safe_public_fallback(response) => {
+                        let mut value = html_fallback(
+                            response,
+                            "announcements_list",
+                            "sse",
+                            "sse_listing_selector_contract",
+                        );
+                        value["category"] = json!("tzgg");
+                        value["page"] = json!(page);
+                        return Ok(value);
+                    }
+                    Err(error) => return Err(error),
+                };
+            let entries: Vec<_> = document
+                .entries
+                .iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
+                .collect();
+            Ok(json!({
+                "schema_version":1,
+                "type":"announcements_list",
+                "result":"listing_snapshot",
+                "publisher":PUBLISHER,
+                "college":"sse",
+                "category":"tzgg",
+                "listing_label":"通知公告",
+                "page":page,
+                "document_title":document.title,
+                "filters":{"since":since,"until":until,"match":query.r#match},
+                "entries":entries,
+                "entry_count":entries.len(),
+                "directory_attribution":attribution,
+                "completeness":{
+                    "scope":"single_college_selected_page",
+                    "pagination":"source_advertised_ordinal_only; no automatic traversal",
+                    "other_colleges":"not_covered",
+                    "dates":"source YYYY.MM.DD; missing, invalid or ambiguous stays null",
+                    "summaries":"source direct a/p excerpt; not original full text"
+                },
+                "retrieval":retrieval(response)
+            }))
+        })
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -158,7 +188,19 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
     bind_college_board(&client, SSE_ROOT_URL, SSE_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_notice_list(&college_html(response)?, &source)?;
+        let document =
+            match college_html(response).and_then(|html| parse_notice_list(&html, &source)) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_list",
+                        "sse",
+                        "sse_listing_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
         if !document
             .entries
             .iter()
@@ -171,18 +213,45 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
         }
         Ok(retrieval(response))
     })?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained SSE listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            let document = college_html(response)?;
-            Ok(normalize(response, &document).map(|mut value| {
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "sse",
+                        "sse_article_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut value = match normalize(response, &document) {
+                Ok(value) => value,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "sse",
+                    "sse_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            Ok({
                 value["publisher"] = json!(PUBLISHER);
                 value["college"] = json!("sse");
-                value["directory_attribution"] = attribution;
-                value["source_listing"] = listing;
+                value["directory_attribution"] = attribution.clone();
+                value["source_listing"] = listing.clone();
                 value
-            }))
-        })?
+            })
+        })
 }
 
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
@@ -213,7 +282,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 line!(),
             )
         })?;
-    let dates = Selector::parse(":scope > div.art-tit > p > span.date").map_err(|_| unavailable())?;
+    let dates =
+        Selector::parse(":scope > div.art-tit > p > span.date").map_err(|_| unavailable())?;
     let mut dates = main.select(&dates);
     let published_at = dates
         .next()
@@ -235,6 +305,7 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             )
         })?;
     let paragraphs = article_paragraphs(body, false)?;
+    eprintln!("sse paragraphs={paragraphs:?}");
     let (attachment_hints, hints_truncated) = declared_jsp_attachment_hints(main)?;
     let attachments_found = !attachment_hints.is_empty() || hints_truncated;
     let images = Selector::parse("img").map_err(|_| unavailable())?;
@@ -313,7 +384,10 @@ mod tests {
         assert_eq!(parsed.entries[0].source_order, 1);
         assert_eq!(parsed.entries[0].title, "First source heading");
         assert_eq!(parsed.entries[0].date.as_deref(), Some("2026-10-10"));
-        assert_eq!(parsed.entries[0].summary.as_deref(), Some("First source excerpt."));
+        assert_eq!(
+            parsed.entries[0].summary.as_deref(),
+            Some("First source excerpt.")
+        );
         assert_eq!(parsed.entries[1].date.as_deref(), Some("2026-09-01"));
         assert_eq!(
             parsed.entries[0].resolved_http_url.as_deref(),

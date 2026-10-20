@@ -10,14 +10,14 @@
 
 use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
-    advertised_page_url, article_category_from_url, article_output,
-    article_paragraphs, bind_college_board, college_directory_attribution, college_html,
-    declared_jsp_attachment_hints, describe_college_surface, element_text, entry_in_scope,
-    failed_contract, inert_element, invalid_article, invalid_list, is_http, parse_iso_date,
-    retrieval, unavailable,
+    advertised_page_url, article_category_from_url, article_output, article_paragraphs,
+    bind_college_board, college_directory_attribution, college_html, declared_jsp_attachment_hints,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    inert_element, invalid_article, invalid_list, is_admitted_html, is_http,
+    is_safe_public_fallback, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
-    ArchiveClient, CacheMode, Error, SEM_NOTICES_URL, SEM_ROOT_URL, Response, sem_path_allowed,
+    ArchiveClient, CacheMode, Error, Response, SEM_NOTICES_URL, SEM_ROOT_URL, sem_path_allowed,
 };
 use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
@@ -71,7 +71,19 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "sem", attribution)
+            if !is_admitted_html(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "sem", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) if is_safe_public_fallback(response) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "sem",
+                    "sem_surface_selector_contract",
+                )),
+                Err(error) => Err(error),
+            }
         })
 }
 
@@ -117,13 +129,16 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
     let mut boards = document
         .select(&board_selector)
         .filter(|node| !inert_element(*node));
-    let board = boards.next().filter(|_| boards.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "SEM notices require one active d-newsU5 board",
-            file!(),
-            line!(),
-        )
-    })?;
+    let board = boards
+        .next()
+        .filter(|_| boards.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "SEM notices require one active d-newsU5 board",
+                file!(),
+                line!(),
+            )
+        })?;
     let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
     let anchors = Selector::parse(":scope > a.inner[href]").map_err(|_| unavailable())?;
     let headings = Selector::parse(":scope > div.text > h4.tit").map_err(|_| unavailable())?;
@@ -231,38 +246,55 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     let (client, mut attribution) = bound_client(mode)?;
     bind_college_board(&client, SEM_ROOT_URL, SEM_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
-        let entries: Vec<_> = document
-            .entries
-            .iter()
-            .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
-            .collect();
-        Ok(json!({
-            "schema_version":1,
-            "type":"announcements_list",
-            "result":"listing_snapshot",
-            "publisher":PUBLISHER,
-            "college":"sem",
-            "category":CATEGORY,
-            "listing_label":CATEGORY_LABEL,
-            "page":page,
-            "document_title":document.title,
-            "filters":{"since":since,"until":until,"match":query.r#match},
-            "entries":entries,
-            "entry_count":entries.len(),
-            "directory_attribution":attribution,
-            "completeness":{
-                "scope":"single_college_selected_page",
-                "pagination":"source_advertised_ordinal_only; no automatic traversal",
-                "other_colleges":"not_covered",
-                "dates":"source split month-day/year; missing, invalid or ambiguous stays null",
-                "summaries":"source has no reviewed row summary; not reconstructed",
-                "external_links":"retained as source hints; never fetched"
-            },
-            "retrieval":retrieval(response)
-        }))
-    })
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let document =
+                match college_html(response).and_then(|html| parse_listing(&html, &target)) {
+                    Ok(document) => document,
+                    Err(_) if is_safe_public_fallback(response) => {
+                        let mut value = html_fallback(
+                            response,
+                            "announcements_list",
+                            "sem",
+                            "sem_listing_selector_contract",
+                        );
+                        value["category"] = json!(CATEGORY);
+                        value["page"] = json!(page);
+                        return Ok(value);
+                    }
+                    Err(error) => return Err(error),
+                };
+            let entries: Vec<_> = document
+                .entries
+                .iter()
+                .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match))
+                .collect();
+            Ok(json!({
+                "schema_version":1,
+                "type":"announcements_list",
+                "result":"listing_snapshot",
+                "publisher":PUBLISHER,
+                "college":"sem",
+                "category":CATEGORY,
+                "listing_label":CATEGORY_LABEL,
+                "page":page,
+                "document_title":document.title,
+                "filters":{"since":since,"until":until,"match":query.r#match},
+                "entries":entries,
+                "entry_count":entries.len(),
+                "directory_attribution":attribution,
+                "completeness":{
+                    "scope":"single_college_selected_page",
+                    "pagination":"source_advertised_ordinal_only; no automatic traversal",
+                    "other_colleges":"not_covered",
+                    "dates":"source split month-day/year; missing, invalid or ambiguous stays null",
+                    "summaries":"source has no reviewed row summary; not reconstructed",
+                    "external_links":"retained as source hints; never fetched"
+                },
+                "retrieval":retrieval(response)
+            }))
+        })
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -288,7 +320,18 @@ fn article_with_client(
     bind_college_board(&client, SEM_ROOT_URL, SEM_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &source)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "sem",
+                    "sem_listing_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         if !document
             .entries
             .iter()
@@ -301,40 +344,75 @@ fn article_with_client(
         }
         Ok(retrieval(response))
     })?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained SEM listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
-            let document = college_html(response)?;
-            Ok(normalize(response, &document).map(|mut value| {
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "sem",
+                        "sem_article_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut value = match normalize(response, &document) {
+                Ok(value) => value,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "sem",
+                    "sem_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            Ok({
                 value["publisher"] = json!(PUBLISHER);
                 value["college"] = json!("sem");
-                value["directory_attribution"] = attribution;
-                value["source_listing"] = listing;
+                value["directory_attribution"] = attribution.clone();
+                value["source_listing"] = listing.clone();
                 value
-            }))
-        })?
+            })
+        })
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let details = Selector::parse("div.d-detail1").map_err(|_| unavailable())?;
-    let mut details = document.select(&details).filter(|node| !inert_element(*node));
-    let detail = details.next().filter(|_| details.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "SEM article requires one active d-detail1 container",
-            file!(),
-            line!(),
-        )
-    })?;
+    let mut details = document
+        .select(&details)
+        .filter(|node| !inert_element(*node));
+    let detail = details
+        .next()
+        .filter(|_| details.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "SEM article requires one active d-detail1 container",
+                file!(),
+                line!(),
+            )
+        })?;
     let forms = Selector::parse(":scope > form[name=\"_newscontent_fromname\"]")
         .map_err(|_| unavailable())?;
     let mut forms = detail.select(&forms);
-    let form = forms.next().filter(|_| forms.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "SEM article requires one direct news-content form",
-            file!(),
-            line!(),
-        )
-    })?;
+    let form = forms
+        .next()
+        .filter(|_| forms.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "SEM article requires one direct news-content form",
+                file!(),
+                line!(),
+            )
+        })?;
     let headings = Selector::parse(":scope > div.hd > h1.tit").map_err(|_| unavailable())?;
     let mut headings = form.select(&headings);
     let title = headings
@@ -367,13 +445,16 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let bodies = Selector::parse(":scope > div#vsb_content > div.v_news_content")
         .map_err(|_| unavailable())?;
     let mut bodies = form.select(&bodies).filter(|node| !inert_element(*node));
-    let body = bodies.next().filter(|_| bodies.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "SEM article requires one direct vsb_content/v_news_content body",
-            file!(),
-            line!(),
-        )
-    })?;
+    let body = bodies
+        .next()
+        .filter(|_| bodies.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "SEM article requires one direct vsb_content/v_news_content body",
+                file!(),
+                line!(),
+            )
+        })?;
     let paragraphs = article_paragraphs(body, true)?;
     let (attachment_hints, hints_truncated) = declared_jsp_attachment_hints(form)?;
     let attachments_found = !attachment_hints.is_empty() || hints_truncated;
@@ -388,7 +469,11 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         .select(&tables)
         .filter(|node| !inert_element(*node))
         .count();
-    if paragraphs.is_empty() && !attachments_found && !has_images && !has_embedded_viewer && table_count == 0
+    if paragraphs.is_empty()
+        && !attachments_found
+        && !has_images
+        && !has_embedded_viewer
+        && table_count == 0
     {
         return Err(failed_contract(
             "SEM article requires text or declared nonparagraph source content",
@@ -465,15 +550,27 @@ mod tests {
         let listing = parse_listing(&Html::parse_document(source), &base).unwrap();
         assert_eq!(listing.entries.len(), 2);
         assert_eq!(listing.entries[0].date.as_deref(), Some("2026-09-08"));
-        assert_eq!(listing.entries[0].resolved_http_url.as_deref(), Some("https://sem.buaa.edu.cn/info/1024/42.htm"));
+        assert_eq!(
+            listing.entries[0].resolved_http_url.as_deref(),
+            Some("https://sem.buaa.edu.cn/info/1024/42.htm")
+        );
         assert_eq!(listing.entries[1].date, None);
-        assert_eq!(listing.entries[1].resolved_http_url.as_deref(), Some("https://mp.weixin.qq.com/s/example"));
+        assert_eq!(
+            listing.entries[1].resolved_http_url.as_deref(),
+            Some("https://mp.weixin.qq.com/s/example")
+        );
     }
 
     #[test]
     fn listing_rejects_multiple_active_boards() {
         let source = r#"<title>Fixture</title><ul class="d-newsU5"><li><a class="inner"><div class="text"><h4 class="tit">One</h4></div></a></li></ul><ul class="d-newsU5"><li><a class="inner"><div class="text"><h4 class="tit">Two</h4></div></a></li></ul>"#;
-        assert!(parse_listing(&Html::parse_document(source), &Url::parse(SEM_NOTICES_URL).unwrap()).is_err());
+        assert!(
+            parse_listing(
+                &Html::parse_document(source),
+                &Url::parse(SEM_NOTICES_URL).unwrap()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -489,7 +586,10 @@ mod tests {
         let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
         assert_eq!(output["title"], "Policy article");
         assert_eq!(output["published_at"], "2026-09-08");
-        assert_eq!(output["body_paragraphs"], json!(["First paragraph.", "Second paragraph."]));
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["First paragraph.", "Second paragraph."])
+        );
         assert_eq!(output["attachments"]["hints"][0]["text"], "Policy.pdf");
         assert_eq!(output["result"], "partial_text");
     }
@@ -513,8 +613,14 @@ mod tests {
     #[test]
     fn sem_url_admission_rejects_query_and_foreign_paths() {
         assert!(plain_url(&Url::parse(SEM_NOTICES_URL).unwrap()));
-        assert!(!plain_url(&Url::parse("https://sem.buaa.edu.cn/xwdt/tzgg.htm?x=1").unwrap()));
-        assert!(!plain_url(&Url::parse("https://sem.buaa.edu.cn/info/1020/42.htm").unwrap()));
-        assert!(!plain_url(&Url::parse("https://other.buaa.edu.cn/info/1024/42.htm").unwrap()));
+        assert!(!plain_url(
+            &Url::parse("https://sem.buaa.edu.cn/xwdt/tzgg.htm?x=1").unwrap()
+        ));
+        assert!(!plain_url(
+            &Url::parse("https://sem.buaa.edu.cn/info/1020/42.htm").unwrap()
+        ));
+        assert!(!plain_url(
+            &Url::parse("https://other.buaa.edu.cn/info/1024/42.htm").unwrap()
+        ));
     }
 }

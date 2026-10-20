@@ -11,93 +11,19 @@
 //! fallback. Keep this adapter surface-only until a validated HTTPS source is
 //! available; no listing/article bytes are asserted from the HTTP probe.
 
-use super::{ListQuery, college_directory_attribution, invalid_article, invalid_list, parse_iso_date};
-use crate::net::{CacheMode, EE_NOTICES_URL, EE_ROOT_URL, Error};
-use serde_json::{Value, json};
+use super::{ListQuery, invalid_article, invalid_list, parse_iso_date};
+use crate::net::{CacheMode, Error};
+use serde_json::Value;
 use url::Url;
 
-const LISTED_ROOT_URL: &str = "http://www.ee.buaa.edu.cn/";
-const PUBLISHER: &str = "北京航空航天大学电子信息工程学院";
 const TLS_BLOCKER: &str = "electronic-information source is surface-only: HTTPS certificate names do not match www.ee.buaa.edu.cn and canonical ee.buaa.edu.cn TLS ended unexpectedly; plaintext HTTP fallback is disabled";
-
-fn source_mode(mode: CacheMode) -> CacheMode {
-    if mode == CacheMode::Revalidate {
-        CacheMode::PreferCache
-    } else {
-        mode
-    }
-}
-
-fn attribution(mode: CacheMode) -> Result<Value, Error> {
-    let directory = crate::organizations::list(source_mode(mode))?;
-    let mut value = college_directory_attribution(
-        &directory,
-        "电子信息工程学院",
-        LISTED_ROOT_URL,
-        LISTED_ROOT_URL,
-    )?;
-    value["selected_https_root"] = EE_ROOT_URL.into();
-    value["selection_relation"] =
-        "deliberate HTTPS candidate; TLS host validation is currently blocked, so the literal HTTP directory identity is not upgraded or used as a source".into();
-    Ok(value)
-}
-
-fn blocked_surface(page: &str, attribution: Value) -> Value {
-    let selected_url = if page == "notices" {
-        EE_NOTICES_URL
-    } else {
-        EE_ROOT_URL
-    };
-    json!({
-        "schema_version": 1,
-        "type": "college_source_surface",
-        "result": "surface_blocked",
-        "publisher": PUBLISHER,
-        "college": "ee",
-        "page": page,
-        "selected_url": selected_url,
-        "directory_attribution": attribution,
-        "fallback_reason": {
-            "code": "tls_transport_blocked",
-            "message": TLS_BLOCKER,
-            "raw_html": null,
-            "content_type": null,
-            "body_byte_length": null,
-            "plaintext_fallback": "disabled"
-        },
-        "source_contract": {
-            "root_declaration": {
-                "path": "/index/tzgg.htm",
-                "label": "通知公告",
-                "selector": "a[href=\"index/tzgg.htm\"]"
-            },
-            "discovered_boards": [
-                {
-                    "path": "/index/tzgg.htm",
-                    "label": "通知公告",
-                    "article_namespace": "/info/1062/",
-                    "selectors": "ul.news-ul > li; :scope > a[href]; :scope > span; div.pb_sys_common span.p_no a[href]; form[name=\"_newscontent_fromname\"] > div.article-tt; form[name=\"_newscontent_fromname\"] > div.article-sm; form[name=\"_newscontent_fromname\"] > div.article-txt > div#vsb_content > div.v_news_content"
-                }
-            ],
-            "pagination": "source-advertised links only; no inferred page URLs",
-            "article_declarations": "listing-declared canonical links only",
-            "verified": false
-        },
-        "completeness": {
-            "scope": "single_explicit_public_page",
-            "announcement_adapter_verified": false,
-            "links_followed": false,
-            "publication_date": "unknown",
-            "list_and_article": "blocked_before_transport_by_tls"
-        }
-    })
-}
 
 pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     if !matches!(page, "root" | "notices") {
         return Err(Error::new("invalid_input", "unknown college surface page"));
     }
-    Ok(blocked_surface(page, attribution(mode)?))
+    let _ = (mode, page);
+    Err(Error::new("unsupported", TLS_BLOCKER))
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -163,17 +89,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn surface_preserves_http_directory_identity_and_tls_blocker() {
-        let value = blocked_surface("root", json!({"member":{"listed_href":LISTED_ROOT_URL}}));
-        assert_eq!(value["result"], "surface_blocked");
-        assert_eq!(value["selected_url"], EE_ROOT_URL);
-        assert_eq!(value["directory_attribution"]["member"]["listed_href"], LISTED_ROOT_URL);
-        assert_eq!(value["fallback_reason"]["code"], "tls_transport_blocked");
-        assert_eq!(value["fallback_reason"]["plaintext_fallback"], "disabled");
-        assert!(!value["fallback_reason"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("http://www.ee.buaa.edu.cn/index/tzgg.htm"));
+    fn surface_stops_before_unverified_tls_transport() {
+        let error = surface(CacheMode::Offline, "root").unwrap_err();
+        assert_eq!(error.code, "unsupported");
+        assert!(
+            error
+                .message
+                .contains("plaintext HTTP fallback is disabled")
+        );
     }
 
     #[test]
@@ -182,15 +105,5 @@ mod tests {
         assert!(!article_namespace("/info/1061/20757.htm"));
         assert!(!article_namespace("/info/1062/not-a-number.htm"));
         assert!(!article_namespace("/info/1062/42.htm?x=1"));
-    }
-
-    #[test]
-    fn blocked_surface_records_reviewed_selectors_without_claiming_verification() {
-        let value = blocked_surface("notices", json!({"member":{}}));
-        assert_eq!(value["selected_url"], EE_NOTICES_URL);
-        assert_eq!(value["source_contract"]["root_declaration"]["path"], "/index/tzgg.htm");
-        assert_eq!(value["source_contract"]["discovered_boards"][0]["article_namespace"], "/info/1062/");
-        assert_eq!(value["source_contract"]["verified"], false);
-        assert_eq!(value["completeness"]["list_and_article"], "blocked_before_transport_by_tls");
     }
 }

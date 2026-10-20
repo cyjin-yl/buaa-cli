@@ -15,40 +15,40 @@ use crate::html::{active_element_text, element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{NaiveDate, NaiveDateTime};
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
 
+pub(crate) mod ase;
 pub(crate) mod aviation;
 pub(crate) mod beijing;
+pub(crate) mod bme;
+pub(crate) mod cst;
+pub(crate) mod dept3;
+pub(crate) mod ee;
 pub(crate) mod fld;
 pub(crate) mod h3i;
 pub(crate) mod hss;
 pub(crate) mod ic;
 pub(crate) mod iiif;
 pub(crate) mod math;
+pub(crate) mod me;
 pub(crate) mod mse;
 pub(crate) mod physics;
-pub(crate) mod me;
 pub(crate) mod rse;
-pub(crate) mod sem;
+pub(crate) mod sa;
+pub(crate) mod sce;
 mod scse;
+pub(crate) mod sem;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
 pub(crate) mod soft;
-pub(crate) mod transportation;
-pub(crate) mod sce;
 pub(crate) mod sse;
+pub(crate) mod transportation;
 pub(crate) mod wrj;
 pub(crate) mod ygy;
 pub(crate) mod yqgdxy;
-pub(crate) mod ase;
-pub(crate) mod bme;
-pub(crate) mod cst;
-pub(crate) mod dept3;
-pub(crate) mod ee;
-pub(crate) mod sa;
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -133,6 +133,8 @@ struct ArticleQuery {
 struct HistoryInput {
     html: String,
     provenance: HistoryProvenance,
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -169,7 +171,7 @@ fn invalid_article() -> Error {
 fn invalid_history() -> Error {
     Error::new(
         "invalid_input",
-        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be a news.buaa.edu.cn listing URL",
+        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be a reviewed listing URL or an explicitly typed Dept3 article URL",
     )
 }
 
@@ -632,6 +634,177 @@ fn retrieval(response: &Response) -> Value {
     })
 }
 
+pub(crate) fn is_admitted_html(response: &Response) -> bool {
+    response.status == 200
+        && !response.body.is_empty()
+        && response.body.len() <= MAX_HTML
+        && response_content_type(response).is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("text/html")
+        })
+}
+
+fn response_content_type(response: &Response) -> Option<&str> {
+    response
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str())
+}
+
+pub(crate) fn is_safe_public_fallback(response: &Response) -> bool {
+    if !is_admitted_html(response) {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(&response.body) else {
+        return false;
+    };
+    let document = Html::parse_document(text);
+    let Ok(bases) = Selector::parse("base[href]") else {
+        return false;
+    };
+    if document.select(&bases).any(|base| {
+        !inert_element(base)
+    }) {
+        return false;
+    }
+    if response.headers.iter().any(|(name, value)| {
+        let name = name.trim().to_ascii_lowercase();
+        if name == "cf-mitigated" {
+            value.trim().eq_ignore_ascii_case("challenge")
+        } else {
+            (name == "x-captcha" || name == "x-challenge" || name.starts_with("cf-chl-"))
+                && !value.trim().is_empty()
+        }
+    }) {
+        return false;
+    }
+    let Ok(elements) = Selector::parse("*") else {
+        return false;
+    };
+    !document
+        .select(&elements)
+        .filter(|element| !inert_element(*element))
+        .any(public_security_element)
+}
+
+fn compact_security_token(value: &str) -> String {
+    value
+        .trim()
+        .bytes()
+        .filter(|byte| byte.is_ascii_alphanumeric())
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect()
+}
+
+fn security_token(value: &str) -> bool {
+    let token = compact_security_token(value);
+    token == "password"
+        || token == "passwd"
+        || token == "passphrase"
+        || token == "csrf"
+        || token == "csrftoken"
+        || token == "xsrf"
+        || token == "xsrftoken"
+        || token == "requestverificationtoken"
+        || token == "verificationtoken"
+        || token == "authenticitytoken"
+        || token == "antiforgerytoken"
+        || token == "captcha"
+        || token == "recaptcha"
+        || token == "hcaptcha"
+        || token == "turnstile"
+        || token == "challenge"
+        || token == "challengeform"
+        || token == "challengeplatform"
+        || token == "auth"
+        || token == "authpage"
+        || token == "login"
+        || token == "signin"
+        || token == "signinform"
+        || token == "authenticate"
+        || token == "authentication"
+        || token == "authform"
+        || token == "oauth"
+        || token == "authorize"
+        || token == "cas"
+        || token == "saml"
+        || token == "sso"
+        || token.contains("password")
+        || token.contains("captcha")
+        || token.contains("turnstile")
+        || token.contains("csrf")
+        || token.contains("xsrf")
+        || token.contains("requestverificationtoken")
+        || token.contains("challenge")
+        || token.contains("login")
+        || token.contains("signin")
+        || token.contains("authentication")
+        || token.contains("authorize")
+        || token.contains("oauth")
+        || token.starts_with("cfchl")
+}
+
+fn public_security_element(element: ElementRef<'_>) -> bool {
+    let tag = element.value().name();
+    element.value().attrs().any(|(name, value)| {
+        let name = name.to_ascii_lowercase();
+        if security_token(&name) {
+            return true;
+        }
+        if tag == "input"
+            && name == "type"
+            && value.trim().eq_ignore_ascii_case("password")
+        {
+            return true;
+        }
+        if !matches!(
+            name.as_str(),
+            "action"
+                | "aria-label"
+                | "autocomplete"
+                | "class"
+                | "content"
+                | "href"
+                | "id"
+                | "label"
+                | "name"
+                | "placeholder"
+                | "src"
+                | "title"
+                | "type"
+        ) && !name.starts_with("data-")
+        {
+            return false;
+        }
+        security_token(value)
+    })
+}
+
+pub(crate) fn html_fallback(
+    response: &Response,
+    output_type: &str,
+    college: &str,
+    reason: &str,
+) -> Value {
+    json!({
+        "schema_version": 1,
+        "type": output_type,
+        "result": "fallback",
+        "college": college,
+        "raw_html": STANDARD.encode(&response.body),
+        "raw_html_sha256": response.sha256,
+        "content_type": response_content_type(response).unwrap_or_default(),
+        "body_byte_length": response.body.len(),
+        "fallback_reason": reason,
+        "retrieval": retrieval(response),
+    })
+}
+
 fn entry_in_scope(
     entry: &ListingEntry,
     since: &Option<String>,
@@ -734,6 +907,195 @@ fn article_output(response: &Response, document: ArticleDocument) -> Value {
         Value::Array(document.paragraphs.into_iter().map(Value::String).collect());
     output["attachments"]["hints"] = Value::Array(document.attachment_hints);
     output
+}
+
+fn article_content(document: ArticleDocument) -> Value {
+    let mut output = json!({
+        "schema_version": 1,
+        "type": "announcements_article",
+        "result": "full_text",
+        "publisher": "北京航空航天大学",
+        "body_paragraph_count": document.paragraphs.len(),
+        "attachments": {
+            "found": document.attachments_found,
+            "note": "attachment links are surfaced as hints and are never downloaded by this command",
+        },
+        "completeness": {
+            "scope": "single_article_page",
+            "body_source": "div.v_news_content p",
+        },
+    });
+    output["title"] = Value::String(document.title);
+    output["category"] = document.category.map(Value::String).unwrap_or(Value::Null);
+    output["published_at"] = document
+        .published_at
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    output["body_paragraphs"] =
+        Value::Array(document.paragraphs.into_iter().map(Value::String).collect());
+    output["attachments"]["hints"] = Value::Array(document.attachment_hints);
+    output
+}
+
+struct SourceTables {
+    values: Vec<Value>,
+    row_count: usize,
+    cell_count: usize,
+    has_text: bool,
+}
+
+fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
+    let tables = Selector::parse("table").map_err(|_| unavailable())?;
+    let rows = Selector::parse("tr").map_err(|_| unavailable())?;
+    let cells = Selector::parse(":scope > th, :scope > td").map_err(|_| unavailable())?;
+    let captions = Selector::parse(":scope > caption").map_err(|_| unavailable())?;
+    let mut result = SourceTables {
+        values: Vec::new(),
+        row_count: 0,
+        cell_count: 0,
+        has_text: false,
+    };
+    for table in body.select(&tables).filter(|node| !inert_element(*node)) {
+        if result.values.len() == MAX_ENTRIES
+            || table.select(&tables).any(|node| !inert_element(node))
+            || table.descendants().any(|node| {
+                matches!(node.value(), Node::Text(text) if !text.trim().is_empty())
+                    && !node.ancestors().any(|ancestor| {
+                        ancestor.value().as_element().is_some_and(|element| {
+                            matches!(
+                                element.name(),
+                                "td" | "th"
+                                    | "caption"
+                                    | "script"
+                                    | "style"
+                                    | "template"
+                                    | "noscript"
+                            )
+                        })
+                    })
+            })
+        {
+            return Err(failed_contract(
+                "source tables require bounded flat rows and cell-owned text",
+                file!(),
+                line!(),
+            ));
+        }
+        let mut caption_nodes = table.select(&captions).filter(|node| !inert_element(*node));
+        let caption = caption_nodes.next().map(element_text);
+        if caption_nodes.next().is_some()
+            || caption
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_PARAGRAPH)
+        {
+            return Err(failed_contract(
+                "table caption is ambiguous or over budget",
+                file!(),
+                line!(),
+            ));
+        }
+        result.has_text |= caption.as_ref().is_some_and(|text| !text.is_empty());
+        let mut source_rows = Vec::new();
+        for row in table.select(&rows).filter(|node| !inert_element(*node)) {
+            if result.row_count == MAX_BODY_PARAGRAPHS {
+                return Err(failed_contract(
+                    "table rows exceed the reviewed text budget",
+                    file!(),
+                    line!(),
+                ));
+            }
+            let mut source_cells = Vec::new();
+            let mut row_bytes = 0usize;
+            for cell in row.select(&cells).filter(|node| !inert_element(*node)) {
+                if source_cells.len() == MAX_ENTRIES {
+                    return Err(failed_contract(
+                        "table row exceeds the reviewed cell budget",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                let text = element_text(cell);
+                row_bytes += text.len();
+                if row_bytes > MAX_PARAGRAPH {
+                    return Err(failed_contract(
+                        "table row text exceeds the reviewed byte budget",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                result.has_text |= !text.is_empty();
+                let mut value = json!({"header":cell.value().name() == "th"});
+                value["text"] = Value::String(text);
+                for span in ["rowspan", "colspan"] {
+                    if let Some(raw) = cell.value().attr(span) {
+                        if raw.len() > MAX_TEXT {
+                            return Err(failed_contract(
+                                "table span attribute exceeds the reviewed text budget",
+                                file!(),
+                                line!(),
+                            ));
+                        }
+                        value[span] = Value::String(raw.to_owned());
+                    }
+                }
+                source_cells.push(value);
+            }
+            result.row_count += 1;
+            result.cell_count += source_cells.len();
+            let mut value = json!({});
+            value["cells"] = Value::Array(source_cells);
+            source_rows.push(value);
+        }
+        let mut value = json!({"source_order":result.values.len() + 1});
+        value["caption"] = caption.map(Value::String).unwrap_or(Value::Null);
+        value["rows"] = Value::Array(source_rows);
+        result.values.push(value);
+    }
+    Ok(result)
+}
+
+fn table_article_output(
+    body: ElementRef<'_>,
+    title: String,
+    category: Option<String>,
+    published_at: Option<String>,
+    body_source: &str,
+) -> Result<Value, Error> {
+    let tables = source_tables(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, tables.has_text)?;
+    if paragraphs.len() + tables.row_count > MAX_BODY_PARAGRAPHS {
+        return Err(failed_contract(
+            "paragraphs and table rows exceed the reviewed text budget",
+            file!(),
+            line!(),
+        ));
+    }
+    let images = Selector::parse("img").map_err(|_| unavailable())?;
+    let has_images = body.select(&images).any(|image| !inert_element(image));
+    let mut output = article_content(ArticleDocument {
+        title,
+        category,
+        published_at,
+        paragraphs,
+        attachment_hints,
+        attachments_found,
+    });
+    output["body_table_count"] = json!(tables.values.len());
+    output["body_table_row_count"] = json!(tables.row_count);
+    output["body_table_cell_count"] = json!(tables.cell_count);
+    output["body_tables"] = Value::Array(tables.values);
+    output["completeness"]["body_source"] = json!(body_source);
+    output["completeness"]["table_representation"] = json!(
+        "normalized source cell text and explicitly present span attributes; no inferred cells, span expansion or visual-layout reconstruction; paragraph-wrapped cells remain in body_paragraphs as well"
+    );
+    output["completeness"]["unextracted_table_count"] = json!(0);
+    output["completeness"]["image_content_present"] = json!(has_images);
+    if has_images || attachments_found {
+        output["result"] = json!("partial_text");
+        output["completeness"]["missing_nonparagraph_content"] =
+            json!("image text and attachment contents are not reconstructed or downloaded");
+    }
+    Ok(output)
 }
 
 fn parse_list_query(input: Option<&str>) -> Result<ListQuery, Error> {
@@ -1061,12 +1423,12 @@ fn college_html(response: &Response) -> Result<Html, Error> {
     if response.status != 200
         || response.body.is_empty()
         || response.body.len() > MAX_HTML
-        || !response.headers.get("content-type").is_some_and(|value| {
+        || !response_content_type(response).is_some_and(|value| {
             value
                 .split(';')
                 .next()
                 .unwrap_or_default()
-                .trim_matches([' ', '\t'])
+                .trim()
                 .eq_ignore_ascii_case("text/html")
         })
     {
@@ -1252,8 +1614,10 @@ fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Err
     if title.len() > MAX_TEXT {
         return Err(unavailable());
     }
-    let views = Selector::parse("div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul")
-        .map_err(|_| unavailable())?;
+    let views = Selector::parse(
+        "div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul, div.notice-list > div > ul",
+    )
+    .map_err(|_| unavailable())?;
     let mut views = document.select(&views).filter(|node| !inert_element(*node));
     let primary = views
         .next()
@@ -1360,13 +1724,29 @@ fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Err
     Ok(ListingDocument { title, entries })
 }
 
+fn is_dept3_article_history_source(raw: &str, url: &Url) -> bool {
+    raw == url.as_str()
+        && url.scheme() == "http"
+        && url.host_str() == Some("dept3.buaa.edu.cn")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && (url.path().starts_with("/info/1093/") || url.path().starts_with("/info/1014/"))
+        && crate::net::dept3_path_allowed(url.path())
+}
+
 pub fn history(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
         return Err(invalid_history());
     }
     let query: HistoryInput = serde_json::from_str(input).map_err(|_| invalid_history())?;
     let college_snapshot = scse::is_history_source(&query.provenance.source_url);
-    if !college_snapshot && !is_list_source_url(&query.provenance.source_url) {
+    let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
+    let dept3_article = query.kind.as_deref() == Some("article")
+        && is_dept3_article_history_source(&query.provenance.source_url, &base);
+    if !college_snapshot && !dept3_article && !is_list_source_url(&query.provenance.source_url) {
         return Err(invalid_history());
     }
     let timestamp = match &query.provenance.capture_timestamp {
@@ -1384,14 +1764,32 @@ pub fn history(input: &str) -> Result<Value, Error> {
     if bytes.len() > MAX_HTML {
         return Err(invalid_history());
     }
-    let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+    if dept3_article {
+        let document =
+            Html::parse_document(std::str::from_utf8(&bytes).map_err(|_| invalid_history())?);
+        let mut output = dept3::parse_article(&document).map_err(|_| invalid_history())?;
+        output["type"] = json!("announcements_history");
+        output["result"] = json!("article_snapshot");
+        output["provenance"] = json!({
+            "status": "operator_asserted",
+            "source_url": query.provenance.source_url,
+            "capture_timestamp": timestamp,
+            "asserted_by": query.provenance.asserted_by,
+        });
+        output["retrieval"] = json!({
+            "sha256": hash,
+            "supplied_bytes": bytes.len(),
+            "provenance_status": "operator_asserted",
+        });
+        return Ok(output);
+    }
     let document = if college_snapshot {
         scse::parse_listing(&bytes, &base)
     } else {
         parse_listing(&bytes, &base)
     }
     .map_err(|_| invalid_history())?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
     Ok(json!({
         "schema_version": 1,
         "type": "announcements_history",
@@ -1492,7 +1890,7 @@ pub fn schema() -> Value {
         "history": {
             "input": {
                 "type": "object",
-                "description": "Offline operator-asserted snapshot: base64 html, provenance.source_url (a reviewed news-center or SCSE notices listing), optional capture_timestamp and asserted_by. Historical SCSE HTTP originals are preserved; no request or archive-attribution verification occurs.",
+                "description": "Offline operator-asserted snapshot: base64 html, provenance.source_url (a reviewed news-center/college listing, or kind:'article' with a reviewed Dept3 article URL), optional capture_timestamp and asserted_by. No request or archive-attribution verification occurs.",
             },
             "output": {
                 "type": "object",
@@ -1507,8 +1905,8 @@ pub fn schema() -> Value {
         "Optional JSON object. college=sse selects the Space and Earth sciences notices board (tzgg), with source YYYY.MM.DD dates, direct h3 headings, direct p excerpts and source-advertised page ordinals only. Other college and university-wide selectors retain their documented scopes; no automatic traversal or inferred URLs."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
-        "sepe", "sse", null
+        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse", "sepe",
+        "sse", null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1556,12 +1954,21 @@ pub fn schema() -> Value {
         "Optional JSON object. college=transportation selects the directory-bound Transportation Science and Engineering public notices (gggs); page ordinals must be source-advertised and dates/title filters are inclusive."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
-        "sepe", "transportation", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "transportation",
+        Value::Null
     ]);
-    output["list"]["input"]["allOf"][0]["if"]["properties"]["college"]["enum"] = json!([
-        "scse", "beijing", "mse", "sepe", "transportation"
-    ]);
+    output["list"]["input"]["allOf"][0]["if"]["properties"]["college"]["enum"] =
+        json!(["scse", "beijing", "mse", "sepe", "transportation"]);
     output["article"]["input"]["description"] = json!(
         "Reviewed HTTPS article URLs include Transportation notices in category 1058. Transportation articles must be declared by the retained notice listing; source_page defaults to 1 and selects only source-advertised ordinals."
     );
@@ -1575,9 +1982,27 @@ pub fn schema() -> Value {
         "Optional JSON object selecting one reviewed college board. college=wrj selects Unmanned Systems Research Institute notices (tzgg), with source YYYY-MM-DD dates, direct line1 titles and source-advertised page ordinals only; no automatic traversal or inferred URLs."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1599,9 +2024,28 @@ pub fn schema() -> Value {
         "Optional JSON object selecting one reviewed college board. college=yqgdxy selects Instrument Science and Optoelectronic Engineering notices (tzgg), with source YYYY.MM.DD dates, direct titles and source-advertised page ordinals only; no automatic traversal or inferred URLs."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1623,9 +2067,29 @@ pub fn schema() -> Value {
         "Optional JSON object selecting one reviewed college board. college=ase selects Aviation Science and Engineering notices (tzgg), with source split MM-DD/year dates and source-advertised page ordinals only; no automatic traversal or inferred URLs."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", "ase", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        "ase",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1647,9 +2111,30 @@ pub fn schema() -> Value {
         "Fixed public pages for reviewed directory-bound college sources, including Humanities and Social Sciences. HSS preserves the exact literal HTTP www.hss.buaa.edu.cn identity and root-declared xwzx1/tzgg.htm board; no HTTPS upgrade, asset download or inferred route is claimed."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", "ase", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "hss",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        "ase",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1668,9 +2153,31 @@ pub fn schema() -> Value {
         "Fixed public pages for reviewed directory-bound college sources, including Biomedical Engineering. BME preserves the exact literal HTTP directory identity and separate HTTPS observation; its root-declared newsList.aspx?catID=13 information portal is selected-only and ASP.NET postback pagination is not followed."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "bme", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", "ase", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "hss",
+        "bme",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        "ase",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1689,9 +2196,32 @@ pub fn schema() -> Value {
         "Fixed public pages for reviewed directory-bound college sources, including Medical Science and Engineering. YGY preserves the exact literal HTTP directory identity and separate HTTPS observation; its root-declared tzgg/yggg.htm board is selected-only and month/day listing dates remain unknown without a year."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "bme", "ygy", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", "ase", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "hss",
+        "bme",
+        "ygy",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        "ase",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1710,9 +2240,33 @@ pub fn schema() -> Value {
         "Fixed public pages for reviewed directory-bound college sources, including Cybersecurity. CST preserves the exact literal HTTP directory identity and separate HTTPS observation; its one-page root-declared index/tzgg.htm board and category-1102 articles are selected-only."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "bme", "ygy", "cst", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", "ase", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "hss",
+        "bme",
+        "ygy",
+        "cst",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        "ase",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1731,9 +2285,34 @@ pub fn schema() -> Value {
         "Fixed public pages for reviewed directory-bound college sources, including Automation. Dept3 preserves the exact literal HTTP directory identity and separate HTTPS observation; its current root-declared xwdt/gggs/tzgg.htm board is page1-only and category-1102/1093/1014 article routes are followed only when declared."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "bme", "ygy", "cst", "dept3", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", "ase", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "hss",
+        "bme",
+        "ygy",
+        "cst",
+        "dept3",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        "ase",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1752,9 +2331,35 @@ pub fn schema() -> Value {
         "Fixed public pages for reviewed directory-bound college sources, including Electronic Information Engineering. EE preserves the exact literal HTTP directory identity and separate HTTPS candidate; certificate/SAN validation blocks root/notices/list/article transport, so plaintext fallback and guessed routes remain disabled."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "hss", "bme", "ygy", "cst", "dept3", "ee", "zfai", "iiif", "mse",
-        "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld",
-        "me", "wrj", "yqgdxy", "ase", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "hss",
+        "bme",
+        "ygy",
+        "cst",
+        "dept3",
+        "ee",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "math",
+        "soft",
+        "transportation",
+        "physics",
+        "sce",
+        "sse",
+        "sem",
+        "fld",
+        "me",
+        "wrj",
+        "yqgdxy",
+        "ase",
+        Value::Null
     ]);
     output["list"]["input"]["allOf"]
         .as_array_mut()
@@ -1824,6 +2429,71 @@ mod tests {
 
     fn base_url() -> Url {
         Url::parse("https://news.buaa.edu.cn/tzgg.htm").unwrap()
+    }
+
+    fn fallback_response(body: &[u8]) -> Response {
+        Response {
+            url: base_url().to_string(),
+            status: 200,
+            headers: std::collections::BTreeMap::from([(
+                "content-type".to_string(),
+                "text/html; charset=utf-8".to_string(),
+            )]),
+            body: body.to_vec(),
+            sha256: format!("{:x}", Sha256::digest(body)),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        }
+    }
+
+    #[test]
+    fn public_fallback_admission_uses_structural_security_attributes() {
+        let ordinary = fallback_response(
+            br#"<html><body><p>Public source bytes mention password, captcha and challenge as prose.</p></body></html>"#,
+        );
+        assert!(is_safe_public_fallback(&ordinary));
+
+        let password = fallback_response(
+            br#"<form action = "/session"><input class = "field" type = " password " name = "p&#97;ssword"></form>"#,
+        );
+        assert!(!is_safe_public_fallback(&password));
+
+        let security_form = fallback_response(
+            br#"<form id="sign-in"><input type="hidden" name="__RequestVerificationToken"><input name="g-recaptcha-response"></form>"#,
+        );
+        assert!(!is_safe_public_fallback(&security_form));
+
+        let challenge = fallback_response(
+            br#"<div id="cf-chl-widget"><iframe src="/cdn-cgi/challenge-platform"></iframe></div>"#,
+        );
+        assert!(!is_safe_public_fallback(&challenge));
+
+        let active_base = fallback_response(
+            br#"<base href="https://foreign.example/"><p>Public source bytes.</p>"#,
+        );
+        assert!(!is_safe_public_fallback(&active_base));
+
+        let mut wrong_status = ordinary.clone();
+        wrong_status.status = 403;
+        assert!(!is_safe_public_fallback(&wrong_status));
+        let mut wrong_mime = ordinary.clone();
+        wrong_mime
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        assert!(!is_safe_public_fallback(&wrong_mime));
+        let mut header_case = ordinary.clone();
+        header_case.headers.remove("content-type");
+        header_case
+            .headers
+            .insert("Content-Type".into(), "text/html".into());
+        assert!(is_safe_public_fallback(&header_case));
+        let oversized = fallback_response(&vec![b'x'; MAX_HTML + 1]);
+        assert!(!is_safe_public_fallback(&oversized));
+
+        let invalid_utf8 = fallback_response(&[b'<', b'p', b'>', 0xff, b'<', b'/', b'p', b'>']);
+        assert!(!is_safe_public_fallback(&invalid_utf8));
     }
 
     #[test]

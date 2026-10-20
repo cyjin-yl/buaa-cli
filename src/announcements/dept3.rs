@@ -2,9 +2,9 @@
 use super::{
     ListQuery, ListingDocument, MAX_TEXT, article_category_from_url, bind_college_board,
     college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
-    parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval,
-    table_article_output, unavailable,
+    entry_in_scope, failed_contract, html_fallback, inert_element, invalid_article, invalid_list,
+    is_admitted_html, is_safe_public_fallback, parse_chinese_publication_date, parse_iso_date,
+    parse_notice_list, retrieval, table_article_output, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, DEPT3_NOTICES_URL, DEPT3_ROOT_URL, Error, dept3_path_allowed,
@@ -59,12 +59,26 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "dept3", attribution)
+            if !is_admitted_html(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "dept3", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) if is_safe_public_fallback(response) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "dept3",
+                    "dept3_surface_selector_contract",
+                )),
+                Err(error) => Err(error),
+            }
         })
 }
 
 pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
-    parse_notice_list(document, base)
+    let root = Url::parse(DEPT3_ROOT_URL).map_err(|_| unavailable())?;
+    let _ = base;
+    parse_notice_list(document, &root)
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -90,7 +104,21 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, DEPT3_ROOT_URL, DEPT3_NOTICES_URL, &mut attribution)?;
     let target = Url::parse(DEPT3_NOTICES_URL).map_err(|_| unavailable())?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &target)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
+                    response,
+                    "announcements_list",
+                    "dept3",
+                    "dept3_listing_selector_contract",
+                );
+                value["category"] = json!("tzgg");
+                value["page"] = json!(1);
+                return Ok(value);
+            }
+            Err(error) => return Err(error),
+        };
         let entries: Vec<_> = document.entries.iter()
             .filter(|entry| entry_in_scope(entry, &since, &until, &query.r#match)).collect();
         Ok(json!({"schema_version":1,"type":"announcements_list","result":"listing_snapshot",
@@ -124,7 +152,18 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, DEPT3_ROOT_URL, DEPT3_NOTICES_URL, &mut attribution)?;
     let source = Url::parse(DEPT3_NOTICES_URL).map_err(|_| unavailable())?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &source)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "dept3",
+                    "dept3_listing_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         if !document
             .entries
             .iter()
@@ -137,22 +176,49 @@ pub(crate) fn article_with_client(
         }
         Ok(retrieval(response))
     })?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained Dept3 listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
-            let document = college_html(response)?;
-            Ok(parse_article(&document).map(|mut output| {
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "dept3",
+                        "dept3_article_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut output = match parse_article(&document) {
+                Ok(output) => output,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "dept3",
+                    "dept3_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            Ok({
                 output["category"] = article_category_from_url(target)
                     .map(Value::String)
                     .unwrap_or(Value::Null);
                 output["retrieval"] = retrieval(response);
                 output["publisher"] = json!(PUBLISHER);
                 output["college"] = json!("dept3");
-                output["directory_attribution"] = attribution;
-                output["source_listing"] = listing;
+                output["directory_attribution"] = attribution.clone();
+                output["source_listing"] = listing.clone();
                 output
-            }))
-        })?
+            })
+        })
 }
 
 pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
@@ -168,8 +234,8 @@ pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
                 line!(),
             )
         })?;
-    let headings = Selector::parse(":scope > div.art-tit.cont-tit > h3")
-        .map_err(|_| unavailable())?;
+    let headings =
+        Selector::parse(":scope > div.art-tit.cont-tit > h3").map_err(|_| unavailable())?;
     let mut headings = main.select(&headings);
     let title = headings
         .next()
@@ -192,7 +258,7 @@ pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {
         .and_then(|node| parse_chinese_publication_date(&element_text(node)));
     let bodies = Selector::parse(
         ":scope > div.art-body-box > div.art-body.article > div#vsb_content > div.v_news_content",
-            )
+    )
     .map_err(|_| unavailable())?;
     let mut bodies = main.select(&bodies).filter(|node| !inert_element(*node));
     let body = bodies

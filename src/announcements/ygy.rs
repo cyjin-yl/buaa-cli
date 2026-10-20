@@ -8,12 +8,12 @@
 //! source-declared hints; no asset is downloaded.
 
 use super::{
-    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES,
-    MAX_HREF, MAX_PARAGRAPH, MAX_TEXT, article_category_from_url,
-    article_output, article_paragraphs, bind_college_board, college_directory_attribution,
-    college_html, declared_jsp_attachment_hints, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
-    parse_iso_date, retrieval, unavailable,
+    ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF,
+    MAX_PARAGRAPH, MAX_TEXT, article_category_from_url, article_output, article_paragraphs,
+    bind_college_board, college_directory_attribution, college_html, declared_jsp_attachment_hints,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    inert_element, invalid_article, invalid_list, is_admitted_html, is_http,
+    is_safe_public_fallback, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, Response, YGY_NOTICES_URL, YGY_ROOT_URL, ygy_path_allowed,
@@ -72,7 +72,19 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            describe_college_surface(response, "ygy", attribution)
+            if !is_admitted_html(response) {
+                return Err(unavailable());
+            }
+            match describe_college_surface(response, "ygy", attribution.clone()) {
+                Ok(value) => Ok(value),
+                Err(_) if is_safe_public_fallback(response) => Ok(html_fallback(
+                    response,
+                    "college_source_surface",
+                    "ygy",
+                    "ygy_surface_selector_contract",
+                )),
+                Err(error) => Err(error),
+            }
         })
 }
 
@@ -139,9 +151,7 @@ fn advertised_next_page_url(bytes: &[u8], base: &Url) -> Result<Url, Error> {
 }
 
 fn source_month_day(month: &str, day: &str) -> bool {
-    let valid_part = |raw: &str| {
-        raw.len() == 2 && raw.bytes().all(|byte| byte.is_ascii_digit())
-    };
+    let valid_part = |raw: &str| raw.len() == 2 && raw.bytes().all(|byte| byte.is_ascii_digit());
     if !valid_part(day) || !valid_part(month) {
         return false;
     }
@@ -163,13 +173,16 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
 
     let lists = Selector::parse("ul.list1").map_err(|_| unavailable())?;
     let mut lists = document.select(&lists).filter(|node| !inert_element(*node));
-    let primary = lists.next().filter(|_| lists.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "YGY notice listing requires one active list1 view",
-            file!(),
-            line!(),
-        )
-    })?;
+    let primary = lists
+        .next()
+        .filter(|_| lists.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "YGY notice listing requires one active list1 view",
+                file!(),
+                line!(),
+            )
+        })?;
     let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
     let anchors = Selector::parse(":scope > div.li-r > a[href]").map_err(|_| unavailable())?;
     let summaries = Selector::parse(":scope > div.li-r > p").map_err(|_| unavailable())?;
@@ -302,7 +315,21 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, YGY_ROOT_URL, YGY_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_listing(&college_html(response)?, &target)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &target)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
+                    response,
+                    "announcements_list",
+                    "ygy",
+                    "ygy_listing_selector_contract",
+                );
+                value["category"] = json!(CATEGORY);
+                value["page"] = json!(page);
+                return Ok(value);
+            }
+            Err(error) => return Err(error),
+        };
         let entries: Vec<&ListingEntry> = document
             .entries
             .iter()
@@ -357,7 +384,18 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, YGY_ROOT_URL, YGY_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let document = match college_html(response).and_then(|html| parse_listing(&html, &source)) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "ygy",
+                    "ygy_listing_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         if !document
             .entries
             .iter()
@@ -370,18 +408,45 @@ pub(crate) fn article_with_client(
         }
         Ok(retrieval(response))
     })?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained YGY listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
-            let document = college_html(response)?;
-            Ok(normalize(response, &document).map(|mut value| {
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "ygy",
+                        "ygy_article_selector_contract",
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut value = match normalize(response, &document) {
+                Ok(value) => value,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "ygy",
+                    "ygy_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            Ok({
                 value["publisher"] = json!(PUBLISHER);
                 value["college"] = json!("ygy");
-                value["directory_attribution"] = attribution;
-                value["source_listing"] = listing;
+                value["directory_attribution"] = attribution.clone();
+                value["source_listing"] = listing.clone();
                 value
-            }))
-        })?
+            })
+        })
 }
 
 fn publication_date(raw: &str) -> Option<String> {
@@ -395,13 +460,16 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let mut containers = document
         .select(&containers)
         .filter(|node| !inert_element(*node));
-    let content = containers.next().filter(|_| containers.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "YGY article requires one active content container",
-            file!(),
-            line!(),
-        )
-    })?;
+    let content = containers
+        .next()
+        .filter(|_| containers.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "YGY article requires one active content container",
+                file!(),
+                line!(),
+            )
+        })?;
     let headings = Selector::parse(":scope > h1").map_err(|_| unavailable())?;
     let mut headings = content.select(&headings);
     let title = headings
@@ -425,13 +493,16 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
     let bodies = Selector::parse(":scope > div.content-detail > div.v_news_content")
         .map_err(|_| unavailable())?;
     let mut bodies = content.select(&bodies).filter(|node| !inert_element(*node));
-    let body = bodies.next().filter(|_| bodies.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "YGY article requires one scoped content-detail/v_news_content body",
-            file!(),
-            line!(),
-        )
-    })?;
+    let body = bodies
+        .next()
+        .filter(|_| bodies.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "YGY article requires one scoped content-detail/v_news_content body",
+                file!(),
+                line!(),
+            )
+        })?;
     let paragraphs = article_paragraphs(body, false)?;
     let (attachment_hints, hints_truncated) = declared_jsp_attachment_hints(content)?;
     let attachments_found = !attachment_hints.is_empty() || hints_truncated;
@@ -509,7 +580,10 @@ mod tests {
         assert_eq!(document.entries.len(), 2);
         assert_eq!(document.entries[0].source_order, 1);
         assert_eq!(document.entries[0].date, None);
-        assert_eq!(document.entries[0].resolved_http_url.as_deref(), Some("https://ygy.buaa.edu.cn/info/1004/42.htm"));
+        assert_eq!(
+            document.entries[0].resolved_http_url.as_deref(),
+            Some("https://ygy.buaa.edu.cn/info/1004/42.htm")
+        );
         assert_eq!(document.entries[1].summary, None);
     }
 
@@ -523,10 +597,16 @@ mod tests {
         let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
         assert_eq!(output["title"], "Original heading");
         assert_eq!(output["published_at"], "2026-09-10");
-        assert_eq!(output["body_paragraphs"], json!(["First inline paragraph."]));
+        assert_eq!(
+            output["body_paragraphs"],
+            json!(["First inline paragraph."])
+        );
         assert_eq!(output["result"], "partial_text");
         assert_eq!(output["attachments"]["found"], true);
-        assert_eq!(output["attachments"]["hints"], json!([{"href":"/system/_content/download.jsp?wbfileid=42","text":"Schedule.pdf","fetched":false}]));
+        assert_eq!(
+            output["attachments"]["hints"],
+            json!([{"href":"/system/_content/download.jsp?wbfileid=42","text":"Schedule.pdf","fetched":false}])
+        );
     }
 
     #[test]
@@ -534,12 +614,9 @@ mod tests {
         let html = r#"<div class="page"><a class="Next" href="yggg/2.htm">下页</a><a class="Next" href="yggg/1.htm">尾页</a></div>
             <div class="page"><a class="Next" href="yggg/2.htm">下页</a></div>"#;
         assert_eq!(
-            advertised_next_page_url(
-                html.as_bytes(),
-                &Url::parse(YGY_NOTICES_URL).unwrap()
-            )
-            .unwrap()
-            .as_str(),
+            advertised_next_page_url(html.as_bytes(), &Url::parse(YGY_NOTICES_URL).unwrap())
+                .unwrap()
+                .as_str(),
             "https://ygy.buaa.edu.cn/tzgg/yggg/2.htm"
         );
         let conflicting = html.replacen("yggg/2.htm", "yggg/3.htm", 1);

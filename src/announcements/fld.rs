@@ -1,16 +1,15 @@
 //! Foreign-languages college notices: exact HTTP directory identity and a
 //! deliberately separate HTTPS observation of the public site.
 use super::{
-    ListingDocument, ListingEntry, ListQuery, MAX_HREF, MAX_TEXT, advertised_page_url,
-    article_category_from_url, article_paragraphs,
-    bind_college_board, college_directory_attribution, college_html, declared_jsp_attachment_hints,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, invalid_article,
-    invalid_list, parse_iso_date, retrieval, unavailable,
+    ListQuery, ListingDocument, ListingEntry, MAX_HREF, MAX_TEXT, advertised_page_url,
+    article_category_from_url, article_paragraphs, bind_college_board,
+    college_directory_attribution, college_html, declared_jsp_attachment_hints,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    invalid_article, invalid_list, is_safe_public_fallback, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, FLD_NOTICES_URL, FLD_ROOT_URL, fld_path_allowed,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use scraper::{ElementRef, Html, Node, Selector};
 use serde_json::{Value, json};
 use url::Url;
@@ -41,46 +40,12 @@ fn source_mode(mode: CacheMode) -> CacheMode {
 
 fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {
     let directory = crate::organizations::list(source_mode(mode))?;
-    let mut attribution = college_directory_attribution(
-        &directory,
-        "外国语学院",
-        LISTED_ROOT_URL,
-        LISTED_ROOT_URL,
-    )?;
+    let mut attribution =
+        college_directory_attribution(&directory, "外国语学院", LISTED_ROOT_URL, LISTED_ROOT_URL)?;
     attribution["selected_https_root"] = FLD_ROOT_URL.into();
     attribution["selection_relation"] =
         "deliberate separate HTTPS observation; the exact listed HTTP identity and original directory provenance are preserved, not upgraded or aliased".into();
-    Ok((
-        ArchiveClient::open_fld(source_mode(mode))?,
-        attribution,
-    ))
-}
-
-fn is_html_response(response: &crate::net::Response) -> bool {
-    response.status == 200
-        && !response.body.is_empty()
-        && response.headers.get("content-type").is_some_and(|value| {
-            value
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim_matches([' ', '\t'])
-                .eq_ignore_ascii_case("text/html")
-        })
-}
-
-fn fallback(response: &crate::net::Response, output_type: &str, reason: &str) -> Value {
-    json!({
-        "schema_version": 1,
-        "type": output_type,
-        "result": "fallback",
-        "college": "fld",
-        "raw_html": STANDARD.encode(&response.body),
-        "content_type": response.headers.get("content-type").cloned().unwrap_or_default(),
-        "body_byte_length": response.body.len(),
-        "fallback_reason": reason,
-        "retrieval": retrieval(response),
-    })
+    Ok((ArchiveClient::open_fld(source_mode(mode))?, attribution))
 }
 
 pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
@@ -94,27 +59,29 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         bind_college_board(&client, FLD_ROOT_URL, FLD_NOTICES_URL, &mut attribution)?;
     }
     let target = Url::parse(raw).map_err(|_| unavailable())?;
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        if !is_html_response(response) {
-            return Err(unavailable());
-        }
-        match describe_college_surface(response, "fld", attribution.clone()) {
-            Ok(mut value) => {
-                value["completeness"]["announcement_adapter_verified"] = json!(true);
-                value["completeness"]["selected_board"] = json!(FLD_NOTICES_URL);
-                Ok(value)
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let _document = college_html(response)?;
+            match describe_college_surface(response, "fld", attribution.clone()) {
+                Ok(mut value) => {
+                    value["completeness"]["announcement_adapter_verified"] = json!(true);
+                    value["completeness"]["selected_board"] = json!(FLD_NOTICES_URL);
+                    Ok(value)
+                }
+                Err(_) if is_safe_public_fallback(response) => {
+                    let mut value = html_fallback(
+                        response,
+                        "college_source_surface",
+                        "fld",
+                        "fld_surface_selector_contract",
+                    );
+                    value["directory_attribution"] = attribution.clone();
+                    Ok(value)
+                }
+                Err(error) => Err(error),
             }
-            Err(_) => {
-                let mut value = fallback(
-                    response,
-                    "college_source_surface",
-                    "fld_surface_selector_contract",
-                );
-                value["directory_attribution"] = attribution.clone();
-                Ok(value)
-            }
-        }
-    })
+        })
 }
 
 fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
@@ -124,13 +91,9 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
     }
     client.get(&latest, false, |response| {
         college_html(response)?;
-        advertised_page_url(
-            &response.body,
-            &latest,
-            page,
-            "div.fanyxh a[href]",
-            |url| plain_url(url) && url.path().starts_with("/xwzx/zxtz/"),
-        )
+        advertised_page_url(&response.body, &latest, page, "div.fanyxh a[href]", |url| {
+            plain_url(url) && url.path().starts_with("/xwzx/zxtz/")
+        })
     })
 }
 
@@ -147,11 +110,7 @@ fn row_date(row: ElementRef<'_>) -> Option<String> {
             }
         }
     }
-    if dates.len() == 1 {
-        dates.pop()
-    } else {
-        None
-    }
+    if dates.len() == 1 { dates.pop() } else { None }
 }
 
 fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
@@ -165,7 +124,9 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
         return Err(unavailable());
     }
     let views = Selector::parse("div.lixistee > ul").map_err(|_| unavailable())?;
-    let mut views = document.select(&views).filter(|node| !super::inert_element(*node));
+    let mut views = document
+        .select(&views)
+        .filter(|node| !super::inert_element(*node));
     let primary = views
         .next()
         .filter(|_| views.next().is_none())
@@ -264,12 +225,14 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     bind_college_board(&client, FLD_ROOT_URL, FLD_NOTICES_URL, &mut attribution)?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = match college_html(response).and_then(|html| parse_listing(&html, &target)) {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &target) {
             Ok(document) => document,
-            Err(_) if is_html_response(response) => {
-                let mut value = fallback(
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
                     response,
                     "announcements_list",
+                    "fld",
                     "fld_listing_selector_contract",
                 );
                 value["category"] = json!(CATEGORY);
@@ -326,7 +289,10 @@ fn script_show_pdf_path(script: &str) -> Result<Option<String>, Error> {
     let mut selected = None;
     while let Some(relative) = script[offset..].find(marker) {
         let start = offset + relative;
-        let previous = script[..start].chars().rev().find(|character| !character.is_whitespace());
+        let previous = script[..start]
+            .chars()
+            .rev()
+            .find(|character| !character.is_whitespace());
         if previous.is_some_and(|character| !matches!(character, ';' | '{' | '}')) {
             offset = start + marker.len();
             continue;
@@ -366,7 +332,10 @@ fn preview_paths(script: &str) -> Result<Vec<String>, Error> {
     let Some(start) = script.find(marker) else {
         return Ok(Vec::new());
     };
-    let Some(tail) = script[start..].split_once('=').map(|(_, value)| value.trim_start()) else {
+    let Some(tail) = script[start..]
+        .split_once('=')
+        .map(|(_, value)| value.trim_start())
+    else {
         return Ok(Vec::new());
     };
     if !tail.starts_with('[') {
@@ -387,7 +356,10 @@ fn preview_paths(script: &str) -> Result<Vec<String>, Error> {
     Ok(paths)
 }
 
-fn declared_assets(body: ElementRef<'_>, article: &Url) -> Result<(Option<Url>, Vec<String>), Error> {
+fn declared_assets(
+    body: ElementRef<'_>,
+    article: &Url,
+) -> Result<(Option<Url>, Vec<String>), Error> {
     let scripts = Selector::parse("script").map_err(|_| unavailable())?;
     let mut original_pdf = None;
     let mut previews = Vec::new();
@@ -416,7 +388,10 @@ fn declared_assets(body: ElementRef<'_>, article: &Url) -> Result<(Option<Url>, 
                     line!(),
                 ));
             }
-            if original_pdf.as_ref().is_some_and(|previous: &Url| previous != &url) {
+            if original_pdf
+                .as_ref()
+                .is_some_and(|previous: &Url| previous != &url)
+            {
                 return Err(failed_contract(
                     "Fld article declares conflicting original PDF URLs",
                     file!(),
@@ -443,23 +418,24 @@ fn publication_date(raw: &str) -> Option<String> {
             dates.push(date);
         }
     }
-    if dates.len() == 1 {
-        dates.pop()
-    } else {
-        None
-    }
+    if dates.len() == 1 { dates.pop() } else { None }
 }
 
 fn normalize_article(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
     let mains = Selector::parse("div.ljkm23").map_err(|_| unavailable())?;
-    let mut mains = document.select(&mains).filter(|node| !super::inert_element(*node));
-    let main = mains.next().filter(|_| mains.next().is_none()).ok_or_else(|| {
-        failed_contract(
-            "Fld article requires one active ljkm23 source container",
-            file!(),
-            line!(),
-        )
-    })?;
+    let mut mains = document
+        .select(&mains)
+        .filter(|node| !super::inert_element(*node));
+    let main = mains
+        .next()
+        .filter(|_| mains.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "Fld article requires one active ljkm23 source container",
+                file!(),
+                line!(),
+            )
+        })?;
     let titles = Selector::parse(":scope > div.mch3").map_err(|_| unavailable())?;
     let mut titles = main.select(&titles);
     let title = titles
@@ -485,8 +461,8 @@ fn normalize_article(response: &crate::net::Response, document: &Html) -> Result
         ));
     }
     let published_at = published_at_raw.as_deref().and_then(publication_date);
-    let body_selector =
-        Selector::parse(":scope > div#vsb_content > div.v_news_content").map_err(|_| unavailable())?;
+    let body_selector = Selector::parse(":scope > div#vsb_content > div.v_news_content")
+        .map_err(|_| unavailable())?;
     let mut bodies = main.select(&body_selector);
     let body = bodies.next().ok_or_else(|| {
         failed_contract(
@@ -515,7 +491,12 @@ fn normalize_article(response: &crate::net::Response, document: &Html) -> Result
         .select(&tables)
         .filter(|node| !super::inert_element(*node))
         .count();
-    if paragraphs.is_empty() && !has_document && !attachments_found && !has_images && table_count == 0 {
+    if paragraphs.is_empty()
+        && !has_document
+        && !attachments_found
+        && !has_images
+        && table_count == 0
+    {
         return Err(failed_contract(
             "Fld article requires text or source-declared document/attachment content",
             file!(),
@@ -528,8 +509,6 @@ fn normalize_article(response: &crate::net::Response, document: &Html) -> Result
         } else {
             "partial_text"
         }
-    } else if paragraphs.is_empty() {
-        "partial_text"
     } else if attachments_found || has_images || table_count != 0 {
         "partial_text"
     } else {
@@ -566,19 +545,21 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
     let (client, mut attribution) = bound_client(mode)?;
     bind_college_board(&client, FLD_ROOT_URL, FLD_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
-    let listing = client.get(&source, false, |response| {
-        let document = match college_html(response).and_then(|html| parse_listing(&html, &source)) {
+    let listing_result: Result<Value, Error> = client.get(&source, false, |response| {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &source) {
             Ok(document) => document,
-            Err(_) if is_html_response(response) => {
-                let mut value = fallback(
+            Err(_) if is_safe_public_fallback(response) => {
+                let mut value = html_fallback(
                     response,
                     "announcements_list",
+                    "fld",
                     "fld_listing_selector_contract",
                 );
                 value["category"] = json!(CATEGORY);
                 value["listing_label"] = json!(LISTING_LABEL);
                 value["page"] = json!(source_page);
-                return Ok(value);
+                return Ok(Ok(value));
             }
             Err(error) => return Err(error),
         };
@@ -587,37 +568,38 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
             .iter()
             .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
         {
-            return Err(Error::new(
+            return Ok(Err(Error::new(
                 "unsupported",
                 "retained latest-notice page does not declare the selected Fld article",
-            ));
+            )));
         }
-        Ok(retrieval(response))
+        Ok(Ok(retrieval(response)))
     })?;
+    let listing = listing_result?;
     if listing.get("result").and_then(Value::as_str) == Some("fallback") {
-        let source_listing = listing.clone();
-        let mut output = listing;
-        output["type"] = json!("announcements_article");
-        output["article_url"] = json!(target.as_str());
-        output["directory_attribution"] = attribution;
-        output["source_listing"] = source_listing;
-        return Ok(output);
+        return Err(Error::new(
+            "unavailable",
+            "retained Fld listing could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
     }
-    client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = college_html(response)?;
-        let mut output = match normalize_article(response, &document) {
-            Ok(value) => value,
-            Err(_) if is_html_response(response) => fallback(
-                response,
-                "announcements_article",
-                "fld_article_selector_contract",
-            ),
-            Err(error) => return Err(error),
-        };
-        output["directory_attribution"] = attribution.clone();
-        output["source_listing"] = listing.clone();
-        Ok(output)
-    })
+    client
+        .with_cache_mode(mode)
+        .get(&target, false, |response| {
+            let document = college_html(response)?;
+            let mut output = match normalize_article(response, &document) {
+                Ok(value) => value,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "fld",
+                    "fld_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            output["directory_attribution"] = attribution.clone();
+            output["source_listing"] = listing.clone();
+            Ok(output)
+        })
 }
 
 #[cfg(test)]
@@ -676,7 +658,10 @@ mod tests {
             output["embedded_document"]["original_pdf_url"],
             "https://fld.buaa.edu.cn/__local/4/58/94/original_12345678_12A59.pdf"
         );
-        assert_eq!(output["embedded_document"]["preview_paths"], json!(["/__local/0/DF/7A/preview.jpg"]));
+        assert_eq!(
+            output["embedded_document"]["preview_paths"],
+            json!(["/__local/0/DF/7A/preview.jpg"])
+        );
     }
 
     #[test]
