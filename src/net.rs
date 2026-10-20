@@ -749,7 +749,6 @@ impl ArchiveClient {
     pub(crate) fn open_iai(mode: CacheMode) -> Result<Self, Error> {
         Self::open_profile(mode, SourceProfile::Iai)
     }
-
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
         let home = governor::identity_home().map_err(|_| cache_error())?;
         let _home = governor::open_directory(&home, false, false).map_err(|_| cache_error())?;

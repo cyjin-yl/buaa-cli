@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add `scripts/cargo-locked` for a single UID-wide Cargo process lock across worktrees, including formatter/test/package commands. Derive the lock from the passwd home and reject sibling-worktree target directories; native two-worktree contention and target-rejection smoke checks passed.
+- Keep incomplete EE dispatch/profile wiring out of the governance/IAI layer; EE remains owned by its dedicated adapter layer. Fresh worktree-owned artifacts are required when native help/schema disagrees with the selected source despite a successful Cargo exit.
 
 - Add directory/root/list-bound Artificial Intelligence college announcements (`college=iai`, `category=tzgg`) from the root-declared `index/tzgg.htm` board. Preserve the directory's exact HTTP identity and deliberate HTTPS observation, source-ordered `listText` rows with `YYYY-MM-DD` dates, selected canonical `/info/1024/` articles and source-declared PDF/image viewer content as `embedded_document` without fabricated text. The board advertises no later page; unreviewed pages, articles and URLs remain unavailable.
 

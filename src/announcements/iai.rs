@@ -79,7 +79,9 @@ fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> 
         return Err(unavailable());
     }
     let views = Selector::parse("div.mainBox > div.listText > ul").map_err(|_| unavailable())?;
-    let mut views = document.select(&views).filter(|node| !super::inert_element(*node));
+    let mut views = document
+        .select(&views)
+        .filter(|node| !super::inert_element(*node));
     let view = views
         .next()
         .filter(|_| views.next().is_none())
@@ -263,9 +265,7 @@ pub(crate) fn article_with_client(
 }
 
 fn publication_date(raw: &str) -> Option<String> {
-    raw.trim()
-        .strip_prefix("发布时间:")
-        .and_then(source_date)
+    raw.trim().strip_prefix("发布时间:").and_then(source_date)
 }
 
 fn declared_embedded_document(
@@ -335,7 +335,10 @@ fn declared_embedded_document(
                 line!(),
             ));
         }
-        if original.as_deref().is_some_and(|previous| previous != url.as_str()) {
+        if original
+            .as_deref()
+            .is_some_and(|previous| previous != url.as_str())
+        {
             return Err(failed_contract(
                 "IAI article declares ambiguous embedded PDF documents",
                 file!(),
@@ -348,9 +351,11 @@ fn declared_embedded_document(
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
-    let forms = Selector::parse("div.mainBox > div.clear > div.nry2 > form")
-        .map_err(|_| unavailable())?;
-    let mut forms = document.select(&forms).filter(|node| !super::inert_element(*node));
+    let forms =
+        Selector::parse("div.mainBox > div.clear > div.nry2 > form").map_err(|_| unavailable())?;
+    let mut forms = document
+        .select(&forms)
+        .filter(|node| !super::inert_element(*node));
     let form = forms
         .next()
         .filter(|_| forms.next().is_none())
@@ -440,7 +445,8 @@ fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
         "ocr_performed":false,
         "original_document_verified":false
     });
-    output["completeness"]["body_source"] = json!("v_news_content paragraphs excluding executable/fallback markup");
+    output["completeness"]["body_source"] =
+        json!("v_news_content paragraphs excluding executable/fallback markup");
     output["completeness"]["missing_document_text"] = json!("not_reconstructed");
     Ok(output)
 }
@@ -479,7 +485,10 @@ mod tests {
         assert_eq!(listing.entries.len(), 2);
         assert_eq!(listing.entries[0].source_order, 1);
         assert_eq!(listing.entries[0].date.as_deref(), Some("2026-09-24"));
-        assert_eq!(listing.entries[0].resolved_http_url.as_deref(), Some("https://iai.buaa.edu.cn/info/1024/42.htm"));
+        assert_eq!(
+            listing.entries[0].resolved_http_url.as_deref(),
+            Some("https://iai.buaa.edu.cn/info/1024/42.htm")
+        );
     }
 
     #[test]
@@ -494,7 +503,10 @@ mod tests {
         assert_eq!(output["result"], "embedded_document");
         assert_eq!(output["published_at"], "2026-09-24");
         assert_eq!(output["body_paragraph_count"], 0);
-        assert_eq!(output["embedded_document"]["original_pdf_url"], "https://iai.buaa.edu.cn/__local/source.pdf");
+        assert_eq!(
+            output["embedded_document"]["original_pdf_url"],
+            "https://iai.buaa.edu.cn/__local/source.pdf"
+        );
     }
 
     #[test]
@@ -502,6 +514,11 @@ mod tests {
         let document = Html::parse_document(
             r#"<div class="mainBox"><div class="listText"><ul><li><i>2026-09-24</i></li></ul></div></div>"#,
         );
-        assert_eq!(parse_listing(&document, &Url::parse(IAI_NOTICES_URL).unwrap()).unwrap_err().code, "unavailable");
+        assert_eq!(
+            parse_listing(&document, &Url::parse(IAI_NOTICES_URL).unwrap())
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
     }
 }

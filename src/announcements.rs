@@ -22,7 +22,6 @@ use url::Url;
 
 pub(crate) mod aviation;
 pub(crate) mod beijing;
-pub(crate) mod ee;
 pub(crate) mod h3i;
 pub(crate) mod iai;
 pub(crate) mod ic;
@@ -745,7 +744,6 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("math") => return math::list(mode, &query),
         Some("mse") => return mse::list(mode, &query),
         Some("sepe") => return sepe::list(mode, &query),
-        Some("ee") => return ee::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -863,9 +861,6 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("sepe.buaa.edu.cn") => {
             return sepe::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
-        Some("www.ee.buaa.edu.cn") => {
-            return ee::article(mode, raw_url, query.source_page.unwrap_or(1));
-        }
         _ => {}
     }
     if query.source_page.is_some() {
@@ -923,9 +918,6 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "sepe" {
         return sepe::surface(mode, page);
-    }
-    if college == "ee" {
-        return ee::surface(mode, page);
     }
     if college == "scse" {
         return scse::surface(mode, page);
