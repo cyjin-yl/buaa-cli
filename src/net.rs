@@ -85,8 +85,7 @@ const SPOC_ROBOTS_URL: &str = "https://spoc.buaa.edu.cn/robots.txt";
 pub(crate) const SPOC_ROOT_URL: &str = "https://spoc.buaa.edu.cn/";
 pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
 pub(crate) const CLASSROOM_ORIGIN: &str = "https://classroom.msa.buaa.edu.cn";
-pub(crate) const CLASSROOM_TRANSCRIPT_PATH: &str =
-    "/courseapi/v3/web-socket/search-trans-result";
+pub(crate) const CLASSROOM_TRANSCRIPT_PATH: &str = "/courseapi/v3/web-socket/search-trans-result";
 const CLASSROOM_ROBOTS_URL: &str = "https://classroom.msa.buaa.edu.cn/robots.txt";
 
 fn classroom_transcript_url_allowed(url: &Url) -> bool {
@@ -2505,7 +2504,8 @@ mod tests {
             client.source.get(&url, true, |_| Ok(())).unwrap_err().code,
             "permission"
         );
-        let other = fixture.classroom_client(CacheMode::Offline, &server, "session=another-account");
+        let other =
+            fixture.classroom_client(CacheMode::Offline, &server, "session=another-account");
         assert_eq!(
             other.get(&url, classroom_track).unwrap_err().code,
             "offline_miss"
@@ -2660,8 +2660,11 @@ mod tests {
         let layout_server = Server::new(|socket, _| {
             reply(socket, 200, "Content-Type: application/json\r\n", CHANGED)
         });
-        let layout =
-            layout_fixture.classroom_client(CacheMode::PreferCache, &layout_server, "session=layout");
+        let layout = layout_fixture.classroom_client(
+            CacheMode::PreferCache,
+            &layout_server,
+            "session=layout",
+        );
         seed(
             &layout.source,
             CLASSROOM_ROBOTS_URL,
@@ -2683,7 +2686,6 @@ mod tests {
         assert_eq!(layout_server.count(), 1);
         assert!(!layout_fixture.governor().status().unwrap().safety_latched);
     }
-
 
     fn seed_spoc_html(client: &ArchiveClient, body: &[u8]) {
         seed(client, SPOC_ENTRY_URL, body, false);

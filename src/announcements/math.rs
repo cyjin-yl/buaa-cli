@@ -281,38 +281,36 @@ pub(crate) fn article_with_client(
             "retained Math listing could not be parsed; the admitted board snapshot was retained for offline repair",
         ));
     }
-    client
-        .with_cache_mode(mode)
-        .get(target, false, |response| {
-            let document = match college_html(response) {
-                Ok(document) => document,
-                Err(_) if is_safe_public_fallback(response) => {
-                    return Ok(html_fallback(
-                        response,
-                        "announcements_article",
-                        "math",
-                        "math_article_selector_contract",
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
-            let mut output = match parse_article(&document) {
-                Ok(output) => output,
-                Err(_) if is_safe_public_fallback(response) => html_fallback(
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
                     response,
                     "announcements_article",
                     "math",
                     "math_article_selector_contract",
-                ),
-                Err(error) => return Err(error),
-            };
-            output["retrieval"] = retrieval(response);
-            output["publisher"] = json!(PUBLISHER);
-            output["college"] = json!("math");
-            output["directory_attribution"] = attribution.clone();
-            output["source_listing"] = listing.clone();
-            Ok(output)
-        })
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut output = match parse_article(&document) {
+            Ok(output) => output,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "math",
+                "math_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        output["retrieval"] = retrieval(response);
+        output["publisher"] = json!(PUBLISHER);
+        output["college"] = json!("math");
+        output["directory_attribution"] = attribution.clone();
+        output["source_listing"] = listing.clone();
+        Ok(output)
+    })
 }
 
 fn math_publication_date(raw: &str) -> Option<String> {

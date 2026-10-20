@@ -350,39 +350,37 @@ fn article_with_client(
             "retained SEM listing could not be parsed; the admitted board snapshot was retained for offline repair",
         ));
     }
-    client
-        .with_cache_mode(mode)
-        .get(target, false, |response| {
-            let document = match college_html(response) {
-                Ok(document) => document,
-                Err(_) if is_safe_public_fallback(response) => {
-                    return Ok(html_fallback(
-                        response,
-                        "announcements_article",
-                        "sem",
-                        "sem_article_selector_contract",
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
-            let mut value = match normalize(response, &document) {
-                Ok(value) => value,
-                Err(_) if is_safe_public_fallback(response) => html_fallback(
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
                     response,
                     "announcements_article",
                     "sem",
                     "sem_article_selector_contract",
-                ),
-                Err(error) => return Err(error),
-            };
-            Ok({
-                value["publisher"] = json!(PUBLISHER);
-                value["college"] = json!("sem");
-                value["directory_attribution"] = attribution.clone();
-                value["source_listing"] = listing.clone();
-                value
-            })
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut value = match normalize(response, &document) {
+            Ok(value) => value,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "sem",
+                "sem_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        Ok({
+            value["publisher"] = json!(PUBLISHER);
+            value["college"] = json!("sem");
+            value["directory_attribution"] = attribution.clone();
+            value["source_listing"] = listing.clone();
+            value
         })
+    })
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {

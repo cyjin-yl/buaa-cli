@@ -182,43 +182,41 @@ pub(crate) fn article_with_client(
             "retained Dept3 listing could not be parsed; the admitted board snapshot was retained for offline repair",
         ));
     }
-    client
-        .with_cache_mode(mode)
-        .get(target, false, |response| {
-            let document = match college_html(response) {
-                Ok(document) => document,
-                Err(_) if is_safe_public_fallback(response) => {
-                    return Ok(html_fallback(
-                        response,
-                        "announcements_article",
-                        "dept3",
-                        "dept3_article_selector_contract",
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
-            let mut output = match parse_article(&document) {
-                Ok(output) => output,
-                Err(_) if is_safe_public_fallback(response) => html_fallback(
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
                     response,
                     "announcements_article",
                     "dept3",
                     "dept3_article_selector_contract",
-                ),
-                Err(error) => return Err(error),
-            };
-            Ok({
-                output["category"] = article_category_from_url(target)
-                    .map(Value::String)
-                    .unwrap_or(Value::Null);
-                output["retrieval"] = retrieval(response);
-                output["publisher"] = json!(PUBLISHER);
-                output["college"] = json!("dept3");
-                output["directory_attribution"] = attribution.clone();
-                output["source_listing"] = listing.clone();
-                output
-            })
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut output = match parse_article(&document) {
+            Ok(output) => output,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "dept3",
+                "dept3_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        Ok({
+            output["category"] = article_category_from_url(target)
+                .map(Value::String)
+                .unwrap_or(Value::Null);
+            output["retrieval"] = retrieval(response);
+            output["publisher"] = json!(PUBLISHER);
+            output["college"] = json!("dept3");
+            output["directory_attribution"] = attribution.clone();
+            output["source_listing"] = listing.clone();
+            output
         })
+    })
 }
 
 pub(super) fn parse_article(document: &Html) -> Result<Value, Error> {

@@ -605,6 +605,23 @@
         "https://news.buaa.edu.cn/zhxw.htm"
       ],
       "evidence": {
+        "unified_offline_2026_10_20": {
+          "scope": "Integrated descendant of 74d463227d07cc822b0d64b56b5fa99874fad583 with formatter output, SSE privacy/scope correction and canonical schema cutover; not an exact-base-head, merged-trunk or current-online claim.",
+          "quality_gate": "Locked offline build, strict all-target clippy and formatter check passed; complete suite 350 library plus 19 CLI passed, two subprocess-worker entry points ignored. One foreground global heavy-work lease, worktree-owned target, UID1000, jobs1, memory2GiB/swap-total3GiB, read-only container root and network none.",
+          "input_set_sha256_before_evidence_update": "ec87e4ffc53e8e6a83a334213021934b0ed656269ae1c4b74fed421c2274bf30",
+          "native_consumers": "Actual CLI capabilities equal the entire49-capability/74-catalog manifest. After removing62 stale schema mutations, a six-failure native schema consumer passes all15 checks, including IAI,29 listing colleges,HSS HTTPS,Transportation namespace,BME query shape and MSE table types. Separate SSE3/report5 focused cases overlap the full suite.",
+          "listing_colleges": ["scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "iai", "zfai", "iiif", "mse", "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld", "me", "wrj", "yqgdxy", "ase", "hss", "bme", "ygy", "cst", "dept3", "ee"],
+          "root_only_colleges": ["rse", "sa"],
+          "current_online_status": "No college in these arrays received a current campus observation in this gate. Existing source-specific live receipts below retain their historical scopes; a schema entry or synthetic parser is not a working remote service.",
+          "blockers": {
+            "all_current_observations": "The original production governor requires deliberate reviewed boot-history admission; no state reset, alternative identity, credential reuse or campus request was performed.",
+            "me": "Reviewed HTTPS transport remains explicitly blocked by TLS validation; no successful surface snapshot or plaintext fallback.",
+            "ee": "Reviewed HTTPS transport remains explicitly blocked by TLS validation; no successful surface snapshot or plaintext fallback.",
+            "sa": "Root-only source contract with inherited certificate-host mismatch; no notice/article route is invented.",
+            "rse": "Retained root has no usable source-declared notice board; metadata is not an announcement service."
+          },
+          "limits": "Failed receipts are retained. No production credentials/governor/cache mount, campus request/authentication/write, real Issue write, player delivery, independent exact-head approval, publication or deployment occurred."
+        },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
           "issue": null,
@@ -2440,7 +2457,8 @@
           "src/recordings.rs",
           "src/main.rs"
         ],
-        "migration": "Authoritative offline normalization implementation and synthetic consumer regressions restored from the source acceptance worktree; runtime/native verification is a parent integration gate.",
+        "migration": "Authoritative offline normalization implementation and synthetic consumer regressions restored from the source acceptance worktree; six import regressions passed in the unified350-library/19-CLI offline gate.",
+        "native_consumer": "Actual compiled CLI preserved every cue, text, translation and source order in a synthetic whole-track input, with independently serialized emitted-segment SHA256 and exact original-body SHA256. This is not current authorized-source, media-binding, rendering or player-synchronization proof.",
         "limits": "One supplied native format; no string/fractional timing, missing-track fallback, media identity inference, translation generation, subtitle delivery/player synchronization, complete history or remote authenticity claim.",
         "privacy": "No retained response, transcript text, identifiers, source hash, session or private receipt is included in this manifest."
       }
@@ -2454,7 +2472,7 @@
       "sources": [],
       "evidence": {
         "command": "buaa recordings subtitles --online|--refresh",
-        "implementation": "Fixed-origin URL admission, existing-session cookie validation, session-scoped private cache and shared-governor request processing are restored; online/native runtime verification remains pending parent gates.",
+        "implementation": "Fixed-origin URL admission, existing-session cookie validation, session-scoped private cache and shared-governor request processing are restored. All five synthetic classroom transport regressions passed in the unified350-library/19-CLI offline gate; existing-session online verification remains pending.",
         "safety": "Cookie delivery is limited to the exact transcript GET, never robots, redirects or another origin. Fresh JSON MIME/application admission precedes immutable comparison; invalid/denied/indeterminate sessions latch without replacing retained originals. No login, refresh, retry, media retrieval or catalog write exists.",
         "limits": "This is a local adapter with a sanitized current gate, not a working authenticated subtitle/media/playback service, course inventory, complete history or campus-mutation authorization.",
         "privacy": "No credentials, private response bodies, session identifiers, operational URLs beyond the reviewed route shape or protected receipts are included."

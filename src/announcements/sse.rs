@@ -305,7 +305,6 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             )
         })?;
     let paragraphs = article_paragraphs(body, false)?;
-    eprintln!("sse paragraphs={paragraphs:?}");
     let (attachment_hints, hints_truncated) = declared_jsp_attachment_hints(main)?;
     let attachments_found = !attachment_hints.is_empty() || hints_truncated;
     let images = Selector::parse("img").map_err(|_| unavailable())?;
@@ -412,7 +411,14 @@ mod tests {
             parsed["body_paragraphs"],
             json!(["First source paragraph.", "Second source paragraph."])
         );
-        assert_eq!(parsed["attachments"]["hints"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            parsed["attachments"]["hints"],
+            json!([{
+                "href": "/system/_content/download.jsp?wbfileid=fixture",
+                "text": "Source.pdf",
+                "fetched": false
+            }])
+        );
         assert_eq!(parsed["result"], "partial_text");
         assert_eq!(parsed["completeness"]["image_content_present"], true);
     }

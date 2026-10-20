@@ -73,8 +73,14 @@ fn canonical_issue_url(value: &str) -> bool {
 fn gh_create_issue(command: &OsStr, request: &ReportRequest) -> GhIssueOutcome {
     let mut invocation = Command::new(command);
     invocation.args([
-        "issue", "create", "--repo", GH_REPO, "--title", request.title.as_str(),
-        "--body-file", "-",
+        "issue",
+        "create",
+        "--repo",
+        GH_REPO,
+        "--title",
+        request.title.as_str(),
+        "--body-file",
+        "-",
     ]);
     for label in &request.labels {
         invocation.args(["--label", label.as_str()]);
@@ -309,21 +315,29 @@ mod tests {
         let missing = fixture.path("not-installed");
         let blocked = report_with_command(valid_input(), missing.as_os_str()).unwrap();
         assert_eq!(blocked["result"], "blocked");
-        assert!(blocked["next_steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step == "Install GitHub CLI: https://cli.github.com/"));
-
-        let logged_out = fixture.command(
-            "#!/bin/sh\nprintf '%s' 'synthetic-auth-secret' >&2\nexit 1\n",
+        assert!(
+            blocked["next_steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|step| step == "Install GitHub CLI: https://cli.github.com/")
         );
+
+        let logged_out =
+            fixture.command("#!/bin/sh\nprintf '%s' 'synthetic-auth-secret' >&2\nexit 1\n");
         let blocked = report_with_command(valid_input(), logged_out.as_os_str()).unwrap();
         assert_eq!(blocked["result"], "blocked");
         assert!(!blocked.to_string().contains("synthetic-auth-secret"));
-        assert!(blocked["next_steps"].as_array().unwrap().iter().any(|step| {
-            step.as_str().is_some_and(|value| value.contains("gh auth login"))
-        }));
+        assert!(
+            blocked["next_steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|step| {
+                    step.as_str()
+                        .is_some_and(|value| value.contains("gh auth login"))
+                })
+        );
     }
 
     #[test]
@@ -342,7 +356,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output["result"], "created");
-        assert_eq!(output["url"], "https://github.com/cyjin-yl/buaa-cli/issues/42");
+        assert_eq!(
+            output["url"],
+            "https://github.com/cyjin-yl/buaa-cli/issues/42"
+        );
         let args = read(&args);
         assert!(args.contains("--body-file\n-\n"));
         assert!(!args.contains("body-via-stdin"));

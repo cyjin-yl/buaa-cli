@@ -323,39 +323,37 @@ pub(crate) fn article_with_client(
             "retained Physics listing could not be parsed; the admitted board snapshot was retained for offline repair",
         ));
     }
-    client
-        .with_cache_mode(mode)
-        .get(target, false, |response| {
-            let document = match college_html(response) {
-                Ok(document) => document,
-                Err(_) if is_safe_public_fallback(response) => {
-                    return Ok(html_fallback(
-                        response,
-                        "announcements_article",
-                        "physics",
-                        "physics_article_selector_contract",
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
-            let mut output = match normalize(response, &document) {
-                Ok(output) => output,
-                Err(_) if is_safe_public_fallback(response) => html_fallback(
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
                     response,
                     "announcements_article",
                     "physics",
                     "physics_article_selector_contract",
-                ),
-                Err(error) => return Err(error),
-            };
-            Ok({
-                output["publisher"] = json!(PUBLISHER);
-                output["college"] = json!("physics");
-                output["directory_attribution"] = attribution.clone();
-                output["source_listing"] = listing.clone();
-                output
-            })
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut output = match normalize(response, &document) {
+            Ok(output) => output,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "physics",
+                "physics_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        Ok({
+            output["publisher"] = json!(PUBLISHER);
+            output["college"] = json!("physics");
+            output["directory_attribution"] = attribution.clone();
+            output["source_listing"] = listing.clone();
+            output
         })
+    })
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {

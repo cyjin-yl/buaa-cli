@@ -1,5 +1,45 @@
 ## Development status
 
+## 2026-10-20: Unified native offline gate, not online acceptance
+
+The integrated candidate descended from `74d463227d07cc822b0d64b56b5fa99874fad583`,
+including formatter output, the SSE correction and the canonical announcement
+schema cutover, passed locked offline build, strict all-target clippy and
+formatter check. The complete suite passed 350 library and 19 CLI cases;
+the two ignored library entries are subprocess worker entry points, not
+newly waived checks. Verification used one foreground shared heavy-work lease,
+the owning worktree's target, UID1000, one compiler job, a 2-GiB memory limit
+(3 GiB including swap), a read-only container root and no network.
+
+The actual compiled CLI's capabilities equal the complete 49-capability,
+74-catalog manifest. Native synthetic consumers preserve every supplied cue,
+text, translation, source order and original/derived digest; fake-gh consumers
+verify stdin-only issue bodies, an explicit GitHub repository host, spoof
+refusal and reconciliation without retry. No real Issue was created.
+
+SSE no longer prints source paragraphs to stderr. Its attachment regression
+requires the owned `Source.pdf` hint and excludes the link outside `art-main`.
+The first report fixture failures were traced to Docker's default `noexec`
+tmpfs: the default-mount probe returned EACCES, while an explicit executable
+tmpfs succeeded. No report result was weakened to accommodate that executor.
+Separate focused SSE/report runs passed 3/5 cases and overlap the full suite.
+
+Sixty-two obsolete post-construction schema mutations were removed. A native
+consumer of the old binary failed six checks; the rebuilt CLI passes all 15,
+including IAI discovery, all 29 listing colleges, HSS HTTPS-only articles,
+Transportation's reviewed namespace, BME's exact query shape and retained MSE
+table types. The validated Rust/Cargo/manifest input-set digest before this
+evidence update is `ec87e4ffc53e8e6a83a334213021934b0ed656269ae1c4b74fed421c2274bf30`.
+Original failed receipts remain retained separately.
+
+These are synthetic/offline results, not current college-source observations,
+authenticated service or player-delivery proof. Production governor history,
+credentials and private response caches were not mounted; no campus request,
+authentication or mutation occurred. Current online work still requires the
+original governor's deliberate reviewed boot-history admission. ME/EE/Sa TLS
+and Rse's missing reviewed notice-board contract remain explicit blockers.
+Exact-head independent review, publication and online acceptance remain gates.
+
 ## 2026-10-20: Public fallback and HSS retention correction
 
 The shared raw-HTML fallback boundary now admits only status-200, bounded,
@@ -12,8 +52,9 @@ embedded document, preview paths remain derived metadata, and conflicting
 original declarations fail. HSS later pages require an explicit source ordinal
 and link label rather than a filename-derived ordinal; missing/conflicting
 ordinal errors remain nested until `ArchiveClient::get` has retained the
-admitted listing response. Native build/tests, cache-only proof and online
-verification are pending; no completion or current-source claim is made.
+admitted listing response. The unified native offline gate above has passed;
+production cache-only source comparison and current online verification
+remain pending. No all-college completion or current-source claim is made.
 ## 2026-10-20: Native subtitle capability cutover
 
 The omitted native subtitle capabilities were restored from the authoritative
@@ -25,8 +66,10 @@ cue, preserves source order/text/translation and hashes the emitted segment
 value. `recordings-native-subtitles-online` is represented as
 implemented-offline for its fixed-source existing-session adapter: URL/cookie
 scope, fresh JSON/application admission, immutable raw-body provenance,
-session-scoped cache and the permanent shared governor are wired; current
-online/native runtime validation remains a parent gate.
+session-scoped cache and the permanent shared governor are wired. Six import
+and five transport regressions passed in the unified suite; the actual CLI's
+synthetic all-cue/digest consumer passed. Existing-session online validation
+and comparison to complete authorized retained originals remain parent gates.
 
 The restored regressions and schemas are synthetic/offline source consumers;
 this entry does not claim online verification, accepted authenticated target
@@ -36,7 +79,6 @@ player-facing subtitle delivery, rendered cues, synchronization and live
 subtitle updates are still unimplemented; JSON import/schema discovery does
 not satisfy those acceptance items.
 
-## Directory-bound Chemistry college news
 ## 2026-10-18: Dept3 current board contract
 
 Read-only public reconnaissance through the shared proxy found that the current HTTPS root `https://dept3.buaa.edu.cn/` declares the exact board `https://dept3.buaa.edu.cn/xwdt/gggs/tzgg.htm` (labels 公告公示/通知公告). The old `/xwzx/xygg.htm` route and category1302 contract are no longer admitted. The selected HTTPS root remains a deliberate observation of the official directory's exact literal/resolved HTTP identity `http://dept3.buaa.edu.cn/`; it is not an upgrade, alias or academic school-code assertion.
@@ -45,7 +87,7 @@ The board is one active `nymain/notice-list` view with direct `ul > li > a` rows
 
 Declared articles use one `form > div.art-main`, direct `div.art-tit.cont-tit > h3` heading, direct `span.date` Chinese publication metadata and one scoped `art-body-box/art-body/#vsb_content/v_news_content` body. Shared bounded paragraph/table extraction preserves source order; images and attachment contents remain unfetched and degraded output stays `partial_text` when applicable. History admissions, schema, help, dispatch and network path allowlists use the same exact board/article declarations. The earlier Dept3 section below records the superseded route and is retained as historical evidence only.
 
-## Directory-bound Dept3 Automation notices
+## Directory-bound Chemistry college news
 
 The Chemistry adapter binds the non-hidden official-directory member `化学学院` at the exact listed/resolved HTTP root `http://sce.buaa.edu.cn/` and deliberately observes the HTTPS root separately. The retained root declares the active `xwzx/xyxw.htm` 学院新闻 board; the adapter does not infer the adjacent notification, research or student routes. Listing rows are the source-ordered direct rows under one active `.fy-list > ul`, with direct `YYYY-MM-DD` date spans and article anchors. Later pages are selected only when the retained pager advertises the requested board path; no ordinal traversal or guessed URL is used.
 

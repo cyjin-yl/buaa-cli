@@ -578,8 +578,7 @@ enum PreviewToken<'a> {
 fn simple_preview_prefix(tokens: &[PreviewToken<'_>]) -> bool {
     matches!(
         tokens,
-        []
-            | [PreviewToken::Identifier("var")]
+        [] | [PreviewToken::Identifier("var")]
             | [PreviewToken::Identifier("let")]
             | [PreviewToken::Identifier("const")]
             | [
@@ -951,9 +950,8 @@ mod tests {
             Url::parse("https://www.hss.buaa.edu.cn/xwzx1/tzgg/1.htm").unwrap()
         );
         assert!(plain_url(&target));
-        let without_indicator = Html::parse_document(
-            r#"<div class="pages"><a href="tzgg/1.htm">下页</a></div>"#,
-        );
+        let without_indicator =
+            Html::parse_document(r#"<div class="pages"><a href="tzgg/1.htm">下页</a></div>"#);
         assert!(select_advertised_page_url(&without_indicator, &base, 2).is_err());
         let conflicting = Html::parse_document(
             r#"<div class="pages"><span>1/2</span><a href="tzgg/1.htm">下页</a><a href="tzgg/2.htm">下页</a></div>"#,
