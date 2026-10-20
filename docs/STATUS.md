@@ -1,5 +1,51 @@
 ## Development status
 
+## 2026-10-21: Source-admission repair round, offline only
+
+Sixteen independently reported source-admission, transport-safety and
+owned-scope findings were reduced to twenty-two offline regressions on the
+integrated candidate descended from `b37f3fbc80f25c7b79bcb104d7400c33ed3d65c9`.
+Every regression failed before the repair and passes after it; no assertion
+was weakened to fit the previous behaviour, and the failing baseline remains
+retained separately.
+
+The repaired contracts are narrow and source-bound. A safe admitted board or
+article whose selector no longer matches keeps its original bytes and reports
+a typed fallback, while the selection error stays nested until the response
+has been retained. An unsafe response, including authentication, password,
+CSRF, CAPTCHA and challenge markup or headers, remains an outer refusal and
+never enters the public cache or the fallback path. Challenge and captcha
+headers are observed before retained metadata is filtered, and a rejected
+classroom session stays latched even when a later encoding or MIME error
+occurs. Article bodies and embedded documents are bound to their owning
+container, so inert templates, comments, strings and unrelated sibling
+containers can neither authorize a document nor supply text. Notice rows stay
+inside their declared notice-list scope, listed links resolve against the
+admitted listing URL, ambiguous nested category tables are refused, and
+omitted table content is reported as partial text.
+
+The unified gate passed with one foreground shared heavy-work lease, the
+owning worktree's target, UID1000, one compiler job, a 2-GiB memory limit
+(3 GiB including swap), a read-only container root and no network. The
+formatter check, locked offline build and strict all-target clippy passed;
+the complete suite passed 372 library and 19 CLI cases, with the same two
+ignored subprocess worker entry points. The actual CLI manifest equals the
+complete 49-capability manifest, the synthetic all-cue subtitle import
+preserves content, order, translation and exact millisecond timing with an
+independently recomputed digest, the report consumer keeps stdin-only bodies,
+an explicit repository host, spoof refusal and an unknown outcome without
+retry, and all 15 published announcement schema cases pass. The source input
+set digest for that run was
+`413ef97880a7ab9aecd1a95828f9bfe14c393f494e5310825ae3bd8bf7f0a0d3`.
+
+These are synthetic and offline results, not current campus observations. No
+campus request, authentication, mutation, credential, production governor or
+private cache was used. ME, EE and Sa transport blockers and the missing Rse
+notice-board contract are unchanged, current online acceptance still requires
+the original governor's deliberate reviewed boot-history admission, and the
+pre-existing failing trusted check on the earlier stack head remains a
+separate open gate.
+
 ## 2026-10-20: Unified native offline gate, not online acceptance
 
 The integrated candidate descended from `74d463227d07cc822b0d64b56b5fa99874fad583`,

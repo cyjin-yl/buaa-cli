@@ -622,6 +622,46 @@
           },
           "limits": "Failed receipts are retained. No production credentials/governor/cache mount, campus request/authentication/write, real Issue write, player delivery, independent exact-head approval, publication or deployment occurred."
         },
+        "source_admission_repair_2026_10_21": {
+          "scope": "Sixteen independently reported source-admission, transport-safety and owned-scope findings were reduced to twenty-two offline regressions on the integrated candidate descendant of b37f3fbc80f25c7b79bcb104d7400c33ed3d65c9. Every regression failed before the repair and passes after it; no assertion was weakened to fit the previous behaviour.",
+          "red_baseline": {
+            "regressions": 22,
+            "passed": 0,
+            "failed": 22,
+            "exit": 101,
+            "source_digest": "625daca4b02010a416a112205a62652a7b7b610950bee2d3b3058c118533d8bd",
+            "source_stable_during_run": true,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-regression-baseline-20261021/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "green_gate": {
+            "source_digest": "413ef97880a7ab9aecd1a95828f9bfe14c393f494e5310825ae3bd8bf7f0a0d3",
+            "source_stable_during_run": true,
+            "formatter_check": "passed",
+            "locked_offline_build": "passed",
+            "strict_all_target_clippy": "passed",
+            "library_cases": 372,
+            "cli_cases": 19,
+            "ignored_library_entries": 2,
+            "ignored_entries_are": "subprocess worker entry points",
+            "native_consumers": "The actual CLI manifest equals the complete 49-capability manifest, the synthetic all-cue subtitle import preserves content, order, translation and exact millisecond timing with an independently recomputed digest, and the report consumer keeps stdin-only bodies, an explicit repository host, spoof refusal and an unknown outcome without retry. No real Issue was created.",
+            "announcement_schema_consumer": "All 15 published schema cases pass, including IAI discovery, all 29 listing colleges, HSS HTTPS-only articles, the Transportation namespace, the BME query shape and retained MSE table types.",
+            "receipt": "target/isolated-20261020-gddn4kgk/review-final-20261021-resume3/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "repaired_contracts": [
+            "A safe admitted board or article whose selector no longer matches retains its original bytes and reports a typed fallback; the selection error stays nested until the response is retained.",
+            "An unsafe response, including authentication, password, CSRF, CAPTCHA and challenge markup or headers, remains an outer refusal and never enters the public cache or the fallback path.",
+            "Challenge and captcha headers are observed before retained metadata is filtered, so a challenged response cannot be reclassified as a public fallback.",
+            "A rejected classroom session stays latched even when a later encoding or MIME error occurs.",
+            "Article bodies and embedded documents are bound to their owning container; inert templates, comments, strings and unrelated sibling containers cannot authorize a document or supply text.",
+            "Notice rows stay inside their declared notice-list scope, listed links resolve against the admitted listing URL, ambiguous nested category tables are refused, and omitted table content is reported as partial text."
+          ],
+          "retained_failures": "The pre-repair baseline, the two intermediate syntax and lint failures and the original failing trusted check remain retained separately; they are not restated as passing evidence.",
+          "limits": "These are synthetic and offline results, not current campus observations. No campus request, authentication, mutation, credential, production governor or private cache was used, and no media player, live feed or authenticated service is proven. ME, EE and Sa transport blockers and the missing Rse notice-board contract are unchanged, and current online acceptance still requires the original governor's deliberate reviewed boot-history admission."
+        },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
           "issue": null,
