@@ -23,6 +23,10 @@ Run the specific command being changed, then focused offline tests. Inspect a fr
 
 All Cargo/Rust commands MUST acquire one process-shared lock across every worktree and Agent before starting. Run `sh scripts/cargo-locked <cargo arguments>` from the target worktree (or use an equivalent lock holder covering the complete command). The launcher derives the lock from the effective UID's passwd home, not a worktree or `HOME` override; in the native seat it is `/home/ezra/.buaa-cli-cargo.lock`. No concurrent `cargo build`, `test`, `clippy`, `fmt`, `package`, or `publish` processes are allowed; serialize them even when worktrees differ. Each worktree MUST keep its own `CARGO_TARGET_DIR`; never share or copy a target directory between worktrees. The launcher defaults to that worktree's `target/` and rejects targets outside it. Native Cargo runs use the project UID-1000 seat. A lock wait is expected coordination, not a reason to bypass the lock.
 
+### Shared heavy-work admission on restored seats
+
+Across all host and CT102 Agents, builds, tests, development instances and debuggers share **one foreground heavy-work slot**. Run them through `/home/ezra/.omp/agent/bin/agent-heavy COMMAND [ARG ...]`; for Cargo, run `agent-heavy sh scripts/cargo-locked <cargo arguments>` from the target worktree. The Cargo lock alone does not replace this cross-project gate. Exit 75 means busy: mark the heavy task blocked and continue code/review work, never bypass the gate, unlink its lock, daemonize a child or release it while an instance still runs. Keep compiler jobs at one and preserve owner memory ceilings. Only the integration owner schedules build/test commands; code, read-only research, review and webpage inspection may proceed in parallel. Do not launch retired containers or duplicate Agent roots to obtain another slot.
+
 ## External contribution lifecycle
 
 1. Bind a bounded issue to its acceptance item and claim it only with actual permission.
