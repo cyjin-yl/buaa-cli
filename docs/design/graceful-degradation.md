@@ -31,16 +31,18 @@ Purpose: let Agents and users create GitHub Issues automatically when they encou
 
 Behavior:
 
-1. Check `gh auth status -h github.com`.
-2. If authenticated, spawn `gh issue create --repo cyjin-yl/buaa-cli --title ... --body ... --label ...`.
-3. Return the created Issue URL.
-4. If `gh` is missing or not authenticated, return a `blocked` result with exact installation/login steps; never fabricate an Issue URL.
+1. Validate the complete request as a typed object before any `gh` call. The object has required string fields `title` and `body`, plus an optional `labels` array containing only strings; unknown or malformed fields are rejected and never discarded.
+2. Check `gh auth status -h github.com`. If `gh` is missing, return `blocked` with the installation and login steps. If it is present but logged out, return `blocked` with `gh auth login` and retry steps. Authentication stderr is not returned because it may contain secrets.
+3. If authenticated, spawn `gh issue create --repo cyjin-yl/buaa-cli --title ... --body-file - --label ...` and write the body through stdin, never as a command-line argument.
+4. Return `created` only when the writer emits the canonical `https://github.com/cyjin-yl/buaa-cli/issues/<positive-id>` URL. A successful or uncertain writer without that URL returns `unknown_outcome` with `reconciliation: required` and `automatic_retry: false`; it is not treated as a retryable authentication failure and no automatic retry is performed.
 
 Required input fields:
 
 - `title` (string): concise problem summary.
 - `body` (string): reproduction command, observed output, environment facts, affected acceptance IDs.
 - `labels` (array of strings, optional): e.g., `["fallback", "agent-report"]`.
+
+Runtime verification of the synthetic report regressions is pending; no real Issue creation or authentication is implied by this contract.
 
 ## Agent integration
 
@@ -49,6 +51,7 @@ When an Agent observes a `fallback_reason` in command output, it SHOULD:
 1. Preserve the raw response bytes locally (they are already in the payload).
 2. Invoke `buaa-cli report` with the reproduction command and `fallback_reason`.
 3. Continue with the raw bytes for any downstream task instead of retrying the network request immediately.
+4. After a sanitized Issue readback, the reporting Agent SHOULD launch a bounded repair subagent using authorized `gh` and the approved `gh stack` workflow, returning the exact branch/PR/head and verification evidence. The Agent MUST NOT self-approve or auto-merge.
 
 ## Scope
 
