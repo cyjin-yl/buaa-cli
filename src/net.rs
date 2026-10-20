@@ -151,6 +151,9 @@ const SOFT_ROBOTS_URL: &str = "https://soft.buaa.edu.cn/robots.txt";
 pub(crate) const TRANSPORTATION_ROOT_URL: &str = "https://transportation.buaa.edu.cn/";
 pub(crate) const TRANSPORTATION_NOTICES_URL: &str = "https://transportation.buaa.edu.cn/xwdt/gggs.htm";
 const TRANSPORTATION_ROBOTS_URL: &str = "https://transportation.buaa.edu.cn/robots.txt";
+pub(crate) const IAI_ROOT_URL: &str = "https://iai.buaa.edu.cn/";
+pub(crate) const IAI_NOTICES_URL: &str = "https://iai.buaa.edu.cn/index/tzgg.htm";
+const IAI_ROBOTS_URL: &str = "https://iai.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -180,6 +183,18 @@ pub(crate) fn transportation_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") { return true; }
     path.strip_prefix("/xwdt/gggs/").or_else(|| path.strip_prefix("/info/1058/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn iai_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/index.htm" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1024/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -384,6 +399,7 @@ enum SourceProfile {
     Math,
     Soft,
     Transportation,
+    Iai,
 }
 
 impl SourceProfile {
@@ -407,6 +423,7 @@ impl SourceProfile {
             Self::Math => MATH_ROBOTS_URL,
             Self::Soft => SOFT_ROBOTS_URL,
             Self::Transportation => TRANSPORTATION_ROBOTS_URL,
+            Self::Iai => IAI_ROBOTS_URL,
         }
     }
 
@@ -430,6 +447,7 @@ impl SourceProfile {
             Self::Math => ".buaa-cli-math-cache",
             Self::Soft => ".buaa-cli-soft-cache",
             Self::Transportation => ".buaa-cli-transportation-cache",
+            Self::Iai => ".buaa-cli-iai-cache",
         }
     }
 
@@ -526,6 +544,11 @@ impl SourceProfile {
             }
             Self::Transportation => {
                 url.host_str() == Some("transportation.buaa.edu.cn") && url.query().is_none() && transportation_path_allowed(url.path())
+            }
+            Self::Iai => {
+                url.host_str() == Some("iai.buaa.edu.cn")
+                    && url.query().is_none()
+                    && iai_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -756,6 +779,9 @@ impl ArchiveClient {
         Self::open_profile(mode, SourceProfile::Transportation)
     }
 
+    pub(crate) fn open_iai(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Iai)
+    }
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
         let home = governor::identity_home().map_err(|_| cache_error())?;
         let _home = governor::open_directory(&home, false, false).map_err(|_| cache_error())?;

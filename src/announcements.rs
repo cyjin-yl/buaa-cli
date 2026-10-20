@@ -23,6 +23,7 @@ use url::Url;
 pub(crate) mod aviation;
 pub(crate) mod beijing;
 pub(crate) mod h3i;
+pub(crate) mod iai;
 pub(crate) mod ic;
 pub(crate) mod iiif;
 pub(crate) mod math;
@@ -146,7 +147,7 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai, Iiif, Mse, Sepe, Soft and Transportation source binding",
+        "announcements article input is malformed; expected a reviewed source-declared HTTPS article URL and a source-supported source_page",
     )
 }
 
@@ -739,6 +740,7 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("beijing") => return beijing::list(mode, &query),
         Some("shenyuan") => return shenyuan::list(mode, &query),
         Some("h3i") => return h3i::list(mode, &query),
+        Some("iai") => return iai::list(mode, &query),
         Some("zfai") => return zfai::list(mode, &query),
         Some("iiif") => return iiif::list(mode, &query),
         Some("math") => return math::list(mode, &query),
@@ -845,6 +847,9 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("h3i.buaa.edu.cn") => {
             return h3i::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("iai.buaa.edu.cn") => {
+            return iai::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         Some("zfai.buaa.edu.cn") => {
             return zfai::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
@@ -902,6 +907,9 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     }
     if college == "h3i" {
         return h3i::surface(mode, page);
+    }
+    if college == "iai" {
+        return iai::surface(mode, page);
     }
     if college == "zfai" {
         return zfai::surface(mode, page);
@@ -1007,6 +1015,7 @@ fn describe_college_surface(
             | "beijing"
             | "shenyuan"
             | "h3i"
+            | "iai"
             | "zfai"
             | "iiif"
             | "mse"
@@ -1305,28 +1314,28 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe|soft [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse, sepe and soft bind the retained authoritative directory; selected boards must be declared by their retained root or section. Mse, Rse and Sepe preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Soft observes the root-declared xwdt/gggs.htm section and its selected tzgg notice board. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
+            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|iai|zfai|iiif|mse|sepe|math|soft|transportation [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]. Fixed reviewed pages only; exact retained-directory identity and root/section-declared board binding. Literal HTTP directory references remain distinct from selected HTTPS observations. Rse is root metadata only; no Rse listing/article route is inferred. Returned same-host path hints are bounded, may be truncated and are never automatically followed. No arbitrary URL or complete college crawl."},
             "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg); college=mse selects Materials-college public notices (gggs); college=sepe selects Energy-college public notices (gggs); college=soft selects Software-college notices (tzgg). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe/Soft boards bind the directory and retained root/section. Mse and Sepe keep their exact HTTP member and explicit separate HTTPS observation. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date. Mse, Sepe and Soft reuse one scoped nymain/notice-list view, direct a/h3 headings, a/p excerpts bounded by the existing 8-KiB paragraph limit, and direct a/span YYYY.MM.DD dates. Absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i accepts page1 only; retained Sepe page1 declares no later ordinal, so page2 is unavailable, not inferred. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college, select the university news center (default category tzgg). Selected college categories: scse/beijing/mse/sepe/transportation gggs; ic/shenyuan/iiif/iai/soft tzgg; aviation tzgg or gkgs; h3i cpgg; zfai xxgg1; math xygg. Preserve exact directory attribution, source row order and source-owned headings/dates; summaries are separate excerpts, never original article text. since/until are inclusive ISO dates and match is a title substring. Page defaults to 1; later pages require explicit source-advertised ordinals. No automatic crawl, guessed URLs or all-college coverage claim.",
                 "additionalProperties": false,
                 "properties": {
-            "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse","sepe","math","soft",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","iai","zfai","iiif","mse","sepe","math","soft","transportation",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "until": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "match": {"type": ["string","null"]}
                 },
-                "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse","sepe"]}}},
+                "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse","sepe","transportation"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
-                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif","soft"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
+                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"if":{"properties":{"college":{"type":"null"}}},"then":{"properties":{"category":{"enum":news_categories}}}}}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif","iai","soft"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
                     {"if":{"required":["college"],"properties":{"college":{"const":"math"}}},"then":{"properties":{"category":{"enum":["xygg",null]},"page":{"enum":[1,null]}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["h3i","iai"]}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
@@ -1336,11 +1345,11 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, Mse board-declared notice in category 1061/1058, Sepe board-declared notice in category 1078/1093/1080, or Soft board-declared notice in category 1095. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe/Soft articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i accepts source_page1 only; retained Sepe and Soft page1 declare no later ordinal. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse, Sepe and Soft publication require one direct art-tit/p/span.date 日期：YYYY年MM月DD日. Mse includes supported flat-table text separately. Sepe and Soft retain scoped source paragraphs and report nonparagraph table text, images or unfetched sibling-file contents as partial_text; pure-image/table-only/empty bodies remain unavailable under shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with a reviewed HTTPS news-center or college article URL. College article reads must bind the exact retained directory/root/selected-listing declaration before a target request; source_page defaults to 1 and selects only an explicitly advertised ordinal. H3i, IAI and Math accept source_page 1 only. Source-owned titles/publication metadata remain distinct from listing excerpts and body dates. Nonparagraph images, tables, viewer declarations and attachment hints retain explicit completeness limits; no implicit asset download, OCR or guessed article route. SCSE and other sources without source-page support reject a non-null source_page. No credentials, custom port, fragment or arbitrary query.",
                 "additionalProperties":false,"required":["url"],
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095)/[0-9]{1,10}[.]htm$"}}}},
-                    {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://h3i[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|iai[.]buaa[.]edu[.]cn/info/1024|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/1058)/[0-9]{1,10}[.]htm$"}}}},
+                    {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://(h3i|iai|math)[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
