@@ -1577,13 +1577,26 @@ impl ArchiveClient {
             .get("retry-after")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        // Cloudflare documents this header specifically as a challenge signal;
-        // HTML/content-type or body keywords are not reliable challenge detectors.
+        // Observe challenge facts before filtering retained metadata. Header
+        // values remain private; only the safety decision survives filtering.
         let challenge = raw
             .headers()
-            .get_all("cf-mitigated")
             .iter()
-            .any(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"));
+            .any(|(name, value)| challenge_header(name.as_str(), value.as_bytes()));
+        let session_metadata_rejected = session.cookie.is_some()
+            && self.profile == SourceProfile::Classroom
+            && classroom_transcript_url_allowed(url)
+            && status == 200
+            && raw.headers().get("content-type").is_none_or(|value| {
+                value.to_str().ok().is_none_or(|value| {
+                    !value
+                        .split(';')
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                        .eq_ignore_ascii_case("application/json")
+                })
+            });
         let mut attributed_archive_status = false;
         let body_budget =
             if self.profile == SourceProfile::Classroom && classroom_transcript_url_allowed(url) {
@@ -1736,9 +1749,10 @@ impl ArchiveClient {
             .as_ref()
             .is_err_and(|error| error.code == "network_error");
         let session_rejected = session.cookie.is_some()
-            && result
-                .as_ref()
-                .is_err_and(|error| matches!(error.code, "auth_latched" | "redirect_refused"));
+            && (session_metadata_rejected
+                || result
+                    .as_ref()
+                    .is_err_and(|error| matches!(error.code, "auth_latched" | "redirect_refused")));
         // A validated Memento error status belongs to the archived resource, not
         // the current source. The independent challenge/body facts still apply.
         // Dropping an unread response cancels it before releasing shared ownership.
@@ -2073,6 +2087,20 @@ pub(crate) fn acquire_kind(
     // Exactly one attempt after at most one gap sleep. A competing owner is never
     // treated as a request gap, retried, or bypassed.
     governor.try_acquire(kind).map_err(|_| governor_error())
+}
+
+pub(crate) fn challenge_header(name: &str, value: &[u8]) -> bool {
+    let value = value.trim_ascii();
+    if name.eq_ignore_ascii_case("cf-mitigated") {
+        value.eq_ignore_ascii_case(b"challenge")
+    } else {
+        (name.eq_ignore_ascii_case("x-captcha")
+            || name.eq_ignore_ascii_case("x-challenge")
+            || name
+                .get(..7)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("cf-chl-")))
+            && !value.is_empty()
+    }
 }
 
 fn collect_headers(raw: &reqwest::header::HeaderMap) -> Result<BTreeMap<String, String>, Error> {
@@ -2418,6 +2446,261 @@ mod tests {
         seed(client, ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
     }
 
+    fn seed_college_html(client: &ArchiveClient, url: &str, body: &[u8]) {
+        seed(client, url, body, false);
+        let mut entry = client.load(&Url::parse(url).unwrap()).unwrap().unwrap();
+        entry
+            .response
+            .headers
+            .insert("content-type".into(), "text/html; charset=utf-8".into());
+        client.save(&entry).unwrap();
+    }
+
+    #[test]
+    fn review_regression_math_discovery_retains_only_safe_source_bytes() {
+        for unsafe_body in [false, true] {
+            let body: &[u8] = if unsafe_body {
+                br#"<form><input type="password"><input name="csrf_token" value="synthetic"></form>"#
+            } else {
+                b"<p>Public listing layout changed.</p>"
+            };
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /index/xygg.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body);
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Math;
+            seed(
+                &client,
+                MATH_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            seed_college_html(
+                &client,
+                MATH_ROOT_URL,
+                "<a href=\"/index/xygg.htm\">学院公告</a>".as_bytes(),
+            );
+            let target = Url::parse("https://math.buaa.edu.cn/info/1294/42.htm").unwrap();
+            crate::announcements::math::article_with_client(
+                client,
+                CacheMode::PreferCache,
+                &target,
+                serde_json::json!({}),
+            )
+            .unwrap_err();
+            let mut offline = fixture.client(CacheMode::Offline, &server);
+            offline.profile = SourceProfile::Math;
+            let source = Url::parse(MATH_NOTICES_URL).unwrap();
+            if unsafe_body {
+                assert!(
+                    offline.load(&source).unwrap().is_none(),
+                    "authentication form entered the public cache"
+                );
+                assert_eq!(
+                    offline.snapshot(&source, false).unwrap_err().code,
+                    "offline_miss"
+                );
+            } else {
+                let cached = offline.snapshot(&source, false).unwrap();
+                assert_eq!(cached.body, body);
+                assert_eq!(cached.sha256, hash(body));
+                assert_eq!(cached.cache_status, CacheStatus::Hit);
+                assert_eq!(
+                    crate::announcements::math::article_with_client(
+                        offline,
+                        CacheMode::Offline,
+                        &target,
+                        serde_json::json!({}),
+                    )
+                    .unwrap_err()
+                    .code,
+                    "unavailable"
+                );
+            }
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    fn assert_missing_ordinal_retains_admitted_source(
+        profile: SourceProfile,
+        root: &str,
+        board: &str,
+        target: &str,
+    ) {
+        const BODY: &[u8] = b"<p>Public board without the requested page ordinal.</p>";
+        let fixture = Fixture::new();
+        let expected_path = Url::parse(board).unwrap().path().to_owned();
+        let server = Server::new(move |socket, request| {
+            assert!(request.starts_with(&format!("GET {expected_path} ")));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let client_for = |mode| {
+            let mut client = fixture.client(mode, &server);
+            client.profile = profile;
+            client
+        };
+        let client = client_for(CacheMode::PreferCache);
+        seed(
+            &client,
+            profile.robots_url(),
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(
+            &client,
+            root,
+            format!("<a href=\"{board}\">Source notice board</a>").as_bytes(),
+        );
+        let target = Url::parse(target).unwrap();
+        let consume = |client, mode| match profile {
+            SourceProfile::Yqgdxy => crate::announcements::yqgdxy::article_with_client(
+                client,
+                mode,
+                &target,
+                2,
+                serde_json::json!({}),
+            ),
+            SourceProfile::Ase => crate::announcements::ase::article_with_client(
+                client,
+                mode,
+                &target,
+                2,
+                serde_json::json!({}),
+            ),
+            SourceProfile::Wrj => crate::announcements::wrj::article_with_client(
+                client,
+                mode,
+                &target,
+                2,
+                serde_json::json!({}),
+            ),
+            SourceProfile::Sse => crate::announcements::sse::article_with_client(
+                client,
+                mode,
+                &target,
+                2,
+                serde_json::json!({}),
+            ),
+            _ => unreachable!(),
+        };
+        let error = consume(client, CacheMode::PreferCache).unwrap_err();
+        let offline = client_for(CacheMode::Offline);
+        let cached = offline
+            .snapshot(&Url::parse(board).unwrap(), false)
+            .unwrap();
+        assert_eq!(cached.body, BODY);
+        assert_eq!(cached.sha256, hash(BODY));
+        assert_eq!(cached.cache_status, CacheStatus::Hit);
+        assert_eq!(
+            consume(offline, CacheMode::Offline).unwrap_err().code,
+            error.code
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn review_regression_yqgdxy_missing_ordinal_retains_source() {
+        assert_missing_ordinal_retains_admitted_source(
+            SourceProfile::Yqgdxy,
+            YQGDXY_ROOT_URL,
+            YQGDXY_NOTICES_URL,
+            "https://yqgdxy.buaa.edu.cn/info/1053/42.htm",
+        );
+    }
+
+    #[test]
+    fn review_regression_ase_missing_ordinal_retains_source() {
+        assert_missing_ordinal_retains_admitted_source(
+            SourceProfile::Ase,
+            ASE_ROOT_URL,
+            ASE_NOTICES_URL,
+            "https://ase.buaa.edu.cn/info/1052/42.htm",
+        );
+    }
+
+    #[test]
+    fn review_regression_wrj_missing_ordinal_retains_source() {
+        assert_missing_ordinal_retains_admitted_source(
+            SourceProfile::Wrj,
+            WRJ_ROOT_URL,
+            WRJ_NOTICES_URL,
+            "https://wrj.buaa.edu.cn/info/1008/42.htm",
+        );
+    }
+
+    #[test]
+    fn review_regression_sse_missing_ordinal_retains_source() {
+        assert_missing_ordinal_retains_admitted_source(
+            SourceProfile::Sse,
+            SSE_ROOT_URL,
+            SSE_NOTICES_URL,
+            "https://sse.buaa.edu.cn/info/1078/42.htm",
+        );
+    }
+
+    #[test]
+    fn review_regression_yqgdxy_article_drift_returns_and_retains_original() {
+        const BODY: &[u8] =
+            b"<p>Original article layout changed without authentication signals.</p>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /info/1053/42.htm "));
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html; charset=utf-8\r\n",
+                BODY,
+            );
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Yqgdxy;
+        seed(
+            &client,
+            YQGDXY_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(
+            &client,
+            YQGDXY_ROOT_URL,
+            "<a href=\"tzgg.htm\">通知公告</a>".as_bytes(),
+        );
+        seed_college_html(&client, YQGDXY_NOTICES_URL, br#"<title>Fixture</title><div class="nymain"><div class="ny-right"><div class="text-list"><ul><li><a href="/info/1053/42.htm">Fixture article</a><span>2026-10-21</span></li></ul></div></div></div>"#);
+        let target = Url::parse("https://yqgdxy.buaa.edu.cn/info/1053/42.htm").unwrap();
+        let output = crate::announcements::yqgdxy::article_with_client(
+            client,
+            CacheMode::PreferCache,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(output["result"], "fallback");
+        assert_eq!(output["raw_html"], STANDARD.encode(BODY));
+        assert_eq!(output["raw_html_sha256"], hash(BODY));
+        assert_eq!(output["body_byte_length"], BODY.len());
+        let mut offline = fixture.client(CacheMode::Offline, &server);
+        offline.profile = SourceProfile::Yqgdxy;
+        let retained = offline.snapshot(&target, false).unwrap();
+        assert_eq!(retained.body, BODY);
+        assert_eq!(retained.sha256, hash(BODY));
+        let mut cached = crate::announcements::yqgdxy::article_with_client(
+            offline,
+            CacheMode::Offline,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let mut expected = output;
+        cached["retrieval"]["cache_status"] = serde_json::json!("hit");
+        expected["retrieval"]["cache_status"] = serde_json::json!("hit");
+        assert_eq!(cached, expected);
+        assert_eq!(server.count(), 1);
+    }
+
     const CLASSROOM_TEST_URL: &str = "https://classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42";
     const CLASSROOM_TEST_BODY: &[u8] = br#"{"code":0,"msg":"","total":1,"list":[{"sub_id":"42","resource_guid":"","all_content":[{"BeginSec":0,"EndSec":3,"Text":"First <not markup>","TransText":""},{"BeginSec":2,"EndSec":4,"Text":"Second","TransText":"translated"}],"trans_content":"not a timing source"}]}"#;
 
@@ -2584,6 +2867,90 @@ mod tests {
             "safety_latched"
         );
         assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn review_regression_non_json_session_rejection_survives_encoding_refusal() {
+        const COMPRESSED: &[u8] = &[
+            31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 179, 201, 40, 201, 205, 177, 43, 174, 204, 43, 201,
+            72, 45, 201, 76, 86, 40, 78, 45, 46, 206, 204, 207, 83, 40, 74, 205, 74, 77, 46, 201,
+            204, 207, 179, 209, 7, 171, 0, 0, 159, 64, 111, 177, 40, 0, 0, 0,
+        ];
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\nContent-Encoding: gzip\r\n",
+                COMPRESSED,
+            );
+        });
+        let client = fixture.classroom_client(
+            CacheMode::PreferCache,
+            &server,
+            "session=synthetic-encoding-rejection",
+        );
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        let error = client.get(&url, classroom_track).unwrap_err();
+        assert!(
+            fixture.governor().status().unwrap().safety_latched,
+            "session rejection was lost behind {}",
+            error.code
+        );
+        assert_eq!(error.code, "auth_latched");
+        assert!(client.source.load(&url).unwrap().is_none());
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "safety_latched"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn review_regression_challenge_header_cannot_be_filtered_into_public_fallback() {
+        for header in [
+            "X-Challenge: required\r\n",
+            "X-Captcha: required\r\n",
+            "CF-Chl-Token: required\r\n",
+            "CF-Mitigated: challenge\r\n",
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(
+                    socket,
+                    200,
+                    &format!("Content-Type: text/html\r\n{header}"),
+                    b"<p>Opaque verification response</p>",
+                );
+            });
+            let client = fixture.client(CacheMode::PreferCache, &server);
+            seed_robots(&client);
+            let url = Url::parse("https://web.archive.org/cdx/search/cdx?output=json").unwrap();
+            let error = client
+                .get(&url, false, |response| {
+                    if crate::announcements::is_safe_public_fallback(response) {
+                        Ok(crate::announcements::html_fallback(
+                            response,
+                            "announcements_list",
+                            "sse",
+                            "synthetic_selector_drift",
+                        ))
+                    } else {
+                        Err(Error::new("unavailable", "Unsafe public response."))
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(error.code, "safety_latched");
+            assert!(client.load(&url).unwrap().is_none());
+            assert!(fixture.governor().status().unwrap().safety_latched);
+            assert_eq!(server.count(), 1);
+        }
     }
 
     #[test]

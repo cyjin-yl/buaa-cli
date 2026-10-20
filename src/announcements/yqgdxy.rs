@@ -6,10 +6,10 @@
 //! resolves later pages from the board's own pagination links.
 use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
-    advertised_page_url, article_body, article_output, bind_college_board,
-    college_directory_attribution, college_html, describe_college_surface, element_text,
-    entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list, is_http,
-    parse_iso_date, retrieval, unavailable,
+    advertised_page_url_document, article_body, bind_college_board, college_directory_attribution,
+    college_html, describe_college_surface, element_text, entry_in_scope, failed_contract,
+    html_fallback, inert_element, invalid_article, invalid_list, is_http,
+    is_safe_public_fallback_document, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, YQGDXY_NOTICES_URL, YQGDXY_ROOT_URL, yqgdxy_path_allowed,
@@ -170,16 +170,21 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
     if page == 1 {
         return Ok(latest);
     }
-    client.get(&latest, false, |response| {
-        college_html(response)?;
-        advertised_page_url(
-            &response.body,
+    let result: Result<Url, Error> = client.get(&latest, false, |response| {
+        let document = college_html(response)?;
+        let selected = advertised_page_url_document(
+            &document,
             &latest,
             page,
             "div.nymain > div.ny-right > div.text-list > div.pagination span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/tzgg/"),
-        )
-    })
+        );
+        if selected.is_err() && !is_safe_public_fallback_document(response, &document) {
+            return Err(unavailable());
+        }
+        Ok(selected)
+    })?;
+    result
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -213,7 +218,22 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            let document = parse_listing(&college_html(response)?, &target)?;
+            let html = college_html(response)?;
+            let document = match parse_listing(&html, &target) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback_document(response, &html) => {
+                    let mut value = html_fallback(
+                        response,
+                        "announcements_list",
+                        "yqgdxy",
+                        "yqgdxy_listing_selector_contract",
+                    );
+                    value["category"] = json!("tzgg");
+                    value["page"] = json!(page);
+                    return Ok(value);
+                }
+                Err(error) => return Err(error),
+            };
             let entries: Vec<_> = document
                 .entries
                 .iter()
@@ -275,35 +295,80 @@ pub(crate) fn article_with_client(
         &mut attribution,
     )?;
     let source = listing_url(&client, source_page)?;
-    let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+    let listing_result: Result<Value, Error> = client.get(&source, false, |response| {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &source) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback_document(response, &html) => {
+                return Ok(Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "yqgdxy",
+                    "yqgdxy_listing_selector_contract",
+                )));
+            }
+            Err(error) => return Err(error),
+        };
         if !document
             .entries
             .iter()
             .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
         {
-            return Err(Error::new(
+            return Ok(Err(Error::new(
                 "unsupported",
                 "retained notice page does not declare the selected Yqgdxy article",
-            ));
+            )));
         }
-        Ok(retrieval(response))
+        Ok(Ok(retrieval(response)))
     })?;
+    let listing = listing_result?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained Yqgdxy notice page could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
     client.with_cache_mode(mode).get(target, false, |response| {
-        let document = parse_article(&college_html(response)?)?;
-        let mut output = article_output(response, document);
+        let html = college_html(response)?;
+        let mut output = match normalize(response, &html) {
+            Ok(value) => value,
+            Err(_) if is_safe_public_fallback_document(response, &html) => html_fallback(
+                response,
+                "announcements_article",
+                "yqgdxy",
+                "yqgdxy_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
         output["publisher"] = json!(PUBLISHER);
         output["college"] = json!("yqgdxy");
         output["directory_attribution"] = attribution;
         output["source_listing"] = listing;
-        output["completeness"]["body_source"] = json!(
-            "unique nymain/art-main form; owned art-tit h3 and unique leaf 日期： ISO date; scoped art-body/v_news_content paragraphs; code and fallback payloads excluded"
-        );
         Ok(output)
     })
 }
 
-pub(super) fn parse_article(document: &Html) -> Result<ArticleDocument, Error> {
+fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
+    let (article, has_images, table_count) = parse_article_with_completeness(document)?;
+    let attachments_found = article.attachments_found;
+    let mut output = super::article_output(response, article);
+    output["completeness"]["body_source"] = json!(
+        "unique nymain/art-main form; owned art-tit h3 and unique leaf 日期： ISO date; scoped art-body/v_news_content paragraphs; code and fallback payloads excluded"
+    );
+    output["completeness"]["image_content_present"] = json!(has_images);
+    output["completeness"]["unextracted_table_count"] = json!(table_count);
+    if attachments_found || has_images || table_count != 0 {
+        output["result"] = json!("partial_text");
+        output["completeness"]["missing_nonparagraph_content"] = json!(
+            "attachment bytes, image text and nonparagraph table content are not reconstructed or downloaded"
+        );
+    }
+    Ok(output)
+}
+
+fn parse_article_with_completeness(
+    document: &Html,
+) -> Result<(ArticleDocument, bool, usize), Error> {
     let views = Selector::parse("div.nymain > div.ny-right > div.art-main > form")
         .map_err(|_| unavailable())?;
     let mut views = document.select(&views).filter(|node| !inert_element(*node));
@@ -353,7 +418,7 @@ pub(super) fn parse_article(document: &Html) -> Result<ArticleDocument, Error> {
     let bodies = Selector::parse(":scope > div.art-body > div > div.v_news_content")
         .map_err(|_| unavailable())?;
     let mut bodies = primary.select(&bodies).filter(|node| !inert_element(*node));
-    let _body = bodies
+    let body = bodies
         .next()
         .filter(|_| bodies.next().is_none())
         .ok_or_else(|| {
@@ -363,25 +428,59 @@ pub(super) fn parse_article(document: &Html) -> Result<ArticleDocument, Error> {
                 line!(),
             )
         })?;
-    let (paragraphs, attachment_hints, attachments_found) = article_body(primary, false)?;
-    Ok(ArticleDocument {
-        title,
-        category: Some("1053".into()),
-        published_at,
-        paragraphs,
-        attachment_hints,
-        attachments_found,
-    })
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
+    let images = Selector::parse("img").map_err(|_| unavailable())?;
+    let tables = Selector::parse("table").map_err(|_| unavailable())?;
+    let has_images = body.select(&images).any(|node| !inert_element(node));
+    let table_count = body
+        .select(&tables)
+        .filter(|node| !inert_element(*node))
+        .count();
+    Ok((
+        ArticleDocument {
+            title,
+            category: Some("1053".into()),
+            published_at,
+            paragraphs,
+            attachment_hints,
+            attachments_found,
+        },
+        has_images,
+        table_count,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::{CacheStatus, Response};
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
 
     fn article_html(dates: &str, body: &str) -> String {
         format!(
             r#"<h3>Outside heading</h3><div class="nymain"><div class="ny-right"><div class="art-main"><form><div class="art-tit"><h3>Original <em>inline</em> heading</h3><p>{dates}<span>Outside date field</span></p></div><div class="art-body"><div><div class="v_news_content">{body}</div></div></div><p>Outside form prose</p></form></div></div></div>"#
         )
+    }
+
+    fn article_html_with_unowned_sibling(dates: &str, body: &str) -> String {
+        format!(
+            r#"<h3>Outside heading</h3><div class="nymain"><div class="ny-right"><div class="art-main"><form><div class="art-tit"><h3>Original <em>inline</em> heading</h3><p>{dates}<span>Outside date field</span></p></div><div class="art-body"><div><div class="v_news_content">{body}</div><div class="other"><div class="v_news_content"><p>Unowned sibling paragraph.</p><a href="/unowned.pdf">Unowned attachment</a></div></div></div></div><p>Outside form prose</p></form></div></div></div>"#
+        )
+    }
+
+    fn response(url: &str, html: &str) -> Response {
+        Response {
+            url: url.into(),
+            status: 200,
+            headers: BTreeMap::from([("content-type".into(), "text/html; charset=utf-8".into())]),
+            sha256: format!("{:x}", Sha256::digest(html.as_bytes())),
+            body: html.as_bytes().to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        }
     }
 
     #[test]
@@ -437,10 +536,9 @@ mod tests {
     #[test]
     fn article_owns_header_body_and_publication_date() {
         let body = "<p>Source <em>inline</em> paragraph.</p><p>2001-01-01</p>";
-        let document = parse_article(&Html::parse_document(&article_html(
-            "<span>日期：2024-02-29</span>",
-            body,
-        )))
+        let (document, _, _) = parse_article_with_completeness(&Html::parse_document(
+            &article_html("<span>日期：2024-02-29</span>", body),
+        ))
         .unwrap();
         assert_eq!(document.title, "Original inline heading");
         assert_eq!(document.published_at.as_deref(), Some("2024-02-29"));
@@ -456,8 +554,9 @@ mod tests {
             "<span>日期：2023-02-29</span>",
             "<span>日期：2024-02-29</span><span>日期：2025-01-01</span>",
         ] {
-            let document =
-                parse_article(&Html::parse_document(&article_html(dates, body))).unwrap();
+            let (document, _, _) =
+                parse_article_with_completeness(&Html::parse_document(&article_html(dates, body)))
+                    .unwrap();
             assert_eq!(document.published_at, None);
             assert_eq!(
                 document.paragraphs,
@@ -468,7 +567,50 @@ mod tests {
             );
         }
         let duplicate = format!("{html}{html}", html = article_html("", body));
-        assert!(parse_article(&Html::parse_document(&duplicate)).is_err());
+        assert!(parse_article_with_completeness(&Html::parse_document(&duplicate)).is_err());
+    }
+
+    #[test]
+    fn review_regression_yqgdxy_article_body_excludes_unowned_siblings_and_links() {
+        let html = article_html_with_unowned_sibling(
+            "<span>日期：2024-02-29</span>",
+            r#"<p>Owned source paragraph.</p><a href="/owned.pdf">Owned attachment</a>"#,
+        );
+        let (document, _, _) =
+            parse_article_with_completeness(&Html::parse_document(&html)).unwrap();
+        assert_eq!(
+            document.paragraphs,
+            vec!["Owned source paragraph.".to_string()]
+        );
+        assert_eq!(document.attachment_hints.len(), 1);
+        assert_eq!(document.attachment_hints[0]["text"], "Owned attachment");
+        assert!(document.attachments_found);
+    }
+
+    #[test]
+    fn review_regression_yqgdxy_empty_owned_body_does_not_borrow_sibling_text() {
+        let html = article_html_with_unowned_sibling("<span>日期：2024-02-29</span>", "");
+        assert_eq!(
+            parse_article_with_completeness(&Html::parse_document(&html))
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn review_regression_yqgdxy_nonparagraph_content_is_not_reported_as_full_text() {
+        let body = r#"<p>Introduction.</p><img src="poster.png" alt="not transcribed"><table><tr><td>Required table content.</td></tr></table>"#;
+        let source = response(
+            "https://yqgdxy.buaa.edu.cn/info/1053/42.htm",
+            &article_html("", body),
+        );
+        let document = college_html(&source).unwrap();
+        let output = normalize(&source, &document).unwrap();
+        assert_eq!(output["body_paragraphs"], json!(["Introduction."]));
+        assert_eq!(output["result"], "partial_text");
+        assert_eq!(output["completeness"]["image_content_present"], true);
+        assert_eq!(output["completeness"]["unextracted_table_count"], 1);
     }
 
     #[test]

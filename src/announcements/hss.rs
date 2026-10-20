@@ -327,7 +327,11 @@ fn listing_url_response(
     page: u32,
 ) -> Result<Result<Url, Error>, Error> {
     let document = college_html(response)?;
-    Ok(select_advertised_page_url(&document, latest, page))
+    let selected = select_advertised_page_url(&document, latest, page);
+    if selected.is_err() && !is_safe_public_fallback(response) {
+        return Err(unavailable());
+    }
+    Ok(selected)
 }
 
 /// HSS's legacy pagination labels are “下页/尾页”, not numeric anchors.  The
@@ -588,7 +592,7 @@ fn simple_preview_prefix(tokens: &[PreviewToken<'_>]) -> bool {
     )
 }
 
-fn declared_preview_paths(script: &str) -> Result<Vec<String>, Error> {
+pub(super) fn declared_preview_paths(script: &str) -> Result<Vec<String>, Error> {
     if !script.contains("vsb_pdf_image_data") {
         return Ok(Vec::new());
     }
@@ -687,7 +691,7 @@ fn declared_document(
     let mut original_pdf = None;
     let mut previews = Vec::new();
     for script in body.select(&scripts) {
-        if script.value().attr("src").is_some() {
+        if script.value().attr("src").is_some() || crate::html::inert_element(script) {
             continue;
         }
         let Some(kind) = crate::html::script_kind(script) else {
@@ -923,6 +927,37 @@ mod tests {
                 .code,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn review_regression_security_discovery_refusal_stays_outer_error() {
+        for body in [
+            r#"<form><input type="password"><input name="csrf_token" value="private-token"></form>"#,
+            r#"<div id="cf-chl-widget"><iframe src="/cdn-cgi/challenge-platform"></iframe></div>"#,
+        ] {
+            let response = response(HSS_NOTICES_URL, body);
+            let latest = Url::parse(HSS_NOTICES_URL).unwrap();
+            let processed = listing_url_response(&response, &latest, 2);
+            assert_eq!(processed.unwrap_err().code, "unavailable");
+        }
+    }
+
+    #[test]
+    fn review_regression_inert_hss_scripts_cannot_authorize_an_embedded_document() {
+        for container in ["template", "noscript"] {
+            let html = format!(
+                r#"<div class="n_con"><form name="_newscontent_fromname"><div class="contain_con">
+                <h2>Source article heading</h2><div id="vsb_content"><div class="v_news_content"><p><{container}><script>showVsbpdfIframe("/__local/1/AA/BB/CC/original.pdf","100%","600");</script></{container}></p></div></div>
+            </div></form></div>"#
+            );
+            let response = response("https://www.hss.buaa.edu.cn/info/1103/42.htm", &html);
+            assert_eq!(
+                normalize(&response, &college_html(&response).unwrap())
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
+        }
     }
 
     #[test]

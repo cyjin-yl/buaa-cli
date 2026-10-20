@@ -7,10 +7,11 @@
 
 use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF,
-    MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, article_body, article_category_from_url,
+    MAX_PARAGRAPH, MAX_TEXT, advertised_page_url_document, article_body, article_category_from_url,
     article_output, bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, inert_element,
-    invalid_article, invalid_list, parse_iso_date, retrieval, unavailable,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    inert_element, invalid_article, invalid_list, is_safe_public_fallback_document, parse_iso_date,
+    retrieval, unavailable,
 };
 use crate::net::{
     ASE_NOTICES_URL, ASE_ROOT_URL, ArchiveClient, CacheMode, Error, ase_path_allowed,
@@ -208,16 +209,21 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
     if page == 1 {
         return Ok(latest);
     }
-    client.get(&latest, false, |response| {
-        college_html(response)?;
-        advertised_page_url(
-            &response.body,
+    let result: Result<Url, Error> = client.get(&latest, false, |response| {
+        let document = college_html(response)?;
+        let selected = advertised_page_url_document(
+            &document,
             &latest,
             page,
             "div.pb_sys_common span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/zhxw/tzgg/"),
-        )
-    })
+        );
+        if selected.is_err() && !is_safe_public_fallback_document(response, &document) {
+            return Err(unavailable());
+        }
+        Ok(selected)
+    })?;
+    result
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -246,7 +252,22 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            let document = parse_listing(&college_html(response)?, &target)?;
+            let html = college_html(response)?;
+            let document = match parse_listing(&html, &target) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback_document(response, &html) => {
+                    let mut value = html_fallback(
+                        response,
+                        "announcements_list",
+                        "ase",
+                        "ase_listing_selector_contract",
+                    );
+                    value["category"] = json!("tzgg");
+                    value["page"] = json!(page);
+                    return Ok(value);
+                }
+                Err(error) => return Err(error),
+            };
             let entries: Vec<_> = document
                 .entries
                 .iter()
@@ -287,26 +308,55 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
     {
         return Err(invalid_article());
     }
-    let (client, mut attribution) = bound_client(mode)?;
+    let (client, attribution) = bound_client(mode)?;
+    article_with_client(client, mode, &target, source_page, attribution)
+}
+
+pub(crate) fn article_with_client(
+    client: ArchiveClient,
+    mode: CacheMode,
+    target: &Url,
+    source_page: u32,
+    mut attribution: Value,
+) -> Result<Value, Error> {
     bind_college_board(&client, ASE_ROOT_URL, ASE_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
-    let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+    let listing_result: Result<Value, Error> = client.get(&source, false, |response| {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &source) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback_document(response, &html) => {
+                return Ok(Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "ase",
+                    "ase_listing_selector_contract",
+                )));
+            }
+            Err(error) => return Err(error),
+        };
         if !document
             .entries
             .iter()
             .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
         {
-            return Err(Error::new(
+            return Ok(Err(Error::new(
                 "unsupported",
                 "retained ASE notice page does not declare the selected article",
-            ));
+            )));
         }
-        Ok(retrieval(response))
+        Ok(Ok(retrieval(response)))
     })?;
+    let listing = listing_result?;
+    if listing.get("result").and_then(Value::as_str) == Some("fallback") {
+        return Err(Error::new(
+            "unavailable",
+            "retained ASE notice page could not be parsed; the admitted board snapshot was retained for offline repair",
+        ));
+    }
     client
         .with_cache_mode(mode)
-        .get(&target, false, |response| {
+        .get(target, false, |response| {
             let document = college_html(response)?;
             Ok(normalize(response, &document).map(|mut value| {
                 value["publisher"] = json!(PUBLISHER);

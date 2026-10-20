@@ -1,5 +1,6 @@
 //! Foreign-languages college notices: exact HTTP directory identity and a
 //! deliberately separate HTTPS observation of the public site.
+use super::scse::viewer;
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_HREF, MAX_TEXT, advertised_page_url,
     article_category_from_url, article_paragraphs, bind_college_board,
@@ -281,36 +282,8 @@ fn local_asset_path(path: &str, extension: Option<&str>) -> bool {
 }
 
 fn script_show_pdf_path(script: &str) -> Result<Option<String>, Error> {
-    if script.len() > 64 * 1024 {
-        return Err(unavailable());
-    }
-    let marker = "showVsbpdfIframe";
-    let mut offset = 0;
     let mut selected = None;
-    while let Some(relative) = script[offset..].find(marker) {
-        let start = offset + relative;
-        let previous = script[..start]
-            .chars()
-            .rev()
-            .find(|character| !character.is_whitespace());
-        if previous.is_some_and(|character| !matches!(character, ';' | '{' | '}')) {
-            offset = start + marker.len();
-            continue;
-        }
-        let tail = script[start + marker.len()..].trim_start();
-        if !tail.starts_with('(') {
-            return Err(unavailable());
-        }
-        let arguments = &tail[1..];
-        let mut stream = serde_json::Deserializer::from_str(arguments).into_iter::<String>();
-        let path = stream
-            .next()
-            .ok_or_else(unavailable)?
-            .map_err(|_| unavailable())?;
-        let rest = arguments[stream.byte_offset()..].trim_start();
-        if !matches!(rest.as_bytes().first(), Some(b',' | b')')) {
-            return Err(unavailable());
-        }
+    for path in viewer::declarations(script)? {
         match selected.as_deref() {
             Some(previous) if previous != path.as_str() => {
                 return Err(failed_contract(
@@ -322,30 +295,12 @@ fn script_show_pdf_path(script: &str) -> Result<Option<String>, Error> {
             None => selected = Some(path),
             _ => {}
         }
-        offset = start + marker.len();
     }
     Ok(selected)
 }
 
 fn preview_paths(script: &str) -> Result<Vec<String>, Error> {
-    let marker = "vsb_pdf_image_data";
-    let Some(start) = script.find(marker) else {
-        return Ok(Vec::new());
-    };
-    let Some(tail) = script[start..]
-        .split_once('=')
-        .map(|(_, value)| value.trim_start())
-    else {
-        return Ok(Vec::new());
-    };
-    if !tail.starts_with('[') {
-        return Err(unavailable());
-    }
-    let end = tail.find(']').ok_or_else(unavailable)?;
-    if end > 64 * 1024 {
-        return Err(unavailable());
-    }
-    let paths: Vec<String> = serde_json::from_str(&tail[..=end]).map_err(|_| unavailable())?;
+    let paths = super::hss::declared_preview_paths(script)?;
     if paths.len() > 128
         || paths
             .iter()
@@ -364,7 +319,8 @@ fn declared_assets(
     let mut original_pdf = None;
     let mut previews = Vec::new();
     for script in body.select(&scripts) {
-        if script.value().attr("src").is_some()
+        if crate::html::inert_element(script)
+            || script.value().attr("src").is_some()
             || crate::html::script_kind(script) != Some(crate::html::ScriptKind::Classic)
         {
             continue;
@@ -658,6 +614,87 @@ mod tests {
             output["embedded_document"]["original_pdf_url"],
             "https://fld.buaa.edu.cn/__local/4/58/94/original_12345678_12A59.pdf"
         );
+        assert_eq!(
+            output["embedded_document"]["preview_paths"],
+            json!(["/__local/0/DF/7A/preview.jpg"])
+        );
+    }
+
+    #[test]
+    fn review_regression_inert_fld_scripts_cannot_authorize_an_embedded_document() {
+        for container in ["template", "noscript"] {
+            let body = format!(
+                r#"<html><body><div class="ljkm23">
+                <div class="mch3">Original notice</div>
+                <div class="mch3sh">来源： 发布时间：2026-10-15</div>
+                <div id="vsb_content" class="mchcot"><div class="v_news_content"><p><{container}><script>showVsbpdfIframe("/__local/4/58/94/original_12345678_12A59.pdf","100%","600");</script></{container}></p></div></div>
+            </div></body></html>"#
+            );
+            let response = response("https://fld.buaa.edu.cn/info/1011/42.htm", &body);
+            let document = college_html(&response).unwrap();
+            assert_eq!(
+                normalize_article(&response, &document).unwrap_err().code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn review_regression_inactive_fld_original_calls_cannot_authorize_an_embedded_document() {
+        for script in [
+            r#"function unused(){showVsbpdfIframe("/__local/4/58/94/original_12345678_12A59.pdf","100%","600");}"#,
+            r#"/*;showVsbpdfIframe("/__local/4/58/94/original_12345678_12A59.pdf");*/"#,
+        ] {
+            let body = format!(
+                r#"<html><body><div class="ljkm23">
+                <div class="mch3">Original notice</div>
+                <div class="mch3sh">来源： 发布时间：2026-10-15</div>
+                <div id="vsb_content" class="mchcot"><div class="v_news_content"><p><script>{script}</script></p></div></div>
+            </div></body></html>"#
+            );
+            let response = response("https://fld.buaa.edu.cn/info/1011/42.htm", &body);
+            let document = college_html(&response).unwrap();
+            assert_eq!(
+                normalize_article(&response, &document).unwrap_err().code,
+                "unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn review_regression_inactive_fld_preview_assignments_cannot_supply_document_presence() {
+        for script in [
+            r#"/*vsb_pdf_image_data=["/__local/0/DF/7A/preview.jpg"];*/"#,
+            r#"const text = "vsb_pdf_image_data=[\"/__local/0/DF/7A/preview.jpg\"]";"#,
+        ] {
+            let body = format!(
+                r#"<html><body><div class="ljkm23">
+                <div class="mch3">Original notice</div>
+                <div class="mch3sh">来源： 发布时间：2026-10-15</div>
+                <div id="vsb_content" class="mchcot"><div class="v_news_content"><p><script>{script}</script></p></div></div>
+            </div></body></html>"#
+            );
+            let response = response("https://fld.buaa.edu.cn/info/1011/42.htm", &body);
+            let document = college_html(&response).unwrap();
+            assert_eq!(
+                normalize_article(&response, &document).unwrap_err().code,
+                "unavailable"
+            );
+        }
+
+        let active_preview_only = r#"<html><body><div class="ljkm23">
+            <div class="mch3">Original notice</div>
+            <div class="mch3sh">来源： 发布时间：2026-10-15</div>
+            <div id="vsb_content" class="mchcot"><div class="v_news_content"><p><script>var vsb_pdf_image_data=["/__local/0/DF/7A/preview.jpg"];</script></p></div></div>
+        </div></body></html>"#;
+        let response = response(
+            "https://fld.buaa.edu.cn/info/1011/42.htm",
+            active_preview_only,
+        );
+        let document = college_html(&response).unwrap();
+        let output = normalize_article(&response, &document).unwrap();
+        assert_eq!(output["result"], "embedded_document");
+        assert_eq!(output["embedded_document"]["original_pdf_url"], Value::Null);
         assert_eq!(
             output["embedded_document"]["preview_paths"],
             json!(["/__local/0/DF/7A/preview.jpg"])

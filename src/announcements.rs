@@ -231,6 +231,16 @@ fn advertised_page_url(
     }
     let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
     let document = Html::parse_document(text);
+    advertised_page_url_document(&document, base, page, ordinal_links, allowed_page)
+}
+
+fn advertised_page_url_document(
+    document: &Html,
+    base: &Url,
+    page: u32,
+    ordinal_links: &str,
+    allowed_page: impl Fn(&Url) -> bool,
+) -> Result<Url, Error> {
     let selector = Selector::parse(ordinal_links).map_err(|_| unavailable())?;
     let mut selected = None;
     for link in document.select(&selector) {
@@ -665,21 +675,21 @@ pub(crate) fn is_safe_public_fallback(response: &Response) -> bool {
         return false;
     };
     let document = Html::parse_document(text);
+    is_safe_public_fallback_document(response, &document)
+}
+
+fn is_safe_public_fallback_document(response: &Response, document: &Html) -> bool {
     let Ok(bases) = Selector::parse("base[href]") else {
         return false;
     };
     if document.select(&bases).any(|base| !inert_element(base)) {
         return false;
     }
-    if response.headers.iter().any(|(name, value)| {
-        let name = name.trim().to_ascii_lowercase();
-        if name == "cf-mitigated" {
-            value.trim().eq_ignore_ascii_case("challenge")
-        } else {
-            (name == "x-captcha" || name == "x-challenge" || name.starts_with("cf-chl-"))
-                && !value.trim().is_empty()
-        }
-    }) {
+    if response
+        .headers
+        .iter()
+        .any(|(name, value)| crate::net::challenge_header(name.trim(), value.as_bytes()))
+    {
         return false;
     }
     let Ok(elements) = Selector::parse("*") else {
@@ -1618,10 +1628,8 @@ fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Err
     if title.len() > MAX_TEXT {
         return Err(unavailable());
     }
-    let views = Selector::parse(
-        "div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul, div.notice-list > div > ul",
-    )
-    .map_err(|_| unavailable())?;
+    let views = Selector::parse("div.nymain > div.w16 > div.ny-right > div.notice-list > div > ul")
+        .map_err(|_| unavailable())?;
     let mut views = document.select(&views).filter(|node| !inert_element(*node));
     let primary = views
         .next()
@@ -2074,6 +2082,66 @@ mod tests {
             Some("https://news.buaa.edu.cn/info/1010/69802.htm")
         );
         assert_eq!(document.entries[2].date.as_deref(), Some("2026-08-26"));
+    }
+
+    #[test]
+    fn review_regression_notice_list_without_nymain_ownership_is_refused() {
+        let document = Html::parse_document(
+            r#"<title>Unowned notices</title><div class="notice-list"><div><ul>
+            <li><a href="../../info/1078/42.htm"><span>2026.10.10</span><h3>Unowned heading</h3><p>Unowned excerpt.</p></a></li>
+            </ul></div></div>"#,
+        );
+        let base = Url::parse(crate::net::SSE_NOTICES_URL).unwrap();
+        assert_eq!(
+            parse_notice_list(&document, &base).unwrap_err().code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn review_regression_notice_list_keeps_owned_rows_despite_unowned_sidebar() {
+        let document = Html::parse_document(
+            r#"<title>Source notices</title>
+            <div class="notice-list"><div><ul><li><a href="../../info/1078/99.htm"><span>2026.10.11</span><h3>Unowned sidebar</h3><p>Unowned excerpt.</p></a></li></ul></div></div>
+            <div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul>
+            <li><a href="../../info/1078/42.htm"><span>2026.10.10</span><h3>First source heading</h3><p>First source excerpt.</p></a></li>
+            <li><a href="../../info/1078/41.htm"><span>2026.09.01</span><h3>Earlier source heading</h3><p>Earlier source excerpt.</p></a></li>
+            </ul></div></div></div></div></div>"#,
+        );
+        let base = Url::parse(crate::net::SSE_NOTICES_URL).unwrap();
+        let parsed = parse_notice_list(&document, &base).unwrap();
+        let rows: Vec<_> = parsed
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.source_order,
+                    entry.title.as_str(),
+                    entry.date.as_deref(),
+                    entry.summary.as_deref(),
+                    entry.resolved_http_url.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    1,
+                    "First source heading",
+                    Some("2026-10-10"),
+                    Some("First source excerpt."),
+                    Some("https://sse.buaa.edu.cn/info/1078/42.htm")
+                ),
+                (
+                    2,
+                    "Earlier source heading",
+                    Some("2026-09-01"),
+                    Some("Earlier source excerpt."),
+                    Some("https://sse.buaa.edu.cn/info/1078/41.htm")
+                ),
+            ]
+        );
     }
 
     #[test]

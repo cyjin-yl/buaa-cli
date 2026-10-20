@@ -9,10 +9,10 @@
 //! inferred from the two roots.
 
 use super::{
-    ArticleDocument, ListQuery, MAX_TEXT, advertised_page_url, article_category_from_url,
-    article_output, article_paragraphs, bind_college_board, college_directory_attribution,
-    college_html, declared_jsp_attachment_hints, describe_college_surface, entry_in_scope,
-    failed_contract, html_fallback, inert_element, invalid_article, invalid_list, is_admitted_html,
+    ArticleDocument, ListQuery, MAX_TEXT, article_category_from_url, article_output,
+    article_paragraphs, bind_college_board, college_directory_attribution, college_html,
+    declared_jsp_attachment_hints, describe_college_surface, entry_in_scope, failed_contract,
+    html_fallback, inert_element, invalid_article, invalid_list, is_admitted_html,
     is_safe_public_fallback, parse_chinese_publication_date, parse_iso_date, parse_notice_list,
     retrieval, unavailable,
 };
@@ -91,15 +91,19 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
-        advertised_page_url(
-            &response.body,
+        let document = college_html(response)?;
+        let selected = super::advertised_page_url_document(
+            &document,
             &latest,
             page,
             "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xwdt/gsgg/tzgg/"),
-        )
-    })
+        );
+        if selected.is_err() && !super::is_safe_public_fallback_document(response, &document) {
+            return Err(unavailable());
+        }
+        Ok(selected)
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -184,7 +188,17 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
     {
         return Err(invalid_article());
     }
-    let (client, mut attribution) = bound_client(mode)?;
+    let (client, attribution) = bound_client(mode)?;
+    article_with_client(client, mode, &target, source_page, attribution)
+}
+
+pub(crate) fn article_with_client(
+    client: ArchiveClient,
+    mode: CacheMode,
+    target: &Url,
+    source_page: u32,
+    mut attribution: Value,
+) -> Result<Value, Error> {
     bind_college_board(&client, SSE_ROOT_URL, SSE_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
@@ -219,39 +233,37 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
             "retained SSE listing could not be parsed; the admitted board snapshot was retained for offline repair",
         ));
     }
-    client
-        .with_cache_mode(mode)
-        .get(&target, false, |response| {
-            let document = match college_html(response) {
-                Ok(document) => document,
-                Err(_) if is_safe_public_fallback(response) => {
-                    return Ok(html_fallback(
-                        response,
-                        "announcements_article",
-                        "sse",
-                        "sse_article_selector_contract",
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
-            let mut value = match normalize(response, &document) {
-                Ok(value) => value,
-                Err(_) if is_safe_public_fallback(response) => html_fallback(
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
                     response,
                     "announcements_article",
                     "sse",
                     "sse_article_selector_contract",
-                ),
-                Err(error) => return Err(error),
-            };
-            Ok({
-                value["publisher"] = json!(PUBLISHER);
-                value["college"] = json!("sse");
-                value["directory_attribution"] = attribution.clone();
-                value["source_listing"] = listing.clone();
-                value
-            })
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut value = match normalize(response, &document) {
+            Ok(value) => value,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "sse",
+                "sse_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        Ok({
+            value["publisher"] = json!(PUBLISHER);
+            value["college"] = json!("sse");
+            value["directory_attribution"] = attribution.clone();
+            value["source_listing"] = listing.clone();
+            value
         })
+    })
 }
 
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {

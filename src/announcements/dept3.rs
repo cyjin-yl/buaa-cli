@@ -76,9 +76,7 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
 }
 
 pub(super) fn parse_listing(document: &Html, base: &Url) -> Result<ListingDocument, Error> {
-    let root = Url::parse(DEPT3_ROOT_URL).map_err(|_| unavailable())?;
-    let _ = base;
-    parse_notice_list(document, &root)
+    parse_notice_list(document, base)
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -291,11 +289,11 @@ mod tests {
 
     #[test]
     fn listing_keeps_external_rows_and_unknown_dates_without_inert_copies() {
-        let html = r#"<title>Synthetic notices</title><ul><li>Unrelated navigation</li></ul><div class="notice-list"><div><ul>
-<li><a href="../info/1014/42.htm"><span>2024.02.29</span><h3>Before <em>inside</em> after<script>not text</script></h3><p>Distinct excerpt</p></a></li>
+        let html = r#"<title>Synthetic notices</title><ul><li>Unrelated navigation</li></ul><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul>
+<li><a href="../../info/1014/42.htm"><span>2024.02.29</span><h3>Before <em>inside</em> after<script>not text</script></h3><p>Distinct excerpt</p></a></li>
 <li><a href="https://external.example/notice"><span>2023.02.29</span><h3>External reference</h3><p>External excerpt</p></a></li>
-<li><a href="../info/1093/43.htm"><span>2026.05.18</span><span>2026.04.16</span><h3>Ambiguous publication</h3><p>Ambiguous excerpt</p></a></li>
-</ul></div></div><template><div class="notice-list"><div><ul><li><a href="../info/1014/99.htm"><span>2026.01.01</span><h3>Inactive copy</h3></a></li></ul></div></div></template>"#;
+<li><a href="../../info/1093/43.htm"><span>2026.05.18</span><span>2026.04.16</span><h3>Ambiguous publication</h3><p>Ambiguous excerpt</p></a></li>
+</ul></div></div></div></div></div><template><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul><li><a href="../../info/1014/99.htm"><span>2026.01.01</span><h3>Inactive copy</h3></a></li></ul></div></div></div></div></div></template>"#;
         let parsed = parse_listing(
             &Html::parse_document(html),
             &Url::parse(DEPT3_NOTICES_URL).unwrap(),
@@ -339,6 +337,22 @@ mod tests {
             .map(|entry| entry.title.as_str())
             .collect();
         assert_eq!(filtered, vec!["Before inside after"]);
+    }
+
+    #[test]
+    fn review_regression_dept3_notice_links_resolve_from_the_admitted_listing_url() {
+        let html = r#"<title>Source notices</title><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul>
+<li><a href="../info/1014/42.htm"><span>2024.02.29</span><h3>Source-relative notice</h3></a></li>
+</ul></div></div></div></div></div>"#;
+        let listing_url = Url::parse(DEPT3_NOTICES_URL).unwrap();
+        let parsed = parse_listing(&Html::parse_document(html), &listing_url).unwrap();
+        assert_eq!(
+            parsed.entries[0].resolved_http_url.as_deref(),
+            Some("https://dept3.buaa.edu.cn/xwdt/info/1014/42.htm")
+        );
+        assert!(!parsed.entries.iter().any(|entry| {
+            entry.resolved_http_url.as_deref() == Some("https://dept3.buaa.edu.cn/info/1014/42.htm")
+        }));
     }
 
     #[test]

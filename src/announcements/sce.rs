@@ -114,7 +114,7 @@ fn advertised_sce_page_url(bytes: &[u8], base: &Url, page: u32) -> Result<Url, E
     let document = Html::parse_document(text);
     let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
     let mut selected = None;
-    for link in document.select(&links) {
+    for link in document.select(&links).filter(|link| !inert_element(*link)) {
         let raw = link.value().attr("href").ok_or_else(unavailable)?;
         if raw.len() > MAX_HREF || raw.chars().any(char::is_control) || raw.contains(['%', '\\']) {
             return Err(failed_contract(
@@ -410,6 +410,11 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     let has_attachments = attachments_found;
     let images = Selector::parse("img").map_err(|_| unavailable())?;
     let has_images = body.select(&images).any(|image| !inert_element(image));
+    let tables = Selector::parse("table").map_err(|_| unavailable())?;
+    let table_count = body
+        .select(&tables)
+        .filter(|table| !inert_element(*table))
+        .count();
     if paragraphs.is_empty() {
         return Err(failed_contract(
             "Chemistry article requires source paragraphs; image-only content is not reconstructed",
@@ -438,10 +443,12 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
         "unique c-content/nr-info/vsb_content/v_news_content; source paragraphs with executable/fallback markup excluded"
     );
     output["completeness"]["image_content_present"] = json!(has_images);
-    if has_images || has_attachments {
+    output["completeness"]["unextracted_table_count"] = json!(table_count);
+    if has_images || has_attachments || table_count != 0 {
         output["result"] = json!("partial_text");
-        output["completeness"]["missing_nonparagraph_content"] =
-            json!("image text and attachment contents are not reconstructed or downloaded");
+        output["completeness"]["missing_nonparagraph_content"] = json!(
+            "attachment bytes, image text and nonparagraph table content are not reconstructed or downloaded"
+        );
     }
     Ok(output)
 }
@@ -588,6 +595,16 @@ mod tests {
     }
 
     #[test]
+    fn review_regression_inert_chemistry_pager_links_cannot_authorize_a_page() {
+        let base = Url::parse(SCE_NOTICES_URL).unwrap();
+        let body = br#"<table class="headStyle16sn2e3sl5"><template><a href="xyxw/2.htm">2</a></template></table>"#;
+        assert_eq!(
+            advertised_sce_page_url(body, &base, 2).unwrap_err().code,
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn chemistry_article_scopes_title_date_and_body_and_marks_images_partial() {
         let body = r#"<h2>Sidebar heading</h2><div class="c-content"><h1 class="c-title">Original chemistry heading</h1><div class="other-s">发布日期：2026-09-29&nbsp;&nbsp;作者：source</div><div class="nr-info"><div id="vsb_content"><div class="v_news_content"><p>First source paragraph.</p><p><img src="/__local/image.jpg"></p><p>Final source paragraph.</p><script>ignored fallback text</script></div></div></div></div>"#;
         let out = normalize(&response(body), &college_html(&response(body)).unwrap()).unwrap();
@@ -596,6 +613,19 @@ mod tests {
         assert_eq!(out["body_paragraph_count"], 2);
         assert_eq!(out["result"], "partial_text");
         assert_eq!(out["completeness"]["image_content_present"], true);
+    }
+
+    #[test]
+    fn review_regression_chemistry_table_omission_is_reported_as_partial_text() {
+        let body = r#"<div class="c-content"><h1 class="c-title">Table notice</h1><div class="other-s">发布日期：2026-09-29</div><div class="nr-info"><div id="vsb_content"><div class="v_news_content"><p>Introduction.</p><table><tr><td>Required table content.</td></tr></table></div></div></div></div>"#;
+        let out = normalize(&response(body), &college_html(&response(body)).unwrap()).unwrap();
+        assert_eq!(out["body_paragraphs"], json!(["Introduction."]));
+        assert_eq!(out["result"], "partial_text");
+        assert_eq!(out["completeness"]["unextracted_table_count"], 1);
+        assert_eq!(
+            out["completeness"]["missing_nonparagraph_content"],
+            "attachment bytes, image text and nonparagraph table content are not reconstructed or downloaded"
+        );
     }
 
     #[test]

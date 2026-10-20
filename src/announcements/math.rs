@@ -253,7 +253,7 @@ pub(crate) fn article_with_client(
         let html = college_html(response)?;
         let document = match parse_listing(&html, &source) {
             Ok(document) => document,
-            Err(_) => {
+            Err(_) if is_safe_public_fallback(response) => {
                 return Ok(Ok(html_fallback(
                     response,
                     "announcements_list",
@@ -261,6 +261,7 @@ pub(crate) fn article_with_client(
                     "math_listing_selector_contract",
                 )));
             }
+            Err(error) => return Err(error),
         };
         if !document
             .entries

@@ -191,6 +191,17 @@ fn parse_listing(document: &Html, base: &Url) -> Result<super::ListingDocument, 
             line!(),
         ));
     }
+    let nested_tables = Selector::parse("table").map_err(|_| unavailable())?;
+    if table
+        .select(&nested_tables)
+        .any(|nested| !super::inert_element(nested))
+    {
+        return Err(failed_contract(
+            "Bme information portal requires non-nested category tables",
+            file!(),
+            line!(),
+        ));
+    }
     let rows = Selector::parse("tr").map_err(|_| unavailable())?;
     let cells = Selector::parse(":scope > td").map_err(|_| unavailable())?;
     let category_titles = Selector::parse("div.posTit").map_err(|_| unavailable())?;
@@ -766,5 +777,20 @@ mod tests {
         );
         assert_eq!(parsed.entries[0].link_kind, "out_of_scope");
         assert_eq!(listing_url(2).unwrap_err().code, "unsupported");
+    }
+
+    #[test]
+    fn review_regression_bme_nested_category_table_is_not_published_twice() {
+        let document = Html::parse_document(
+            r#"<title>BME</title><table id="DataList1"><tr><td><table><tr><td><div class="posTit">通知公告</div><ul><li><span>[2026-01-01]</span><a href="newsInfo.aspx?catID=13&amp;subcatID=46&amp;curID=1" title="One">One</a></li></ul></td></tr></table></td></tr></table>"#,
+        );
+        match parse_listing(&document, &Url::parse(BME_NOTICES_URL).unwrap()) {
+            Ok(parsed) => {
+                assert_eq!(parsed.entries.len(), 1);
+                assert_eq!(parsed.entries[0].source_order, 1);
+                assert_eq!(parsed.entries[0].title, "One");
+            }
+            Err(error) => assert_eq!(error.code, "unavailable"),
+        }
     }
 }
