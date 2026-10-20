@@ -265,6 +265,9 @@ const YGY_ROBOTS_URL: &str = "https://ygy.buaa.edu.cn/robots.txt";
 pub(crate) const CST_ROOT_URL: &str = "https://cst.buaa.edu.cn/";
 pub(crate) const CST_NOTICES_URL: &str = "https://cst.buaa.edu.cn/index/tzgg.htm";
 const CST_ROBOTS_URL: &str = "https://cst.buaa.edu.cn/robots.txt";
+pub(crate) const IAI_ROOT_URL: &str = "https://iai.buaa.edu.cn/";
+pub(crate) const IAI_NOTICES_URL: &str = "https://iai.buaa.edu.cn/index/tzgg.htm";
+const IAI_ROBOTS_URL: &str = "https://iai.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sepe_path_allowed(path: &str) -> bool {
     if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
@@ -422,6 +425,18 @@ pub(crate) fn ygy_path_allowed(path: &str) -> bool {
     }
     path.strip_prefix("/tzgg/yggg/")
         .or_else(|| path.strip_prefix("/info/1004/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn iai_path_allowed(path: &str) -> bool {
+    if matches!(path, "/" | "/index.htm" | "/robots.txt" | "/index/tzgg.htm") {
+        return true;
+    }
+    path.strip_prefix("/index/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1024/"))
         .and_then(|stem| stem.strip_suffix(".htm"))
         .is_some_and(|stem| {
             !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
@@ -656,6 +671,7 @@ enum SourceProfile {
     Ygy,
     Cst,
     Dept3,
+    Iai,
 }
 
 impl SourceProfile {
@@ -693,6 +709,7 @@ impl SourceProfile {
             Self::Ygy => YGY_ROBOTS_URL,
             Self::Cst => CST_ROBOTS_URL,
             Self::Dept3 => DEPT3_ROBOTS_URL,
+            Self::Iai => IAI_ROBOTS_URL,
         }
     }
 
@@ -730,6 +747,7 @@ impl SourceProfile {
             Self::Ygy => ".buaa-cli-ygy-cache",
             Self::Cst => ".buaa-cli-cst-cache",
             Self::Dept3 => ".buaa-cli-dept3-cache",
+            Self::Iai => ".buaa-cli-iai-cache",
         }
     }
 
@@ -899,6 +917,11 @@ impl SourceProfile {
                 url.host_str() == Some("dept3.buaa.edu.cn")
                     && url.query().is_none()
                     && dept3_path_allowed(url.path())
+            }
+            Self::Iai => {
+                url.host_str() == Some("iai.buaa.edu.cn")
+                    && url.query().is_none()
+                    && iai_path_allowed(url.path())
             }
         };
         if common_invalid || !allowed {
@@ -1185,6 +1208,9 @@ impl ArchiveClient {
         Self::open_profile(mode, SourceProfile::Dept3)
     }
 
+    pub(crate) fn open_iai(mode: CacheMode) -> Result<Self, Error> {
+        Self::open_profile(mode, SourceProfile::Iai)
+    }
     fn open_profile(mode: CacheMode, profile: SourceProfile) -> Result<Self, Error> {
         let home = governor::identity_home().map_err(|_| cache_error())?;
         let _home = governor::open_directory(&home, false, false).map_err(|_| cache_error())?;
