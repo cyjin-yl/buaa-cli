@@ -21,6 +21,8 @@ Use original code or compatible licensed dependencies, never copy incompatible i
 
 Run the specific command being changed, then focused offline tests. Inspect a fresh-context independent review; fix findings and re-run affected proof. Update acceptance evidence and blockers, not merely a checklist checkbox. Never present a links catalog, fake endpoint, generic success stub or fixture parser as a working remote service.
 
+All Cargo/Rust commands MUST acquire one process-shared lock across every worktree and Agent before starting: use `flock -x /home/ezra/.buaa-cli-cargo.lock -c 'cargo ...'` (or an equivalent lock holder that covers the complete command). No concurrent `cargo build`, `test`, `clippy`, `fmt`, `package`, or `publish` processes are allowed; serialize them even when worktrees differ. Each worktree MUST keep its own `CARGO_TARGET_DIR`; never share or copy a target directory between worktrees. Native Cargo runs use the project UID-1000 seat. A lock wait is expected coordination, not a reason to bypass the lock.
+
 ## External contribution lifecycle
 
 1. Bind a bounded issue to its acceptance item and claim it only with actual permission.
