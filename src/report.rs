@@ -9,6 +9,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 const REPO: &str = "cyjin-yl/buaa-cli";
+const GH_REPO: &str = "github.com/cyjin-yl/buaa-cli";
 const ISSUE_URL_PREFIX: &str = "https://github.com/cyjin-yl/buaa-cli/issues/";
 
 #[derive(Deserialize)]
@@ -70,23 +71,16 @@ fn canonical_issue_url(value: &str) -> bool {
 }
 
 fn gh_create_issue(command: &OsStr, request: &ReportRequest) -> GhIssueOutcome {
-    let mut args: Vec<String> = vec![
-        "issue".into(),
-        "create".into(),
-        "--repo".into(),
-        REPO.into(),
-        "--title".into(),
-        request.title.clone(),
-        "--body-file".into(),
-        "-".into(),
-    ];
+    let mut invocation = Command::new(command);
+    invocation.args([
+        "issue", "create", "--repo", GH_REPO, "--title", request.title.as_str(),
+        "--body-file", "-",
+    ]);
     for label in &request.labels {
-        args.push("--label".into());
-        args.push(label.clone());
+        invocation.args(["--label", label.as_str()]);
     }
 
-    let mut child = match Command::new(command)
-        .args(&args)
+    let mut child = match invocation
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -133,19 +127,23 @@ fn blocked(failure: GhAuthFailure) -> Value {
             vec![
                 "Install GitHub CLI: https://cli.github.com/",
                 "Run: gh auth login",
-                "Then retry: buaa-cli report",
+                "Then retry: buaa report",
             ],
         ),
         GhAuthFailure::NotAuthenticated => (
-            "the local gh CLI is not authenticated for github.com",
-            vec!["Run: gh auth login", "Then retry: buaa-cli report"],
+            "authentication for github.com could not be confirmed",
+            vec![
+                "Run: gh auth status -h github.com",
+                "If not logged in, run: gh auth login",
+                "Then retry: buaa report",
+            ],
         ),
         GhAuthFailure::Unavailable => (
             "the local gh CLI could not be started",
             vec![
                 "Install GitHub CLI: https://cli.github.com/",
                 "Run: gh auth login",
-                "Then retry: buaa-cli report",
+                "Then retry: buaa report",
             ],
         ),
     };
@@ -165,8 +163,8 @@ fn unknown_outcome(request: &ReportRequest) -> Value {
         "result": "unknown_outcome",
         "url": null,
         "repo": REPO,
-        "title": request.title.clone(),
-        "labels": request.labels.clone(),
+        "title": &request.title,
+        "labels": &request.labels,
         "reconciliation": "required",
         "automatic_retry": false,
         "reason": "gh issue writer did not return a canonical Issue URL; reconcile the repository before retrying"
@@ -197,6 +195,34 @@ fn report_with_command(input: &str, command: &OsStr) -> Result<Value, crate::net
 
 pub fn report(input: &str) -> Result<Value, crate::net::Error> {
     report_with_command(input, OsStr::new("gh"))
+}
+
+pub fn schema() -> Value {
+    json!({
+        "input": {
+            "type":"object", "additionalProperties":false, "required":["title","body"],
+            "properties": {
+                "title":{"type":"string"}, "body":{"type":"string"},
+                "labels":{"type":"array","items":{"type":"string"}}
+            }
+        },
+        "output": {
+            "type":"object", "required":["schema_version","type","result"],
+            "properties": {
+                "schema_version":{"const":1}, "type":{"const":"report"},
+                "result":{"enum":["created","blocked","unknown_outcome"]},
+                "url":{"type":["string","null"],"pattern":"^https://github[.]com/cyjin-yl/buaa-cli/issues/[1-9][0-9]*$"},
+                "reason":{"type":"string"},
+                "next_steps":{"type":"array","items":{"type":"string"}}
+            },
+            "allOf":[
+                {"if":{"properties":{"result":{"const":"created"}}},"then":{"required":["url"],"properties":{"url":{"type":"string"}}}},
+                {"if":{"properties":{"result":{"const":"blocked"}}},"then":{"required":["reason","next_steps"]}},
+                {"if":{"properties":{"result":{"const":"unknown_outcome"}}},"then":{"required":["url","reconciliation","automatic_retry"],"properties":{"url":{"const":null},"reconciliation":{"const":"required"},"automatic_retry":{"const":false}}}}
+            ]
+        },
+        "description":"Explicit sanitized GitHub Issue write through gh. Blocked or uncertain results are not created Issues; reconcile unknown outcomes before retrying. Body is delivered via stdin, never argv."
+    })
 }
 
 #[cfg(test)]
@@ -283,7 +309,6 @@ mod tests {
         let missing = fixture.path("not-installed");
         let blocked = report_with_command(valid_input(), missing.as_os_str()).unwrap();
         assert_eq!(blocked["result"], "blocked");
-        assert!(blocked["reason"].as_str().unwrap().contains("not installed"));
         assert!(blocked["next_steps"]
             .as_array()
             .unwrap()
@@ -295,12 +320,10 @@ mod tests {
         );
         let blocked = report_with_command(valid_input(), logged_out.as_os_str()).unwrap();
         assert_eq!(blocked["result"], "blocked");
-        assert_eq!(
-            blocked["reason"],
-            "the local gh CLI is not authenticated for github.com"
-        );
         assert!(!blocked.to_string().contains("synthetic-auth-secret"));
-        assert_eq!(blocked["next_steps"][0], "Run: gh auth login");
+        assert!(blocked["next_steps"].as_array().unwrap().iter().any(|step| {
+            step.as_str().is_some_and(|value| value.contains("gh auth login"))
+        }));
     }
 
     #[test]

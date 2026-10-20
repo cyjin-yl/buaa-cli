@@ -49,7 +49,7 @@ cargo build --locked --offline
 | Announcements | `announcements list\|article\|document\|history`; `announcements college-source <college> [root\|notices\|public-notices]` | Selected source-bound pages and documents only; broader adapters, attachments, and history remain partial. |
 | Public SPOC | `spoc surface [root\|entry]`; `spoc script` | Sanitized public-surface metadata only; this is not authenticated course/material access. See [`docs/SPOC.md`](docs/SPOC.md). |
 | Gateway and governor | `gateway usage` and explicit operation flows; `governor boot-review-plan\|boot-review-commit --offline` | Cache-first gateway usage and local safety flows; no live account operation is claimed. See [`docs/GATEWAY.md`](docs/GATEWAY.md). |
-| Defect reporting | `report` | Explicitly creates a sanitized GitHub Issue through an installed, authenticated `gh`; missing authentication and uncertain writer outcomes remain explicit. Never attach credentials or raw private responses. |
+| Defect reporting | `report` | Explicitly writes a GitHub Issue from operator-sanitized input through an installed, authenticated `gh`; authentication failures and uncertain writer outcomes remain explicit. The command does not redact private content: never attach credentials or raw private responses. |
 
 For exact argument shapes, supported college values, output fields, and bounds,
 use `./target/debug/buaa schema` rather than relying on a summary table.

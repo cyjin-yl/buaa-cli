@@ -415,6 +415,7 @@ fn run() -> CliResult {
                 "gateway": buaa_cli::gateway::schema(),
                 "governor": buaa_cli::governor::boot_review_schema(),
                 "recordings": buaa_cli::recordings::schema(),
+                "report": buaa_cli::report::schema(),
                 "organizations": buaa_cli::organizations::schema(),
                 "spoc": buaa_cli::spoc::schema(),
                 "announcements": buaa_cli::announcements::schema(),
@@ -476,7 +477,7 @@ fn run() -> CliResult {
         "fengrubei" => run_fengrubei(&args[1..]),
         "gateway" => run_gateway(&args[1..]),
         "governor" => run_governor(&args[1..]),
-        "report" => {
+        "report" if args.len() == 1 => {
             let input = read_input()?;
             let output = buaa_cli::report::report(&input).map_err(service_error)?;
             emit(&output)
