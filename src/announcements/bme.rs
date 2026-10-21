@@ -372,6 +372,7 @@ fn article_with_client(
             .iter()
             .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
         {
+            super::refuse_unsafe_listing(response, &html)?;
             return Ok(Err(Error::new(
                 "unsupported",
                 "retained Bme information portal does not declare the selected article",

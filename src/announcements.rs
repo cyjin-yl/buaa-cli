@@ -701,6 +701,20 @@ fn is_safe_public_fallback_document(response: &Response, document: &Html) -> boo
         .any(public_security_element)
 }
 
+/// Refuse an unsafe admitted listing outright.
+///
+/// A response that carries authentication, password, CSRF, CAPTCHA or
+/// challenge semantics must never be retained in the public cache, not even
+/// when its selectors happen to match a listing view. A safe admitted
+/// response keeps its original bytes so it can still be repaired offline.
+pub(crate) fn refuse_unsafe_listing(response: &Response, document: &Html) -> Result<(), Error> {
+    if is_safe_public_fallback_document(response, document) {
+        Ok(())
+    } else {
+        Err(unavailable())
+    }
+}
+
 fn compact_security_token(value: &str) -> String {
     value
         .trim()

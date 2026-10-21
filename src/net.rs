@@ -2523,6 +2523,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn review_regression_unsafe_successful_listing_is_refused_before_cache_save() {
+        const BODY: &[u8] = br#"<title>Fixture</title><form><input type="password" name="password"><input type="hidden" name="csrf_token" value="synthetic"></form><div class="nymain"><div class="ny-right"><div class="text-list"><ul><li><a href="/info/1053/41.htm">Other notice</a><span>2026-10-21</span></li></ul></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /tzgg.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Yqgdxy;
+        seed(
+            &client,
+            YQGDXY_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(
+            &client,
+            YQGDXY_ROOT_URL,
+            "<a href=\"tzgg.htm\">通知公告</a>".as_bytes(),
+        );
+        let target = Url::parse("https://yqgdxy.buaa.edu.cn/info/1053/42.htm").unwrap();
+        let error = crate::announcements::yqgdxy::article_with_client(
+            client,
+            CacheMode::PreferCache,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "unavailable");
+
+        let mut offline = fixture.client(CacheMode::Offline, &server);
+        offline.profile = SourceProfile::Yqgdxy;
+        let source = Url::parse(YQGDXY_NOTICES_URL).unwrap();
+        assert!(offline.load(&source).unwrap().is_none());
+        assert_eq!(
+            offline.snapshot(&source, false).unwrap_err().code,
+            "offline_miss"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
     fn assert_missing_ordinal_retains_admitted_source(
         profile: SourceProfile,
         root: &str,
