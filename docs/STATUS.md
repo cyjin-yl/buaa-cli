@@ -1,5 +1,51 @@
 ## Development status
 
+## 2026-10-21: Governed public online verification
+
+The shared process governor on this host had no production directory before
+the first governed online read, so no request gap, cooldown, failure streak,
+authentication latch or pending outcome existed to be lost. The earlier
+`governor history is unavailable` reply came from the boot-review command,
+which deliberately refuses to create missing history, and therefore applies to
+a host that never had a history. No reset, namespace copy or account change
+was needed, and the normal first-use path created the private 0700 governor
+directory with its 0600 lock and state file.
+
+Credential-free public reads then succeeded through the shared governor and the
+owner's egress proxy:
+
+- The official directory returned HTTP 200, 41857 bytes and 50 entries, and the
+  offline replay of the same source returned a cache hit with an identical
+  digest.
+- The computer college root, its declared 公告公示 board, the 10-row college
+  listing and the board-declared article all returned HTTP 200; the article
+  reported 2026-10-19 with 2 body paragraphs and `full_text`.
+- The university news centre 通知公告 listing returned 5 rows.
+- Current college root surfaces were observed for math, h3i, sse, mse, wrj and
+  yqgdxy.
+- Two CDX lookups returned captures, including 100 captures for the computer
+  college root; a governed capture of both targets was refused because the
+  archived replay redirects and this adapter does not follow redirects.
+- The SPOC public root and entry surfaces plus the currently declared
+  application bundle were read. The root digest still matches the 2026-09-28
+  observation, while the entry digest and the application bundle fingerprint
+  changed, so the earlier bundle reference is stale.
+- The campus gateway usage read now succeeds and reports the session online.
+  The two earlier edge failures stay on record. No credential was sent, no
+  login was attempted and no account mutation was performed.
+
+Two attempts were refused by the shared governor with a cooldown or
+minimum-interval denial and were retried only after waiting. No pacing, robots,
+TLS, challenge or governor rule was bypassed, and no private cache, credential
+or campus write was involved.
+
+The remaining gaps are unchanged: ME and EE still fail TLS validation, Sa stays
+root-only, Rse still has no source-declared board, the SPOC authenticated
+course and material contract is still unverified, archive capture of a
+redirecting replay stays refused, the pinned template fetch reports a
+conflicting cached artifact, and replay playback, live playback and
+player-facing subtitle delivery are still unimplemented.
+
 ## 2026-10-21: Source-admission repair round, offline only
 
 Sixteen independently reported source-admission, transport-safety and
