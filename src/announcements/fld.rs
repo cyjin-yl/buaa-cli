@@ -519,12 +519,12 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
             }
             Err(error) => return Err(error),
         };
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()
             .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
         {
-            super::refuse_unsafe_listing(response, &html)?;
             return Ok(Err(Error::new(
                 "unsupported",
                 "retained latest-notice page does not declare the selected Fld article",

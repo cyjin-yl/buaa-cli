@@ -76,6 +76,28 @@ This remains offline evidence, not current campus or authenticated-service
 acceptance. Online governor boot-history admission, ME/EE/Sa/Rse blockers,
 playback and player-facing subtitle delivery remain separate gates.
 
+## 2026-10-21: Target-present unsafe listing bypass corrected
+
+A second independent security review of head `73583fe916dac4f7be445531c9f10f5dd3f087a8`
+found that the first P1 guard was still inside the target-not-declared branch.
+An unsafe selector-valid listing that declared the requested target skipped the
+guard and could be persisted. This was a source-only finding; no live or
+private response was accessed.
+
+The guard now runs immediately after each of the seven listing parsers and
+before target membership is tested. Both target-absent and target-present
+password/CSRF listings fail outward before cache persistence, while safe
+admitted drift retains its original nested result. The loopback regression now
+exercises both target shapes and passes 23/23 focused cases.
+
+The P2 unified offline gate passed formatter, locked build, strict all-target
+clippy, 373 library cases (two ignored subprocess workers), 19 CLI cases and
+15 schema cases. Its source input digest is
+`39e7c84ba93fa81a99be164a292385c5164adfa507225714cc1363648213a0b3`.
+No network, campus request, authentication, mutation, credential, production
+governor or private cache was used. Final exact-head independent approval
+remains a merge gate.
+
 ## 2026-10-20: Unified native offline gate, not online acceptance
 
 The integrated candidate descended from `74d463227d07cc822b0d64b56b5fa99874fad583`,

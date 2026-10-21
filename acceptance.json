@@ -691,6 +691,34 @@
           },
           "limits": "The review and all verification are source-bound and offline. No current campus observation, authentication, mutation, credential, production governor or private cache was used. Online acceptance, media playback and player-facing subtitle delivery remain separate gates."
         },
+        "unsafe_target_membership_bypass_repair_2026_10_21": {
+          "review": "A second independent security review of exact head 73583fe found that the new guard was still inside the target-not-declared branch. An unsafe selector-valid listing that declared the requested target skipped the guard and could be persisted. The review was source-only and did not access live or private data.",
+          "repair": "Move refuse_unsafe_listing before the target-membership test in all seven consumers. Both target-absent and target-present unsafe listings now fail outward before ArchiveClient persistence; safe admitted listings retain their existing nested-drift semantics.",
+          "focused_regressions": {
+            "cases": 23,
+            "passed": 23,
+            "failed": 0,
+            "covers": "selector-valid Yqgdxy listing with password/CSRF markup and both target-absent and target-present rows",
+            "receipt": "target/isolated-20261020-gddn4kgk/review-regressions-p2-20261021/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "unified_gate": {
+            "source_digest": "39e7c84ba93fa81a99be164a292385c5164adfa507225714cc1363648213a0b3",
+            "formatter_check": "passed",
+            "locked_offline_build": "passed",
+            "strict_all_target_clippy": "passed",
+            "library_cases": 373,
+            "ignored_library_entries": 2,
+            "cli_cases": 19,
+            "schema_cases": 15,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-p2-final-20261021/receipt.json",
+            "source_stable_during_run": true,
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "limits": "The source review and verification remain offline evidence. No live campus response, authentication, mutation, credential, production governor or private cache was used, and final exact-head independent approval remains a separate merge gate."
+        },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
           "issue": null,
