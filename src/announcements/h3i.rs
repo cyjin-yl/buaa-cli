@@ -224,7 +224,9 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, H3I_ROOT_URL, H3I_NOTICES_URL, &mut attribution)?;
     let source = Url::parse(H3I_NOTICES_URL).map_err(|_| unavailable())?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let html = college_html(response)?;
+        let document = parse_listing(&html, &source)?;
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()

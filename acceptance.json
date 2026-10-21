@@ -719,6 +719,34 @@
           },
           "limits": "The source review and verification remain offline evidence. No live campus response, authentication, mutation, credential, production governor or private cache was used, and final exact-head independent approval remains a separate merge gate."
         },
+        "legacy_target_membership_guard_followup_2026_10_21": {
+          "review": "A delayed aggregated source review correctly identified the same target-present unsafe-listing shape in the older Aviation, IAI, IC, IIIF, Shenyuan, H3i and Beijing article-discovery consumers. Before this follow-up, each parsed the listing, tested target membership and returned retrieval without a shared safety guard.",
+          "repair": "Each of the seven legacy consumers now parses the admitted HTML once, invokes refuse_unsafe_listing before target membership, and only then returns the existing unsupported or retrieval result. Safe existing behavior is unchanged; unsafe target-present listings fail before cache persistence.",
+          "focused_regressions": {
+            "cases": 23,
+            "passed": 23,
+            "failed": 0,
+            "new_legacy_case": "Aviation target-present password/CSRF listing returns unavailable, does not cache the board and performs one loopback request.",
+            "receipt": "target/isolated-20261020-gddn4kgk/followup-regressions-20261021/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "unified_gate": {
+            "source_digest": "69185a30be142411fc3af4c664b73dea0a90ce268a3ce23772d87159c4f1923a",
+            "formatter_check": "passed",
+            "locked_offline_build": "passed",
+            "strict_all_target_clippy": "passed",
+            "library_cases": 374,
+            "ignored_library_entries": 2,
+            "cli_cases": 19,
+            "schema_cases": 15,
+            "receipt": "target/isolated-20261020-gddn4kgk/followup-final-20261021/receipt.json",
+            "source_stable_during_run": true,
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "limits": "This follow-up is synthetic/offline source evidence only. No campus request, authentication, mutation, credential, production governor or private cache was used; online acceptance and rights-cleared media remain separate gates."
+        },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
           "issue": null,

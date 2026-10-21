@@ -251,7 +251,9 @@ pub(crate) fn article_with_client(
     )?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let html = college_html(response)?;
+        let document = parse_listing(&html, &source)?;
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()

@@ -98,6 +98,28 @@ No network, campus request, authentication, mutation, credential, production
 governor or private cache was used. Final exact-head independent approval
 remains a merge gate.
 
+## 2026-10-21: Legacy article-discovery guards added
+
+A delayed aggregated source review identified the same target-present unsafe
+listing bypass in the older Aviation, IAI, IC, IIIF, Shenyuan, H3i and Beijing
+article consumers. Their parsed listing rows could declare the requested
+article and return retrieval without the shared safety guard.
+
+The follow-up adds `refuse_unsafe_listing` immediately after admitted HTML
+parsing and before membership testing in all seven consumers. Safe behavior is
+unchanged; unsafe target-present password/CSRF responses fail before cache
+persistence. A real loopback Aviation regression covers that target-present
+case, verifies `unavailable`, an offline cache miss and exactly one request.
+
+The follow-up focused set passes 23/23 cases. Its unified offline gate passes
+formatter, locked build, strict all-target clippy, 374 library cases (two
+ignored subprocess workers), 19 CLI cases and 15 schema cases. The source
+input digest is
+`69185a30be142411fc3af4c664b73dea0a90ce268a3ce23772d87159c4f1923a`.
+No campus request, authentication, mutation, credential, production governor
+or private cache was used. This is a follow-up source-safety proof, not online
+campus or rights-cleared media acceptance.
+
 ## 2026-10-20: Unified native offline gate, not online acceptance
 
 The integrated candidate descended from `74d463227d07cc822b0d64b56b5fa99874fad583`,

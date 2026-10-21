@@ -237,7 +237,9 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, IAI_ROOT_URL, IAI_NOTICES_URL, &mut attribution)?;
     let source = Url::parse(IAI_NOTICES_URL).map_err(|_| unavailable())?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source)?;
+        let html = college_html(response)?;
+        let document = parse_listing(&html, &source)?;
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()
