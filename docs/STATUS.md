@@ -24,6 +24,33 @@ cases. Earlier failed flag, generated-file readback and export-bound fixture
 receipts remain retained; they are not rewritten as successes. Private media,
 text, paths and image evidence remain outside Git.
 
+## Retained native subtitle source revalidation
+
+The original private evidence survives in the existing BUAA seat's persistent
+home mount even though its container-local path is absent from the host home.
+Only the retained original, import input and independent pre-implementation
+oracle were copied to a new private directory; their complete hashes match
+the retained copies. No seat was started or restored, and no production
+governor, credential or campus service was accessed for this verification.
+
+The current compiled CLI imported all 2,455 cues from the 636,471-byte native
+original under the foreground heavy-work guardian. Every cue field, exact
+selection, original length/hash and independently recomputed emitted-segment
+digest matched. The native empty resource identity stays explicitly missing;
+media association, fresh authentication, complete history and live delivery
+are not proved. Private inputs and full output remain outside Git.
+
+A later full-window VLC/X11 observation showed subtitle glyphs and advancing
+playback time. Earlier captures clipped the native window's subtitle region;
+the paused toggle comparison remained unchanged and is inconclusive. This
+adds a bounded rendering observation, not whole-track synchronization proof.
+
+Read-only Life tool inspection located selected-course replay capture and MP4
+acquisition, with ASR as a separate downstream source of local SRT files.
+The finite-HLS collector rejects ongoing playlists. Neither that replay path
+nor empty translation/socket metadata establishes a native subtitle or live
+service contract; no private implementation was copied or executed here.
+
 ## 2026-10-21: Governed public online verification
 
 A filesystem check found no production governor directory in the effective
@@ -66,9 +93,14 @@ erasure. No account login or campus write was performed.
 The remaining gaps are unchanged: ME and EE still fail TLS validation, Sa stays
 root-only, Rse still has no source-declared board, the SPOC authenticated
 course and material contract is still unverified, archive capture of a
-redirecting replay stays refused, the pinned template fetch reports a
-conflicting cached artifact, and replay playback, live playback and
-player-facing subtitle delivery are still unimplemented.
+redirecting replay stays refused, and the pinned template fetch reports a
+conflicting cached artifact. Live playback, whole native-track/media binding
+and live subtitle updates remain unverified.
+Bounded local replay/export/delivery is implemented as described above; it is
+not a complete online media service. The ihome and department-material items
+remain reference catalogs without implemented source adapters, not working
+services. Further campus observations still require reviewed continuity with
+the original permanent governor; prior successful requests do not establish it.
 
 ## 2026-10-21: Source-admission repair round, offline only
 
