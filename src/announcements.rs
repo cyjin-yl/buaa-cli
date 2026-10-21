@@ -33,7 +33,7 @@ mod scse;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
 pub(crate) mod soft;
-pub(crate) mod transportation,
+pub(crate) mod transportation;
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
