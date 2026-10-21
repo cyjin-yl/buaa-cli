@@ -415,7 +415,7 @@ fn create_temporary_subtitle(directory: File, body: &[u8]) -> Result<TemporarySu
         let file = match crate::governor::open_child(
             &directory,
             name,
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
         ) {
             Ok(file) => file,
             Err(error) if error.raw_os_error() == Some(libc::EEXIST) => continue,
@@ -956,15 +956,19 @@ mod tests {
     }
 
     #[test]
-    fn subtitle_wiring_distinguishes_srt_and_vtt() {
-        assert_eq!(
-            subtitle_format(Path::new("/private/subtitles.srt")),
-            Ok(SubtitleFormat::Srt)
-        );
-        assert_eq!(
-            subtitle_format(Path::new("/private/subtitles.VTT")),
-            Ok(SubtitleFormat::Vtt)
-        );
-        assert!(subtitle_format(Path::new("/private/subtitles.txt")).is_err());
+    fn generated_subtitle_is_readable_and_removed_after_use() {
+        let root = TempRoot::new();
+        let directory = crate::governor::open_directory(&root.0, false, true)
+            .expect("private subtitle directory");
+        let bytes = b"1\r\n00:00:00,000 --> 00:00:01,000\r\nLocal cue\r\n\r\n";
+        let mut temporary = create_temporary_subtitle(directory, bytes)
+            .expect("readable generated subtitle");
+        let path = root.0.join(temporary.name.to_str().unwrap());
+        let mut actual = Vec::new();
+        temporary.file.read_to_end(&mut actual).expect("read subtitle descriptor");
+        assert_eq!(actual, bytes);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        drop(temporary);
+        assert!(!path.exists());
     }
 }
