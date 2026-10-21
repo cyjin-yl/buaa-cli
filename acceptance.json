@@ -662,6 +662,35 @@
           "retained_failures": "The pre-repair baseline, the two intermediate syntax and lint failures and the original failing trusted check remain retained separately; they are not restated as passing evidence.",
           "limits": "These are synthetic and offline results, not current campus observations. No campus request, authentication, mutation, credential, production governor or private cache was used, and no media player, live feed or authenticated service is proven. ME, EE and Sa transport blockers and the missing Rse notice-board contract are unchanged, and current online acceptance still requires the original governor's deliberate reviewed boot-history admission."
         },
+        "unsafe_nested_listing_repair_2026_10_21": {
+          "review": "Independent exact-head source review identified one P1 admission defect: the nested unsupported-result path in Yqgdxy, ASE and WRJ, with the same shape in BME, FLD, HSS and Math, skipped the security predicate after a structurally valid listing parse. A password/CSRF response could therefore be retained before the caller observed unsupported. The review was source-only; no live response or private data was used.",
+          "repair": "A shared refuse_unsafe_listing guard now rejects authentication, password, CSRF, CAPTCHA, challenge and active-base semantics before the nested error can reach transport persistence. Safe admitted selector drift keeps the original nested-retention behaviour. Seven consumers call the guard.",
+          "focused_regressions": {
+            "cases": 23,
+            "passed": 23,
+            "failed": 0,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-regressions-p1-20261021/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "unified_gate": {
+            "source_digest": "3f481183a009325efa6fffa69a036ef5b0168aa323fec372a9c792746a219683",
+            "formatter_check": "passed",
+            "locked_offline_build": "passed",
+            "strict_all_target_clippy": "passed",
+            "library_cases": 373,
+            "ignored_library_entries": 2,
+            "cli_cases": 19,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-p1-final-20261021/receipt.json",
+            "schema_recovery_receipt": "target/isolated-20261020-gddn4kgk/review-p1-schema-recovery-20261021/receipt.json",
+            "schema_cases": 15,
+            "schema_exit": 0,
+            "source_stable_during_run": true,
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "limits": "The review and all verification are source-bound and offline. No current campus observation, authentication, mutation, credential, production governor or private cache was used. Online acceptance, media playback and player-facing subtitle delivery remain separate gates."
+        },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
           "issue": null,

@@ -46,6 +46,36 @@ the original governor's deliberate reviewed boot-history admission, and the
 pre-existing failing trusted check on the earlier stack head remains a
 separate open gate.
 
+## 2026-10-21: Unsafe nested listing retention corrected
+
+An independent source-only review of the integrated candidate found one P1
+admission defect: the nested `unsupported` result used for safe selector
+drift was returned after a structurally valid listing parse without rechecking
+security markup. A password/CSRF response could therefore be persisted before
+the caller observed the unsupported article. The review did not access live
+sources, private caches or credentials.
+
+The fix adds one shared `refuse_unsafe_listing` guard and calls it from the
+seven affected article-discovery consumers (Yqgdxy, ASE, WRJ, BME, FLD, HSS
+and Math). Safe admitted drift still retains original bytes for offline repair;
+authentication, password, CSRF, CAPTCHA, challenge and active-base responses
+now fail outward before cache persistence. A real loopback regression uses a
+selector-valid Yqgdxy listing containing password/CSRF markup and verifies an
+`unavailable` outer error, no cached listing and one request.
+
+The focused source-admission set passed 23/23 cases. The unified source gate
+passed formatter, locked offline build, strict all-target clippy, 373 library
+cases (two ignored subprocess workers) and 19 CLI cases. The actual CLI
+manifest and subtitle/report consumers passed as before. A fresh schema
+recovery, bound to the same source digest
+`3f481183a009325efa6fffa69a036ef5b0168aa323fec372a9c792746a219683`, passed
+all 15 published schema cases. All verification used one global heavy-work
+lease and no network or campus request.
+
+This remains offline evidence, not current campus or authenticated-service
+acceptance. Online governor boot-history admission, ME/EE/Sa/Rse blockers,
+playback and player-facing subtitle delivery remain separate gates.
+
 ## 2026-10-20: Unified native offline gate, not online acceptance
 
 The integrated candidate descended from `74d463227d07cc822b0d64b56b5fa99874fad583`,
