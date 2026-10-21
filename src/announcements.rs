@@ -1397,12 +1397,21 @@ pub fn schema() -> Value {
         "Optional JSON object. college=transportation selects the directory-bound Transportation Science and Engineering public notices (gggs); page ordinals must be source-advertised and dates/title filters are inclusive."
     );
     output["list"]["input"]["properties"]["college"]["enum"] = json!([
-        "scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "zfai", "iiif", "mse",
-        "sepe", "transportation", Value::Null
+        "scse",
+        "ic",
+        "aviation",
+        "beijing",
+        "shenyuan",
+        "h3i",
+        "zfai",
+        "iiif",
+        "mse",
+        "sepe",
+        "transportation",
+        Value::Null
     ]);
-    output["list"]["input"]["allOf"][0]["if"]["properties"]["college"]["enum"] = json!([
-        "scse", "beijing", "mse", "sepe", "transportation"
-    ]);
+    output["list"]["input"]["allOf"][0]["if"]["properties"]["college"]["enum"] =
+        json!(["scse", "beijing", "mse", "sepe", "transportation"]);
     output["article"]["input"]["description"] = json!(
         "Reviewed HTTPS article URLs include Transportation notices in category 1058. Transportation articles must be declared by the retained notice listing; source_page defaults to 1 and selects only source-advertised ordinals."
     );

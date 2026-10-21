@@ -149,7 +149,8 @@ pub(crate) const SOFT_ROOT_URL: &str = "https://soft.buaa.edu.cn/";
 pub(crate) const SOFT_NOTICES_URL: &str = "https://soft.buaa.edu.cn/xwdt/gggs/tzgg.htm";
 const SOFT_ROBOTS_URL: &str = "https://soft.buaa.edu.cn/robots.txt";
 pub(crate) const TRANSPORTATION_ROOT_URL: &str = "https://transportation.buaa.edu.cn/";
-pub(crate) const TRANSPORTATION_NOTICES_URL: &str = "https://transportation.buaa.edu.cn/xwdt/gggs.htm";
+pub(crate) const TRANSPORTATION_NOTICES_URL: &str =
+    "https://transportation.buaa.edu.cn/xwdt/gggs.htm";
 const TRANSPORTATION_ROBOTS_URL: &str = "https://transportation.buaa.edu.cn/robots.txt";
 pub(crate) const IAI_ROOT_URL: &str = "https://iai.buaa.edu.cn/";
 pub(crate) const IAI_NOTICES_URL: &str = "https://iai.buaa.edu.cn/index/tzgg.htm";
@@ -170,18 +171,41 @@ pub(crate) fn sepe_path_allowed(path: &str) -> bool {
 }
 
 pub(crate) fn math_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/index/xygg.htm") { return true; }
-    path.strip_prefix("/info/1294/").and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+    if matches!(path, "/" | "/robots.txt" | "/index/xygg.htm") {
+        return true;
+    }
+    path.strip_prefix("/info/1294/")
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 pub(crate) fn soft_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm" | "/xwdt/gggs/tzgg.htm") { return true; }
-    path.strip_prefix("/xwdt/gggs/tzgg/").or_else(|| path.strip_prefix("/info/1095/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+    if matches!(
+        path,
+        "/" | "/robots.txt" | "/xwdt/gggs.htm" | "/xwdt/gggs/tzgg.htm"
+    ) {
+        return true;
+    }
+    path.strip_prefix("/xwdt/gggs/tzgg/")
+        .or_else(|| path.strip_prefix("/info/1095/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 pub(crate) fn transportation_path_allowed(path: &str) -> bool {
-    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") { return true; }
-    path.strip_prefix("/xwdt/gggs/").or_else(|| path.strip_prefix("/info/1058/")).and_then(|stem| stem.strip_suffix(".htm")).is_some_and(|stem| !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit()))
+    if matches!(path, "/" | "/robots.txt" | "/xwdt/gggs.htm") {
+        return true;
+    }
+    path.strip_prefix("/xwdt/gggs/")
+        .or_else(|| path.strip_prefix("/info/1058/"))
+        .and_then(|stem| stem.strip_suffix(".htm"))
+        .is_some_and(|stem| {
+            !stem.is_empty() && stem.len() <= 10 && stem.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 pub(crate) fn iai_path_allowed(path: &str) -> bool {
@@ -532,13 +556,19 @@ impl SourceProfile {
                     && sepe_path_allowed(url.path())
             }
             Self::Math => {
-                url.host_str() == Some("math.buaa.edu.cn") && url.query().is_none() && math_path_allowed(url.path())
+                url.host_str() == Some("math.buaa.edu.cn")
+                    && url.query().is_none()
+                    && math_path_allowed(url.path())
             }
             Self::Soft => {
-                url.host_str() == Some("soft.buaa.edu.cn") && url.query().is_none() && soft_path_allowed(url.path())
+                url.host_str() == Some("soft.buaa.edu.cn")
+                    && url.query().is_none()
+                    && soft_path_allowed(url.path())
             }
             Self::Transportation => {
-                url.host_str() == Some("transportation.buaa.edu.cn") && url.query().is_none() && transportation_path_allowed(url.path())
+                url.host_str() == Some("transportation.buaa.edu.cn")
+                    && url.query().is_none()
+                    && transportation_path_allowed(url.path())
             }
             Self::Iai => {
                 url.host_str() == Some("iai.buaa.edu.cn")
