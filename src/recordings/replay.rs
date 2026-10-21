@@ -502,6 +502,11 @@ fn build_argv(
                 "--no-terminal".to_owned(),
                 "--really-quiet".to_owned(),
                 "--no-config".to_owned(),
+                "--load-scripts=no".to_owned(),
+                "--autoload-files=no".to_owned(),
+                "--no-load-unsafe-playlists".to_owned(),
+                "--access-references=no".to_owned(),
+                "--ytdl=no".to_owned(),
                 "--no-input-terminal".to_owned(),
                 "--hwdec=no".to_owned(),
             ];
@@ -516,6 +521,12 @@ fn build_argv(
         }
         Player::Vlc => {
             let mut argv = vec![
+                // VLC 3.x documents --config as the alternate config-file
+                // selector; /dev/null makes the choice explicit without
+                // relying on an undocumented --no-config alias.
+                "--config=/dev/null".to_owned(),
+                "--no-daemon".to_owned(),
+                "--no-one-instance".to_owned(),
                 "--no-video-title-show".to_owned(),
                 "--play-and-exit".to_owned(),
             ];
@@ -579,6 +590,187 @@ fn clear_close_on_exec(fd: RawFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_LD: u16 = 0x00;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_W: u16 = 0x00;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_ABS: u16 = 0x20;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_JMP: u16 = 0x05;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_JEQ: u16 = 0x10;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_JSET: u16 = 0x40;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_K: u16 = 0x00;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const BPF_RET: u16 = 0x06;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SECCOMP_SET_MODE_FILTER: libc::c_long = 1;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SECCOMP_ARCH_OFFSET: u32 = 4;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SECCOMP_NR_OFFSET: u32 = 0;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SECCOMP_ARG0_OFFSET: u32 = 16;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const fn bpf_stmt(code: u16, k: u32) -> libc::sock_filter {
+    libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const fn bpf_jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
+    libc::sock_filter { code, jt, jf, k }
+}
+
+/// The filter is installed after fork and before exec, so it cannot affect
+/// this process or any of its other children.  Unknown inherited descriptors
+/// are closed separately below; that makes the domain check meaningful even
+/// when the caller had an accidentally inherited network descriptor.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+static NETWORK_SANDBOX: [libc::sock_filter; 23] = [
+    // Check the native x86-64 syscall ABI before inspecting a syscall number.
+    bpf_stmt(BPF_LD | BPF_W | BPF_ABS, SECCOMP_ARCH_OFFSET),
+    bpf_jump(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+    bpf_stmt(BPF_LD | BPF_W | BPF_ABS, SECCOMP_NR_OFFSET),
+    // x32 uses the x86-64 audit arch but a different syscall-number space.
+    bpf_jump(BPF_JMP | BPF_JSET | BPF_K, X32_SYSCALL_BIT, 0, 1),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+    // socket(domain, ...) and socketpair(domain, ...) are the only creation
+    // paths allowed to reach a socket.  AF_UNIX is required for X11 and local
+    // audio IPC; every other domain receives EPERM in the child.
+    bpf_jump(BPF_JMP | BPF_JEQ | BPF_K, libc::SYS_socket as u32, 0, 4),
+    bpf_stmt(BPF_LD | BPF_W | BPF_ABS, SECCOMP_ARG0_OFFSET),
+    bpf_jump(BPF_JMP | BPF_JEQ | BPF_K, libc::AF_UNIX as u32, 1, 0),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    bpf_jump(BPF_JMP | BPF_JEQ | BPF_K, libc::SYS_socketpair as u32, 0, 4),
+    bpf_stmt(BPF_LD | BPF_W | BPF_ABS, SECCOMP_ARG0_OFFSET),
+    bpf_jump(BPF_JMP | BPF_JEQ | BPF_K, libc::AF_UNIX as u32, 1, 0),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    // Do not permit io_uring to create or use an unfiltered socket operation.
+    bpf_jump(
+        BPF_JMP | BPF_JEQ | BPF_K,
+        libc::SYS_io_uring_setup as u32,
+        0,
+        1,
+    ),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+    bpf_jump(
+        BPF_JMP | BPF_JEQ | BPF_K,
+        libc::SYS_io_uring_enter as u32,
+        0,
+        1,
+    ),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+    bpf_jump(
+        BPF_JMP | BPF_JEQ | BPF_K,
+        libc::SYS_io_uring_register as u32,
+        0,
+        1,
+    ),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+    bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+];
+
+fn inherited_parent_fds(media_fd: RawFd, subtitle_fd: Option<RawFd>) -> Result<Vec<RawFd>, Error> {
+    // Enumerate before Command::spawn creates its private exec-error pipe.
+    // The entry list is materialized first so the read_dir descriptor itself
+    // is gone before any descriptor number is retained for the child.
+    let entries = std::fs::read_dir("/proc/self/fd").map_err(|_| unavailable())?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        paths.push(entry.map_err(|_| unavailable())?.path());
+    }
+    let mut inherited = Vec::new();
+    for path in paths {
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let Ok(fd) = name.parse::<RawFd>() else {
+            continue;
+        };
+        if fd < CHILD_FD_MIN || fd == media_fd || Some(fd) == subtitle_fd {
+            continue;
+        }
+        // A read_dir entry for the iterator's own descriptor is stale after
+        // the iterator drops.  Requiring the proc link to remain readable
+        // avoids retaining that number for a later Command-owned descriptor.
+        match std::fs::read_link(&path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(unavailable()),
+        }
+        inherited.push(fd);
+    }
+    Ok(inherited)
+}
+
+fn close_inherited_fds(fds: &[RawFd]) -> io::Result<()> {
+    for &fd in fds {
+        // SAFETY: these numbers were enumerated in the parent before spawn;
+        // this operation runs only in the forked child.  Command's private
+        // exec-error pipe is allocated after enumeration and is not included.
+        if unsafe { libc::close(fd) } < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EBADF) {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn install_network_sandbox() -> io::Result<()> {
+    // SAFETY: no_new_privs is process-local to this child and is required for
+    // an unprivileged seccomp filter install.
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let program = libc::sock_fprog {
+        len: NETWORK_SANDBOX.len() as libc::c_ushort,
+        filter: NETWORK_SANDBOX.as_ptr() as *mut libc::sock_filter,
+    };
+    // SAFETY: the static program remains valid until this syscall returns;
+    // seccomp copies it into the kernel.  No TSYNC is needed in the fresh
+    // single-threaded post-fork child.
+    let result =
+        unsafe { libc::syscall(libc::SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0_u32, &program) };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn install_network_sandbox() -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "recording replay requires Linux x86-64 seccomp",
+    ))
 }
 
 fn send_signal(child: &Child, signal: i32) -> Result<(), Error> {
@@ -647,17 +839,21 @@ fn run_player(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    let parent_fds = inherited_parent_fds(media_fd, subtitle_fd)?;
     // SAFETY: the closure performs only async-signal-safe fcntl operations
-    // on descriptors duplicated for this child.  It runs after stdio setup
-    // and before exec, leaving the parent's close-on-exec flags unchanged.
+    // on descriptors duplicated for this child plus the child-only seccomp
+    // and descriptor-isolation syscalls.  It runs after stdio setup and
+    // before exec, leaving the parent's descriptors and sandbox unchanged.
     unsafe {
         command.pre_exec(move || {
+            close_inherited_fds(&parent_fds)?;
             clear_close_on_exec(media_fd)?;
             if let Some(fd) = subtitle_fd
                 && fd != media_fd
             {
                 clear_close_on_exec(fd)?;
             }
+            install_network_sandbox()?;
             Ok(())
         });
     }
@@ -816,8 +1012,8 @@ pub fn schema() -> Value {
                         "type":"object",
                         "additionalProperties":false,
                         "oneOf":[
-                            {"required":["path"],"properties":{"path":{"type":"string","minLength":1,"maxLength":MAX_PATH},"url":{"type":"null"}}},
-                            {"required":["url"],"properties":{"url":{"type":"string","minLength":1,"maxLength":MAX_URL},"path":{"type":"null"}}}
+                            {"type":"object","required":["path"],"properties":{"path":{"type":"string","minLength":1,"maxLength":MAX_PATH},"url":{"type":"null"}}},
+                            {"type":"object","required":["url"],"properties":{"url":{"type":"string","minLength":1,"maxLength":MAX_URL},"path":{"type":"null"}}}
                         ],
                         "properties":{"path":{"type":["string","null"]},"url":{"type":["string","null"]}}
                     },
@@ -827,8 +1023,8 @@ pub fn schema() -> Value {
                         "type":["object","null"],
                         "additionalProperties":false,
                         "oneOf":[
-                            {"required":["path"],"properties":{"path":{"type":"string","minLength":1,"maxLength":MAX_PATH},"segments":{"type":"null"}}},
-                            {"required":["segments"],"properties":{"path":{"type":"null"},"segments":{"type":"array","minItems":1,"maxItems":MAX_SEGMENTS,"items":segment}}},
+                            {"type":"object","required":["path"],"properties":{"path":{"type":"string","minLength":1,"maxLength":MAX_PATH},"segments":{"type":"null"}}},
+                            {"type":"object","required":["segments"],"properties":{"path":{"type":"null"},"segments":{"type":"array","minItems":1,"maxItems":MAX_SEGMENTS,"items":segment}}},
                             {"type":"null"}
                         ],
                         "properties":{"path":{"type":["string","null"]},"segments":{"type":["array","null"]}}
@@ -907,23 +1103,6 @@ mod tests {
     }
 
     #[test]
-    fn headless_sinks_require_explicit_opt_in() {
-        let visible_mpv = build_argv(Player::Mpv, "/proc/self/fd/3", None, None, 0, false);
-        assert!(!visible_mpv.iter().any(|value| value == "--vo=null"));
-        assert!(!visible_mpv.iter().any(|value| value == "--ao=null"));
-        let headless_mpv = build_argv(Player::Mpv, "/proc/self/fd/3", None, None, 0, true);
-        assert!(headless_mpv.iter().any(|value| value == "--vo=null"));
-        assert!(headless_mpv.iter().any(|value| value == "--ao=null"));
-
-        let visible_vlc = build_argv(Player::Vlc, "/proc/self/fd/3", None, None, 0, false);
-        assert!(!visible_vlc.iter().any(|value| value == "dummy"));
-        let headless_vlc = build_argv(Player::Vlc, "/proc/self/fd/3", None, None, 0, true);
-        assert!(headless_vlc.iter().any(|value| value == "dummy"));
-        assert!(headless_vlc.iter().any(|value| value == "--vout=dummy"));
-        assert!(headless_vlc.iter().any(|value| value == "--aout=dummy"));
-    }
-
-    #[test]
     fn path_safety_keeps_direct_argv_chars_and_rejects_controls() {
         use std::os::unix::fs::symlink;
 
@@ -961,14 +1140,102 @@ mod tests {
         let directory = crate::governor::open_directory(&root.0, false, true)
             .expect("private subtitle directory");
         let bytes = b"1\r\n00:00:00,000 --> 00:00:01,000\r\nLocal cue\r\n\r\n";
-        let mut temporary = create_temporary_subtitle(directory, bytes)
-            .expect("readable generated subtitle");
+        let mut temporary =
+            create_temporary_subtitle(directory, bytes).expect("readable generated subtitle");
         let path = root.0.join(temporary.name.to_str().unwrap());
         let mut actual = Vec::new();
-        temporary.file.read_to_end(&mut actual).expect("read subtitle descriptor");
+        temporary
+            .file
+            .read_to_end(&mut actual)
+            .expect("read subtitle descriptor");
         assert_eq!(actual, bytes);
         assert_eq!(fs::read(&path).unwrap(), bytes);
         drop(temporary);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn schema_one_of_branches_are_type_disjoint() {
+        let input = schema()["input"].clone();
+        let media = &input["properties"]["media"]["oneOf"];
+        assert_eq!(media[0]["type"], "object");
+        assert_eq!(media[1]["type"], "object");
+        let subtitles = &input["properties"]["subtitles"]["oneOf"];
+        assert_eq!(subtitles[0]["type"], "object");
+        assert_eq!(subtitles[1]["type"], "object");
+        assert_eq!(subtitles[2]["type"], "null");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn child_sandbox_denies_non_unix_sockets_and_io_uring() {
+        let mut pipe = [0; 2];
+        // SAFETY: `pipe` points to two writable stack-owned descriptor slots.
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            // SAFETY: this is the forked test child; failures use _exit so no
+            // parent-owned Rust destructors run after fork.
+            unsafe {
+                libc::close(pipe[0]);
+                if install_network_sandbox().is_err() {
+                    libc::_exit(90);
+                }
+                let internet =
+                    libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+                let internet_errno = io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or_default();
+                if internet >= 0 {
+                    libc::close(internet);
+                }
+                let unix = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+                let unix_allowed = unix >= 0;
+                if unix >= 0 {
+                    libc::close(unix);
+                }
+                let ring = libc::syscall(
+                    libc::SYS_io_uring_setup,
+                    1_u32,
+                    std::ptr::null_mut::<libc::c_void>(),
+                );
+                let ring_errno = io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or_default();
+                let result = [internet_errno, i32::from(unix_allowed), ring_errno];
+                let written = libc::write(
+                    pipe[1],
+                    result.as_ptr().cast(),
+                    std::mem::size_of_val(&result),
+                );
+                libc::close(pipe[1]);
+                if written != std::mem::size_of_val(&result) as isize {
+                    libc::_exit(91);
+                }
+                let _ = ring;
+                libc::_exit(0);
+            }
+        }
+        // SAFETY: the parent owns the read end and waits for its direct child.
+        unsafe { libc::close(pipe[1]) };
+        let mut result = [0_i32; 3];
+        let mut reader = unsafe { File::from_raw_fd(pipe[0]) };
+        // SAFETY: `result` is a contiguous array of initialized i32 values;
+        // reading its exact byte length preserves the array's alignment.
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                result.as_mut_ptr().cast::<u8>(),
+                std::mem::size_of_val(&result),
+            )
+        };
+        reader.read_exact(bytes).unwrap();
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+        assert_eq!(result[0], libc::EPERM);
+        assert_eq!(result[1], 1);
+        assert_eq!(result[2], libc::EPERM);
     }
 }

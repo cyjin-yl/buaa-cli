@@ -1,5 +1,29 @@
 ## Development status
 
+## Bounded local player delivery
+
+The local replay command now launches installed mpv/VLC with explicit
+authorization, descriptor-bound media/subtitles, initial seek, optional
+headless output and bounded shutdown. Internet socket creation and io_uring
+are denied in the Linux x86-64 player child; Unix display/audio IPC remains
+available. Player configuration and external helper/script autoload are
+disabled. This is not a general decoder/filesystem sandbox.
+
+An actual guarded CLI run exercised both players with supplied SRT tracks,
+initial seek and bound-triggered stop/reaping. A separate segments-to-SRT run
+verified submission and cleanup. Independent mpv/X11 screenshots at one
+paused source frame showed subtitle-only pixel differences; exact seek and
+subsequent playback/audio-clock advancement were observed. These local
+observations do not certify ASR accuracy, native media-track association,
+physical speaker output, live playback or universal synchronization.
+
+The guarded quality gate passed formatter, locked offline build, strict
+all-target clippy, 389 library cases (two worker entries ignored), 19 CLI
+cases, native manifest/subtitle/report consumers and 15 announcement schema
+cases. Earlier failed flag, generated-file readback and export-bound fixture
+receipts remain retained; they are not rewritten as successes. Private media,
+text, paths and image evidence remain outside Git.
+
 ## 2026-10-21: Governed public online verification
 
 A filesystem check found no production governor directory in the effective

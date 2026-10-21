@@ -56,6 +56,13 @@ shell. Input is strict JSON on stdin with `authorized: true`, `player`, and
 `media.path` selecting an existing absolute local file. Remote URLs remain
 unsupported: the public-page transport is not a generic media fetch profile.
 The local path, subtitle text and source URLs are not included in receipts.
+The player child is confined against Internet socket creation; a local
+playlist is not permission for the player to fetch remote segments or keys.
+Unix sockets remain available for local display/audio IPC. This is a network
+boundary, not a general sandbox against an adversarial media decoder or
+local filesystem access. Player configuration and helper/script autoload are
+disabled so external configuration cannot enable daemon playback.
+The confinement requires Linux x86-64; unsupported platforms fail closed.
 
 Optional `seek_seconds` selects the initial media position. `max_seconds`
 limits the player run (default 120, maximum 3600); the parent stops and reaps

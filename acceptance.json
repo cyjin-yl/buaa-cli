@@ -2644,7 +2644,9 @@
       "sources": [],
       "implementation": "recordings replay accepts an explicitly authorized local file, mpv or VLC, optional local/normalized subtitles, initial seek and bounded stop. Normal device output is default; headless null/dummy output is explicit. Remote media transport remains unsupported.",
       "observed_rendering": "A bounded real-media mpv/X11 probe precisely sought to a selected derived-cue window, observed playback/audio clocks advance, and compared subtitle/video-only screenshots at one paused source frame. Pixel differences localized to the subtitle area. Private frames/text/media identifiers remain outside Git.",
-      "remaining": "CLI end-to-end mpv/VLC receipts, final quality gate and exact-head review must accompany publication. Physical speaker output, whole authorized native-track/media binding, all-player synchronization and live playback are not established by a separate rendered derived-track probe."
+      "local_cli_proof": "Under the global heavy-work guardian, actual installed mpv and VLC both replayed an authorized local file with initial seek and a supplied SRT, reached the player runtime bound, and were stopped and reaped. Generated segment-to-SRT submission also passed and its temporary file was removed. Player receipts explicitly leave rendering/audio/synchronization unverified; those are not inferred from arguments or exit status.",
+      "quality_gate": "Rust 1.89 formatter, locked offline build, strict all-target clippy, 389 library tests and 19 CLI tests passed, with two subprocess workers ignored. Native manifest/subtitle/report consumers and all 15 announcement schema cases passed. Linux child confinement has a forked boundary regression proving non-Unix socket and io_uring denial with Unix socket allowance.",
+      "remaining": "Linux x86-64 only. Physical speaker output, whole authorized native-track/media binding, VLC rendered-cue synchronization and live playback remain unverified. The network filter is not a general decoder/filesystem sandbox and permits local Unix IPC."
     },
     {
       "id": "recording-live-playback",
