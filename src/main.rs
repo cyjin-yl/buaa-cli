@@ -397,7 +397,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings subtitles [--online|--refresh]", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings subtitles [--online|--refresh]", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements/spoc/recordings subtitles --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
@@ -486,6 +486,12 @@ fn run() -> CliResult {
             let input = read_input()?;
             let output = buaa_cli::recordings::search(&input).map_err(service_error)?;
             emit(&output)
+        }
+        "recordings" if args.len() == 2 && args[1] == "replay" => {
+            let mut input = read_input()?;
+            let output = buaa_cli::recordings::replay::replay(&input);
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
         }
         "recordings"
             if args.get(1).map(String::as_str) == Some("subtitles")

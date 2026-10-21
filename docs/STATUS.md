@@ -2,14 +2,13 @@
 
 ## 2026-10-21: Governed public online verification
 
-The shared process governor on this host had no production directory before
-the first governed online read, so no request gap, cooldown, failure streak,
-authentication latch or pending outcome existed to be lost. The earlier
-`governor history is unavailable` reply came from the boot-review command,
-which deliberately refuses to create missing history, and therefore applies to
-a host that never had a history. No reset, namespace copy or account change
-was needed, and the normal first-use path created the private 0700 governor
-directory with its 0600 lock and state file.
+A filesystem check found no production governor directory in the effective
+UID's passwd home at observation time. Local absence does not prove that
+history never existed or establish continuity with the earlier container
+runtime. The review command refuses to create missing history; normal open
+subsequently created a private 0700 directory with a 0600 lock and state file.
+No existing local governor files were deleted. The earlier claim that there
+could have been no historical waits or unknown outcomes was not established.
 
 Credential-free public reads then succeeded through the shared governor and the
 owner's egress proxy:
@@ -34,10 +33,11 @@ owner's egress proxy:
   The two earlier edge failures stay on record. No credential was sent, no
   login was attempted and no account mutation was performed.
 
-Two attempts were refused by the shared governor with a cooldown or
-minimum-interval denial and were retried only after waiting. No pacing, robots,
-TLS, challenge or governor rule was bypassed, and no private cache, credential
-or campus write was involved.
+The observed governor enforced cooldown/interval denials. The CLI created
+private response caches. Account network identifiers and response digests
+are excluded from the current public manifest; earlier Git revisions may
+retain the previously published fields. This correction is not historical
+erasure. No account login or campus write was performed.
 
 The remaining gaps are unchanged: ME and EE still fail TLS validation, Sa stays
 root-only, Rse still has no source-declared board, the SPOC authenticated

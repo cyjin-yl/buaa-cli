@@ -3,6 +3,8 @@
 mod catalog;
 mod model;
 mod provenance;
+pub mod replay;
+pub mod subtitle_export;
 pub mod subtitles;
 #[cfg(test)]
 mod test_support;
@@ -210,6 +212,7 @@ pub fn schema() -> Value {
     }});
     output["subtitles"] = subtitles::schema();
     output["subtitles-online"] = subtitles::online_schema();
+    output["replay"] = replay::schema();
     output
 }
 
