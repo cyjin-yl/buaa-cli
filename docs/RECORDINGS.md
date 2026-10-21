@@ -49,9 +49,54 @@ Bounds are 4 MiB decoded input, 256 tracks, 20,000 selected cues, 256-byte ident
 
 Fresh HTTP status, JSON MIME, body budget and application success are admitted before immutable-byte comparison. An indeterminate/denied/redirected session latches the shared safety outcome and does not replace a retained original. A valid application response whose selected layout is malformed is retained privately for a cache-only parser correction but still returns an error. The online original hash covers the raw HTTP body, not a constructed wrapper; a cache hit or `304` does not imply recording media retrieval. The current source/runtime gate remains pending parent validation, and no accepted authenticated target response is claimed here.
 
-## Required playback and subtitle services — not implemented
+## Bounded local replay
 
-The restored subtitle paths normalize supplied/native timed data only; they are not a player. **Player launch, seeking, controlled stop/exit, actual audio/video playback and replay subtitle synchronization are UNIMPLEMENTED.** No mpv/VLC launcher or player-facing delivery path exists. **Live playback, current audio/video, reconnect/stop lifecycle and governed playlist/fragment/key/range scheduling are UNIMPLEMENTED.** The `recording-subtitle-service` capability is therefore only partial-offline: native/local track selection and actual rendered subtitle cues, synchronization, lifecycle and live updates remain UNIMPLEMENTED and unverified. A JSON schema/discovery entry is not evidence of rendered output or a usable replay/live service.
+`buaa recordings replay` launches installed mpv or VLC directly, without a
+shell. Input is strict JSON on stdin with `authorized: true`, `player`, and
+`media.path` selecting an existing absolute local file. Remote URLs remain
+unsupported: the public-page transport is not a generic media fetch profile.
+The local path, subtitle text and source URLs are not included in receipts.
+The player child is confined against Internet socket creation; a local
+playlist is not permission for the player to fetch remote segments or keys.
+Unix sockets remain available for local display/audio IPC. This is a network
+boundary, not a general sandbox against an adversarial media decoder or
+local filesystem access. Player configuration and helper/script autoload are
+disabled so external configuration cannot enable daemon playback.
+The confinement requires Linux x86-64; unsupported platforms fail closed.
+
+Optional `seek_seconds` selects the initial media position. `max_seconds`
+limits the player run (default 120, maximum 3600); the parent stops and reaps
+the child when the bound expires. Media hashing precedes this player bound.
+Normal audio/video output is the default; explicit `headless: true` requests
+null/dummy outputs and does not establish audible or visible device output.
+
+`subtitles.path` selects an existing SRT/VTT file, or `subtitles.segments`
+selects normalized integer-millisecond cues. Segment materialization requires
+an explicit private `private_dir` owned by the caller with mode 0700. The
+temporary SRT is mode 0600, exclusively created and cleaned after the player
+exits. Native JSON cue preservation and player-format representability are
+different contracts; unrepresentable exports are refused rather than silently
+dropping text or changing timing.
+
+Receipts distinguish submitted player arguments/subtitles, the observed
+process exit, and unverified rendering/audio facts. Successful process launch
+alone is not subtitle-rendering or synchronization proof.
+
+A separate bounded real-media mpv/X11 observation exercised an exact seek,
+playback clock advancement and subtitle pixels in a virtual display. The
+same paused source frame was captured both with subtitles and video-only;
+pixel differences were localized to the subtitle region. This proves that
+selected local derived cues can render on the observed player, not that the
+ASR text is accurate, that source media and native classroom tracks are
+universally associated, or that physical speakers were heard. Private frames,
+source text, media identifiers and full source digests remain outside Git.
+
+## Live playback and remaining subtitle service gaps
+
+Live playback, current audio/video, reconnect/stop lifecycle and governed
+playlist/fragment/key/range scheduling remain unimplemented. Local replay and
+one rendered derived subtitle track do not complete live updates, whole
+authorized native-track verification or all-player synchronization acceptance.
 
 ## Object-storage interface facts — source-only draft
 

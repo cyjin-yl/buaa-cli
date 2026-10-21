@@ -18,10 +18,10 @@
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed. Only known pre-reboot history has an explicit offline plan/commit migration; unknown outcomes and missing/corrupt history cannot migrate. No reset or automatic recovery.",
         "first_use_on_this_host_2026_10_21": {
-          "observation": "This host had no production governor directory before the first governed online read, so no request gap, cooldown, failure streak, authentication latch or pending outcome existed to be lost. The shared governor was created by the normal first-use path and now holds a private 0700 directory with a 0600 lock and state file.",
-          "review_command_scope": "The boot-review-plan command intentionally refuses to create missing history, so it reports governor history is unavailable on a host that never had one. That is the inapplicable migration path, not a lost-history failure, and it required no reset, namespace copy or account change.",
+          "observation": "A local filesystem check found no production governor directory in the effective UID's passwd home at observation time. That establishes local absence only, not that historical state never existed or that another runtime identity had no history. The subsequent normal open created a private 0700 directory with a 0600 lock and state file; no existing local state was deleted.",
+          "review_command_scope": "boot-review-plan does not create missing directories, while normal open has a fresh-initialization path. The earlier unavailable result identifies directory admission failure, not a proven boot mismatch or state corruption. Cross-runtime historical continuity was not established by the local absence check.",
           "pacing": "Two online attempts were refused by the shared governor with a cooldown or minimum-interval denial and were retried only after waiting. No pacing, robots, TLS, challenge or governor rule was bypassed.",
-          "limits": "The observed public gateway and directory reads are credential-free. No authentication, campus mutation, credential use or private cache was involved."
+          "limits": "No login or account mutation was attempted. The CLI retained responses in private caches; account response content and network identifiers must not be published. This observation does not establish continuity with the earlier container governor."
         },
         "boot_history_review": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/83",
@@ -90,9 +90,8 @@
         "command": "buaa gateway usage --online",
         "result": "usage_snapshot",
         "online": true,
-        "online_ip": "10.135.150.11",
         "source_url": "https://gw.buaa.edu.cn/cgi-bin/rad_user_info",
-        "response_body_sha256": "db9c569a3e7dcb3ec1c18cd0bb3b3e57eb0d89bbc60bc543ae63389ecd4791c7",
+        "private_response_provenance": "Retained privately; account network address and response digest omitted from the current public manifest. Earlier Git revisions may retain these fields; this change is not historical erasure.",
         "scope": "Read-only usage of the owner account through the shared governor and the owner's egress proxy. No credential was transmitted, no login was attempted, no logout or other account mutation was performed, and the adapter keeps identity fields redacted.",
         "status_change": "The 2026-09-25 and 2026-09-28 observations failed at the network edge with a severed TLS handshake. The endpoint is reachable now, so the live claim for the usage path is satisfied; login, logout and recovery still require their own explicit typed intent."
       },
@@ -2640,10 +2639,14 @@
     {
       "id": "recording-replay-playback",
       "title": "mpv/VLC replay playback",
-      "status": "pending",
+      "status": "partial",
       "acceptance": "Select an authorized source-bound replay, launch mpv or VLC without a shell, observe actual audio/video, seeking, subtitle synchronization and controlled exit. Credentials/signed URLs must not leak through argv/logs; use cached or controlled media paths retaining the same permanent governor.",
       "sources": [],
-      "remaining": "No player-launch command or actual playback proof exists; native subtitle JSON import is not replay playback."
+      "implementation": "recordings replay accepts an explicitly authorized local file, mpv or VLC, optional local/normalized subtitles, initial seek and bounded stop. Normal device output is default; headless null/dummy output is explicit. Remote media transport remains unsupported.",
+      "observed_rendering": "A bounded real-media mpv/X11 probe precisely sought to a selected derived-cue window, observed playback/audio clocks advance, and compared subtitle/video-only screenshots at one paused source frame. Pixel differences localized to the subtitle area. Private frames/text/media identifiers remain outside Git.",
+      "local_cli_proof": "Under the global heavy-work guardian, actual installed mpv and VLC both replayed an authorized local file with initial seek and a supplied SRT, reached the player runtime bound, and were stopped and reaped. Generated segment-to-SRT submission also passed and its temporary file was removed. Player receipts explicitly leave rendering/audio/synchronization unverified; those are not inferred from arguments or exit status.",
+      "quality_gate": "Rust 1.89 formatter, locked offline build, strict all-target clippy, 389 library tests and 19 CLI tests passed, with two subprocess workers ignored. Native manifest/subtitle/report consumers and all 15 announcement schema cases passed. Linux child confinement has a forked boundary regression proving non-Unix socket and io_uring denial with Unix socket allowance.",
+      "remaining": "Linux x86-64 only. Physical speaker output, whole authorized native-track/media binding, VLC rendered-cue synchronization and live playback remain unverified. The network filter is not a general decoder/filesystem sandbox and permits local Unix IPC."
     },
     {
       "id": "recording-live-playback",
@@ -2663,7 +2666,8 @@
         "recordings-native-subtitles",
         "recordings-native-subtitles-online"
       ],
-      "remaining": "Timed original normalization and a fixed-source subtitle GET adapter are implemented; player-facing subtitle delivery/export, actual rendering/synchronization and live updates are not implemented or verified."
+      "local_delivery": "Strict bounded SRT/WebVTT export and local player subtitle submission are implemented. Native JSON remains lossless; player export refuses text that the chosen formats cannot represent literally, unsupported controls and zero-duration cues. One authorized derived track has a separate mpv/X11 pixel/time observation.",
+      "remaining": "Whole native-platform track/media binding, VLC rendered-cue synchronization, physical audio output and live subtitle updates remain unverified. Submitted player arguments alone are not proof of rendering."
     }
   ],
   "catalog_entries": [

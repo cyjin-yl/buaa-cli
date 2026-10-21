@@ -223,6 +223,24 @@ fn normalize_track(
     Ok((segments, derived_sha256))
 }
 
+/// Export an already normalized segment array without changing its JSON form.
+/// The formatter is the single owner of cue validation and serialization; it
+/// refuses text that cannot be represented literally in bounded (16 MiB) SRT
+/// output.
+pub fn export_srt(segments: &Value) -> Result<String, Error> {
+    let segments = segments.as_array().ok_or_else(invalid)?;
+    crate::recordings::subtitle_export::srt(segments)
+}
+
+/// Export an already normalized segment array without changing its JSON form.
+/// The formatter is the single owner of cue validation and serialization; it
+/// refuses text that cannot be represented literally in bounded (16 MiB)
+/// WebVTT output.
+pub fn export_vtt(segments: &Value) -> Result<String, Error> {
+    let segments = segments.as_array().ok_or_else(invalid)?;
+    crate::recordings::subtitle_export::vtt(segments)
+}
+
 fn rejected_session() -> Error {
     Error::new(
         "auth_latched",
