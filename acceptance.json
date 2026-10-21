@@ -17,6 +17,12 @@
         "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention. Earlier offline suite: 118 passed across five suites (one ignored). Final merged-source gate: 197 library + 18 CLI passed, two ignored; locked offline build, strict all-target clippy and formatter check passed. The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed. Only known pre-reboot history has an explicit offline plan/commit migration; unknown outcomes and missing/corrupt history cannot migrate. No reset or automatic recovery.",
+        "first_use_on_this_host_2026_10_21": {
+          "observation": "This host had no production governor directory before the first governed online read, so no request gap, cooldown, failure streak, authentication latch or pending outcome existed to be lost. The shared governor was created by the normal first-use path and now holds a private 0700 directory with a 0600 lock and state file.",
+          "review_command_scope": "The boot-review-plan command intentionally refuses to create missing history, so it reports governor history is unavailable on a host that never had one. That is the inapplicable migration path, not a lost-history failure, and it required no reset, namespace copy or account change.",
+          "pacing": "Two online attempts were refused by the shared governor with a cooldown or minimum-interval denial and were retried only after waiting. No pacing, robots, TLS, challenge or governor rule was bypassed.",
+          "limits": "The observed public gateway and directory reads are credential-free. No authentication, campus mutation, credential use or private cache was involved."
+        },
         "boot_history_review": {
           "issue": "https://github.com/cyjin-yl/buaa-cli/issues/83",
           "commands": [
@@ -80,7 +86,17 @@
         "gateway-logout-plan-commit",
         "gateway-logout-recovery"
       ],
-      "remaining": "The operator authorized live read-only gateway usage observations on 2026-09-25; the shared governor request interval was raised to 60 seconds for the session and the two governed attempts were approximately two hours and twenty-two minutes apart. Both terminated at the network edge: TLS verification passed, but the handshake was severed (SSL_ERROR_SYSCALL / unexpected EOF) with zero response bytes, sanitized `unavailable`, exit 7. No campus request was completed, so live endpoint compatibility, owner account postconditions and actual ac_id/IP remain unverified. The devcontainer has no route to gw.buaa.edu.cn; a later attempt requires reachable egress, the same governor controls, and the same read-only scope.",
+      "online_usage_observation_2026_10_21": {
+        "command": "buaa gateway usage --online",
+        "result": "usage_snapshot",
+        "online": true,
+        "online_ip": "10.135.150.11",
+        "source_url": "https://gw.buaa.edu.cn/cgi-bin/rad_user_info",
+        "response_body_sha256": "db9c569a3e7dcb3ec1c18cd0bb3b3e57eb0d89bbc60bc543ae63389ecd4791c7",
+        "scope": "Read-only usage of the owner account through the shared governor and the owner's egress proxy. No credential was transmitted, no login was attempted, no logout or other account mutation was performed, and the adapter keeps identity fields redacted.",
+        "status_change": "The 2026-09-25 and 2026-09-28 observations failed at the network edge with a severed TLS handshake. The endpoint is reachable now, so the live claim for the usage path is satisfied; login, logout and recovery still require their own explicit typed intent."
+      },
+      "remaining": "The 2026-09-25 and 2026-09-28 governed usage attempts failed at the network edge with a severed TLS handshake and zero response bytes; those failures stay on record. The 2026-10-21 governed usage read succeeded and is recorded in online_usage_observation_2026_10_21, so live usage compatibility is now established. Login, logout, recovery and any account postcondition still require their own explicit typed intent, and the owner account's actual ac_id stays unverified by this read-only path.",
       "authorized_attempts": [
         {
           "at_utc_approx": "2026-09-25T18:12:54Z",
@@ -159,6 +175,13 @@
           "command": "buaa spoc surface --online",
           "result": "HTTP 200, body bytes/hash, content-type text/html; charset=utf-8",
           "scope": "public surface only; script/material still contract-blocked"
+        },
+        "online_surface_and_script_2026_10_21": {
+          "commands": "buaa spoc surface root --online; buaa spoc surface entry --online; buaa spoc script --online",
+          "root": "HTTP 200, 377 bytes, sha256 373cd4cd521ae2c33d27ce647d416b6a4d44523e100fa8503fd7f984af355243, identical to the 2026-09-28 observation",
+          "entry": "HTTP 200, 2173 bytes, sha256 8d4281472bc9d19c..., which differs from the 2026-09-28 entry digest, so the current entry page is the one this receipt describes",
+          "declared_scripts": "The entry page declares chunk-vendors.0cdf68e5.js and app.45f599d9.js. The app bundle fingerprint changed from a7c0879c to 45f599d9, so the previously recorded bundle reference is stale.",
+          "scope": "Public surface and one declared application bundle only. The bundle is not executed, no session or credential was used, and no course, material, media or attendance contract is claimed."
         }
       }
     },
@@ -577,6 +600,8 @@
         ],
         "observed_source": {
           "directory_url": "https://www.buaa.edu.cn/jgsz/jxkyjg02.htm",
+          "online_read_2026_10_21": "A governed `buaa organizations list --online` read returned HTTP 200, 41857 bytes, sha256 77c310f0905ff42540e85aa3bc3f2827efdc2f72742738414a0a35be554e09ba and 50 source entries. The offline replay of the same source returned a cache hit with an identical digest, and the first-use governor state was created by the normal initialization path.",
+          "online_read_scope": "Public institutional directory only. No credential, no mutation, and no private cache was involved; the entry set remains exactly what the live document declares.",
           "directory_sha256": "f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9",
           "homepage_sha256": "b936471fe3aaad7ae6e4753b0183f347fd637aaa18c59ecf893c6703c3911ebd",
           "robots_status": 404,
@@ -746,6 +771,13 @@
             "campus_requests": 0
           },
           "limits": "This follow-up is synthetic/offline source evidence only. No campus request, authentication, mutation, credential, production governor or private cache was used; online acceptance and rights-cleared media remain separate gates."
+        },
+        "governed_online_reads_2026_10_21": {
+          "scope": "Credential-free public announcement reads through the shared production governor and the owner's egress proxy. Every request was paced by the governor, and two pacing denials were honoured by waiting and retrying rather than bypassing.",
+          "scse": "Root HTTP 200, 40850 bytes, sha256 5b0962930b00f6ac...; the declared 公告公示 board HTTP 200, 27612 bytes, sha256 0989172a7bb59ca6...; the college listing for category gggs returned 10 source rows; the board-declared article https://scse.buaa.edu.cn/info/1099/12587.htm returned HTTP 200, 24743 bytes, sha256 8583db9b6c755be9..., published 2026-10-19, with 2 body paragraphs and result full_text.",
+          "university_news_center": "The default 通知公告 listing returned HTTP 200, 20490 bytes, sha256 e00bc377d3f1d9c7..., with 5 source rows.",
+          "college_surfaces": "Current HTTP 200 root surfaces with their byte lengths and digests: math 57735 sha256 3b0cfca842740e38..., h3i 50469 sha256 b9c4e8dbc8ee093d..., sse 53708 sha256 27126cfc644f4557..., mse 57931 sha256 efed9004c300c51e..., wrj 52570 sha256 fd067bc801f57bbd..., yqgdxy 58877 sha256 f72cfbf96c36b8f6....",
+          "limits": "These are current public observations of the selected pages. They do not claim complete history, later pages, attachments, all-college coverage, authenticated services or media rights, and no campus mutation, credential or private cache was used."
         },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
@@ -2276,6 +2308,8 @@
         "limits": "Live proof covers one exact homepage replay, one bounded dated CDX search and earlier index pagination; Wayback archived error-status behavior remains offline-tested only. Publication dates remain unknown, and a local byte hash does not authenticate the archive or publisher. No direct campus-origin request. General TimeGate/TimeMap crawling, announcement-source replay/extraction and Life/transcript integration are not implemented by this adapter.",
         "online_lookup_2026-10-18": {
           "command": "buaa archive lookup --online",
+          "online_lookup_2026_10_21": "Two governed CDX lookups succeeded: the official directory URL returned captures found with HTTP 200, 2721 bytes and sha256 077df7a33280b84f..., and the scse root URL returned 100 captures with HTTP 200, 13125 bytes and sha256 c12a495eb0d69bae.... A governed capture of both targets was refused because the archived replay redirects, which this adapter deliberately does not follow; the refusal is recorded instead of being worked around.",
+          "online_lookup_scope": "Index lookups only. No replayed original bytes were captured, no publication date was inferred, and the archive digests remain archive-reported values rather than locally verified content hashes.",
           "input": "{\"url\":\"https://news.buaa.edu.cn/tzgg.htm\"}",
           "result": "captures found via CDX, http 200, mimetype text/html",
           "scope": "CDX lookup only; capture has encoding boundary"
