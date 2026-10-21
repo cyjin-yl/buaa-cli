@@ -15,21 +15,41 @@ use crate::html::{active_element_text, element_text, inert_element};
 use crate::net::{ArchiveClient, CacheMode, Error, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{NaiveDate, NaiveDateTime};
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
 
+pub(crate) mod ase;
 pub(crate) mod aviation;
 pub(crate) mod beijing;
+pub(crate) mod bme;
+pub(crate) mod cst;
+pub(crate) mod dept3;
+pub(crate) mod ee;
+pub(crate) mod fld;
 pub(crate) mod h3i;
+pub(crate) mod hss;
+pub(crate) mod iai;
 pub(crate) mod ic;
 pub(crate) mod iiif;
+pub(crate) mod math;
+pub(crate) mod me;
 pub(crate) mod mse;
+pub(crate) mod physics;
 pub(crate) mod rse;
+pub(crate) mod sa;
+pub(crate) mod sce;
 mod scse;
+pub(crate) mod sem;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
+pub(crate) mod soft;
+pub(crate) mod sse;
+pub(crate) mod transportation;
+pub(crate) mod wrj;
+pub(crate) mod ygy;
+pub(crate) mod yqgdxy;
 pub(crate) mod zfai;
 
 const NEWS_BASE: &str = "https://news.buaa.edu.cn";
@@ -114,6 +134,8 @@ struct ArticleQuery {
 struct HistoryInput {
     html: String,
     provenance: HistoryProvenance,
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -143,14 +165,14 @@ fn invalid_list() -> Error {
 fn invalid_article() -> Error {
     Error::new(
         "invalid_input",
-        "announcements article input is malformed; expected a reviewed HTTPS news-center or college article URL; source_page is supported only for IC, aviation, Beijing, Shenyuan, H3i, Zfai and Iiif source binding",
+        "announcements article input is malformed; expected a reviewed source-declared HTTPS article URL and a source-supported source_page",
     )
 }
 
 fn invalid_history() -> Error {
     Error::new(
         "invalid_input",
-        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be a news.buaa.edu.cn listing URL",
+        "announcements history input is malformed; html must be base64 UTF-8 and provenance.source_url must be a reviewed listing URL or an explicitly typed Dept3 article URL",
     )
 }
 
@@ -209,6 +231,16 @@ fn advertised_page_url(
     }
     let text = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
     let document = Html::parse_document(text);
+    advertised_page_url_document(&document, base, page, ordinal_links, allowed_page)
+}
+
+fn advertised_page_url_document(
+    document: &Html,
+    base: &Url,
+    page: u32,
+    ordinal_links: &str,
+    allowed_page: impl Fn(&Url) -> bool,
+) -> Result<Url, Error> {
     let selector = Selector::parse(ordinal_links).map_err(|_| unavailable())?;
     let mut selected = None;
     for link in document.select(&selector) {
@@ -613,6 +645,186 @@ fn retrieval(response: &Response) -> Value {
     })
 }
 
+pub(crate) fn is_admitted_html(response: &Response) -> bool {
+    response.status == 200
+        && !response.body.is_empty()
+        && response.body.len() <= MAX_HTML
+        && response_content_type(response).is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("text/html")
+        })
+}
+
+fn response_content_type(response: &Response) -> Option<&str> {
+    response
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str())
+}
+
+pub(crate) fn is_safe_public_fallback(response: &Response) -> bool {
+    if !is_admitted_html(response) {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(&response.body) else {
+        return false;
+    };
+    let document = Html::parse_document(text);
+    is_safe_public_fallback_document(response, &document)
+}
+
+fn is_safe_public_fallback_document(response: &Response, document: &Html) -> bool {
+    let Ok(bases) = Selector::parse("base[href]") else {
+        return false;
+    };
+    if document.select(&bases).any(|base| !inert_element(base)) {
+        return false;
+    }
+    if response
+        .headers
+        .iter()
+        .any(|(name, value)| crate::net::challenge_header(name.trim(), value.as_bytes()))
+    {
+        return false;
+    }
+    let Ok(elements) = Selector::parse("*") else {
+        return false;
+    };
+    !document
+        .select(&elements)
+        .filter(|element| !inert_element(*element))
+        .any(public_security_element)
+}
+
+/// Refuse an unsafe admitted listing outright.
+///
+/// A response that carries authentication, password, CSRF, CAPTCHA or
+/// challenge semantics must never be retained in the public cache, not even
+/// when its selectors happen to match a listing view. A safe admitted
+/// response keeps its original bytes so it can still be repaired offline.
+pub(crate) fn refuse_unsafe_listing(response: &Response, document: &Html) -> Result<(), Error> {
+    if is_safe_public_fallback_document(response, document) {
+        Ok(())
+    } else {
+        Err(unavailable())
+    }
+}
+
+fn compact_security_token(value: &str) -> String {
+    value
+        .trim()
+        .bytes()
+        .filter(|byte| byte.is_ascii_alphanumeric())
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect()
+}
+
+fn security_token(value: &str) -> bool {
+    let token = compact_security_token(value);
+    token == "password"
+        || token == "passwd"
+        || token == "passphrase"
+        || token == "csrf"
+        || token == "csrftoken"
+        || token == "xsrf"
+        || token == "xsrftoken"
+        || token == "requestverificationtoken"
+        || token == "verificationtoken"
+        || token == "authenticitytoken"
+        || token == "antiforgerytoken"
+        || token == "captcha"
+        || token == "recaptcha"
+        || token == "hcaptcha"
+        || token == "turnstile"
+        || token == "challenge"
+        || token == "challengeform"
+        || token == "challengeplatform"
+        || token == "auth"
+        || token == "authpage"
+        || token == "login"
+        || token == "signin"
+        || token == "signinform"
+        || token == "authenticate"
+        || token == "authentication"
+        || token == "authform"
+        || token == "oauth"
+        || token == "authorize"
+        || token == "cas"
+        || token == "saml"
+        || token == "sso"
+        || token.contains("password")
+        || token.contains("captcha")
+        || token.contains("turnstile")
+        || token.contains("csrf")
+        || token.contains("xsrf")
+        || token.contains("requestverificationtoken")
+        || token.contains("challenge")
+        || token.contains("login")
+        || token.contains("signin")
+        || token.contains("authentication")
+        || token.contains("authorize")
+        || token.contains("oauth")
+        || token.starts_with("cfchl")
+}
+
+fn public_security_element(element: ElementRef<'_>) -> bool {
+    let tag = element.value().name();
+    element.value().attrs().any(|(name, value)| {
+        let name = name.to_ascii_lowercase();
+        if security_token(&name) {
+            return true;
+        }
+        if tag == "input" && name == "type" && value.trim().eq_ignore_ascii_case("password") {
+            return true;
+        }
+        if !matches!(
+            name.as_str(),
+            "action"
+                | "aria-label"
+                | "autocomplete"
+                | "class"
+                | "content"
+                | "href"
+                | "id"
+                | "label"
+                | "name"
+                | "placeholder"
+                | "src"
+                | "title"
+                | "type"
+        ) && !name.starts_with("data-")
+        {
+            return false;
+        }
+        security_token(value)
+    })
+}
+
+pub(crate) fn html_fallback(
+    response: &Response,
+    output_type: &str,
+    college: &str,
+    reason: &str,
+) -> Value {
+    json!({
+        "schema_version": 1,
+        "type": output_type,
+        "result": "fallback",
+        "college": college,
+        "raw_html": STANDARD.encode(&response.body),
+        "raw_html_sha256": response.sha256,
+        "content_type": response_content_type(response).unwrap_or_default(),
+        "body_byte_length": response.body.len(),
+        "fallback_reason": reason,
+        "retrieval": retrieval(response),
+    })
+}
+
 fn entry_in_scope(
     entry: &ListingEntry,
     since: &Option<String>,
@@ -717,6 +929,195 @@ fn article_output(response: &Response, document: ArticleDocument) -> Value {
     output
 }
 
+fn article_content(document: ArticleDocument) -> Value {
+    let mut output = json!({
+        "schema_version": 1,
+        "type": "announcements_article",
+        "result": "full_text",
+        "publisher": "北京航空航天大学",
+        "body_paragraph_count": document.paragraphs.len(),
+        "attachments": {
+            "found": document.attachments_found,
+            "note": "attachment links are surfaced as hints and are never downloaded by this command",
+        },
+        "completeness": {
+            "scope": "single_article_page",
+            "body_source": "div.v_news_content p",
+        },
+    });
+    output["title"] = Value::String(document.title);
+    output["category"] = document.category.map(Value::String).unwrap_or(Value::Null);
+    output["published_at"] = document
+        .published_at
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    output["body_paragraphs"] =
+        Value::Array(document.paragraphs.into_iter().map(Value::String).collect());
+    output["attachments"]["hints"] = Value::Array(document.attachment_hints);
+    output
+}
+
+struct SourceTables {
+    values: Vec<Value>,
+    row_count: usize,
+    cell_count: usize,
+    has_text: bool,
+}
+
+fn source_tables(body: ElementRef<'_>) -> Result<SourceTables, Error> {
+    let tables = Selector::parse("table").map_err(|_| unavailable())?;
+    let rows = Selector::parse("tr").map_err(|_| unavailable())?;
+    let cells = Selector::parse(":scope > th, :scope > td").map_err(|_| unavailable())?;
+    let captions = Selector::parse(":scope > caption").map_err(|_| unavailable())?;
+    let mut result = SourceTables {
+        values: Vec::new(),
+        row_count: 0,
+        cell_count: 0,
+        has_text: false,
+    };
+    for table in body.select(&tables).filter(|node| !inert_element(*node)) {
+        if result.values.len() == MAX_ENTRIES
+            || table.select(&tables).any(|node| !inert_element(node))
+            || table.descendants().any(|node| {
+                matches!(node.value(), Node::Text(text) if !text.trim().is_empty())
+                    && !node.ancestors().any(|ancestor| {
+                        ancestor.value().as_element().is_some_and(|element| {
+                            matches!(
+                                element.name(),
+                                "td" | "th"
+                                    | "caption"
+                                    | "script"
+                                    | "style"
+                                    | "template"
+                                    | "noscript"
+                            )
+                        })
+                    })
+            })
+        {
+            return Err(failed_contract(
+                "source tables require bounded flat rows and cell-owned text",
+                file!(),
+                line!(),
+            ));
+        }
+        let mut caption_nodes = table.select(&captions).filter(|node| !inert_element(*node));
+        let caption = caption_nodes.next().map(element_text);
+        if caption_nodes.next().is_some()
+            || caption
+                .as_ref()
+                .is_some_and(|text| text.len() > MAX_PARAGRAPH)
+        {
+            return Err(failed_contract(
+                "table caption is ambiguous or over budget",
+                file!(),
+                line!(),
+            ));
+        }
+        result.has_text |= caption.as_ref().is_some_and(|text| !text.is_empty());
+        let mut source_rows = Vec::new();
+        for row in table.select(&rows).filter(|node| !inert_element(*node)) {
+            if result.row_count == MAX_BODY_PARAGRAPHS {
+                return Err(failed_contract(
+                    "table rows exceed the reviewed text budget",
+                    file!(),
+                    line!(),
+                ));
+            }
+            let mut source_cells = Vec::new();
+            let mut row_bytes = 0usize;
+            for cell in row.select(&cells).filter(|node| !inert_element(*node)) {
+                if source_cells.len() == MAX_ENTRIES {
+                    return Err(failed_contract(
+                        "table row exceeds the reviewed cell budget",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                let text = element_text(cell);
+                row_bytes += text.len();
+                if row_bytes > MAX_PARAGRAPH {
+                    return Err(failed_contract(
+                        "table row text exceeds the reviewed byte budget",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                result.has_text |= !text.is_empty();
+                let mut value = json!({"header":cell.value().name() == "th"});
+                value["text"] = Value::String(text);
+                for span in ["rowspan", "colspan"] {
+                    if let Some(raw) = cell.value().attr(span) {
+                        if raw.len() > MAX_TEXT {
+                            return Err(failed_contract(
+                                "table span attribute exceeds the reviewed text budget",
+                                file!(),
+                                line!(),
+                            ));
+                        }
+                        value[span] = Value::String(raw.to_owned());
+                    }
+                }
+                source_cells.push(value);
+            }
+            result.row_count += 1;
+            result.cell_count += source_cells.len();
+            let mut value = json!({});
+            value["cells"] = Value::Array(source_cells);
+            source_rows.push(value);
+        }
+        let mut value = json!({"source_order":result.values.len() + 1});
+        value["caption"] = caption.map(Value::String).unwrap_or(Value::Null);
+        value["rows"] = Value::Array(source_rows);
+        result.values.push(value);
+    }
+    Ok(result)
+}
+
+fn table_article_output(
+    body: ElementRef<'_>,
+    title: String,
+    category: Option<String>,
+    published_at: Option<String>,
+    body_source: &str,
+) -> Result<Value, Error> {
+    let tables = source_tables(body)?;
+    let (paragraphs, attachment_hints, attachments_found) = article_body(body, tables.has_text)?;
+    if paragraphs.len() + tables.row_count > MAX_BODY_PARAGRAPHS {
+        return Err(failed_contract(
+            "paragraphs and table rows exceed the reviewed text budget",
+            file!(),
+            line!(),
+        ));
+    }
+    let images = Selector::parse("img").map_err(|_| unavailable())?;
+    let has_images = body.select(&images).any(|image| !inert_element(image));
+    let mut output = article_content(ArticleDocument {
+        title,
+        category,
+        published_at,
+        paragraphs,
+        attachment_hints,
+        attachments_found,
+    });
+    output["body_table_count"] = json!(tables.values.len());
+    output["body_table_row_count"] = json!(tables.row_count);
+    output["body_table_cell_count"] = json!(tables.cell_count);
+    output["body_tables"] = Value::Array(tables.values);
+    output["completeness"]["body_source"] = json!(body_source);
+    output["completeness"]["table_representation"] = json!(
+        "normalized source cell text and explicitly present span attributes; no inferred cells, span expansion or visual-layout reconstruction; paragraph-wrapped cells remain in body_paragraphs as well"
+    );
+    output["completeness"]["unextracted_table_count"] = json!(0);
+    output["completeness"]["image_content_present"] = json!(has_images);
+    if has_images || attachments_found {
+        output["result"] = json!("partial_text");
+        output["completeness"]["missing_nonparagraph_content"] =
+            json!("image text and attachment contents are not reconstructed or downloaded");
+    }
+    Ok(output)
+}
+
 fn parse_list_query(input: Option<&str>) -> Result<ListQuery, Error> {
     match input {
         None => Ok(ListQuery::default()),
@@ -736,10 +1137,29 @@ pub fn list(mode: CacheMode, input: Option<&str>) -> Result<Value, Error> {
         Some("beijing") => return beijing::list(mode, &query),
         Some("shenyuan") => return shenyuan::list(mode, &query),
         Some("h3i") => return h3i::list(mode, &query),
+        Some("iai") => return iai::list(mode, &query),
         Some("zfai") => return zfai::list(mode, &query),
         Some("iiif") => return iiif::list(mode, &query),
+        Some("math") => return math::list(mode, &query),
         Some("mse") => return mse::list(mode, &query),
         Some("sepe") => return sepe::list(mode, &query),
+        Some("soft") => return soft::list(mode, &query),
+        Some("transportation") => return transportation::list(mode, &query),
+        Some("physics") => return physics::list(mode, &query),
+        Some("sce") => return sce::list(mode, &query),
+        Some("sse") => return sse::list(mode, &query),
+        Some("sem") => return sem::list(mode, &query),
+        Some("fld") => return fld::list(mode, &query),
+        Some("me") => return me::list(mode, &query),
+        Some("wrj") => return wrj::list(mode, &query),
+        Some("yqgdxy") => return yqgdxy::list(mode, &query),
+        Some("ase") => return ase::list(mode, &query),
+        Some("hss") => return hss::list(mode, &query),
+        Some("bme") => return bme::list(mode, &query),
+        Some("ygy") => return ygy::list(mode, &query),
+        Some("cst") => return cst::list(mode, &query),
+        Some("dept3") => return dept3::list(mode, &query),
+        Some("ee") => return ee::list(mode, &query),
         Some(_) => return Err(invalid_list()),
         None => {}
     }
@@ -839,17 +1259,74 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
         Some("h3i.buaa.edu.cn") => {
             return h3i::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("iai.buaa.edu.cn") => {
+            return iai::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         Some("zfai.buaa.edu.cn") => {
             return zfai::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
         Some("iiif.buaa.edu.cn") => {
             return iiif::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
+        Some("math.buaa.edu.cn") => {
+            return math::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
         Some("mse.buaa.edu.cn") => {
             return mse::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
         Some("sepe.buaa.edu.cn") => {
             return sepe::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("soft.buaa.edu.cn") => {
+            return soft::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("transportation.buaa.edu.cn") => {
+            return transportation::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("physics.buaa.edu.cn") => {
+            return physics::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("sce.buaa.edu.cn") => {
+            return sce::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("sse.buaa.edu.cn") => {
+            return sse::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("sem.buaa.edu.cn") => {
+            return sem::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("fld.buaa.edu.cn") => {
+            return fld::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("www.me.buaa.edu.cn") => {
+            return me::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("wrj.buaa.edu.cn") => {
+            return wrj::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("yqgdxy.buaa.edu.cn") => {
+            return yqgdxy::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("ase.buaa.edu.cn") => {
+            return ase::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("www.hss.buaa.edu.cn") => {
+            return hss::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("bme.buaa.edu.cn") => {
+            return bme::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("ygy.buaa.edu.cn") => {
+            return ygy::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("cst.buaa.edu.cn") => {
+            return cst::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("dept3.buaa.edu.cn") => {
+            return dept3::article(mode, raw_url, query.source_page.unwrap_or(1));
+        }
+        Some("www.ee.buaa.edu.cn") => {
+            return ee::article(mode, raw_url, query.source_page.unwrap_or(1));
         }
         _ => {}
     }
@@ -888,11 +1365,17 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "h3i" {
         return h3i::surface(mode, page);
     }
+    if college == "iai" {
+        return iai::surface(mode, page);
+    }
     if college == "zfai" {
         return zfai::surface(mode, page);
     }
     if college == "iiif" {
         return iiif::surface(mode, page);
+    }
+    if college == "math" {
+        return math::surface(mode, page);
     }
     if college == "mse" {
         return mse::surface(mode, page);
@@ -903,8 +1386,62 @@ pub fn college_surface(mode: CacheMode, college: &str, page: &str) -> Result<Val
     if college == "sepe" {
         return sepe::surface(mode, page);
     }
+    if college == "soft" {
+        return soft::surface(mode, page);
+    }
+    if college == "transportation" {
+        return transportation::surface(mode, page);
+    }
+    if college == "physics" {
+        return physics::surface(mode, page);
+    }
+    if college == "sse" {
+        return sse::surface(mode, page);
+    }
+    if college == "sem" {
+        return sem::surface(mode, page);
+    }
+    if college == "fld" {
+        return fld::surface(mode, page);
+    }
+    if college == "me" {
+        return me::surface(mode, page);
+    }
+    if college == "wrj" {
+        return wrj::surface(mode, page);
+    }
+    if college == "yqgdxy" {
+        return yqgdxy::surface(mode, page);
+    }
+    if college == "ase" {
+        return ase::surface(mode, page);
+    }
+    if college == "hss" {
+        return hss::surface(mode, page);
+    }
+    if college == "bme" {
+        return bme::surface(mode, page);
+    }
+    if college == "ygy" {
+        return ygy::surface(mode, page);
+    }
+    if college == "cst" {
+        return cst::surface(mode, page);
+    }
+    if college == "dept3" {
+        return dept3::surface(mode, page);
+    }
+    if college == "ee" {
+        return ee::surface(mode, page);
+    }
+    if college == "sa" {
+        return sa::surface(mode, page);
+    }
     if college == "scse" {
         return scse::surface(mode, page);
+    }
+    if college == "sce" {
+        return sce::surface(mode, page);
     }
     Err(Error::new("invalid_input", "unknown college surface page"))
 }
@@ -913,12 +1450,12 @@ fn college_html(response: &Response) -> Result<Html, Error> {
     if response.status != 200
         || response.body.is_empty()
         || response.body.len() > MAX_HTML
-        || !response.headers.get("content-type").is_some_and(|value| {
+        || !response_content_type(response).is_some_and(|value| {
             value
                 .split(';')
                 .next()
                 .unwrap_or_default()
-                .trim_matches([' ', '\t'])
+                .trim()
                 .eq_ignore_ascii_case("text/html")
         })
     {
@@ -983,11 +1520,29 @@ fn describe_college_surface(
             | "beijing"
             | "shenyuan"
             | "h3i"
+            | "iai"
             | "zfai"
             | "iiif"
             | "mse"
             | "rse"
             | "sepe"
+            | "soft"
+            | "physics"
+            | "sce"
+            | "sse"
+            | "fld"
+            | "sem"
+            | "me"
+            | "wrj"
+            | "yqgdxy"
+            | "ase"
+            | "hss"
+            | "bme"
+            | "ygy"
+            | "cst"
+            | "dept3"
+            | "ee"
+            | "sa"
     ) {
         college_html(response)?
     } else {
@@ -1195,13 +1750,29 @@ fn parse_notice_list(document: &Html, base: &Url) -> Result<ListingDocument, Err
     Ok(ListingDocument { title, entries })
 }
 
+fn is_dept3_article_history_source(raw: &str, url: &Url) -> bool {
+    raw == url.as_str()
+        && url.scheme() == "http"
+        && url.host_str() == Some("dept3.buaa.edu.cn")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && (url.path().starts_with("/info/1093/") || url.path().starts_with("/info/1014/"))
+        && crate::net::dept3_path_allowed(url.path())
+}
+
 pub fn history(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_HTML.div_ceil(3) * 4 + 128 {
         return Err(invalid_history());
     }
     let query: HistoryInput = serde_json::from_str(input).map_err(|_| invalid_history())?;
     let college_snapshot = scse::is_history_source(&query.provenance.source_url);
-    if !college_snapshot && !is_list_source_url(&query.provenance.source_url) {
+    let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
+    let dept3_article = query.kind.as_deref() == Some("article")
+        && is_dept3_article_history_source(&query.provenance.source_url, &base);
+    if !college_snapshot && !dept3_article && !is_list_source_url(&query.provenance.source_url) {
         return Err(invalid_history());
     }
     let timestamp = match &query.provenance.capture_timestamp {
@@ -1219,14 +1790,32 @@ pub fn history(input: &str) -> Result<Value, Error> {
     if bytes.len() > MAX_HTML {
         return Err(invalid_history());
     }
-    let base = Url::parse(&query.provenance.source_url).map_err(|_| invalid_history())?;
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+    if dept3_article {
+        let document =
+            Html::parse_document(std::str::from_utf8(&bytes).map_err(|_| invalid_history())?);
+        let mut output = dept3::parse_article(&document).map_err(|_| invalid_history())?;
+        output["type"] = json!("announcements_history");
+        output["result"] = json!("article_snapshot");
+        output["provenance"] = json!({
+            "status": "operator_asserted",
+            "source_url": query.provenance.source_url,
+            "capture_timestamp": timestamp,
+            "asserted_by": query.provenance.asserted_by,
+        });
+        output["retrieval"] = json!({
+            "sha256": hash,
+            "supplied_bytes": bytes.len(),
+            "provenance_status": "operator_asserted",
+        });
+        return Ok(output);
+    }
     let document = if college_snapshot {
         scse::parse_listing(&bytes, &base)
     } else {
         parse_listing(&bytes, &base)
     }
     .map_err(|_| invalid_history())?;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
     Ok(json!({
         "schema_version": 1,
         "type": "announcements_history",
@@ -1280,27 +1869,38 @@ pub fn schema() -> Value {
             "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
         },
         "college_source": {
-            "input":{"description":"announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe [root|notices] [--online|--refresh], aviation [root|notices|public-notices] [--online|--refresh], or rse [root] [--online|--refresh]; fixed public pages only. ic, aviation, beijing, shenyuan, h3i, zfai, iiif, mse, rse and sepe bind the retained authoritative directory; selected boards must be declared by their retained root. Mse, Rse and Sepe preserve exact literal/resolved HTTP identities and explicitly observe HTTPS separately, not an upgrade, alias or protocol-equivalence claim. Rse is root metadata only: the observed69-byte HTML has no title or source board declaration, so no Rse listing/article adapter is claimed and no route is inferred. H3i preserves the directory's exact index.htm root and selects recruitment announcements. Zfai observes its root-declared xxgg1.htm information announcements; Iiif observes its root-declared xwgg/tzgg.htm notice board. Mse and Sepe each observe their own root-declared xwdt/gggs.htm public notices. Source path hints are bounded and may be truncated, not exhaustive discovery. No stdin or arbitrary URL."},
-            "output":{"type":"object","description":"Source-contract observation with byte/hash retrieval facts and bounded same-host path hints. Hints are never followed; this is not a complete college crawl."}
+            "input":{"description":"Fixed directory-bound college-source pages for scse, ic, aviation, beijing, shenyuan, h3i, iai, zfai, iiif, mse, rse, sepe, math, soft, transportation, physics, sce, sse, sem, fld, me, wrj, yqgdxy, ase, sa, hss, bme, ygy, cst, dept3 and ee. Select root or a reviewed notices board; aviation also supports public-notices. Rse and Sa support root only. ME and EE remain explicit transport blockers, not successful snapshots. Preserve literal directory URLs separately from deliberate HTTPS observations; bind boards through source declarations, follow no returned hints, and never infer missing routes or claim complete coverage."},
+            "output":{"type":"object","description":"Source metadata with retrieval provenance or an explicit unsupported/transport error; safe admitted selector drift may carry original raw_html and fallback_reason. No authentication or challenge body is exposed."}
         },
         "list": {
             "input": {
                 "type": ["object", "null"],
-                "description": "Optional JSON object. Without college: university news center, default category tzgg. college=scse selects computer-college notices (gggs); college=ic selects integrated-circuit notices (tzgg); college=aviation selects student notices (tzgg, default) or public notices (gkgs); college=beijing selects Beijing-college notices (gggs); college=shenyuan selects Shenyuan-college notices (tzgg); college=h3i selects International Innovation recruitment announcements (cpgg); college=zfai selects Sino-French Aviation information announcements (xxgg1); college=iiif selects International Interdisciplinary institute notices (tzgg); college=mse selects Materials-college public notices (gggs); college=sepe selects Energy-college public notices (gggs). IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe boards bind the directory and retained root. Mse and Sepe keep their exact HTTP member and explicit separate HTTPS observation. Canonical source rows and source order are retained; linked dynamic/external URLs are preserved, not fetch permission. Zfai preserves the source rr/p.ps3 excerpt separately from the rr/h4s2 title; neither is original article text. Iiif uses its unique direct wape-right/ss rows, visible a headings and one direct span date. Mse and Sepe reuse one scoped nymain/notice-list view, direct a/h3 headings, a/p excerpts bounded by the existing 8-KiB paragraph limit, and direct a/span YYYY.MM.DD dates. Absent, invalid or ambiguous dates remain unknown. Page defaults to 1; later ordinals must be source-advertised. H3i accepts page1 only; retained Sepe page1 declares no later ordinal, so page2 is unavailable, not inferred. since/until are inclusive dates, match is a title substring. No automatic crawl or inferred URLs.",
+                "description": "Optional JSON object. Without college, select the university news center (default category tzgg). Selected college categories and page limits are constrained below. Preserve source row order, original titles/dates, separate excerpts, and exact directory/root/list binding. since/until are inclusive ISO dates; match is a title substring. Later pages require explicit source-advertised ordinals; no automatic crawl or guessed URLs. ME/EE listing requests remain explicit TLS blockers.",
                 "additionalProperties": false,
                 "properties": {
-                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","zfai","iiif","mse","sepe",null]},
+                    "college": {"enum": ["scse","ic","aviation","beijing","shenyuan","h3i","iai","zfai","iiif","mse","sepe","math","soft","transportation","physics","sce","sse","sem","fld","me","wrj","yqgdxy","ase","hss","bme","ygy","cst","dept3","ee",null]},
                     "category": {"type": ["string","null"]},
                     "page": {"type": ["integer","null"], "minimum": 1,"maximum":u32::MAX},
                     "since": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "until": {"type": ["string","null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
                     "match": {"type": ["string","null"]}
                 },
-                "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse","sepe"]}}},
+                "allOf":[{"if":{"required":["college"],"properties":{"college":{"enum":["scse","beijing","mse","sepe","transportation"]}}},
                     "then":{"properties":{"category":{"enum":["gggs",null]}}},
-                    "else":{"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}},"else":{"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}},"else":{"properties":{"category":{"enum":news_categories}}}}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
-                    {"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
+                },
+                    {"if":{"properties":{"college":{"type":"null"}}},"then":{"properties":{"category":{"enum":news_categories}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"aviation"}}},"then":{"properties":{"category":{"enum":["tzgg","gkgs",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"h3i"}}},"then":{"properties":{"category":{"enum":["cpgg",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"zfai"}}},"then":{"properties":{"category":{"enum":["xxgg1",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"sce"}}},"then":{"properties":{"category":{"enum":["xyxw",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"fld"}}},"then":{"properties":{"category":{"enum":["zxtz",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"me"}}},"then":{"properties":{"category":{"enum":["xyxw","xszx",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"bme"}}},"then":{"properties":{"category":{"enum":["information",null]},"page":{"enum":[1,null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"ygy"}}},"then":{"properties":{"category":{"enum":["yggg",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["ic","shenyuan","iiif","iai","soft","physics","sem","sse","wrj","yqgdxy","ase","hss","cst","dept3","ee"]}}},"then":{"properties":{"category":{"enum":["tzgg",null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"dept3"}}},"then":{"properties":{"page":{"enum":[1,null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"const":"math"}}},"then":{"properties":{"category":{"enum":["xygg",null]},"page":{"enum":[1,null]}}}},
+                    {"if":{"required":["college"],"properties":{"college":{"enum":["h3i","iai"]}}},"then":{"properties":{"page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
@@ -1310,11 +1910,12 @@ pub fn schema() -> Value {
         "article": {
             "input": {
                 "type": "object",
-                "description": "JSON object with url: news-center article, SCSE notice in category 1099/1299, canonical IC notice in category 1042, aviation public notice in category 1061, Beijing notice in category 1014, Shenyuan notice in category 1083, H3i recruitment notice in category 1141, Zfai information notice in category 1196, Iiif notice in category 1186, Mse board-declared notice in category 1061/1058, or Sepe board-declared notice in category 1078/1093/1080. IC/aviation/Beijing/Shenyuan/H3i/Zfai/Iiif/Mse/Sepe articles must be declared by their retained source listing; source_page defaults to 1 and selects a source-advertised ordinal. H3i accepts source_page1 only; retained Sepe page1 declares no later ordinal. Article headings come from the original article, not from listing teasers or excerpts. Iiif publication uses its direct title header's [发表时间]： metadata, not body dates; source paragraphs with untranscribed images produce partial_text rather than fabricated full text. Mse and Sepe publication require one direct art-tit/p/span.date 日期：YYYY年MM月DD日. Mse includes supported flat-table text separately. Sepe retains scoped source paragraphs and reports nonparagraph table text, images or unfetched sibling-file contents as partial_text; pure-image/table-only/empty Sepe bodies remain unavailable under shared nonempty-paragraph admission. Other sources reject a non-null source_page. Dynamic/external links are not article-fetch permission. HTTPS only; no query, credentials, custom port or fragment.",
+                "description": "JSON object with a reviewed source article URL. Source-page-capable college readers require retained directory/root/list declarations before requesting an article. source_page defaults to 1; later ordinals must be source-advertised. H3i, IAI, Math, Dept3 and BME support page 1 only. SCSE and readers without source-page support reject a non-null selector. Keep original headings/publication facts distinct from excerpts and body dates; explicitly report unfetched image/table/viewer/attachment content. BME accepts only its exact reviewed ASP.NET query shape. ME/EE remain transport blockers. No arbitrary URL, credentials, custom port, fragment, automatic asset download or inferred route." ,
                 "additionalProperties":false,"required":["url"],
+                "me_article_contract":{"description":"ME article URLs are limited to HTTPS www.me.buaa.edu.cn/info/1126 or /info/1128 paths and must be declared by a discovered xyxw or xszx board; the adapter currently returns a TLS transport blocker before any request."},
                 "properties": {"url": {"type": "string"},"source_page":{"type":["integer","null"],"minimum":1,"maximum":u32::MAX}},
-                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://(ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080))/[0-9]{1,10}[.]htm$"}}}},
-                    {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://h3i[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
+                "allOf":[{"if":{"required":["source_page"],"properties":{"source_page":{"type":"integer"}}},"then":{"properties":{"url":{"pattern":"^https://((ic[.]buaa[.]edu[.]cn/info/1042|aviation[.]buaa[.]edu[.]cn/info/1061|beijing[.]buaa[.]edu[.]cn/info/1014|hc[.]buaa[.]edu[.]cn/info/1083|h3i[.]buaa[.]edu[.]cn/info/1141|iai[.]buaa[.]edu[.]cn/info/1024|zfai[.]buaa[.]edu[.]cn/info/1196|iiif[.]buaa[.]edu[.]cn/info/1186|mse[.]buaa[.]edu[.]cn/info/(1061|1058)|sepe[.]buaa[.]edu[.]cn/info/(1078|1093|1080)|math[.]buaa[.]edu[.]cn/info/1294|soft[.]buaa[.]edu[.]cn/info/1095|transportation[.]buaa[.]edu[.]cn/info/1058|physics[.]buaa[.]edu[.]cn/info/1252|sce[.]buaa[.]edu[.]cn/info/1013|sse[.]buaa[.]edu[.]cn/info/1078|sem[.]buaa[.]edu[.]cn/info/1024|fld[.]buaa[.]edu[.]cn/info/1011|www[.]me[.]buaa[.]edu[.]cn/info/(1126|1128)|wrj[.]buaa[.]edu[.]cn/info/1008|yqgdxy[.]buaa[.]edu[.]cn/info/1053|ase[.]buaa[.]edu[.]cn/info/(1052|1285)|www[.]hss[.]buaa[.]edu[.]cn/info/1103|ygy[.]buaa[.]edu[.]cn/info/1004|cst[.]buaa[.]edu[.]cn/info/1102|dept3[.]buaa[.]edu[.]cn/info/(1093|1014)|www[.]ee[.]buaa[.]edu[.]cn/info/1062)/[0-9]{1,10}[.]htm|bme[.]buaa[.]edu[.]cn/newsInfo[.]aspx[?]catID=13&subcatID=[0-9]{1,10}&curID=[0-9]{1,10})$"}}}},
+                    {"if":{"required":["url"],"properties":{"url":{"pattern":"^https://(h3i|iai|math|dept3|bme)[.]buaa[.]edu[.]cn/"}}},"then":{"properties":{"source_page":{"enum":[1,null]}}}}]
             },
             "output": {
                 "type": "object",
@@ -1324,7 +1925,7 @@ pub fn schema() -> Value {
         "history": {
             "input": {
                 "type": "object",
-                "description": "Offline operator-asserted snapshot: base64 html, provenance.source_url (a reviewed news-center or SCSE notices listing), optional capture_timestamp and asserted_by. Historical SCSE HTTP originals are preserved; no request or archive-attribution verification occurs.",
+                "description": "Offline operator-asserted snapshot: base64 html, provenance.source_url (a reviewed news-center/college listing, or kind:'article' with a reviewed Dept3 article URL), optional capture_timestamp and asserted_by. No request or archive-attribution verification occurs.",
             },
             "output": {
                 "type": "object",
@@ -1332,6 +1933,7 @@ pub fn schema() -> Value {
             }
         },
     });
+
     output["article"]["output"]["properties"] = json!({
         "body_tables": {
             "type":"array","maxItems":MAX_ENTRIES,
@@ -1355,6 +1957,7 @@ pub fn schema() -> Value {
         "body_table_row_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS},
         "body_table_cell_count":{"type":"integer","minimum":0,"maximum":MAX_BODY_PARAGRAPHS * MAX_ENTRIES}
     });
+
     output
 }
 
@@ -1412,6 +2015,71 @@ mod tests {
         Url::parse("https://news.buaa.edu.cn/tzgg.htm").unwrap()
     }
 
+    fn fallback_response(body: &[u8]) -> Response {
+        Response {
+            url: base_url().to_string(),
+            status: 200,
+            headers: std::collections::BTreeMap::from([(
+                "content-type".to_string(),
+                "text/html; charset=utf-8".to_string(),
+            )]),
+            body: body.to_vec(),
+            sha256: format!("{:x}", Sha256::digest(body)),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        }
+    }
+
+    #[test]
+    fn public_fallback_admission_uses_structural_security_attributes() {
+        let ordinary = fallback_response(
+            br#"<html><body><p>Public source bytes mention password, captcha and challenge as prose.</p></body></html>"#,
+        );
+        assert!(is_safe_public_fallback(&ordinary));
+
+        let password = fallback_response(
+            br#"<form action = "/session"><input class = "field" type = " password " name = "p&#97;ssword"></form>"#,
+        );
+        assert!(!is_safe_public_fallback(&password));
+
+        let security_form = fallback_response(
+            br#"<form id="sign-in"><input type="hidden" name="__RequestVerificationToken"><input name="g-recaptcha-response"></form>"#,
+        );
+        assert!(!is_safe_public_fallback(&security_form));
+
+        let challenge = fallback_response(
+            br#"<div id="cf-chl-widget"><iframe src="/cdn-cgi/challenge-platform"></iframe></div>"#,
+        );
+        assert!(!is_safe_public_fallback(&challenge));
+
+        let active_base = fallback_response(
+            br#"<base href="https://foreign.example/"><p>Public source bytes.</p>"#,
+        );
+        assert!(!is_safe_public_fallback(&active_base));
+
+        let mut wrong_status = ordinary.clone();
+        wrong_status.status = 403;
+        assert!(!is_safe_public_fallback(&wrong_status));
+        let mut wrong_mime = ordinary.clone();
+        wrong_mime
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        assert!(!is_safe_public_fallback(&wrong_mime));
+        let mut header_case = ordinary.clone();
+        header_case.headers.remove("content-type");
+        header_case
+            .headers
+            .insert("Content-Type".into(), "text/html".into());
+        assert!(is_safe_public_fallback(&header_case));
+        let oversized = fallback_response(&vec![b'x'; MAX_HTML + 1]);
+        assert!(!is_safe_public_fallback(&oversized));
+
+        let invalid_utf8 = fallback_response(&[b'<', b'p', b'>', 0xff, b'<', b'/', b'p', b'>']);
+        assert!(!is_safe_public_fallback(&invalid_utf8));
+    }
+
     #[test]
     fn parse_listing_reads_tlist_rows() {
         let document = parse_listing(listing_html().as_bytes(), &base_url()).unwrap();
@@ -1428,6 +2096,66 @@ mod tests {
             Some("https://news.buaa.edu.cn/info/1010/69802.htm")
         );
         assert_eq!(document.entries[2].date.as_deref(), Some("2026-08-26"));
+    }
+
+    #[test]
+    fn review_regression_notice_list_without_nymain_ownership_is_refused() {
+        let document = Html::parse_document(
+            r#"<title>Unowned notices</title><div class="notice-list"><div><ul>
+            <li><a href="../../info/1078/42.htm"><span>2026.10.10</span><h3>Unowned heading</h3><p>Unowned excerpt.</p></a></li>
+            </ul></div></div>"#,
+        );
+        let base = Url::parse(crate::net::SSE_NOTICES_URL).unwrap();
+        assert_eq!(
+            parse_notice_list(&document, &base).unwrap_err().code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn review_regression_notice_list_keeps_owned_rows_despite_unowned_sidebar() {
+        let document = Html::parse_document(
+            r#"<title>Source notices</title>
+            <div class="notice-list"><div><ul><li><a href="../../info/1078/99.htm"><span>2026.10.11</span><h3>Unowned sidebar</h3><p>Unowned excerpt.</p></a></li></ul></div></div>
+            <div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul>
+            <li><a href="../../info/1078/42.htm"><span>2026.10.10</span><h3>First source heading</h3><p>First source excerpt.</p></a></li>
+            <li><a href="../../info/1078/41.htm"><span>2026.09.01</span><h3>Earlier source heading</h3><p>Earlier source excerpt.</p></a></li>
+            </ul></div></div></div></div></div>"#,
+        );
+        let base = Url::parse(crate::net::SSE_NOTICES_URL).unwrap();
+        let parsed = parse_notice_list(&document, &base).unwrap();
+        let rows: Vec<_> = parsed
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.source_order,
+                    entry.title.as_str(),
+                    entry.date.as_deref(),
+                    entry.summary.as_deref(),
+                    entry.resolved_http_url.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    1,
+                    "First source heading",
+                    Some("2026-10-10"),
+                    Some("First source excerpt."),
+                    Some("https://sse.buaa.edu.cn/info/1078/42.htm")
+                ),
+                (
+                    2,
+                    "Earlier source heading",
+                    Some("2026-09-01"),
+                    Some("Earlier source excerpt."),
+                    Some("https://sse.buaa.edu.cn/info/1078/41.htm")
+                ),
+            ]
+        );
     }
 
     #[test]

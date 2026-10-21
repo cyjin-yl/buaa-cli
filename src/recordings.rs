@@ -3,6 +3,7 @@
 mod catalog;
 mod model;
 mod provenance;
+pub mod subtitles;
 #[cfg(test)]
 mod test_support;
 
@@ -189,7 +190,7 @@ pub fn schema() -> Value {
         "properties":{"segment_asset":{"anyOf":[asset,{"type":"null"}]},"original_assets":{"type":"array","items":asset},
             "links":{"type":"array","items":link},"issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","asset_id"],"properties":{"kind":{"enum":["missing_asset","cycle_detected","depth_limit","node_limit","edge_limit","no_original"]},"asset_id":{"type":"string"}}}},
             "complete":{"type":"boolean"},"hash_verification":{"const":"catalog_declared_not_blob_verified"}}});
-    json!({"search":{
+    let mut output = json!({"search":{
         "input":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["catalog","query"],
             "properties":{"catalog":{"type":"string","minLength":1,"maxLength":4096,"description":"Absolute local SQLite path; UTF-8 byte bound applies. Not a remote URI."},
                 "query":{"type":"string","minLength":1,"maxLength":4096,"description":"Literal text phrase under the catalog's unicode61 FTS tokenizer; UTF-8 byte bound applies."},
@@ -206,7 +207,10 @@ pub fn schema() -> Value {
                 "provenance":{"type":"object","additionalProperties":provenance},"next_cursor":{"type":["string","null"],"maxLength":MAX_CURSOR},
                 "completeness":{"type":"object","additionalProperties":false,"required":["scope","more_results","frozen_snapshot_across_requests","complete_history"],"properties":{"scope":{"const":"provided_catalog"},"more_results":{"type":"boolean"},"frozen_snapshot_across_requests":{"const":false},"complete_history":{"const":false}}},
                 "network_access":{"const":false},"source_objects_fetched":{"const":false}}}
-    }})
+    }});
+    output["subtitles"] = subtitles::schema();
+    output["subtitles-online"] = subtitles::online_schema();
+    output
 }
 
 #[cfg(test)]

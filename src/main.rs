@@ -326,7 +326,7 @@ fn run_announcements(args: &[String]) -> CliResult {
             let output = buaa_cli::announcements::document(mode, &input).map_err(service_error)?;
             emit(&output)
         }
-        Some("college-source") if matches!(args.get(1).map(String::as_str), Some("scse" | "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "zfai" | "iiif" | "mse" | "rse" | "sepe")) => {
+        Some("college-source") if matches!(args.get(1).map(String::as_str), Some("scse" | "ic" | "aviation" | "beijing" | "shenyuan" | "h3i" | "iai" | "hss" | "bme" | "ygy" | "cst" | "dept3" | "ee" | "zfai" | "iiif" | "mse" | "rse" | "sepe" | "math" | "soft" | "transportation" | "physics" | "sce" | "sse" | "sem" | "fld" | "me" | "wrj" | "yqgdxy" | "ase" | "sa")) => {
             let (page, flags) = match args.get(2).map(String::as_str) {
                 Some("root" | "notices" | "public-notices") => (args[2].as_str(), &args[2..]),
                 _ => ("root", &args[1..]),
@@ -343,7 +343,7 @@ fn run_announcements(args: &[String]) -> CliResult {
         _ => Err((
             "unsupported",
             3,
-            "expected announcements list|article|document [--online|--refresh], announcements college-source <college> [root|notices|public-notices] [--online|--refresh], or announcements history".into(),
+            "expected announcements list|article|document [--online|--refresh], announcements college-source <college> (including fld) [root|notices|public-notices] [--online|--refresh], or announcements history".into(),
         )),
     }
 }
@@ -397,8 +397,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|zfai|iiif|mse|sepe [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
-            "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements/spoc --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false, "public_official_directory_enabled":true},
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings subtitles [--online|--refresh]", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements/spoc/recordings subtitles --online or --refresh; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
             "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
         })),
         "capabilities" if args.len() == 1 => {
@@ -415,6 +415,7 @@ fn run() -> CliResult {
                 "gateway": buaa_cli::gateway::schema(),
                 "governor": buaa_cli::governor::boot_review_schema(),
                 "recordings": buaa_cli::recordings::schema(),
+                "report": buaa_cli::report::schema(),
                 "organizations": buaa_cli::organizations::schema(),
                 "spoc": buaa_cli::spoc::schema(),
                 "announcements": buaa_cli::announcements::schema(),
@@ -435,7 +436,7 @@ fn run() -> CliResult {
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
                 "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
-            "network_policy":{"default":"offline","opt_in":"archive/organizations/announcements/spoc --online or --refresh; fengrubei fetch --online; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
+            "network_policy":{"default":"offline","opt_in":"archive/organizations/announcements/spoc/recordings subtitles --online or --refresh; fengrubei fetch --online; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
             let mut raw = false;
@@ -476,7 +477,7 @@ fn run() -> CliResult {
         "fengrubei" => run_fengrubei(&args[1..]),
         "gateway" => run_gateway(&args[1..]),
         "governor" => run_governor(&args[1..]),
-        "report" => {
+        "report" if args.len() == 1 => {
             let input = read_input()?;
             let output = buaa_cli::report::report(&input).map_err(service_error)?;
             emit(&output)
@@ -485,6 +486,27 @@ fn run() -> CliResult {
             let input = read_input()?;
             let output = buaa_cli::recordings::search(&input).map_err(service_error)?;
             emit(&output)
+        }
+        "recordings"
+            if args.get(1).map(String::as_str) == Some("subtitles")
+                && (args.len() == 2
+                    || (args.len() == 3
+                        && matches!(args[2].as_str(), "--online" | "--refresh"))) =>
+        {
+            let mut input = read_input()?;
+            let output = match args.get(2).map(String::as_str) {
+                Some("--online") => buaa_cli::recordings::subtitles::online(
+                    buaa_cli::net::CacheMode::PreferCache,
+                    &input,
+                ),
+                Some("--refresh") => buaa_cli::recordings::subtitles::online(
+                    buaa_cli::net::CacheMode::Revalidate,
+                    &input,
+                ),
+                _ => buaa_cli::recordings::subtitles::import(&input),
+            };
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
         }
         "organizations" => run_organizations(&args[1..]),
         "spoc" => run_spoc(&args[1..]),

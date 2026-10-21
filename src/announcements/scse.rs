@@ -20,7 +20,7 @@ use url::Url;
 
 pub(super) const PUBLISHER: &str = "北京航空航天大学计算机学院";
 
-mod viewer;
+pub(super) mod viewer;
 
 fn source_mode(mode: CacheMode) -> CacheMode {
     if mode == CacheMode::Revalidate {

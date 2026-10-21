@@ -1,4 +1,315 @@
-# Development status
+## Development status
+
+## 2026-10-21: Source-admission repair round, offline only
+
+Sixteen independently reported source-admission, transport-safety and
+owned-scope findings were reduced to twenty-two offline regressions on the
+integrated candidate descended from `b37f3fbc80f25c7b79bcb104d7400c33ed3d65c9`.
+Every regression failed before the repair and passes after it; no assertion
+was weakened to fit the previous behaviour, and the failing baseline remains
+retained separately.
+
+The repaired contracts are narrow and source-bound. A safe admitted board or
+article whose selector no longer matches keeps its original bytes and reports
+a typed fallback, while the selection error stays nested until the response
+has been retained. An unsafe response, including authentication, password,
+CSRF, CAPTCHA and challenge markup or headers, remains an outer refusal and
+never enters the public cache or the fallback path. Challenge and captcha
+headers are observed before retained metadata is filtered, and a rejected
+classroom session stays latched even when a later encoding or MIME error
+occurs. Article bodies and embedded documents are bound to their owning
+container, so inert templates, comments, strings and unrelated sibling
+containers can neither authorize a document nor supply text. Notice rows stay
+inside their declared notice-list scope, listed links resolve against the
+admitted listing URL, ambiguous nested category tables are refused, and
+omitted table content is reported as partial text.
+
+The unified gate passed with one foreground shared heavy-work lease, the
+owning worktree's target, UID1000, one compiler job, a 2-GiB memory limit
+(3 GiB including swap), a read-only container root and no network. The
+formatter check, locked offline build and strict all-target clippy passed;
+the complete suite passed 372 library and 19 CLI cases, with the same two
+ignored subprocess worker entry points. The actual CLI manifest equals the
+complete 49-capability manifest, the synthetic all-cue subtitle import
+preserves content, order, translation and exact millisecond timing with an
+independently recomputed digest, the report consumer keeps stdin-only bodies,
+an explicit repository host, spoof refusal and an unknown outcome without
+retry, and all 15 published announcement schema cases pass. The source input
+set digest for that run was
+`413ef97880a7ab9aecd1a95828f9bfe14c393f494e5310825ae3bd8bf7f0a0d3`.
+
+These are synthetic and offline results, not current campus observations. No
+campus request, authentication, mutation, credential, production governor or
+private cache was used. ME, EE and Sa transport blockers and the missing Rse
+notice-board contract are unchanged, current online acceptance still requires
+the original governor's deliberate reviewed boot-history admission, and the
+pre-existing failing trusted check on the earlier stack head remains a
+separate open gate.
+
+## 2026-10-21: Unsafe nested listing retention corrected
+
+An independent source-only review of the integrated candidate found one P1
+admission defect: the nested `unsupported` result used for safe selector
+drift was returned after a structurally valid listing parse without rechecking
+security markup. A password/CSRF response could therefore be persisted before
+the caller observed the unsupported article. The review did not access live
+sources, private caches or credentials.
+
+The fix adds one shared `refuse_unsafe_listing` guard and calls it from the
+seven affected article-discovery consumers (Yqgdxy, ASE, WRJ, BME, FLD, HSS
+and Math). Safe admitted drift still retains original bytes for offline repair;
+authentication, password, CSRF, CAPTCHA, challenge and active-base responses
+now fail outward before cache persistence. A real loopback regression uses a
+selector-valid Yqgdxy listing containing password/CSRF markup and verifies an
+`unavailable` outer error, no cached listing and one request.
+
+The focused source-admission set passed 23/23 cases. The unified source gate
+passed formatter, locked offline build, strict all-target clippy, 373 library
+cases (two ignored subprocess workers) and 19 CLI cases. The actual CLI
+manifest and subtitle/report consumers passed as before. A fresh schema
+recovery, bound to the same source digest
+`3f481183a009325efa6fffa69a036ef5b0168aa323fec372a9c792746a219683`, passed
+all 15 published schema cases. All verification used one global heavy-work
+lease and no network or campus request.
+
+This remains offline evidence, not current campus or authenticated-service
+acceptance. Online governor boot-history admission, ME/EE/Sa/Rse blockers,
+playback and player-facing subtitle delivery remain separate gates.
+
+## 2026-10-21: Target-present unsafe listing bypass corrected
+
+A second independent security review of head `73583fe916dac4f7be445531c9f10f5dd3f087a8`
+found that the first P1 guard was still inside the target-not-declared branch.
+An unsafe selector-valid listing that declared the requested target skipped the
+guard and could be persisted. This was a source-only finding; no live or
+private response was accessed.
+
+The guard now runs immediately after each of the seven listing parsers and
+before target membership is tested. Both target-absent and target-present
+password/CSRF listings fail outward before cache persistence, while safe
+admitted drift retains its original nested result. The loopback regression now
+exercises both target shapes and passes 23/23 focused cases.
+
+The P2 unified offline gate passed formatter, locked build, strict all-target
+clippy, 373 library cases (two ignored subprocess workers), 19 CLI cases and
+15 schema cases. Its source input digest is
+`39e7c84ba93fa81a99be164a292385c5164adfa507225714cc1363648213a0b3`.
+No network, campus request, authentication, mutation, credential, production
+governor or private cache was used. Final exact-head independent approval
+remains a merge gate.
+
+## 2026-10-20: Unified native offline gate, not online acceptance
+
+The integrated candidate descended from `74d463227d07cc822b0d64b56b5fa99874fad583`,
+including formatter output, the SSE correction and the canonical announcement
+schema cutover, passed locked offline build, strict all-target clippy and
+formatter check. The complete suite passed 350 library and 19 CLI cases;
+the two ignored library entries are subprocess worker entry points, not
+newly waived checks. Verification used one foreground shared heavy-work lease,
+the owning worktree's target, UID1000, one compiler job, a 2-GiB memory limit
+(3 GiB including swap), a read-only container root and no network.
+
+The actual compiled CLI's capabilities equal the complete 49-capability,
+74-catalog manifest. Native synthetic consumers preserve every supplied cue,
+text, translation, source order and original/derived digest; fake-gh consumers
+verify stdin-only issue bodies, an explicit GitHub repository host, spoof
+refusal and reconciliation without retry. No real Issue was created.
+
+SSE no longer prints source paragraphs to stderr. Its attachment regression
+requires the owned `Source.pdf` hint and excludes the link outside `art-main`.
+The first report fixture failures were traced to Docker's default `noexec`
+tmpfs: the default-mount probe returned EACCES, while an explicit executable
+tmpfs succeeded. No report result was weakened to accommodate that executor.
+Separate focused SSE/report runs passed 3/5 cases and overlap the full suite.
+
+Sixty-two obsolete post-construction schema mutations were removed. A native
+consumer of the old binary failed six checks; the rebuilt CLI passes all 15,
+including IAI discovery, all 29 listing colleges, HSS HTTPS-only articles,
+Transportation's reviewed namespace, BME's exact query shape and retained MSE
+table types. The validated Rust/Cargo/manifest input-set digest before this
+evidence update is `ec87e4ffc53e8e6a83a334213021934b0ed656269ae1c4b74fed421c2274bf30`.
+Original failed receipts remain retained separately.
+
+These are synthetic/offline results, not current college-source observations,
+authenticated service or player-delivery proof. Production governor history,
+credentials and private response caches were not mounted; no campus request,
+authentication or mutation occurred. Current online work still requires the
+original governor's deliberate reviewed boot-history admission. ME/EE/Sa TLS
+and Rse's missing reviewed notice-board contract remain explicit blockers.
+Exact-head independent review, publication and online acceptance remain gates.
+
+## 2026-10-20: Public fallback and HSS retention correction
+
+The shared raw-HTML fallback boundary now admits only status-200, bounded,
+UTF-8 `text/html` responses without active `<base>` semantics or structural
+authentication/password, CSRF, CAPTCHA and challenge attributes. BME, FLD and
+HSS downstream selector fallbacks use that admission while source-admission and
+article-binding failures remain outside raw serialization. HSS `showVsbpdfIframe` and preview declarations are parsed
+without execution; inactive/commented/string preview text cannot authorize an
+embedded document, preview paths remain derived metadata, and conflicting
+original declarations fail. HSS later pages require an explicit source ordinal
+and link label rather than a filename-derived ordinal; missing/conflicting
+ordinal errors remain nested until `ArchiveClient::get` has retained the
+admitted listing response. The unified native offline gate above has passed;
+production cache-only source comparison and current online verification
+remain pending. No all-college completion or current-source claim is made.
+## 2026-10-20: Native subtitle capability cutover
+
+The omitted native subtitle capabilities were restored from the authoritative
+source worktree into the integrated transport without copying private source
+receipts or credentials. `recordings-native-subtitles` is represented as
+implemented-offline: supplied input is permission-gated, bound to the exact
+original bytes, selects one `(sub_id, resource_guid)` pair, validates every
+cue, preserves source order/text/translation and hashes the emitted segment
+value. `recordings-native-subtitles-online` is represented as
+implemented-offline for its fixed-source existing-session adapter: URL/cookie
+scope, fresh JSON/application admission, immutable raw-body provenance,
+session-scoped cache and the permanent shared governor are wired. Six import
+and five transport regressions passed in the unified suite; the actual CLI's
+synthetic all-cue/digest consumer passed. Existing-session online validation
+and comparison to complete authorized retained originals remain parent gates.
+
+The restored regressions and schemas are synthetic/offline source consumers;
+this entry does not claim online verification, accepted authenticated target
+bytes, media rights, catalog writes or publication. Replay and live playback
+remain pending. Player launch, seek, controlled stop/exit, actual audio/video,
+player-facing subtitle delivery, rendered cues, synchronization and live
+subtitle updates are still unimplemented; JSON import/schema discovery does
+not satisfy those acceptance items.
+
+## 2026-10-18: Dept3 current board contract
+
+Read-only public reconnaissance through the shared proxy found that the current HTTPS root `https://dept3.buaa.edu.cn/` declares the exact board `https://dept3.buaa.edu.cn/xwdt/gggs/tzgg.htm` (labels 公告公示/通知公告). The old `/xwzx/xygg.htm` route and category1302 contract are no longer admitted. The selected HTTPS root remains a deliberate observation of the official directory's exact literal/resolved HTTP identity `http://dept3.buaa.edu.cn/`; it is not an upgrade, alias or academic school-code assertion.
+
+The board is one active `nymain/notice-list` view with direct `ul > li > a` rows, direct `span` dotted dates (`YYYY.MM.DD`), direct `h3` source headings and direct `p` excerpts. Its pagination declares only ordinal1, so the adapter accepts `category=tzgg`, page1 only and never infers later pages. The five current source rows link to two source-declared article namespaces, `/info/1093/<id>.htm` and `/info/1014/<id>.htm`; external references remain retained listing links and are never fetched.
+
+Declared articles use one `form > div.art-main`, direct `div.art-tit.cont-tit > h3` heading, direct `span.date` Chinese publication metadata and one scoped `art-body-box/art-body/#vsb_content/v_news_content` body. Shared bounded paragraph/table extraction preserves source order; images and attachment contents remain unfetched and degraded output stays `partial_text` when applicable. History admissions, schema, help, dispatch and network path allowlists use the same exact board/article declarations. The earlier Dept3 section below records the superseded route and is retained as historical evidence only.
+
+## Directory-bound Chemistry college news
+
+The Chemistry adapter binds the non-hidden official-directory member `化学学院` at the exact listed/resolved HTTP root `http://sce.buaa.edu.cn/` and deliberately observes the HTTPS root separately. The retained root declares the active `xwzx/xyxw.htm` 学院新闻 board; the adapter does not infer the adjacent notification, research or student routes. Listing rows are the source-ordered direct rows under one active `.fy-list > ul`, with direct `YYYY-MM-DD` date spans and article anchors. Later pages are selected only when the retained pager advertises the requested board path; no ordinal traversal or guessed URL is used.
+
+Article admission is restricted to HTTPS `sce.buaa.edu.cn/info/1013/<digits>.htm` URLs declared by the selected board. The parser binds one `.c-content` title, one `.other-s` 发布日期 marker and one scoped `#vsb_content .v_news_content` body. Active paragraphs are retained with shared budgets; image-bearing text is `partial_text`, while image-only content remains unavailable. Foreign, credential-bearing, query, fragment and unreviewed paths fail before transport. Root/list/article/surface reads use the shared governor/cache profile; no attachment or image bytes are fetched.
+
+## Directory-bound Software-college notices
+
+The official directory records the visible `软件学院` member as the exact
+literal/resolved `http://soft.buaa.edu.cn/`. The selected HTTPS observation
+retains that HTTP identity and is not a protocol alias. The HTTPS homepage
+declares `/xwdt/gggs.htm`; that section declares the selected
+`/xwdt/gggs/tzgg.htm` 通知公告 board. The adapter binds both declarations
+before reading the source-ordered `nymain/notice-list` rows, and only accepts
+source-advertised `/xwdt/gggs/tzgg/<digits>.htm` pages plus declared
+`/info/1095/<digits>.htm` originals.
+
+`college=soft` with `category=tzgg` supports inclusive date/title filters,
+`college-source soft root|notices`, and selected source-page article reads.
+Article extraction uses the unique `art-main`/`art-tit`/`v_news_content` scope;
+source-declared JSP files are unfetched hints, while image and table content
+remains explicit `partial_text`. Credentials, queries, fragments, custom
+ports, foreign hosts, guessed routes and automatic page traversal are
+rejected. The live source currently exposes one page; no complete history or
+all-college coverage is claimed.
+## Directory-bound Physics college notices
+
+The retained official directory member25 is 物理学院 with exact literal/resolved `http://physics.buaa.edu.cn/`; the selected `https://physics.buaa.edu.cn/` observation is kept separate and is not an HTTP upgrade or alias. Credential-free public reconnaissance through the approved proxy observed a 24,601-byte HTTPS root, which actively declares `index/tzgg.htm` as 通知公告. The retained board is 14,566 bytes, advertises 26 total source rows and an ordinal link `index/tzgg/1.htm`; selected article paths are `/info/1252/<digits>.htm`.
+
+The adapter binds the retained directory identity, root-declared board, source-ordered `ul.news-ul > li` rows with direct `a`/`span` ISO dates, advertised `div.pb_sys_common span.p_no a[href]` pagination, and original `div.article-tt`, `div.article-sm` (`发布时间：YYYY-MM-DD`) and nested `div.article-txt div.v_news_content` content. URL admission is HTTPS-only, credential/query/fragment/port-free and limited to robots, root, board, advertised board pages and category1252 originals. No guessed route, automatic traversal, attachment download or campus write is enabled. Public reconnaissance hashes: root `31ef8ad1e908888b3d15460ff6f4c5f4c3805d58ba3d619a2bbc3e21d12f0872`, board `90fffa5a28bb734803bc15ab38c68c5fff407192a9c7ffd608228214a3f053a8`, selected article `be17adc3ad361827aac0e76ef057937147295df7635c670056012c70734ca8d7`; these are source observations, not native governor/cache proof.
+
+`announcements college-source physics [root|notices]`, `announcements list` with `college=physics`/`category=tzgg`, and declared-board `announcements article` are wired through the existing shared governor/cache and directory attribution. Synthetic parser tests cover source order/date filters, inert/foreign pagination refusal, original publication/body scope, ambiguous body refusal and URL boundaries. Full offline/native verification and exact-head publication remain parent-agent gates.
+
+## Space and Earth sciences announcements
+
+The exact official-directory member26 is 空间与地球科学学院 with literal/resolved `http://sse.buaa.edu.cn/`; the source order is not a school code. The adapter deliberately selects `https://sse.buaa.edu.cn/` separately and preserves the HTTP directory identity rather than asserting protocol equivalence. Public root discovery returned HTML 200 (54,269 bytes) and declares `xwdt/gsgg/tzgg.htm` under 新闻动态 → 公告公示 → 通知公告. The board returned HTML 200 (28,122 bytes), with one current source-ordered `nymain/notice-list` view, direct `li > a > span` `YYYY.MM.DD` dates, `h3` headings, `p` excerpts and no advertised later-page anchor. The selected first article namespace is `/info/1078/<digits>.htm`; its original layout is one direct `art-main`, `art-tit > h3`, `art-tit > p > span.date` (`日期：YYYY年MM月DD日`) and `art-body-box > art-body > #vsb_content > .v_news_content` body.
+
+`announcements college-source sse root|notices`, `list` with `college=sse`/`category=tzgg`, and declared `article` now use the same cache-first client, permanent process-shared governor, directory binding, source-declared pagination and selected-only refresh as the other directory-bound college adapters. The network profile admits only HTTPS root/robots, the declared board, advertised board pages and canonical `/info/1078/` articles; credentials, queries, fragments, custom ports, foreign hosts, undeclared categories and guessed routes are rejected before transport. Article output keeps source paragraphs and publication metadata separate, reports active images/tables/unfetched JSP attachments as partial content, and never downloads attachments or reconstructs image text.
+
+The only mandatory robots response observed through the approved proxy was HTTP 404 (1,693 bytes, standard shared robots-missing body); root, board and one declared article were separately observed as HTTP 200. Response originals remain private and are not fixtures. Missing later-page declarations, other board categories, complete history, attachments/OCR, authenticated services and campus writes remain out of scope. Offline synthetic coverage in `src/announcements/sse.rs` defends row/date/order preservation, direct article scope/partial-content boundaries and canonical URL/path admission; parent-owned locked cargo/build/clippy/formatter gates remain required.
+
+## Directory-bound SEM economics and management notices
+
+The SEM adapter binds the authoritative directory member `经济管理学院` with its exact listed/resolved `http://sem.buaa.edu.cn/` identity, then deliberately observes `https://sem.buaa.edu.cn/` separately; this is not a silent HTTP upgrade or protocol-equivalence claim. Public read-only reconnaissance found the root-declared notice board `https://sem.buaa.edu.cn/xwdt/tzgg.htm` (`通知公告`). The board uses one active `ul.d-newsU5` list, direct `a.inner` rows with `div.text > h4.tit` headings, and split `div.date > div.t1` month-day plus `div.t2` slash-year dates. Its first page advertises `tzgg/<ordinal>.htm` pages and includes both own-site `/info/1024/<id>.htm` notices and external WeChat links; external destinations remain metadata only.
+
+`college=sem` is implemented for root/notices surface snapshots, `category=tzgg` listings with inclusive date/title filters and source-advertised page selection, and canonical `/info/1024/` articles declared by the selected listing. Article extraction binds one `d-detail1`/news-content form, direct `h1.tit`/publication metadata and one `vsb_content/v_news_content` body. Embedded viewers, images, tables and source-declared sibling JSP files remain unfetched and are reported as `partial_text` or `attachment_only`; no prose is invented from scripts or PDF previews. Query, credential, foreign-host, wrong-category, unadvertised and undeclared URLs fail before transport. Synthetic listing/date, duplicate-board, article-body/attachment, attachment-only-viewer and URL-admission cases are included in the adapter module. No history completion, attachment download, campus mutation or all-college coverage is claimed; native build/test evidence remains a parent integration gate.
+
+## Directory-bound Fld foreign-languages notices
+
+The `fld` adapter binds the visible official-directory member `外国语学院` whose literal and resolved identity is `http://fld.buaa.edu.cn/`. It deliberately observes `https://fld.buaa.edu.cn/` separately and requires that root to declare `https://fld.buaa.edu.cn/xwzx/zxtz.htm` before listing or article reads. The selected board is `college=fld`, `category=zxtz`; source rows use the complete `title` attribute, direct `YYYY-MM-DD` row dates and canonical `/info/1011/<id>.htm` declarations. Later pages are selected only from active `div.fanyxh a[href]` ordinal links, never guessed.
+
+The article contract is the reviewed `div.ljkm23` layout: direct `mch3` title, `mch3sh` `发布时间：YYYY-MM-DD` metadata and one `#vsb_content > .v_news_content` body. Source-declared `showVsbpdfIframe` originals and `vsb_pdf_image_data` previews remain unfetched `embedded_document` metadata; no PDF/image download or OCR is implied. Listing/article/surface selector drift returns governed response bytes as base64 `raw_html` with `content_type`, byte length and `fallback_reason`; foreign, query, credential, custom-port and fragment routes are rejected before transport.
+
+Focused synthetic parser coverage is included in `src/announcements/fld.rs` for source title/date/link preservation, PDF-only embedded-document handling and foreign/query URL rejection. Native build, online governed source capture, cache-only replay, capability evidence and independent review remain owner-side gates; no deployment, merge or campus mutation is claimed here.
+
+## Mechanical Engineering and Automation source boundary
+
+The official directory member is preserved exactly as listed/resolved `http://www.me.buaa.edu.cn/`, under the name 机械工程及自动化学院. Read-only public reconnaissance through the approved proxy found the root-declared `xyxw.htm` 学院新闻 board (article namespace `/info/1126/`, source-advertised 56-page pager) and `xszx.htm` 学术资讯 board (article namespace `/info/1128/`, source-advertised 18-page pager). The observed selectors are source-specific: `div.news_l > div.news_l_con > ul > li` rows with direct `a`/`p` title/date fields for 学院新闻, `div.noticer > dl` with `dt`/`dd` anchors for 学术资讯, and article `div.news_r > div.news_r_tit`, `p.news_r_tit2`, `div#vsb_content > div.v_news_content` fields. Pagination and article links are source declarations only; no URL is inferred.
+
+The HTTPS candidate `https://www.me.buaa.edu.cn/` is not currently admitted: TLS validation reports a certificate subject-name mismatch for `www.me.buaa.edu.cn`; a separate HTTPS probe of canonical `me.buaa.edu.cn` ended unexpectedly during TLS. The adapter therefore remains **surface-only/blocked**. `college-source me root|notices` retains the literal HTTP directory attribution and reports a structured `tls_transport_blocked` fallback; `college=me` list/article inputs refuse before transport. Plain HTTP requests, TLS verification bypasses, foreign/query/credential URLs and unverified source bytes are not used. A valid HTTPS source observation is required before listing/article extraction can be enabled.
+
+## Directory-bound Wrj无人系统研究院 notices
+
+Owned `work/wrj-adapter` adds the directory-bound `wrj` capability for 北京航空航天大学无人系统研究院. The retained official-directory snapshot identifies visible member10 under 航空航天学科群 with exact literal `http://wrj.buaa.edu.cn` and resolved `http://wrj.buaa.edu.cn/`; the source order is not an academic-unit code. The selected HTTPS root `https://wrj.buaa.edu.cn/` is a deliberate separate observation, not an HTTP upgrade, alias or protocol-equivalence assertion.
+
+Proxy reconnaissance selected the root-declared `https://wrj.buaa.edu.cn/xwgg/tzgg.htm` 通知公告 board. Its current source layout is one scoped `div.main > div.w90 > div.main-right > div.content > div.txt-list > ul` view, with direct `li > a.line1` title links and `li > span` `YYYY-MM-DD` dates; its pagination control is the scoped `div.pb_sys_common span.p_no` declaration. The selected board declares category-1008 article `/info/1008/3067.htm`. Its article contract is one active `_newscontent_fromname` form, direct `h3.title`, one `art-itro` `发布时间：YYYY-MM-DD` span, and one scoped `article > [id^=vsb_content_] > .v_news_content` body. Active JSP attachment links remain unfetched hints; image/table/attachment content is reported as `partial_text`, not reconstructed.
+
+The adapter preserves source order, inclusive date/title filtering, source-advertised pagination only, exact directory identity, root-declared board binding, selected-only article reads and the shared governor/cache. Foreign, query-bearing, credential-bearing, noncanonical or undeclared URLs fail before transport. Raw public reconnaissance originals are not committed; governed native/cache proof and exact-head integration remain separate gates.
+
+## Directory-bound Yqgdxy instrument-science notices
+
+The retained official directory identifies visible 仪器科学与光电工程学院 with literal and resolved `http://yqgdxy.buaa.edu.cn/`. The adapter preserves that HTTP identity while selecting the HTTPS root separately; it follows only the root-declared `/tzgg.htm` notice board. The board uses one `div.nymain > div.ny-right > div.text-list > ul` view with direct row anchors and ISO-date spans. Later pages are selected only through the unique `div.pagination span.p_no` ordinal declaration; no filename arithmetic or automatic traversal is used.
+
+`announcements list` accepts `{"college":"yqgdxy","category":"tzgg"}` and preserves source order, literal/resolved links, and unknown dates. `announcements article` accepts only HTTPS same-host `/info/1053/<digits>.htm` URLs declared by the selected board page. The article parser requires one owned `nymain/art-main` form, direct `art-tit/h3`, a unique leaf `日期：YYYY-MM-DD` span, and one scoped `art-body/v_news_content`; body links are hints only and no linked bytes are fetched. `college-source yqgdxy root|notices` exposes bounded source metadata with graceful retrieval facts.
+
+Synthetic coverage exercises inert-row exclusion, source-order and ambiguous-date handling, owned article title/date/body extraction, allowlisted path boundaries, foreign/query-bearing URL rejection, and deliberate HTTP-versus-HTTPS identity separation. This branch contains implementation/docs only; no campus write, authentication, guessed route, source fallback, or acceptance-manifest mutation is claimed.
+
+## Directory-bound ASE aviation-science notices
+
+The official directory currently exposes visible 航空科学与工程学院 with the exact literal/resolved `http://www.ase.buaa.edu.cn/` member. Its root declares `https://ase.buaa.edu.cn/`-equivalent navigation only through the deliberate canonical HTTPS observation used by this adapter; the directory HTTP identity is retained in attribution and is not upgraded or aliased. Public reconnaissance observed the root-declared `/zhxw/tzgg.htm` notice board, ten source-ordered `div.txtList` rows, split `MM-DD`/year dates, advertised `/zhxw/tzgg/<ordinal>.htm` pages and `/info/1052/` or `/info/1285/` article links. The canonical article uses `div.arc-tit > h1`, one `发布时间：YYYY-MM-DD` header span and one `#vsb_content_2 > div.v_news_content` body.
+
+The implementation adds `college=ase`, category `tzgg`, root/notices surfaces, source-advertised pagination and selected board-declared articles. URL admission is HTTPS-only on `ase.buaa.edu.cn`, with no query, credentials, custom port, fragment or unadvertised path; the shared production governor/cache profile remains the only transport path. Synthetic listing/article fixtures preserve source order, split dates, scoped body text and explicit image/table `partial_text` boundaries. No locked build, native CLI gate, cache oracle or formal online acceptance is claimed in this worktree; those checks remain parent integration work. No attachments, images, tables, OCR, complete history or campus writes are implied.
+
+## Astronautics college source frontier
+
+The retained official-directory member is visible 宇航学院, with exact literal/resolved `http://www.sa.buaa.edu.cn/`; its ordinal is source order, not a school identifier. Public read-only reconnaissance through the approved proxy found the HTTP root and the root-declared notice/news paths `index/xytz.htm`, `index/xyxw.htm` and `index/cggs.htm`. Their list layout is a distinct direct `con_list`/`li` contract with direct `a` and date `span` nodes; notice articles use `/info/1051/<id>.htm`. These observations are discovery notes, not admitted adapter originals.
+
+The adapter preserves the directory HTTP identity and selects `https://www.sa.buaa.edu.cn/` only as a deliberately separate HTTPS observation. The selected HTTPS request is allowlisted to `/robots.txt` and `/` only; HTTPS validation through the approved proxy failed because the server certificate did not match `www.sa.buaa.edu.cn`, so no source bytes were admitted. The HTTP-only observations cannot be used as an HTTP fallback, TLS bypass, host alias or protocol-equivalence claim. `college-source sa root` is therefore surface-only; no Sa list/article route is advertised, and notice/original verification remains blocked on a usable verified HTTPS response or reviewed source contract. No campus mutation, authentication, route guessing or attachment retrieval.
+
+## Directory-bound HSS Humanities and Social Sciences notices
+
+The official directory's visible member 人文社会科学学院 (source order30) retains the exact literal/resolved `http://www.hss.buaa.edu.cn/` as directory metadata. Transport is HTTPS-only: the adapter selects `https://www.hss.buaa.edu.cn/` as a separate candidate and never uses the literal HTTP identity for egress. A bounded public read through the approved proxy observed the root-declared `xwzx1/tzgg.htm` 通知公告 board. Its source view is `div.n_right > ul.list > li`, with one direct `a` whose child `span` carries an ISO date; the board advertises display page2 as `xwzx1/tzgg/1.htm` through its legacy 下页/尾页 links. Selected originals are declared as `/info/1103/<digits>.htm`. The first retained page has20 rows and the advertised second page has one row; no later page is inferred. A usable validated HTTPS response is required before listing/article bytes are admitted.
+
+The adapter preserves source order and date/title separation, rejects foreign/query/credential/noncanonical URLs before transport, and binds the board through the retained root declaration. The historical source observation described one `div.n_con`/`form[name=_newscontent_fromname]`/`div.contain_con`, direct `h2`, centered `发布日期：YYYY-MM-DD` caption and one `#vsb_content > .v_news_content` body. That HTTP observation is metadata only; the adapter admits bytes only from the separate HTTPS candidate, so no current original/document bytes are asserted until HTTPS validation succeeds. No plaintext HTTP egress, OCR, attachment download, complete history or campus write is claimed. Offline/native verification and acceptance evidence remain with the parent integration.
+
+## Directory-bound BME information announcements
+
+The retained official-directory member35 is 生物与医学工程学院 under 医工交叉学科群, with exact literal/resolved `http://bme.buaa.edu.cn/`. The selected HTTPS observation is deliberately separate (`https://bme.buaa.edu.cn/`), not an alias or silent protocol upgrade. The HTTPS root declares `newsList.aspx?catID=13` as its 信息公告 portal; the portal's active `table#DataList1` contains source category cells (`div.posTit`) and `ul > li` rows with bracketed ISO dates, full `a[title]` headings, visible anchor excerpts and declared `newsInfo.aspx?catID=13&subcatID=<digits>&curID=<digits>` article URLs.
+
+The adapter preserves portal source order and title/excerpt distinction, accepts only the exact BME host and query shapes above, and scopes article extraction to one active `div.newsInfo`, direct `div.newsInfoTit > h3`, and its direct body. Paragraphs and bounded flat table captions/rows/cells are retained; image/document contents remain unfetched and produce `partial_text`. The portal's later page controls are ASP.NET `__doPostBack` declarations rather than independent GET URLs, so only the retained page 1 is supported; no postback, guessed page, category route, attachment, history, all-college crawl or campus write is claimed. Synthetic listing, URL-boundary and article/table tests are included; native build/test proof and external publication remain separate gates.
+
+## Directory-bound YGY medical science and engineering notices
+
+Public read-only reconnaissance through the shared proxy confirmed `https://ygy.buaa.edu.cn/` (HTTP 200), its active root-declared `https://ygy.buaa.edu.cn/tzgg/yggg.htm` 医工公告 board, three source-advertised board pages (`yggg.htm`, `yggg/2.htm`, `yggg/1.htm`), and canonical article links under `/info/1004/`. The captured root directory snapshot binds the visible member `医学科学与工程学院` to literal `http://ygy.buaa.edu.cn` and resolved `http://ygy.buaa.edu.cn/`; the selected HTTPS source is retained as a deliberate separate observation, not a protocol upgrade or alias. `ul.list1 > li` rows use `div.li-l > p.p1/p2` month/day values without a year, so the adapter preserves `date: null` rather than inferring dates. Article selectors are one active `div.content`, direct `h1` and `div.time`, and one `div.content-detail > div.v_news_content`; source-declared JSP attachment links, images and tables remain unfetched and are reported as partial content.
+
+The implementation is local and unclaimed on `work/ygy-announcements-20261018`; no issue/PR, merge, deployment, campus mutation or governed native acceptance proof is claimed here. Full online/cache proof remains owner-controlled and must use the production governor and private originals; source history, all-college traversal and attachment retrieval remain out of scope.
+
+## Directory-bound CST 网络空间安全学院 notices
+
+The reviewed public source is `https://cst.buaa.edu.cn/`, selected separately from the official-directory member's exact literal `http://cst.buaa.edu.cn` (resolved directory root `http://cst.buaa.edu.cn/`). The root actively declares `index/tzgg.htm` as 通知公告. The adapter therefore binds `college=cst`, `category=tzgg`, and exposes only the root and that declared board; no guessed index, search, dynamic, or attachment route is admitted.
+
+Public read-only reconnaissance through the shared proxy observed robots `404` (1693 bytes, SHA-256 `29c0b0a5db57af93122bca27d4c301f5d1b7d34e5f410a85b4c1af2e747a1407`), HTTPS root `200` (38235 bytes, SHA-256 `1d03ee24029caf2a6191ea9970fffc5f35f841d9d23f35d47bbb1225fa84ebe3`), declared board `200` (27454 bytes, SHA-256 `adf3d6f199ba34f5a13005442a1c8e4bbb320f4292e87296ae662efd43462a2e`) and one board-declared category-1102 article `https://cst.buaa.edu.cn/info/1102/5379.htm` `200` (32419 bytes, SHA-256 `c5af4743ea99cb457deb7a167d3cd65c96f905bcb4bb554fd5911ae36ab49027`). These retained observations are public-source facts, not immutable publisher or rights certificates; raw originals remain outside the repository.
+
+The board uses `div.text-list > ul > li` rows, `div.text-ldata > div > p` month/day plus `span` year, and `div.text-linfo > h3` title / `p` excerpt. Seven source rows were observed, including a source duplicate for one article; source order is retained and no later ordinal is advertised. Articles use one `div.art-main`, direct `div.art-tit.cont-tit > h3`, `发布日期：YYYY-MM-DD`, and one `#vsb_content > .v_news_content` body. The adapter preserves active paragraphs and document-link hints without downloading attachments, rejects ambiguous containers and foreign/query/credential URLs, and keeps missing/invalid dates unknown. Full history, all-college coverage, image/OCR/table reconstruction, later pages and campus writes remain out of scope.
+
+## Electronic Information Engineering source frontier
+
+The official directory snapshot binds visible member13 电子信息工程学院 under 信息学科群 with exact literal/resolved `http://www.ee.buaa.edu.cn/`. Public read-only reconnaissance found the root-declared `/index/tzgg.htm` 通知公告 board, source-advertised `pb_sys_common` pagination, canonical `/info/1062/` article links, and the bounded selectors retained by the adapter (`ul.news-ul > li`, direct row `a`/`span`, and the direct `article-tt`/`article-sm`/`vsb_content` structure). This is source-contract discovery only; raw HTTP bytes and personal notice text are not committed.
+
+The selected HTTPS candidate `https://www.ee.buaa.edu.cn/` is currently blocked before source admission: certificate SAN/hostname validation reports no alternative certificate subject name for `www.ee.buaa.edu.cn`; a separately probed canonical `ee.buaa.edu.cn` TLS handshake ended unexpectedly. Plain HTTP is not used as a fallback and no TLS verification is disabled. The adapter therefore truthfully exposes `college-source ee root|notices` as `surface_blocked` with `fallback_reason.code=tls_transport_blocked`, preserves the exact HTTP directory attribution and selected HTTPS candidate, and rejects EE listing/article reads as unsupported before transport. No board/article content, all-college/history/attachment coverage or online capability is claimed until a validated HTTPS source is available.
+## Artificial Intelligence college announcements
+
+The `iai` adapter binds the official-directory member 人工智能学院 while preserving its exact literal/resolved `http://iai.buaa.edu.cn/` identity. The source is deliberately observed over HTTPS at `https://iai.buaa.edu.cn/`; this is recorded as a separate observation, not an alias or silent protocol upgrade. The retained root declares `index/tzgg.htm` (通知公告), whose `mainBox/listText` direct `li > a + i` rows preserve source order, canonical `YYYY-MM-DD` dates and `/info/1024/<id>.htm` article links. The board's current pagination widget advertises no later ordinal, so page 2 and beyond remain unavailable rather than inferred.
+
+IAI root/notices surfaces, listing filters and selected article reads use a dedicated allowlisted network profile and the shared directory/governor/cache policy. The observed article layout is `mainBox/nry2/form`, `show01/h5`, `show01/date/s`, and `vsb_content/show02/v_news_content`; source-declared `showVsbpdfIframe`/`vsb_pdf_image_data` content is reported as `embedded_document` or `partial_text` without fetching PDF/preview assets or fabricating text. No all-college/history/attachment/OCR or campus-write claim is made.
 
 ## Directory-bound Sepe energy notices
 
@@ -165,7 +476,6 @@ Corrected full source gate: **214 library + 19 CLI passes**, two ignored, five s
 
 **Actual merged runtime:** the first post-merge Git fetch failed with TLS termination and REST GET with EOF. Those failures remain recorded; no TLS disable or proxy fallback. Root first fast-forwarded to the locally available reviewed source and built offline. One later deliberate fetch/REST succeeded after that build interval; root fast-forwarded only to the actual merge and rebuilt. Nine actual merged-root cache-only commands passed: script, root/entry/default surfaces, IC policy and notice-source metadata, help/schema/capabilities. Entry/script original MIME, hashes, bytes, timestamps and HTTP200 revalidation facts matched; selected-page counts were 1/1/default2, IC `published_at` was 2026-09-29 with 38 paragraphs, and 44 capabilities still reported SPOC blocked. Production governor bytes stayed unchanged at 60,000/900,000-ms policy with auth disarmed and no latch/pending outcome: zero campus requests, authentication or mutations. [Merged runtime receipt](https://github.com/cyjin-yl/buaa-cli/issues/87#issuecomment-5968147258) binds this proof. This completes bounded public-source integration, not authenticated course/material/subtitle retrieval or all-college history.
 
-<<<<<<< HEAD
 ## 2026-10-17: announcement source-admission correction
 
 PR94 / issue93 now separate source admission from downstream parsing throughout the inherited news/SCSE/IC/aviation paths. HTTP200, exact HTML MIME, bounded nonempty UTF-8 and active-base checks run once; layout, missing-board, unadvertised-ordinal and undeclared-article errors remain errors but admitted originals reach private cache persistence before the inner result is returned. Supplied history reuses the same byte/base admission without invented HTTP metadata. Shared ordinal selection rejects conflicting active destinations and unreviewed control/percent/backslash syntax; duplicate identical responsive destinations are allowed. This follows the existing mainline nested-result convention rather than weakening transport admission.
@@ -175,7 +485,6 @@ For inherited news/SCSE/IC consumers, this correction is specifically response a
 The earliest source-authority layer also includes the independently prepared directory producer repair: active-only identity text, inherited hidden-source attributes, exact HTML MIME/base admission and private retention of admitted layout failures. Existing source-text walkers move once to the common HTML module instead of establishing a second implementation. Aviation now binds each desktop row's unique heading to that same unique anchor, refuses multiple desktop headings/bodies rather than concatenating prose, and keeps ambiguous publication headers unknown. Synthetic parser and real-loopback consumer cases cover these failure boundaries; their execution result belongs to the exact-head PR receipt, not the historical totals below.
 
 The new `Offline Rust` workflow fetches the declared toolchain and locked dependencies separately, then checks format/build/tests/clippy and native help/schema/capabilities in a loopback-only network namespace with a fresh HOME. It has read-only repository permission, no persisted checkout credential, no secrets or campus operations, and no private-CI bridge. A workflow definition is not evidence of an executed or trusted green check. The dated live/cache/native/browser receipts below still belong to their original heads, not to this correction; current exact-head offline proof and independent review are recorded separately in the PR before integration. No new campus request, authentication, governor mutation, merge, retarget or issue closure is part of this correction. Full-college/history/attachment acceptance remains partial.
-=======
 ## Directory-bound Iiif institute notices
 
 Bounded [issue #103](https://github.com/cyjin-yl/buaa-cli/issues/103) binds visible official-directory member50 国际前沿交叉科学研究院, category 融合创新示范区 and exact literal/resolved `https://iiif.buaa.edu.cn/`. The ordinal is source order, not an academic school code. Original directory HTML SHA-256 `f491e3ae91fc9ffd37b04e3cc3a5e7b8744f4c90950b3fb1498b3f21a16b56d9` is distinct from derived50-entry directory JSON SHA-256 `9f8ae603fd20387662642bfe8535c237aa9a4832b11c595fb711e43edf336c4d`. The retained root actively declares `/xwgg/tzgg.htm`, labelled 通知公告, as well as an unfetched recruitment board. No guessed route or hidden-member alias.
@@ -356,7 +665,6 @@ After recording the 224+19 metadata receipt, the owned CLI rebuilt offline and t
 Actual local Chromium desktop1365x900/mobile390x844 inspection and screenshots confirm the Beijing example, shared 1,024 bound, 224+19 and prior aviation220+19 labels, explicit unmerged-stack limit and working evidence navigation. Document width equals both viewports; existing code/table auto-scrollers remain local. Scripts/external styles/frames/broken fragments count0. Tabs were released and the local server stopped; this is not Pages deployment. A bounded nine-public-file private-key/GitHub-token/AWS-key format scan counted0, not a privacy/security certificate. Personal originals/prose remain private; no additional campus GET, authentication or write occurred.
 
 Scope: one college, one current notice board and one source-declared original. No later-page live observation, full history/archive replay, all-college/faculty completion, other attachment download/OCR, publisher signature/security certificate, authenticated campus service or recording/Life retrieval. Source checking and exact-head integration decisions must not be inferred from this local evidence.
->>>>>>> work/sepe-full-stacked
 
 ## 2026-10-03: directory-bound aviation college notices
 

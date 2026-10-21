@@ -605,6 +605,120 @@
         "https://news.buaa.edu.cn/zhxw.htm"
       ],
       "evidence": {
+        "unified_offline_2026_10_20": {
+          "scope": "Integrated descendant of 74d463227d07cc822b0d64b56b5fa99874fad583 with formatter output, SSE privacy/scope correction and canonical schema cutover; not an exact-base-head, merged-trunk or current-online claim.",
+          "quality_gate": "Locked offline build, strict all-target clippy and formatter check passed; complete suite 350 library plus 19 CLI passed, two subprocess-worker entry points ignored. One foreground global heavy-work lease, worktree-owned target, UID1000, jobs1, memory2GiB/swap-total3GiB, read-only container root and network none.",
+          "input_set_sha256_before_evidence_update": "ec87e4ffc53e8e6a83a334213021934b0ed656269ae1c4b74fed421c2274bf30",
+          "native_consumers": "Actual CLI capabilities equal the entire49-capability/74-catalog manifest. After removing62 stale schema mutations, a six-failure native schema consumer passes all15 checks, including IAI,29 listing colleges,HSS HTTPS,Transportation namespace,BME query shape and MSE table types. Separate SSE3/report5 focused cases overlap the full suite.",
+          "listing_colleges": ["scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "iai", "zfai", "iiif", "mse", "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld", "me", "wrj", "yqgdxy", "ase", "hss", "bme", "ygy", "cst", "dept3", "ee"],
+          "root_only_colleges": ["rse", "sa"],
+          "current_online_status": "No college in these arrays received a current campus observation in this gate. Existing source-specific live receipts below retain their historical scopes; a schema entry or synthetic parser is not a working remote service.",
+          "blockers": {
+            "all_current_observations": "The original production governor requires deliberate reviewed boot-history admission; no state reset, alternative identity, credential reuse or campus request was performed.",
+            "me": "Reviewed HTTPS transport remains explicitly blocked by TLS validation; no successful surface snapshot or plaintext fallback.",
+            "ee": "Reviewed HTTPS transport remains explicitly blocked by TLS validation; no successful surface snapshot or plaintext fallback.",
+            "sa": "Root-only source contract with inherited certificate-host mismatch; no notice/article route is invented.",
+            "rse": "Retained root has no usable source-declared notice board; metadata is not an announcement service."
+          },
+          "limits": "Failed receipts are retained. No production credentials/governor/cache mount, campus request/authentication/write, real Issue write, player delivery, independent exact-head approval, publication or deployment occurred."
+        },
+        "source_admission_repair_2026_10_21": {
+          "scope": "Sixteen independently reported source-admission, transport-safety and owned-scope findings were reduced to twenty-two offline regressions on the integrated candidate descendant of b37f3fbc80f25c7b79bcb104d7400c33ed3d65c9. Every regression failed before the repair and passes after it; no assertion was weakened to fit the previous behaviour.",
+          "red_baseline": {
+            "regressions": 22,
+            "passed": 0,
+            "failed": 22,
+            "exit": 101,
+            "source_digest": "625daca4b02010a416a112205a62652a7b7b610950bee2d3b3058c118533d8bd",
+            "source_stable_during_run": true,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-regression-baseline-20261021/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "green_gate": {
+            "source_digest": "413ef97880a7ab9aecd1a95828f9bfe14c393f494e5310825ae3bd8bf7f0a0d3",
+            "source_stable_during_run": true,
+            "formatter_check": "passed",
+            "locked_offline_build": "passed",
+            "strict_all_target_clippy": "passed",
+            "library_cases": 372,
+            "cli_cases": 19,
+            "ignored_library_entries": 2,
+            "ignored_entries_are": "subprocess worker entry points",
+            "native_consumers": "The actual CLI manifest equals the complete 49-capability manifest, the synthetic all-cue subtitle import preserves content, order, translation and exact millisecond timing with an independently recomputed digest, and the report consumer keeps stdin-only bodies, an explicit repository host, spoof refusal and an unknown outcome without retry. No real Issue was created.",
+            "announcement_schema_consumer": "All 15 published schema cases pass, including IAI discovery, all 29 listing colleges, HSS HTTPS-only articles, the Transportation namespace, the BME query shape and retained MSE table types.",
+            "receipt": "target/isolated-20261020-gddn4kgk/review-final-20261021-resume3/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "repaired_contracts": [
+            "A safe admitted board or article whose selector no longer matches retains its original bytes and reports a typed fallback; the selection error stays nested until the response is retained.",
+            "An unsafe response, including authentication, password, CSRF, CAPTCHA and challenge markup or headers, remains an outer refusal and never enters the public cache or the fallback path.",
+            "Challenge and captcha headers are observed before retained metadata is filtered, so a challenged response cannot be reclassified as a public fallback.",
+            "A rejected classroom session stays latched even when a later encoding or MIME error occurs.",
+            "Article bodies and embedded documents are bound to their owning container; inert templates, comments, strings and unrelated sibling containers cannot authorize a document or supply text.",
+            "Notice rows stay inside their declared notice-list scope, listed links resolve against the admitted listing URL, ambiguous nested category tables are refused, and omitted table content is reported as partial text."
+          ],
+          "retained_failures": "The pre-repair baseline, the two intermediate syntax and lint failures and the original failing trusted check remain retained separately; they are not restated as passing evidence.",
+          "limits": "These are synthetic and offline results, not current campus observations. No campus request, authentication, mutation, credential, production governor or private cache was used, and no media player, live feed or authenticated service is proven. ME, EE and Sa transport blockers and the missing Rse notice-board contract are unchanged, and current online acceptance still requires the original governor's deliberate reviewed boot-history admission."
+        },
+        "unsafe_nested_listing_repair_2026_10_21": {
+          "review": "Independent exact-head source review identified one P1 admission defect: the nested unsupported-result path in Yqgdxy, ASE and WRJ, with the same shape in BME, FLD, HSS and Math, skipped the security predicate after a structurally valid listing parse. A password/CSRF response could therefore be retained before the caller observed unsupported. The review was source-only; no live response or private data was used.",
+          "repair": "A shared refuse_unsafe_listing guard now rejects authentication, password, CSRF, CAPTCHA, challenge and active-base semantics before the nested error can reach transport persistence. Safe admitted selector drift keeps the original nested-retention behaviour. Seven consumers call the guard.",
+          "focused_regressions": {
+            "cases": 23,
+            "passed": 23,
+            "failed": 0,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-regressions-p1-20261021/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "unified_gate": {
+            "source_digest": "3f481183a009325efa6fffa69a036ef5b0168aa323fec372a9c792746a219683",
+            "formatter_check": "passed",
+            "locked_offline_build": "passed",
+            "strict_all_target_clippy": "passed",
+            "library_cases": 373,
+            "ignored_library_entries": 2,
+            "cli_cases": 19,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-p1-final-20261021/receipt.json",
+            "schema_recovery_receipt": "target/isolated-20261020-gddn4kgk/review-p1-schema-recovery-20261021/receipt.json",
+            "schema_cases": 15,
+            "schema_exit": 0,
+            "source_stable_during_run": true,
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "limits": "The review and all verification are source-bound and offline. No current campus observation, authentication, mutation, credential, production governor or private cache was used. Online acceptance, media playback and player-facing subtitle delivery remain separate gates."
+        },
+        "unsafe_target_membership_bypass_repair_2026_10_21": {
+          "review": "A second independent security review of exact head 73583fe found that the new guard was still inside the target-not-declared branch. An unsafe selector-valid listing that declared the requested target skipped the guard and could be persisted. The review was source-only and did not access live or private data.",
+          "repair": "Move refuse_unsafe_listing before the target-membership test in all seven consumers. Both target-absent and target-present unsafe listings now fail outward before ArchiveClient persistence; safe admitted listings retain their existing nested-drift semantics.",
+          "focused_regressions": {
+            "cases": 23,
+            "passed": 23,
+            "failed": 0,
+            "covers": "selector-valid Yqgdxy listing with password/CSRF markup and both target-absent and target-present rows",
+            "receipt": "target/isolated-20261020-gddn4kgk/review-regressions-p2-20261021/receipt.json",
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "unified_gate": {
+            "source_digest": "39e7c84ba93fa81a99be164a292385c5164adfa507225714cc1363648213a0b3",
+            "formatter_check": "passed",
+            "locked_offline_build": "passed",
+            "strict_all_target_clippy": "passed",
+            "library_cases": 373,
+            "ignored_library_entries": 2,
+            "cli_cases": 19,
+            "schema_cases": 15,
+            "receipt": "target/isolated-20261020-gddn4kgk/review-p2-final-20261021/receipt.json",
+            "source_stable_during_run": true,
+            "network_requests": 0,
+            "campus_requests": 0
+          },
+          "limits": "The source review and verification remain offline evidence. No live campus response, authentication, mutation, credential, production governor or private cache was used, and final exact-head independent approval remains a separate merge gate."
+        },
         "quality_gate": "Latest exact merged source dca1fbff8e86dae700a9c7ba4eb6e27f027cf67e passed locked offline build/full205library+18CLI tests,2ignored,strict all-target clippy/fmt before merge; actual merged main516a4efc44960c0cd35c2957fde8d359f7526cb7 was separately rebuilt and IC source/page2/policy/capabilities exercised offline with original hashes/cachehits/Gov byte-unchanged. This is not an extra full-suite run, signed privateCI or platform/security approval. Historical source receipts below retain their original scope.",
         "sepe_slice": {
           "issue": null,
@@ -2427,6 +2541,67 @@
         "privacy": "No actual private catalog/media/credentials or private implementation copied; only reviewed non-sensitive structural field/key/relation/FTS facts used.",
         "limits": "Local catalog only, no remote object retrieval or blob verification. Operator attestation is not rights proof. WAL sidecar coordination is possible; no frozen snapshot across requests; metadata and SQL resource bounds are explicit."
       }
+    },
+    {
+      "id": "recordings-native-subtitles",
+      "title": "Supplied native classroom subtitle normalization",
+      "status": "implemented-offline",
+      "acceptance": "Exact original Base64/SHA256, operator permission and explicit unique native track selection; full text/translation/source order, exact integer-second to millisecond timing, separate original/derived hashes and explicit unknown resource/capture facts. No remote retrieval or catalog writes.",
+      "sources": [],
+      "evidence": {
+        "implementation": [
+          "src/recordings/subtitles.rs",
+          "src/recordings.rs",
+          "src/main.rs"
+        ],
+        "migration": "Authoritative offline normalization implementation and synthetic consumer regressions restored from the source acceptance worktree; six import regressions passed in the unified350-library/19-CLI offline gate.",
+        "native_consumer": "Actual compiled CLI preserved every cue, text, translation and source order in a synthetic whole-track input, with independently serialized emitted-segment SHA256 and exact original-body SHA256. This is not current authorized-source, media-binding, rendering or player-synchronization proof.",
+        "limits": "One supplied native format; no string/fractional timing, missing-track fallback, media identity inference, translation generation, subtitle delivery/player synchronization, complete history or remote authenticity claim.",
+        "privacy": "No retained response, transcript text, identifiers, source hash, session or private receipt is included in this manifest."
+      }
+    },
+    {
+      "id": "recordings-native-subtitles-online",
+      "title": "Existing-session native classroom subtitle read",
+      "status": "implemented-offline",
+      "parent_items": ["recordings", "live", "recording-subtitle-service"],
+      "acceptance": "One explicitly authorized fixed-origin native subtitle GET with protected-stdin existing session, exact track selection, whole immutable wire-body provenance and the permanent shared governor. No password/master key, login, redirect, auth refresh, retry, media or catalog write.",
+      "sources": [],
+      "evidence": {
+        "command": "buaa recordings subtitles --online|--refresh",
+        "implementation": "Fixed-origin URL admission, existing-session cookie validation, session-scoped private cache and shared-governor request processing are restored. All five synthetic classroom transport regressions passed in the unified350-library/19-CLI offline gate; existing-session online verification remains pending.",
+        "safety": "Cookie delivery is limited to the exact transcript GET, never robots, redirects or another origin. Fresh JSON MIME/application admission precedes immutable comparison; invalid/denied/indeterminate sessions latch without replacing retained originals. No login, refresh, retry, media retrieval or catalog write exists.",
+        "limits": "This is a local adapter with a sanitized current gate, not a working authenticated subtitle/media/playback service, course inventory, complete history or campus-mutation authorization.",
+        "privacy": "No credentials, private response bodies, session identifiers, operational URLs beyond the reviewed route shape or protected receipts are included."
+      }
+    },
+    {
+      "id": "recording-replay-playback",
+      "title": "mpv/VLC replay playback",
+      "status": "pending",
+      "acceptance": "Select an authorized source-bound replay, launch mpv or VLC without a shell, observe actual audio/video, seeking, subtitle synchronization and controlled exit. Credentials/signed URLs must not leak through argv/logs; use cached or controlled media paths retaining the same permanent governor.",
+      "sources": [],
+      "remaining": "No player-launch command or actual playback proof exists; native subtitle JSON import is not replay playback."
+    },
+    {
+      "id": "recording-live-playback",
+      "title": "mpv/VLC realtime live playback",
+      "status": "pending",
+      "acceptance": "Play a source-bound authorized live stream with actual current audio/video and correct stop/reconnect semantics through a reviewed media path. Playlist/fragments/keys/range requests retain account-wide governance and secret handling; no implicit auth/transport retries or weakened request floors.",
+      "sources": [],
+      "remaining": "No viable native live contract or controlled media scheduling/credential integration is implemented; direct uncontrolled player egress is not accepted."
+    },
+    {
+      "id": "recording-subtitle-service",
+      "title": "Native/local player-synchronized subtitle service",
+      "status": "partial-offline",
+      "acceptance": "Serve and select native-platform and local subtitle tracks for replay/live players with source/time provenance, synchronization and live updates. Verify actual rendered cues and lifecycle without inventing language, speaker or missing timing.",
+      "sources": [],
+      "implemented_slices": [
+        "recordings-native-subtitles",
+        "recordings-native-subtitles-online"
+      ],
+      "remaining": "Timed original normalization and a fixed-source subtitle GET adapter are implemented; player-facing subtitle delivery/export, actual rendering/synchronization and live updates are not implemented or verified."
     }
   ],
   "catalog_entries": [
