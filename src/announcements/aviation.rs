@@ -227,7 +227,9 @@ pub(crate) fn article_with_client(
     )?;
     let source = listing_url(&client, AVIATION_PUBLIC_NOTICES_URL, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_listing(&college_html(response)?, &source, "公开公示")?;
+        let html = college_html(response)?;
+        let document = parse_listing(&html, &source, "公开公示")?;
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()

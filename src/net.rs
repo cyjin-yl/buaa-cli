@@ -3410,6 +3410,49 @@ mod tests {
     }
 
     #[test]
+    fn aviation_target_present_unsafe_listing_is_refused_before_cache_save() {
+        const BODY: &[u8] = br#"<title>Fixture notices</title><form><input type="password" name="password"><input type="hidden" name="csrf_token" value="synthetic"></form><div class="body mh"><div class="moudle"><div class="right"><div class="items"><div class="item"><div class="r"><a href="../info/1061/42.htm"><div class="title">Fixture policy</div></a></div></div></div></div></div></div>"#;
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /gkgs.htm "));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Aviation;
+        seed(
+            &client,
+            AVIATION_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(
+            &client,
+            AVIATION_ROOT_URL,
+            "<a href=\"gkgs.htm\">Fixture public notices</a>".as_bytes(),
+        );
+        let target = Url::parse("https://aviation.buaa.edu.cn/info/1061/42.htm").unwrap();
+        let error = crate::announcements::aviation::article_with_client(
+            client,
+            CacheMode::PreferCache,
+            &target,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "unavailable");
+
+        let mut offline = fixture.client(CacheMode::Offline, &server);
+        offline.profile = SourceProfile::Aviation;
+        let source = Url::parse(AVIATION_PUBLIC_NOTICES_URL).unwrap();
+        assert!(offline.load(&source).unwrap().is_none());
+        assert_eq!(
+            offline.snapshot(&source, false).unwrap_err().code,
+            "offline_miss"
+        );
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
     fn aviation_article_uses_advertised_source_page_and_refreshes_only_the_target() {
         const ARTICLE: &[u8] = br#"<div class="body mh"><div class="moudle"><div class="right"><div class="items"><div><form><div class="title">Fixture policy</div><div class="v_news_content"><p>Source policy paragraph.</p></div></form></div></div></div></div></div><div class="mbody ph"><div class="items"><form><div class="v_news_content"><p>Not extra prose.</p></div></form></div></div>"#;
         let fixture = Fixture::new();
