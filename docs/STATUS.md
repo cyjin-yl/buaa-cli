@@ -1,5 +1,97 @@
 ## Development status
 
+## Governed public online verification round (2026-10-23)
+
+Campus egress from this host is reachable again: `classroom.msa.buaa.edu.cn`
+resolves to the internal address, the TCP connect succeeds and the TLS
+session verifies `*.msa.buaa.edu.cn`. The earlier "TLS severed at the network
+edge" observation is no longer current for this host and is not rewritten in
+the historical receipts.
+
+Using the earlier candidate CLI and the production shared governor, fifteen college
+source surfaces were re-read with `--refresh` and produced fresh
+`miss`/`revalidated` observations with HTTP 200, byte counts and body
+digests: aviation, beijing, bme, cst, dept3, h3i, iai, ic, iiif, mse, rse,
+scse, shenyuan, ygy and zfai. The historical sweep retried some failed
+requests and honoured local pacing refusals. Earlier failures remain failures;
+only admitted final responses count here. These root-page observations do not
+complete department material catalogs, notice bodies or all-college coverage.
+HSS did not complete its network interaction and EE remains
+surface-only because its HTTPS certificate names do not match; both stay
+recorded as failures.
+
+Some later selected college surfaces were **not** requested: a rejected classroom
+authentication latched the shared account-safety state, so every
+account-scoped request was refused locally with exit 4 before any network
+request. These refusals are separate from the earlier surface observations.
+No parallel account key or TLS bypass is authorized. Subsequent deliberate
+authentication resumes do not erase the refusals or establish the missing
+adapters for ihome and department materials.
+
+## Governed classroom session acquisition
+
+`buaa recordings session --offline` deliberately arms one authentication
+attempt without network access. `--online` receives authorization, the
+credential, the exact typed intent and an explicit selected-lesson
+verification on protected stdin. The credential-bearing request is pinned
+to the reviewed SSO service; redirect, challenge and application-response
+admission remain subject to the same account-wide governor. A negative or
+indeterminate result is not permission to rearm automatically.
+
+An admitted classroom session is stored privately and referenced explicitly.
+Positive selected-lesson application confirmation is not independent proof of
+account identity, media rights or course completion. `recordings subtitles
+--online` accepts the stored reference as `session_ref` instead of an
+operator-pasted cookie. Exactly one of `cookie` or `session_ref` is required.
+Stored version-2 sessions retain acquired cookie scope, Path and expiry and
+filter each actual API URL; old flattened files require deliberate authentication.
+The hardened source passed strict all-target clippy, an explicit locked
+offline build, 432 library cases and 19 CLI cases with three worker entries
+ignored. Native consumers matched the full 51/74 manifest, all 2,455 retained
+supplied cues and all 3,389 raw-source cues. Complete retained media readback
+also matched; these checks made no campus requests and left the production
+governor unchanged. Fresh exact-head review and original-runtime online smoke
+remain separate gates; earlier login receipts are not their approval.
+
+Runtime admission also found two distinct governor entities: the migrated
+original runtime retains a 60-second request interval, whereas prior host
+observations used a later local five-second store. Those host receipts do not
+establish original account-history continuity. Further campus operations must
+use the existing original production runtime and honor both known sets of
+barriers; neither history is copied, reset or silently merged.
+
+## Observed classroom session, recording media and native subtitles
+
+Earlier candidates completed a CAS/forwarding flow and stored platform
+cookies. These receipts preceded independent findings in positive-session
+admission, cookie scope, request pacing, body limits and response lifetime.
+They remain historical observations, not a security or current-head approval.
+
+The platform APIs declared a released replay and a recording asset. An earlier
+candidate read a one-mebibyte prefix with HTTP 206 and acquired all
+2,068,314,499 bytes of a `video/mp4` with a privately retained whole-file
+digest. The recording host answered without the classroom cookie. The
+local original is retained for offline readback; it need not be downloaded
+again to repair transport or parser defects. Private lesson identifiers,
+recording dates, source digests and operational paths stay outside Git.
+
+One native subtitle track was read through the governed
+fixed-origin endpoint with the stored session reference: 3389 cues in source
+order, spanning 219 s to 8897 s, from a 595,620-byte original, revalidated
+with HTTP 200 and an unchanged body digest. The platform serves that envelope
+with an HTML content type, so the response body is now the admission
+authority and the labelling drift is reported in the receipt; an HTML sign-in
+page still fails the envelope admission and is refused without being
+retained.
+
+The native track has no resource identifier. Platform lesson metadata is an
+association lead; date/duration agreement and caller-supplied cue facts do not
+independently verify a native media binding. Nine sampled mpv cue windows
+showed localized subtitle differences and four early gap samples did not.
+VLC root captures were black; later window captures used unmatched frames and
+remain inconclusive. Neither finite sampling nor process exit completes
+all-cue, dual-player synchronization or realtime-live acceptance.
+
 ## Bounded local player delivery
 
 The local replay command now launches installed mpv/VLC with explicit

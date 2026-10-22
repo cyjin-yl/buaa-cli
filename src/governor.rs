@@ -143,6 +143,15 @@ pub struct RequestLease<'a> {
     kind: RequestKind,
 }
 
+/// A request slot reserved while the current lease remains pending. The
+/// caller may sleep for `request_wait` without releasing the account lock;
+/// `cooldown_wait` means a durable server cooldown was observed and the
+/// current attempt must stop instead of retrying.
+pub(crate) struct FollowupReservation {
+    pub(crate) request_wait: Duration,
+    pub(crate) cooldown_wait: Duration,
+}
+
 struct GovernorLock {
     file: File,
     owner_pid: u32,
@@ -792,6 +801,73 @@ impl Governor {
 }
 
 impl RequestLease<'_> {
+    /// Durably retain response status, Retry-After and challenge facts before
+    /// any caller-owned cookie or body processing can fail. The request remains
+    /// pending and the same lock stays held; the caller still must finish the
+    /// lease after bounded body handling. This deliberately does not reserve a
+    /// follow-up slot: pacing is reserved only after the prior body is fully
+    /// consumed.
+    pub(crate) fn observe_http(
+        &mut self,
+        status: u16,
+        retry_after: Option<&str>,
+        challenge: bool,
+    ) -> Result<(), String> {
+        if !(100..=599).contains(&status) {
+            return Err("invalid HTTP response status".into());
+        }
+        let now = now_ms()?;
+        self.state.observe(now)?;
+        if self.state.pending != Some(self.kind) {
+            return Err("request lease is no longer pending".into());
+        }
+        let retry_deadline = retry_after.and_then(|value| retry_after_deadline(value, now));
+        if let Some(until) = retry_deadline {
+            self.state.cooldown_until_ms = self.state.cooldown_until_ms.max(until);
+        } else if status == 429 {
+            self.state.cooldown_until_ms = self
+                .state
+                .cooldown_until_ms
+                .max(deadline(now, MISSING_RETRY_AFTER_MS)?);
+        }
+        if challenge || matches!(status, 401 | 403) {
+            self.state.safety_latched = true;
+            self.state.authentication_armed = false;
+        }
+        self.governor.save(&self.state, false)
+    }
+
+    /// Reserve the next request in this still-pending attempt. This updates
+    /// the durable request floor while retaining the same lock and pending
+    /// outcome, so callers never need to call `Governor::status` while an I/O
+    /// lease is held. Any cooldown previously observed on this lease remains
+    /// durable and causes the caller to stop instead of retrying.
+    pub(crate) fn reserve_followup(&mut self) -> Result<FollowupReservation, String> {
+        let now = now_ms()?;
+        self.state.observe(now)?;
+        if self.state.pending != Some(self.kind) {
+            return Err("request lease is no longer pending".into());
+        }
+        let cooldown_wait = self.state.cooldown_until_ms.saturating_sub(now);
+        if cooldown_wait != 0 {
+            self.governor.save(&self.state, false)?;
+            return Ok(FollowupReservation {
+                request_wait: Duration::ZERO,
+                cooldown_wait: Duration::from_millis(cooldown_wait),
+            });
+        }
+        let request_at = self
+            .state
+            .next_request_ms
+            .max(deadline(now, self.state.request_interval_ms)?);
+        self.state.next_request_ms = deadline(request_at, self.state.request_interval_ms)?;
+        self.governor.save(&self.state, false)?;
+        Ok(FollowupReservation {
+            request_wait: Duration::from_millis(request_at.saturating_sub(now)),
+            cooldown_wait: Duration::ZERO,
+        })
+    }
+
     /// Record the actual outcome durably, then release exclusivity. Even success
     /// reserves a full request gap after completion. An I/O failure or invalid
     /// outcome returns an error, leaving the unfinished crash reservation.
@@ -1690,6 +1766,51 @@ mod tests {
             assert!(super::http_date_ms(valid, reference).is_some(), "{valid}");
         }
     }
+
+    #[test]
+    fn followup_reservation_keeps_configured_gap_and_retry_date_durable() {
+        let fixture = Fixture::new();
+        let limits =
+            Limits::new(Duration::from_secs(60), Duration::from_secs(15 * 60)).expect("limits");
+        let governor = Governor::open_at(fixture.state_dir(), limits).expect("governor");
+        governor
+            .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+            .expect("resume");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        lease.state.next_request_ms = 0;
+        let followup = lease.reserve_followup().expect("follow-up");
+        assert!(followup.request_wait >= Duration::from_secs(60));
+        lease
+            .observe_http(503, Some("Sun, 06 Nov 2099 08:49:37 GMT"), false)
+            .expect("date cooldown");
+        lease
+            .finish(Outcome::CredentialRejected)
+            .expect("durable finish");
+        let status = governor.status().expect("status");
+        assert!(status.cooldown_wait > Duration::from_secs(60));
+        assert!(!status.authentication_armed);
+        assert!(status.safety_latched);
+    }
+
+    #[test]
+    fn observed_429_floor_survives_body_failure_finish() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        governor
+            .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+            .expect("resume");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        lease.observe_http(429, None, false).expect("observe");
+        lease
+            .finish(Outcome::NetworkFailure)
+            .expect("finish after body failure");
+        assert!(governor.status().expect("status").cooldown_wait >= Duration::from_secs(30 * 60));
+    }
+
     #[test]
     fn rfc850_years_use_the_full_reference_timestamp() {
         let reference_2026 = reference_time(2026, 9, 24, 5, 40, 0);

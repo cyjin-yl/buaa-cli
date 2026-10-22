@@ -108,14 +108,22 @@ struct OnlineInput<'a> {
     authorized: bool,
     #[serde(borrow)]
     selection: Selection<'a>,
-    #[serde(deserialize_with = "deserialize_cookie")]
-    cookie: Zeroizing<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_cookie")]
+    cookie: Option<Zeroizing<String>>,
+    #[serde(borrow, default)]
+    session_ref: Option<Cow<'a, str>>,
 }
 
 fn deserialize_cookie<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Zeroizing<String>, D::Error> {
     String::deserialize(deserializer).map(Zeroizing::new)
+}
+
+fn deserialize_optional_cookie<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Zeroizing<String>>, D::Error> {
+    deserialize_cookie(deserializer).map(Some)
 }
 
 struct DigestWriter(Sha256);
@@ -190,8 +198,8 @@ fn normalize_track(
     data: NativeData<'_>,
     selection: &Selection<'_>,
 ) -> Result<(Value, String), Error> {
-    let tracks: Vec<Track<'_>> =
-        serde_json::from_str(data.list.ok_or_else(invalid)?.get()).map_err(|_| invalid())?;
+    let list = data.list.ok_or_else(invalid)?;
+    let tracks: Vec<Track<'_>> = serde_json::from_str(list.get()).map_err(|_| invalid())?;
     if tracks.len() > MAX_TRACKS {
         return Err(invalid());
     }
@@ -248,18 +256,14 @@ fn rejected_session() -> Error {
     )
 }
 
-fn require_application_success(code: i64) -> Result<(), Error> {
-    if code != 0 {
-        return Err(rejected_session());
-    }
-    Ok(())
-}
-
 /// A fresh body can be an expired-session reply even when an immutable original
 /// exists. Admit its application status before comparing or retaining old bytes.
 pub(crate) fn validate_http_application(body: &[u8]) -> Result<(), Error> {
     let data: NativeData<'_> = serde_json::from_slice(body).map_err(|_| rejected_session())?;
-    require_application_success(data.code)
+    if data.code != 0 {
+        return Err(rejected_session());
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_http_metadata(
@@ -276,10 +280,10 @@ pub(crate) fn validate_http_metadata(
     if bytes == 0 {
         return Err(rejected_session());
     }
-    let mime = content_type
-        .and_then(|value| value.split(';').next())
-        .map(str::trim);
-    if mime.is_none_or(|mime| !mime.eq_ignore_ascii_case("application/json")) {
+    // The observed platform labels its JSON response as text/html. Admit only
+    // the reviewed JSON/HTML labels, then independently validate the JSON
+    // application envelope; a label alone never confirms a session.
+    if !crate::net::classroom_json_mime(content_type) {
         return Err(rejected_session());
     }
     Ok(())
@@ -301,10 +305,23 @@ pub(crate) fn process_http(
     )?;
     let data: NativeData<'_> =
         serde_json::from_slice(&response.body).map_err(|_| rejected_session())?;
-    require_application_success(data.code)?;
+    if data.code != 0 {
+        return Err(rejected_session());
+    }
     // Valid authenticated source bytes survive layout/selection failure for a
     // cache-only correction; unsuccessful application replies never enter cache.
     let normalized = normalize_track(data, &selection);
+    let content_type = response
+        .headers
+        .get("content-type")
+        .map(String::as_str)
+        .unwrap_or("");
+    let mime_label_matches_json = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .eq_ignore_ascii_case("application/json");
     Ok(normalized.map(|(segments, derived_sha256)| {
         let fetched = response.cache_status != CacheStatus::Hit;
         let body_fetched = fetched && response.revalidation_status != Some(304);
@@ -317,6 +334,7 @@ pub(crate) fn process_http(
             "derivation":{"sha256":derived_sha256,"hash_scope":"compact_utf8_segments_json_in_output_field_order","time_conversion":"exact_integer_seconds_to_milliseconds","text_normalization":"none"},
             "segments":segments,
             "retrieval":{"source_url":response.url,"fetched_at_unix_ms":response.fetched_at_unix_ms,"cache_status":response.cache_status,"revalidated_at_unix_ms":response.revalidated_at_unix_ms,"revalidation_status":response.revalidation_status},
+            "response":{"http_status":response.status,"content_type":content_type,"mime_label_matches_json":mime_label_matches_json,"envelope":"flat","admission":"response_body_shape"},
             "completeness":{"scope":"selected_track_in_observed_response","complete_history":false,"source_order_preserved":true,"unsegmented_trans_content_used":false},
             "network_access":fetched,"source_objects_fetched":body_fetched,"source_object_scope":"native_subtitle_response_only_not_recording_media","catalog_modified":false,
         })
@@ -352,18 +370,26 @@ pub fn online(mode: CacheMode, input: &str) -> Result<Value, Error> {
     {
         return Err(invalid());
     }
+    // Exactly one session source: an operator-supplied cookie or a stored
+    // session reference. The credential itself never leaves its private file.
+    let credentials = crate::recordings::session::SessionCredentials::load(
+        request.cookie.as_ref().map(|cookie| cookie.as_str()),
+        request.session_ref.as_deref(),
+    )?;
     let mut url = Url::parse(CLASSROOM_ORIGIN).map_err(|_| invalid())?;
     url.set_path(CLASSROOM_TRANSCRIPT_PATH);
     url.query_pairs_mut()
         .append_pair("format", "json")
         .append_pair("sub_id", &request.selection.sub_id);
-    let client = ClassroomClient::open(mode, &request.cookie)?;
-    client.get(&url, |response| {
-        process_http(
-            response,
-            &request.selection.sub_id,
-            &request.selection.resource_guid,
-        )
+    credentials.with_header(&url, |cookie, expires| {
+        let client = ClassroomClient::open(mode, cookie, expires)?;
+        client.get(&url, |response| {
+            process_http(
+                response,
+                &request.selection.sub_id,
+                &request.selection.resource_guid,
+            )
+        })
     })?
 }
 
@@ -386,12 +412,21 @@ pub fn online_schema() -> Value {
         "source_url":{"type":"string"},"fetched_at_unix_ms":{"type":"integer","minimum":0},
         "cache_status":{"enum":["hit","miss","revalidated"]},"revalidated_at_unix_ms":{"type":["integer","null"]},"revalidation_status":{"type":["integer","null"]}
     }});
+    output["properties"]["response"] = json!({"type":"object","additionalProperties":false,
+        "required":["http_status","content_type","mime_label_matches_json","envelope","admission"],
+        "properties":{
+            "http_status":{"const":200},"content_type":{"type":"string"},
+            "mime_label_matches_json":{"type":"boolean"},"envelope":{"const":"flat"},
+            "admission":{"const":"response_body_shape"}
+        }
+    });
     output["description"] = json!(
         "Fixed-origin session-bound native subtitle GET/cache only. Credentials remain on stdin/in memory and are never sent to robots, redirects or another origin; no session/credential is included in cache or output. Body hash covers raw HTTP bytes, not a constructed wrapper. No login, media retrieval, catalog write, publisher/rights proof or course completion."
     );
     json!({
-        "input":{"type":"object","additionalProperties":false,"required":["authorized","selection","cookie"],"properties":{
+        "input":{"type":"object","additionalProperties":false,"required":["authorized","selection"],"oneOf":[{"required":["cookie"]},{"required":["session_ref"]}],"properties":{
             "authorized":{"const":true},"cookie":{"type":"string","minLength":1,"maxLength":16384,"writeOnly":true,"description":"Explicit existing native session Cookie value via protected stdin only; never a master key/password or an arbitrary header map."},
+            "session_ref":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Non-secret reference to one stored governed classroom session. Exactly one of cookie or session_ref is required; the credential itself stays in its private owner-only file."},
             "selection":{"type":"object","additionalProperties":false,"required":["sub_id","resource_guid"],"properties":{"sub_id":{"type":"string","pattern":"^[0-9]{1,20}$"},"resource_guid":offline["input"]["properties"]["selection"]["properties"]["resource_guid"]}}
         }},
         "output":output,"network_policy":{"origin":CLASSROOM_ORIGIN,"path":CLASSROOM_TRANSCRIPT_PATH,"method":"GET","cache_first":true,"automatic_authentication_retry":false,"shared_governor":true,"robots_authenticated":false}
@@ -437,6 +472,7 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn native(cues: &str) -> String {
         format!(
@@ -574,5 +610,86 @@ mod tests {
                 "invalid_input"
             );
         }
+    }
+
+    #[test]
+    fn an_online_read_needs_exactly_one_session_source() {
+        let mut request = json!({"authorized":true,"selection":{"sub_id":"42","resource_guid":""}});
+        assert_eq!(
+            online(crate::net::CacheMode::Offline, &request.to_string())
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
+        request["cookie"] = json!("a=b");
+        request["session_ref"] = json!("0".repeat(64));
+        assert_eq!(
+            online(crate::net::CacheMode::Offline, &request.to_string())
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
+    }
+
+    fn live_body(shape: &str) -> String {
+        let track = r#"{"sub_id":"42","resource_guid":"","all_content":[{"BeginSec":2,"EndSec":3,"Text":"x","TransText":""}]}"#;
+        match shape {
+            "flat" => format!(r#"{{"code":0,"msg":"ok","total":1,"list":[{track}]}}"#),
+            _ => format!(r#"{{"code":1,"msg":"failed","list":[{track}]}}"#),
+        }
+    }
+
+    #[test]
+    fn a_login_page_or_failed_application_is_not_admitted() {
+        assert_eq!(
+            validate_http_application(b"<html><body>please sign in</body></html>")
+                .expect_err("html page")
+                .code,
+            "auth_latched"
+        );
+        assert_eq!(
+            validate_http_application(live_body("failed").as_bytes())
+                .expect_err("failed application")
+                .code,
+            "auth_latched"
+        );
+    }
+
+    #[test]
+    fn a_mime_label_mismatch_is_recorded_rather_than_hidden() {
+        let body = live_body("flat").into_bytes();
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "content-type".to_string(),
+            "text/html; charset=UTF-8".to_string(),
+        );
+        let body_digest = digest(&body);
+        let response = crate::net::Response {
+            url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+            status: 200,
+            headers,
+            body,
+            sha256: body_digest,
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let output = process_http(&response, "42", "")
+            .expect("outer")
+            .expect("selected track");
+        assert_eq!(output["response"]["mime_label_matches_json"], false);
+        assert_eq!(output["response"]["envelope"], "flat");
+        assert_eq!(output["response"]["admission"], "response_body_shape");
+        assert_eq!(
+            output["response"]["content_type"],
+            "text/html; charset=UTF-8"
+        );
+        assert_eq!(
+            output["segments"],
+            json!([{
+                "source_order":1,"start_ms":2000,"end_ms":3000,"text":"x","translation":""
+            }])
+        );
     }
 }

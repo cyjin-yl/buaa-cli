@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Harden multi-hop session scheduling and recording-media integrity after
+  independent review: persist response safety facts before body/cookie
+  processing, retain the configured completion-to-next-request gap, validate
+  a fresh selected-lesson response, strictly bind ranges and complete media,
+  and publish/reuse only owner-private verified files. The isolated offline
+  and native gate passes 432 library plus 19 CLI cases; current original-runtime
+  online smoke and live/dual-player synchronization remain separate gates.
+- Preserve successful media responses' Retry-After, reject explicitly mismatched
+  lesson-probe tenants, and store versioned classroom Cookie scope, Path and
+  expiry metadata. Filter stored cookies for each actual request URL; legacy
+  flattened session files require deliberate authentication, not silent migration.
+- Honor Cookie Max-Age over Expires independently of attribute order, including
+  empty-value deletion, and stop before password submission when a login form
+  adds an unreviewed interactive control. A hidden CAPTCHA container alone
+  remains distinct from an active input.
+- Include external HTML form associations and unnamed controls in the
+  pre-password safety scan. Retain stored-cookie expiry through governor waits
+  and reject an expired credential immediately before transmission, releasing
+  the unused lease without changing existing safety facts.
+- Require unique, correctly typed username/password controls before a credential
+  POST; same-name added controls cannot inherit the credential-field exemption.
+- Honor disabled fieldsets and their first-legend exception when admitting
+  credential controls and scanning for additional login interactions.
+- Add governed classroom session acquisition (`recordings session --offline` to
+  arm one attempt, `--online` to run it) with a protected-stdin credential, a
+  reviewed single sign-on service and host-scoped cookies, a private
+  owner-only session file referenced by a non-secret account fingerprint, and
+  `recordings subtitles --online` accepting that reference instead of a
+  pasted cookie. Rejections and challenges latch and are never bypassed; a
+  cookie only reaches the hosts its own declared domain allows, and the
+  sign-on credential never leaves the sign-on host.
+- Add governed classroom recording-media acquisition (`recordings media
+  --online`): the lesson facts, the recording asset and the media bytes come
+  from the platform's own reviewed endpoints and the exact URL it declares,
+  under the shared governor with an explicit digest scope, with the session
+  cookie never sent to the recording host. The native-track binding is the
+  platform's lesson identity, the declared recording asset and the observed
+  duration cover; a resource-identity match is not claimed when the native
+  track declares none.
+- Admit the native classroom transcript by its response body rather than the
+  transport's content label, because the platform serves that envelope with
+  an HTML content type. The labelling drift is reported in the receipt, and an
+  HTML sign-in page still fails the envelope admission and is refused without
+  being retained.
+- Re-verify fifteen college source surfaces online with `--refresh` through
+  the production shared governor, recording fresh HTTP status, byte counts and
+  body digests. Retain the HSS network failure, the EE certificate-name
+  refusal, and the twelve surfaces left unattempted behind a latched
+  account-safety state.
 - Explicitly release governor flock leases in the acquiring process so inherited descriptors cannot extend completed operations; retain request-body/persistence lifetime, latches, pacing and unknown-outcome barriers. Isolate the sandbox regression through exec and add an inherited-descriptor/policy regression. Record the default-parallel offline gate and authorized original-runtime boot migration without resetting account history or granting authentication.
 - Revalidate the current native subtitle importer against all 2,455 cues of a retained authorized original and its independent pre-implementation oracle. Preserve missing media identity and separate this offline whole-track proof from fresh service access. Record the bounded full-window VLC glyph observation and its inconclusive paused-toggle control; local replay delivery is no longer described as unimplemented.
 - Add bounded local `recordings replay` for installed mpv/VLC with explicit authorization, initial seek, subtitle selection and controlled child exit. Normal A/V output is the default; headless outputs are explicit. Add strict SRT/WebVTT export without changing native subtitle JSON/digest semantics. Receipts distinguish submission, observed process exit and unverified rendering; remote media/live streams remain unsupported.
