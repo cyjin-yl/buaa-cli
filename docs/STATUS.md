@@ -17,12 +17,81 @@ subsequent playback/audio-clock advancement were observed. These local
 observations do not certify ASR accuracy, native media-track association,
 physical speaker output, live playback or universal synchronization.
 
-The guarded quality gate passed formatter, locked offline build, strict
+The earlier guarded player quality gate passed formatter, locked offline build, strict
 all-target clippy, 389 library cases (two worker entries ignored), 19 CLI
 cases, native manifest/subtitle/report consumers and 15 announcement schema
 cases. Earlier failed flag, generated-file readback and export-bound fixture
 receipts remain retained; they are not rewritten as successes. Private media,
 text, paths and image evidence remain outside Git.
+
+## CI account-lease lifetime correction
+
+The native-evidence PR's push run failed with an account-lease contention
+error; its separate pull-request run passed. The failed run is retained,
+not retried into a success. Moving the sandbox probe from bare fork to an
+exec-isolated worker passed its focused check but did not alone fix the
+default-parallel suite: a later run still had 12 lease-related failures.
+
+The governor now explicitly unlocks when its original owner releases the
+RAII guard. A duplicated descriptor can otherwise keep flock alive after
+the owner closes it, including during another thread's fork/exec window.
+The guard records its acquiring PID so a fork child's destructor cannot
+unlock a parent's active request. All acquisition paths retain the guard
+through state processing and persistence. Pacing, latches, authentication
+and durable unknown-outcome rules are unchanged.
+
+A deterministic inherited-descriptor regression preserves the rejection
+latch and full request gap after completion. The corrected locked offline
+gate passed 25 focused governor cases, 390 library cases and 19 CLI cases
+with default test parallelism; three subprocess worker entries were ignored
+in the full suite. Formatter, strict all-target clippy, build, whole 49/74
+manifest equality and all 2,455 native cues also passed. The initial local
+parallel run exhausted its 2 GiB virtual-address limit; its failure remains
+retained. The completed gate kept that limit and default parallelism while
+bounding glibc arenas with `MALLOC_ARENA_MAX=2`.
+
+## Original-runtime governor continuity
+
+After explicit operator authorization, the existing BUAA container's
+original history was migrated with the local-only exact boot-review plan
+and commit, not deleted or replaced by the newer host-only state. Independent
+readback matched the complete retained old-byte digest and unchanged
+permanent lock inode/permissions. The original 60-second request policy and
+15-minute background policy remain; full residual waits of 60,001 and
+900,000 ms were newly reserved, and the old armed authentication permission
+was disarmed. No campus request was sent by this operation.
+
+Further campus reads must use that original shared namespace, not the
+later host-only five-second history. This resolves the original-runtime
+boot-continuity blocker, not service adapters, media rights, authentication
+or live-stream contracts.
+
+## Retained native subtitle source revalidation
+
+The original private evidence survives in the existing BUAA seat's persistent
+home mount even though its container-local path is absent from the host home.
+Only the retained original, import input and independent pre-implementation
+oracle were copied to a new private directory; their complete hashes match
+the retained copies. No seat was started or restored, and no production
+governor, credential or campus service was accessed for this verification.
+
+The current compiled CLI imported all 2,455 cues from the 636,471-byte native
+original under the foreground heavy-work guardian. Every cue field, exact
+selection, original length/hash and independently recomputed emitted-segment
+digest matched. The native empty resource identity stays explicitly missing;
+media association, fresh authentication, complete history and live delivery
+are not proved. Private inputs and full output remain outside Git.
+
+A later full-window VLC/X11 observation showed subtitle glyphs and advancing
+playback time. Earlier captures clipped the native window's subtitle region;
+the paused toggle comparison remained unchanged and is inconclusive. This
+adds a bounded rendering observation, not whole-track synchronization proof.
+
+Read-only Life tool inspection located selected-course replay capture and MP4
+acquisition, with ASR as a separate downstream source of local SRT files.
+The finite-HLS collector rejects ongoing playlists. Neither that replay path
+nor empty translation/socket metadata establishes a native subtitle or live
+service contract; no private implementation was copied or executed here.
 
 ## 2026-10-21: Governed public online verification
 
@@ -66,9 +135,14 @@ erasure. No account login or campus write was performed.
 The remaining gaps are unchanged: ME and EE still fail TLS validation, Sa stays
 root-only, Rse still has no source-declared board, the SPOC authenticated
 course and material contract is still unverified, archive capture of a
-redirecting replay stays refused, the pinned template fetch reports a
-conflicting cached artifact, and replay playback, live playback and
-player-facing subtitle delivery are still unimplemented.
+redirecting replay stays refused, and the pinned template fetch reports a
+conflicting cached artifact. Live playback, whole native-track/media binding
+and live subtitle updates remain unverified.
+Bounded local replay/export/delivery is implemented as described above; it is
+not a complete online media service. The ihome and department-material items
+remain reference catalogs without implemented source adapters, not working
+services. Further campus observations still require reviewed continuity with
+the original permanent governor; prior successful requests do not establish it.
 
 ## 2026-10-21: Source-admission repair round, offline only
 

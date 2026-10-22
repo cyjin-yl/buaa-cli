@@ -17,6 +17,29 @@
         "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention. Earlier offline suite: 118 passed across five suites (one ignored). Final merged-source gate: 197 library + 18 CLI passed, two ignored; locked offline build, strict all-target clippy and formatter check passed. The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed. Only known pre-reboot history has an explicit offline plan/commit migration; unknown outcomes and missing/corrupt history cannot migrate. No reset or automatic recovery.",
+        "lease_lifetime_repair_2026_10_21": {
+          "failure": "A trusted push check failed on account-lease contention. Exec-isolating the sandbox probe alone did not resolve the default-parallel suite; the retained follow-up run had twelve lease-related failures.",
+          "repair": "Explicit original-process RAII unlock on every governor acquisition path prevents inherited descriptors from extending a completed operation. An acquiring PID check prevents a fork child destructor from unlocking a live parent request. Body processing, persistence, pacing, latches and unknown-outcome barriers remain unchanged.",
+          "offline_proof": "A duplicated-descriptor regression verifies completed-lease release while preserving the rejection latch, disarmed authentication and full request gap. Twenty-five focused governor cases, 390 full library cases and 19 CLI cases passed with default test parallelism; three full-suite subprocess-worker entries were ignored. Formatter, locked offline build and strict all-target clippy passed under the shared heavy-work guard with a worktree-owned target.",
+          "retained_failures": "The original trusted check, incomplete test-only repair and local virtual-address exhaustion remain retained. The successful parallel gate kept the 2 GiB address-space bound and limited glibc arenas rather than serializing tests. This proof is offline, not a new campus observation."
+        },
+        "original_runtime_migration_2026_10_21": {
+          "authorization": "Explicit operator authorization to reset runtime history was applied as the existing conservative local-only plan/commit migration in the original running BUAA environment, not history deletion or an alternative account namespace.",
+          "original_bytes_preserved": true,
+          "independent_snapshot_digest_matches_preview": true,
+          "permanent_lock_inode_and_permissions_unchanged": true,
+          "retained_request_interval_ms": 60000,
+          "retained_background_interval_ms": 900000,
+          "newly_reserved_full_residual_ms": {
+            "request": 60001,
+            "background": 900000,
+            "cooldown": 0
+          },
+          "authentication_disarmed": true,
+          "pending_outcome": false,
+          "network_requests": 0,
+          "limits": "The original-runtime boot-continuity blocker is resolved. Further campus work must use its original shared governor, not the later host-only five-second history. This operation does not establish authentication, media rights, service adapters or live playback; migration-time reservations are not current wait durations. Private snapshots and raw plans remain outside source."
+        },
         "first_use_on_this_host_2026_10_21": {
           "observation": "A local filesystem check found no production governor directory in the effective UID's passwd home at observation time. That establishes local absence only, not that historical state never existed or that another runtime identity had no history. The subsequent normal open created a private 0700 directory with a 0600 lock and state file; no existing local state was deleted.",
           "review_command_scope": "boot-review-plan does not create missing directories, while normal open has a fresh-initialization path. The earlier unavailable result identifies directory admission failure, not a proven boot mismatch or state corruption. Cross-runtime historical continuity was not established by the local absence check.",
@@ -638,7 +661,7 @@
           "root_only_colleges": ["rse", "sa"],
           "current_online_status": "No college in these arrays received a current campus observation in this gate. Existing source-specific live receipts below retain their historical scopes; a schema entry or synthetic parser is not a working remote service.",
           "blockers": {
-            "all_current_observations": "The original production governor requires deliberate reviewed boot-history admission; no state reset, alternative identity, credential reuse or campus request was performed.",
+            "all_current_observations": "At this historical offline gate the original production governor still required deliberate reviewed boot-history admission; no state reset, alternative identity, credential reuse or campus request was performed. The subsequent original_runtime_migration_2026_10_21 evidence resolves only that boot-continuity blocker.",
             "me": "Reviewed HTTPS transport remains explicitly blocked by TLS validation; no successful surface snapshot or plaintext fallback.",
             "ee": "Reviewed HTTPS transport remains explicitly blocked by TLS validation; no successful surface snapshot or plaintext fallback.",
             "sa": "Root-only source contract with inherited certificate-host mismatch; no notice/article route is invented.",
@@ -684,7 +707,7 @@
             "Notice rows stay inside their declared notice-list scope, listed links resolve against the admitted listing URL, ambiguous nested category tables are refused, and omitted table content is reported as partial text."
           ],
           "retained_failures": "The pre-repair baseline, the two intermediate syntax and lint failures and the original failing trusted check remain retained separately; they are not restated as passing evidence.",
-          "limits": "These are synthetic and offline results, not current campus observations. No campus request, authentication, mutation, credential, production governor or private cache was used, and no media player, live feed or authenticated service is proven. ME, EE and Sa transport blockers and the missing Rse notice-board contract are unchanged, and current online acceptance still requires the original governor's deliberate reviewed boot-history admission."
+          "limits": "These are synthetic and offline results, not current campus observations. No campus request, authentication, mutation, credential, production governor or private cache was used in this repair gate, and no media player, live feed or authenticated service is proven. ME, EE and Sa transport blockers and the missing Rse notice-board contract are unchanged. The later original_runtime_migration_2026_10_21 evidence resolves the separately recorded boot-continuity blocker, not these service contracts."
         },
         "unsafe_nested_listing_repair_2026_10_21": {
           "review": "Independent exact-head source review identified one P1 admission defect: the nested unsupported-result path in Yqgdxy, ASE and WRJ, with the same shape in BME, FLD, HSS and Math, skipped the security predicate after a structurally valid listing parse. A password/CSRF response could therefore be retained before the caller observed unsupported. The review was source-only; no live response or private data was used.",
@@ -2616,7 +2639,7 @@
           "src/main.rs"
         ],
         "migration": "Authoritative offline normalization implementation and synthetic consumer regressions restored from the source acceptance worktree; six import regressions passed in the unified350-library/19-CLI offline gate.",
-        "native_consumer": "Actual compiled CLI preserved every cue, text, translation and source order in a synthetic whole-track input, with independently serialized emitted-segment SHA256 and exact original-body SHA256. This is not current authorized-source, media-binding, rendering or player-synchronization proof.",
+        "native_consumer": "The current compiled CLI re-imported all 2,455 cues from an operator-authorized retained 636,471-byte native original. Every text, translation, integer-millisecond interval and source-order field equals the independent pre-implementation whole-track oracle. Complete original bytes, source length/hash, exact track selection and independently serialized emitted-segment SHA256 match; the three selected private input files also match their retained remote copies. No new campus request occurred. The source has an empty resource_guid, preserved explicitly as missing media association; this is not current service, media-binding, rendering or player-synchronization proof.",
         "limits": "One supplied native format; no string/fractional timing, missing-track fallback, media identity inference, translation generation, subtitle delivery/player synchronization, complete history or remote authenticity claim.",
         "privacy": "No retained response, transcript text, identifiers, source hash, session or private receipt is included in this manifest."
       }
@@ -2643,7 +2666,7 @@
       "acceptance": "Select an authorized source-bound replay, launch mpv or VLC without a shell, observe actual audio/video, seeking, subtitle synchronization and controlled exit. Credentials/signed URLs must not leak through argv/logs; use cached or controlled media paths retaining the same permanent governor.",
       "sources": [],
       "implementation": "recordings replay accepts an explicitly authorized local file, mpv or VLC, optional local/normalized subtitles, initial seek and bounded stop. Normal device output is default; headless null/dummy output is explicit. Remote media transport remains unsupported.",
-      "observed_rendering": "A bounded real-media mpv/X11 probe precisely sought to a selected derived-cue window, observed playback/audio clocks advance, and compared subtitle/video-only screenshots at one paused source frame. Pixel differences localized to the subtitle area. Private frames/text/media identifiers remain outside Git.",
+      "observed_rendering": "A bounded real-media mpv/X11 probe precisely sought to a selected derived-cue window, observed playback/audio clocks advance, and compared subtitle/video-only screenshots at one paused source frame. Pixel differences localized to the subtitle area. A separate full-window VLC/X11 capture showed subtitle glyphs over video with seek and clock observations. Earlier desktop captures clipped the native window and could not establish subtitle absence; a paused subtitle-toggle comparison was unchanged and remains inconclusive, not removal or universal synchronization proof. Private frames/text/media identifiers remain outside Git.",
       "local_cli_proof": "Under the global heavy-work guardian, actual installed mpv and VLC both replayed an authorized local file with initial seek and a supplied SRT, reached the player runtime bound, and were stopped and reaped. Generated segment-to-SRT submission also passed and its temporary file was removed. Player receipts explicitly leave rendering/audio/synchronization unverified; those are not inferred from arguments or exit status.",
       "quality_gate": "Rust 1.89 formatter, locked offline build, strict all-target clippy, 389 library tests and 19 CLI tests passed, with two subprocess workers ignored. Native manifest/subtitle/report consumers and all 15 announcement schema cases passed. Linux child confinement has a forked boundary regression proving non-Unix socket and io_uring denial with Unix socket allowance.",
       "remaining": "Linux x86-64 only. Physical speaker output, whole authorized native-track/media binding, VLC rendered-cue synchronization and live playback remain unverified. The network filter is not a general decoder/filesystem sandbox and permits local Unix IPC."
@@ -2666,7 +2689,7 @@
         "recordings-native-subtitles",
         "recordings-native-subtitles-online"
       ],
-      "local_delivery": "Strict bounded SRT/WebVTT export and local player subtitle submission are implemented. Native JSON remains lossless; player export refuses text that the chosen formats cannot represent literally, unsupported controls and zero-duration cues. One authorized derived track has a separate mpv/X11 pixel/time observation.",
+      "local_delivery": "Strict bounded SRT/WebVTT export and local player subtitle submission are implemented. Native JSON remains lossless; player export refuses text that the chosen formats cannot represent literally, unsupported controls and zero-duration cues. One authorized derived track has a separate mpv/X11 pixel/time observation and a full-window VLC/X11 glyph/clock observation; the paused VLC toggle control is inconclusive. These derived cues are not relabelled as native platform subtitles.",
       "remaining": "Whole native-platform track/media binding, VLC rendered-cue synchronization, physical audio output and live subtitle updates remain unverified. Submitted player arguments alone are not proof of rendering."
     }
   ],

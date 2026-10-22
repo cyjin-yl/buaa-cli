@@ -43,6 +43,15 @@ All selected cues are validated before any successful output. Current support is
 
 Bounds are 4 MiB decoded input, 256 tracks, 20,000 selected cues, 256-byte identifiers and 8 KiB text/translation fields. Successful stdout may contain private text and identifiers, so it must not be forwarded to logs, issues or third-party models. These interfaces establish neither publisher authenticity, media-byte integrity nor course rights.
 
+The current compiled CLI was also exercised on a retained, operator-authorized
+636,471-byte native original. All 2,455 cues matched an independent
+pre-implementation whole-track oracle, including exact text, translation,
+integer-millisecond timing and source order. Original bytes/length/hash, exact
+selection and the independently serialized emitted-segment digest matched.
+The source's empty `resource_guid` remained missing; no media association,
+fresh service access or complete history was inferred. Original, oracle,
+inputs and full output remain private; no new campus request was made.
+
 ## Governed native subtitle GET
 
 `buaa recordings subtitles --online` and `--refresh` use only the reviewed fixed-origin transcript GET, with a protected-stdin existing session and the same process-shared governor/cache policy as other adapters. The request is constructed from the numeric `sub_id`; arbitrary URLs, methods and header maps are rejected. The cookie is validated as cookie pairs, marked sensitive, delivered only to the transcript target (never robots, redirects or another origin), scoped into a private cache namespace, and excluded from cache/output/report diagnostics. There is no password/master-key input, login, refresh, redirect following, automatic retry, media fetch or catalog write.
@@ -91,12 +100,21 @@ ASR text is accurate, that source media and native classroom tracks are
 universally associated, or that physical speakers were heard. Private frames,
 source text, media identifiers and full source digests remain outside Git.
 
+A separate VLC/X11 observation showed subtitle glyphs over video in a full
+native-window capture, alongside seek and clock observations. The first
+virtual desktop was smaller than the native window and clipped the subtitle
+region, so those early captures could not establish subtitle absence. A
+subtitle toggle while paused left the captured pixels unchanged; that control
+is inconclusive, not evidence of removal or general synchronization.
+
 ## Live playback and remaining subtitle service gaps
 
 Live playback, current audio/video, reconnect/stop lifecycle and governed
 playlist/fragment/key/range scheduling remain unimplemented. Local replay and
-one rendered derived subtitle track do not complete live updates, whole
-authorized native-track verification or all-player synchronization acceptance.
+the observed derived subtitle track do not complete live updates, whole
+native-track/media binding or all-player synchronization acceptance. The
+whole supplied-native-track import proof above is a separate input-processing
+result, not proof that its missing media association has been recovered.
 
 ## Object-storage interface facts — source-only draft
 
