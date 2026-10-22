@@ -17,12 +17,54 @@ subsequent playback/audio-clock advancement were observed. These local
 observations do not certify ASR accuracy, native media-track association,
 physical speaker output, live playback or universal synchronization.
 
-The guarded quality gate passed formatter, locked offline build, strict
+The earlier guarded player quality gate passed formatter, locked offline build, strict
 all-target clippy, 389 library cases (two worker entries ignored), 19 CLI
 cases, native manifest/subtitle/report consumers and 15 announcement schema
 cases. Earlier failed flag, generated-file readback and export-bound fixture
 receipts remain retained; they are not rewritten as successes. Private media,
 text, paths and image evidence remain outside Git.
+
+## CI account-lease lifetime correction
+
+The native-evidence PR's push run failed with an account-lease contention
+error; its separate pull-request run passed. The failed run is retained,
+not retried into a success. Moving the sandbox probe from bare fork to an
+exec-isolated worker passed its focused check but did not alone fix the
+default-parallel suite: a later run still had 12 lease-related failures.
+
+The governor now explicitly unlocks when its original owner releases the
+RAII guard. A duplicated descriptor can otherwise keep flock alive after
+the owner closes it, including during another thread's fork/exec window.
+The guard records its acquiring PID so a fork child's destructor cannot
+unlock a parent's active request. All acquisition paths retain the guard
+through state processing and persistence. Pacing, latches, authentication
+and durable unknown-outcome rules are unchanged.
+
+A deterministic inherited-descriptor regression preserves the rejection
+latch and full request gap after completion. The corrected locked offline
+gate passed 25 focused governor cases, 390 library cases and 19 CLI cases
+with default test parallelism; three subprocess worker entries were ignored
+in the full suite. Formatter, strict all-target clippy, build, whole 49/74
+manifest equality and all 2,455 native cues also passed. The initial local
+parallel run exhausted its 2 GiB virtual-address limit; its failure remains
+retained. The completed gate kept that limit and default parallelism while
+bounding glibc arenas with `MALLOC_ARENA_MAX=2`.
+
+## Original-runtime governor continuity
+
+After explicit operator authorization, the existing BUAA container's
+original history was migrated with the local-only exact boot-review plan
+and commit, not deleted or replaced by the newer host-only state. Independent
+readback matched the complete retained old-byte digest and unchanged
+permanent lock inode/permissions. The original 60-second request policy and
+15-minute background policy remain; full residual waits of 60,001 and
+900,000 ms were newly reserved, and the old armed authentication permission
+was disarmed. No campus request was sent by this operation.
+
+Further campus reads must use that original shared namespace, not the
+later host-only five-second history. This resolves the original-runtime
+boot-continuity blocker, not service adapters, media rights, authentication
+or live-stream contracts.
 
 ## Retained native subtitle source revalidation
 

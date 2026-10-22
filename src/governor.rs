@@ -138,9 +138,34 @@ pub struct Governor {
 #[must_use = "retain the lease throughout request I/O and record its outcome"]
 pub struct RequestLease<'a> {
     governor: &'a Governor,
-    _lock: File,
+    _lock: GovernorLock,
     state: State,
     kind: RequestKind,
+}
+
+struct GovernorLock {
+    file: File,
+    owner_pid: u32,
+}
+
+impl GovernorLock {
+    fn held(file: File) -> Self {
+        Self {
+            file,
+            owner_pid: std::process::id(),
+        }
+    }
+}
+
+impl Drop for GovernorLock {
+    fn drop(&mut self) {
+        // Closing alone leaves flock held while an unrelated fork/exec child
+        // still has a copy. Only the acquiring process may release our lock;
+        // a fork child's destructor must not unlock its parent's live request.
+        if std::process::id() == self.owner_pid {
+            let _ = FileExt::unlock(&self.file);
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -226,7 +251,7 @@ pub fn boot_review_plan() -> Result<Value, crate::net::Error> {
     let (lock, _) = governor
         .open_lock(false)
         .map_err(|_| boot_review_safety())?;
-    lock_exclusive(&lock).map_err(|_| boot_review_busy())?;
+    let _lock = lock_exclusive(lock).map_err(|_| boot_review_busy())?;
     let (state, bytes) = governor.load_record().map_err(|_| boot_review_safety())?;
     let plan = governor.review_plan(&state, &bytes)?;
     serde_json::to_value(plan).map_err(|_| boot_review_safety())
@@ -427,14 +452,15 @@ impl Governor {
     // Separate descriptor acquisition from initialization so the first-open
     // interleaving can be exercised with a real contending process.
     fn initialize(&self, limits: Limits, lock: File, created: bool) -> Result<(), String> {
-        if created {
+        let _lock = if created {
             // A concurrent opener may win flock before the creator. It cannot
             // initialize state, so let it fail and release rather than abandon
             // our fresh lock with no state forever.
             FileExt::lock_exclusive(&lock).map_err(|_| "cannot initialize governor lock")?;
+            GovernorLock::held(lock)
         } else {
-            lock_exclusive(&lock)?;
-        }
+            lock_exclusive(lock)?
+        };
         let now = now_ms()?;
         if created {
             // A pre-existing state without its permanent lock is not a fresh
@@ -479,7 +505,7 @@ impl Governor {
     /// consumed one-shot authorization precede returning the lease.
     pub fn try_acquire(&self, kind: RequestKind) -> Result<RequestLease<'_>, String> {
         let (lock, _) = self.open_lock(false)?;
-        lock_exclusive(&lock)?;
+        let lock = lock_exclusive(lock)?;
         let mut state = self.load()?;
         let now = now_ms()?;
         state.observe(now)?;
@@ -522,7 +548,7 @@ impl Governor {
     /// Retry-After, background deadlines, or a raised scheduling policy.
     pub fn resume_authentication(&self, _authorization: ResumeAuthorization) -> Result<(), String> {
         let (lock, _) = self.open_lock(false)?;
-        lock_exclusive(&lock)?;
+        let _lock = lock_exclusive(lock)?;
         let mut state = self.load()?;
         let now = now_ms()?;
         state.observe(now)?;
@@ -536,7 +562,7 @@ impl Governor {
     /// ordinary auth resume: neither a lost Retry-After nor latch may be waived.
     pub fn status(&self) -> Result<Status, String> {
         let (lock, _) = self.open_lock(false)?;
-        lock_exclusive(&lock)?;
+        let _lock = lock_exclusive(lock)?;
         let mut state = self.load()?;
         let now = now_ms()?;
         state.observe(now)?;
@@ -686,7 +712,7 @@ impl Governor {
 
     fn commit_review(&self, commit: BootReviewCommit) -> Result<Value, crate::net::Error> {
         let (lock, _) = self.open_lock(false).map_err(|_| boot_review_safety())?;
-        lock_exclusive(&lock).map_err(|_| boot_review_busy())?;
+        let _lock = lock_exclusive(lock).map_err(|_| boot_review_busy())?;
         let (mut state, bytes) = self.load_record().map_err(|_| boot_review_safety())?;
         let expected = self.review_plan(&state, &bytes)?;
         if expected != commit.plan {
@@ -943,14 +969,15 @@ fn deadline(now: u64, delay: u64) -> Result<u64, String> {
         .ok_or_else(|| "governor deadline is out of range".into())
 }
 
-fn lock_exclusive(file: &File) -> Result<(), String> {
-    FileExt::try_lock_exclusive(file).map_err(|error| {
+fn lock_exclusive(file: File) -> Result<GovernorLock, String> {
+    FileExt::try_lock_exclusive(&file).map_err(|error| -> String {
         if error.kind() == std::io::ErrorKind::WouldBlock {
             "another process holds the account request lease".into()
         } else {
             "cannot acquire governor lock".into()
         }
-    })
+    })?;
+    Ok(GovernorLock::held(file))
 }
 
 pub(crate) fn identity_home() -> Result<PathBuf, String> {

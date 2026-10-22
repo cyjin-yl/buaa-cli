@@ -1169,73 +1169,74 @@ mod tests {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn child_sandbox_denies_non_unix_sockets_and_io_uring() {
-        let mut pipe = [0; 2];
-        // SAFETY: `pipe` points to two writable stack-owned descriptor slots.
-        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
-        let pid = unsafe { libc::fork() };
-        assert!(pid >= 0);
-        if pid == 0 {
-            // SAFETY: this is the forked test child; failures use _exit so no
-            // parent-owned Rust destructors run after fork.
-            unsafe {
-                libc::close(pipe[0]);
-                if install_network_sandbox().is_err() {
-                    libc::_exit(90);
-                }
-                let internet =
-                    libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
-                let internet_errno = io::Error::last_os_error()
-                    .raw_os_error()
-                    .unwrap_or_default();
-                if internet >= 0 {
-                    libc::close(internet);
-                }
-                let unix = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
-                let unix_allowed = unix >= 0;
-                if unix >= 0 {
-                    libc::close(unix);
-                }
-                let ring = libc::syscall(
-                    libc::SYS_io_uring_setup,
-                    1_u32,
-                    std::ptr::null_mut::<libc::c_void>(),
-                );
-                let ring_errno = io::Error::last_os_error()
-                    .raw_os_error()
-                    .unwrap_or_default();
-                let result = [internet_errno, i32::from(unix_allowed), ring_errno];
-                let written = libc::write(
-                    pipe[1],
-                    result.as_ptr().cast(),
-                    std::mem::size_of_val(&result),
-                );
-                libc::close(pipe[1]);
-                if written != std::mem::size_of_val(&result) as isize {
-                    libc::_exit(91);
-                }
-                let _ = ring;
-                libc::_exit(0);
-            }
-        }
-        // SAFETY: the parent owns the read end and waits for its direct child.
-        unsafe { libc::close(pipe[1]) };
-        let mut result = [0_i32; 3];
-        let mut reader = unsafe { File::from_raw_fd(pipe[0]) };
-        // SAFETY: `result` is a contiguous array of initialized i32 values;
-        // reading its exact byte length preserves the array's alignment.
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                result.as_mut_ptr().cast::<u8>(),
-                std::mem::size_of_val(&result),
-            )
-        };
-        reader.read_exact(bytes).unwrap();
-        let mut status = 0;
-        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
-        assert!(libc::WIFEXITED(status));
-        assert_eq!(libc::WEXITSTATUS(status), 0);
+        // A bare fork can retain another test thread's flock lease after that
+        // thread drops it. Exec first, as the governor subprocess tests do, so
+        // unrelated CLOEXEC descriptors cannot outlive their owners here.
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{module}::network_sandbox_worker"),
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("BUAA_REPLAY_SANDBOX_WORKER", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let result: [i32; 3] = serde_json::from_str(
+            stderr
+                .lines()
+                .find_map(|line| line.strip_prefix("BUAA_SANDBOX_RESULT="))
+                .expect("sandbox worker result"),
+        )
+        .unwrap();
         assert_eq!(result[0], libc::EPERM);
         assert_eq!(result[1], 1);
         assert_eq!(result[2], libc::EPERM);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    #[ignore = "subprocess entry point invoked by the offline sandbox regression"]
+    fn network_sandbox_worker() {
+        if std::env::var("BUAA_REPLAY_SANDBOX_WORKER").ok().as_deref() != Some("1") {
+            return;
+        }
+        install_network_sandbox().unwrap();
+        // SAFETY: these socket/syscall probes have scalar arguments, no borrowed
+        // memory and close each descriptor that is unexpectedly admitted.
+        let result = unsafe {
+            let internet = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+            let internet_errno = if internet < 0 {
+                io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or_default()
+            } else {
+                libc::close(internet);
+                0
+            };
+            let unix = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+            let unix_allowed = unix >= 0;
+            if unix_allowed {
+                libc::close(unix);
+            }
+            let ring = libc::syscall(
+                libc::SYS_io_uring_setup,
+                1_u32,
+                std::ptr::null_mut::<libc::c_void>(),
+            );
+            let ring_errno = if ring < 0 {
+                io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or_default()
+            } else {
+                libc::close(ring as i32);
+                0
+            };
+            [internet_errno, i32::from(unix_allowed), ring_errno]
+        };
+        eprintln!("BUAA_SANDBOX_RESULT={}", json!(result));
     }
 }

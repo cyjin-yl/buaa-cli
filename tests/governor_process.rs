@@ -442,6 +442,27 @@ macro_rules! governor_process_regressions {
         }
 
         #[test]
+        fn finished_lease_releases_inherited_descriptor_without_waiving_policy() {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            // dup and fork share the same flock open-file description. Keep
+            // this copy alive through finish, without a timing-dependent fork.
+            let inherited = lease._lock.file.try_clone().unwrap();
+            assert!(Governor::open_at(fixture.state_dir(), Limits::default()).is_err());
+            let before_finish = timestamp_ms();
+            lease.finish(Outcome::CredentialRejected).unwrap();
+            let reopened = fixture.open();
+            let status = reopened.status().unwrap();
+            assert!(status.safety_latched);
+            assert!(!status.authentication_armed);
+            assert!(status.next_request_boottime_ms > before_finish + 5_000);
+            assert!(reopened.try_acquire(RequestKind::Interactive).is_err());
+            assert!(reopened.load().unwrap().pending.is_none());
+            drop(inherited);
+        }
+
+        #[test]
         fn rfc850_future_retry_after_survives_503_finish() {
             let current_year =
                 chrono::Datelike::year(&chrono::DateTime::<chrono::Utc>::from(SystemTime::now()));
