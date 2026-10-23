@@ -31,6 +31,10 @@
 - Distinguish an unreviewed login interaction from a confirmed CAPTCHA or
   challenge. Both remain blocked before password submission; classification
   alone never bypasses the account safety latch.
+- Classify a CAPTCHA from response challenge headers or an active, enabled
+  challenge control—not arbitrary response-body keywords. Hidden/disabled
+  challenge markup still cannot establish a session and is not misreported as
+  an interactive challenge.
 - Add governed classroom session acquisition (`recordings session --offline` to
   arm one attempt, `--online` to run it) with a protected-stdin credential, a
   reviewed single sign-on service and host-scoped cookies, a private

@@ -70,6 +70,15 @@ diagnosed cooldown was zero, while
 the challenge latch remained set; waiting alone does not clear that latch.
 No automatic authentication retry or challenge bypass occurred.
 
+The fresh review of the next exact head found that raw `captcha`/`challenge`
+substrings in post-submit HTML could label inert hidden login-page containers
+as an actual challenge. The source now derives that classification from
+response challenge headers or an active enabled challenge control in the
+reviewed form. A raw-body keyword still vetoes session admission, but cannot
+itself label a challenge. Synthetic regressions cover the retained hidden
+container and hidden/disabled challenge controls; a fresh full gate and review
+are required for this exact change.
+
 Both initial exact-head GitHub offline checks exposed a remaining-time test
 assertion that ignored elapsed milliseconds. The regression now checks the
 absolute thirty-minute deadline and its retention after body failure, without

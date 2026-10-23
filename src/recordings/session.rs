@@ -784,6 +784,24 @@ fn failed_code_body(body: &str) -> bool {
     value.get("code").is_some() && value.get("code").and_then(Value::as_i64) != Some(0)
 }
 
+fn final_response_is_admissible(
+    final_host: &str,
+    status: u16,
+    body: &str,
+    challenge: bool,
+    retry_after: Option<&str>,
+    class: FailureClass,
+) -> bool {
+    final_host == CLASSROOM_HOST
+        && status == 200
+        && !body.trim().is_empty()
+        && !challenge
+        && !body_contains_unverified_challenge_text(body)
+        && retry_after.is_none()
+        && !failed_code_body(body)
+        && class == FailureClass::Unknown
+}
+
 fn response_id(value: Option<&Value>, expected: &str) -> bool {
     let expected = expected.parse::<u64>().ok();
     match value {
@@ -807,7 +825,6 @@ fn validate_identity_probe(
         || hop.challenge
         || hop.retry_after.is_some()
         || hop.body.trim().is_empty()
-        || body_challenge(&hop.body)
         || !crate::net::classroom_json_mime(hop.content_type.as_deref())
     {
         return Err(rejected());
@@ -843,8 +860,82 @@ fn form_control_belongs_to(control: ElementRef<'_>, form: ElementRef<'_>) -> boo
         == Some(form)
 }
 
+fn element_is_inert(control: ElementRef<'_>) -> bool {
+    for element in std::iter::once(control).chain(control.ancestors().filter_map(ElementRef::wrap))
+    {
+        if matches!(
+            element.value().name(),
+            "script" | "style" | "template" | "noscript"
+        ) || element.value().attr("hidden").is_some()
+            || element.value().attr("inert").is_some()
+        {
+            return true;
+        }
+        if let Some(style) = element.value().attr("style") {
+            for declaration in style.split(';') {
+                let Some((property, value)) = declaration.split_once(':') else {
+                    continue;
+                };
+                let property = property.trim().to_ascii_lowercase();
+                let value = value.trim().to_ascii_lowercase();
+                let value = value.split_whitespace().next().unwrap_or("");
+                if (property == "display" && value == "none")
+                    || (property == "visibility" && matches!(value, "hidden" | "collapse"))
+                    || (property == "content-visibility" && value == "hidden")
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn challenge_control_marker(control: ElementRef<'_>) -> bool {
+    let element = control.value();
+    if element.name() == "input"
+        && element
+            .attr("type")
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("hidden"))
+    {
+        return false;
+    }
+    [
+        "name",
+        "id",
+        "class",
+        "aria-label",
+        "placeholder",
+        "autocomplete",
+        "title",
+    ]
+    .into_iter()
+    .filter_map(|name| element.attr(name))
+    .any(|value| {
+        let lowered = value.to_ascii_lowercase();
+        [
+            "captcha",
+            "challenge",
+            "verificationcode",
+            "verification-code",
+            "verification_code",
+            "verification code",
+            "验证码",
+            "校验码",
+        ]
+        .iter()
+        .any(|marker| lowered.contains(marker))
+    })
+}
+
+#[derive(Default)]
+struct ParsedLoginForm {
+    fields: BTreeMap<String, String>,
+    has_active_challenge_control: bool,
+}
+
 /// The login form's own fields; a missing execution token is a refusal.
-fn login_fields(html: &str) -> Result<BTreeMap<String, String>, Error> {
+fn login_fields(html: &str) -> Result<ParsedLoginForm, Error> {
     let document = Html::parse_document(html);
     let form = Selector::parse("form").map_err(|_| invalid())?;
     let input =
@@ -897,6 +988,8 @@ fn login_fields(html: &str) -> Result<BTreeMap<String, String>, Error> {
     }
     let (mut fields, form) = selected.ok_or_else(invalid)?;
     let controls = Selector::parse("input, select, textarea").map_err(|_| invalid())?;
+    let challenge_controls =
+        Selector::parse("input, select, textarea, button").map_err(|_| invalid())?;
     let fieldsets = Selector::parse("fieldset[disabled]").map_err(|_| invalid())?;
     let disabled_fieldsets: HashMap<_, _> = document
         .select(&fieldsets)
@@ -925,6 +1018,12 @@ fn login_fields(html: &str) -> Result<BTreeMap<String, String>, Error> {
         }
         false
     };
+    let has_active_challenge_control = document.select(&challenge_controls).any(|control| {
+        form_control_belongs_to(control, form)
+            && !effectively_disabled(control)
+            && !element_is_inert(control)
+            && challenge_control_marker(control)
+    });
     let mut username_seen = false;
     let mut password_seen = false;
     let extra_interaction = document.select(&controls).any(|control| {
@@ -953,19 +1052,20 @@ fn login_fields(html: &str) -> Result<BTreeMap<String, String>, Error> {
     if extra_interaction || !username_seen || !password_seen {
         fields.insert("__unreviewed_control".to_string(), String::new());
     }
-    Ok(fields)
+    Ok(ParsedLoginForm {
+        fields,
+        has_active_challenge_control,
+    })
 }
 
 /// Never omit an extra interactive step from the reviewed password flow.
 /// A hidden captcha container alone is not an interactive control.
-fn requires_challenge(fields: &BTreeMap<String, String>) -> bool {
-    fields
-        .keys()
-        .any(|name| name.eq_ignore_ascii_case("captcha"))
+fn requires_challenge(fields: &ParsedLoginForm) -> bool {
+    fields.has_active_challenge_control
 }
 
-fn requires_interaction_review(fields: &BTreeMap<String, String>) -> bool {
-    fields.contains_key("__unreviewed_control")
+fn requires_interaction_review(fields: &ParsedLoginForm) -> bool {
+    fields.fields.contains_key("__unreviewed_control")
 }
 
 fn interaction_review_required() -> Error {
@@ -1002,7 +1102,7 @@ impl FailureClass {
     }
 }
 
-fn classify(html: &str, fields: &BTreeMap<String, String>) -> FailureClass {
+fn classify(html: &str, fields: &ParsedLoginForm) -> FailureClass {
     if requires_challenge(fields) {
         return FailureClass::Challenge;
     }
@@ -1041,7 +1141,8 @@ fn classify(html: &str, fields: &BTreeMap<String, String>) -> FailureClass {
     FailureClass::Unknown
 }
 
-fn body_challenge(html: &str) -> bool {
+/// A body-text hit is only a success veto; it is never proof of an active challenge.
+fn body_contains_unverified_challenge_text(html: &str) -> bool {
     let lowered = html.to_ascii_lowercase();
     lowered.contains("captcha")
         || lowered.contains("challenge")
@@ -1377,7 +1478,11 @@ pub fn login(input: &str) -> Result<Value, Error> {
             interaction_review_required(),
         ));
     }
-    let Some(execution) = fields.get("execution").filter(|value| !value.is_empty()) else {
+    let Some(execution) = fields
+        .fields
+        .get("execution")
+        .filter(|value| !value.is_empty())
+    else {
         return Err(settle_failed_attempt(
             lease,
             &fingerprint,
@@ -1388,7 +1493,7 @@ pub fn login(input: &str) -> Result<Value, Error> {
             rejected(),
         ));
     };
-    if fields.get("__method").map(String::as_str) != Some("post") {
+    if fields.fields.get("__method").map(String::as_str) != Some("post") {
         return Err(settle_failed_attempt(
             lease,
             &fingerprint,
@@ -1399,7 +1504,7 @@ pub fn login(input: &str) -> Result<Value, Error> {
             invalid(),
         ));
     }
-    let Some(action) = fields.get("__action") else {
+    let Some(action) = fields.fields.get("__action") else {
         return Err(settle_failed_attempt(
             lease,
             &fingerprint,
@@ -1444,6 +1549,7 @@ pub fn login(input: &str) -> Result<Value, Error> {
         (
             "type",
             fields
+                .fields
                 .get("type")
                 .map(String::as_str)
                 .unwrap_or("username_password"),
@@ -1452,13 +1558,18 @@ pub fn login(input: &str) -> Result<Value, Error> {
         (
             "_eventId",
             fields
+                .fields
                 .get("_eventId")
                 .map(String::as_str)
                 .unwrap_or("submit"),
         ),
         (
             "submit",
-            fields.get("submit").map(String::as_str).unwrap_or("LOGIN"),
+            fields
+                .fields
+                .get("submit")
+                .map(String::as_str)
+                .unwrap_or("LOGIN"),
         ),
     ];
 
@@ -1488,22 +1599,23 @@ pub fn login(input: &str) -> Result<Value, Error> {
     let final_url = posted.url.clone();
     let final_host = final_url.host_str().unwrap_or("").to_string();
     let final_fields = login_fields(&posted.body).unwrap_or_default();
-    let final_challenge =
-        posted.challenge || requires_challenge(&final_fields) || body_challenge(&posted.body);
+    let final_challenge = posted.challenge || requires_challenge(&final_fields);
     let final_class = if final_challenge {
         FailureClass::Challenge
     } else {
         classify(&posted.body, &final_fields)
     };
-    let final_success_shape = final_host == CLASSROOM_HOST
-        && posted.status == 200
-        && !posted.body.trim().is_empty()
-        && !final_challenge
-        && posted.retry_after.is_none()
-        && !failed_code_body(&posted.body)
-        && final_class == FailureClass::Unknown;
+    let final_success_shape = final_response_is_admissible(
+        &final_host,
+        posted.status,
+        &posted.body,
+        final_challenge,
+        posted.retry_after.as_deref(),
+        final_class,
+    );
     let classroom_header = jar.header(&probe_url);
     let sign_in_page = final_fields
+        .fields
         .keys()
         .any(|name| name.eq_ignore_ascii_case("password"));
     if !final_success_shape || classroom_header.is_none() || sign_in_page {
@@ -1562,21 +1674,19 @@ pub fn login(input: &str) -> Result<Value, Error> {
         &request.verification.course_id,
         &request.verification.sub_id,
     ) {
-        let class = if probe.challenge || body_challenge(&probe.body) {
+        let class = if probe.challenge {
             FailureClass::Challenge
         } else {
             FailureClass::IdentityUnverified
         };
-        let outcome = if (probe.challenge || body_challenge(&probe.body))
-            && (probe.retry_after.is_some() || probe.status >= 400)
-        {
+        let outcome = if probe.challenge && (probe.retry_after.is_some() || probe.status >= 400) {
             crate::governor::Outcome::Http {
                 status: probe.status,
                 retry_after: probe.retry_after.as_deref(),
                 challenge: true,
                 network_failure: false,
             }
-        } else if probe.challenge || body_challenge(&probe.body) {
+        } else if probe.challenge {
             crate::governor::Outcome::CaptchaRequired
         } else if (400..=599).contains(&probe.status) {
             crate::governor::Outcome::Http {
@@ -1780,7 +1890,7 @@ mod tests {
         (directory, path)
     }
 
-    fn assert_unreviewed_interaction(fields: &BTreeMap<String, String>) {
+    fn assert_unreviewed_interaction(fields: &ParsedLoginForm) {
         assert!(requires_interaction_review(fields));
         assert!(!requires_challenge(fields));
         assert_eq!(classify("", fields), FailureClass::UnsafeInteraction);
@@ -1793,18 +1903,70 @@ mod tests {
     fn a_hidden_captcha_container_is_not_a_required_challenge() {
         let fields = login_fields(REVIEWED_LOGIN_PAGE).expect("login fields");
         assert!(!requires_challenge(&fields));
+        assert!(body_contains_unverified_challenge_text(REVIEWED_LOGIN_PAGE));
+        assert_eq!(
+            classify(REVIEWED_LOGIN_PAGE, &fields),
+            FailureClass::Unknown
+        );
         let challenged = login_fields(
             r#"<form method="post" action="login"><input name="password"><input name="execution" value="token"><input name="captcha"></form>"#,
         )
         .expect("form");
         assert!(requires_challenge(&challenged));
         assert_eq!(classify("", &challenged), FailureClass::Challenge);
+        assert!(!final_response_is_admissible(
+            CLASSROOM_HOST,
+            200,
+            REVIEWED_LOGIN_PAGE,
+            false,
+            None,
+            FailureClass::Unknown,
+        ));
+        assert!(final_response_is_admissible(
+            CLASSROOM_HOST,
+            200,
+            "ordinary response",
+            false,
+            None,
+            FailureClass::Unknown,
+        ));
+        assert!(!final_response_is_admissible(
+            CLASSROOM_HOST,
+            200,
+            "interactive challenge",
+            true,
+            None,
+            FailureClass::Unknown,
+        ));
+
+        for control in [
+            r#"<input name="captcha" type="hidden" value="token">"#,
+            r#"<input name="captcha" disabled>"#,
+            r#"<span hidden><input name="captcha"></span>"#,
+            r#"<span style="display: none"><input name="captcha"></span>"#,
+            r#"<fieldset disabled><input name="captcha"></fieldset>"#,
+        ] {
+            let page = REVIEWED_LOGIN_PAGE.replace("</form>", &format!("{control}</form>"));
+            assert!(
+                !requires_challenge(&login_fields(&page).unwrap()),
+                "{control}"
+            );
+        }
+        let page = REVIEWED_LOGIN_PAGE.replace(
+            "</form>",
+            r#"<fieldset disabled><legend><input name="captcha"></legend></fieldset></form>"#,
+        );
+        assert!(requires_challenge(&login_fields(&page).unwrap()));
+        let page = REVIEWED_LOGIN_PAGE.replace(
+            "</form>",
+            r#"<fieldset disabled><legend>caption</legend><legend><input name="captcha"></legend></fieldset></form>"#,
+        );
+        assert!(!requires_challenge(&login_fields(&page).unwrap()));
     }
 
     #[test]
     fn extra_login_controls_cannot_be_omitted_from_the_password_flow() {
         for control in [
-            r#"<input name="verificationCode">verification code"#,
             r#"<input name="unfamiliarStep">"#,
             r#"<select name="verification"><option>choose</option></select>"#,
             r#"<textarea name="answer"></textarea>"#,
@@ -1813,6 +1975,13 @@ mod tests {
             let fields = login_fields(&page).unwrap();
             assert_unreviewed_interaction(&fields);
         }
+        let page = REVIEWED_LOGIN_PAGE.replace(
+            "</form>",
+            r#"<input name="verificationCode" required></form>"#,
+        );
+        let fields = login_fields(&page).unwrap();
+        assert!(requires_challenge(&fields));
+        assert_eq!(classify("", &fields), FailureClass::Challenge);
         let page = REVIEWED_LOGIN_PAGE.replace(
             "</form>",
             r#"<input name="csrf" type="hidden"><input name="disabledStep" disabled></form>"#,
@@ -1824,10 +1993,11 @@ mod tests {
 
     #[test]
     fn login_safety_includes_external_and_unnamed_associated_controls() {
+        let verification = format!(
+            r#"{REVIEWED_LOGIN_PAGE}<input form="loginForm" name="verificationCode" required>"#
+        );
+        assert!(requires_challenge(&login_fields(&verification).unwrap()));
         for page in [
-            format!(
-                r#"{REVIEWED_LOGIN_PAGE}<input form="loginForm" name="verificationCode" required>"#
-            ),
             format!(r#"{REVIEWED_LOGIN_PAGE}<textarea form="loginForm" required></textarea>"#),
             REVIEWED_LOGIN_PAGE.replace("</form>", "<input required></form>"),
         ] {
@@ -2292,7 +2462,7 @@ mod tests {
 
     #[test]
     fn a_failed_attempt_is_classified_without_echoing_the_page() {
-        let fields = BTreeMap::new();
+        let fields = ParsedLoginForm::default();
         assert_eq!(
             classify("用户名或密码错误", &fields),
             FailureClass::CredentialRejected
@@ -2306,8 +2476,10 @@ mod tests {
             classify("CAS ticket invalid or expired", &fields),
             FailureClass::TicketRejected
         );
-        let mut challenged = BTreeMap::new();
-        challenged.insert("captcha".to_string(), String::new());
+        let challenged = ParsedLoginForm {
+            fields: BTreeMap::new(),
+            has_active_challenge_control: true,
+        };
         assert_eq!(classify("anything", &challenged), FailureClass::Challenge);
     }
 

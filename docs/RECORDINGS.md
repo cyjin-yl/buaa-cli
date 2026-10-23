@@ -94,6 +94,10 @@ unreviewed-interaction safety refusal; it is not mislabeled as a confirmed
 CAPTCHA challenge. An inert hidden CAPTCHA container alone is not a challenge
 control. A later server response is classified separately and does not imply
 that a password was or was not submitted.
+Confirmed challenge classification requires a response challenge signal or an
+active, enabled challenge control in the reviewed form. Raw response text that
+mentions CAPTCHA or verification vocabulary can prevent session admission, but
+does not by itself assert an interactive challenge.
 The scan follows explicit HTML `form` associations, including controls outside
 the form element, and does not require a control to have a `name`.
 Only one username text input and one password input of the reviewed password

@@ -62,6 +62,13 @@
           "network_requests": 0,
           "limitation": "The existing response retained no HTML or form fields, so the original refusal's exact branch remains unknown. This classification correction does not authorize clearing the latch or retrying credentials."
         },
+        "post_submit_challenge_false_positive_2026_10_23": {
+          "review_finding": "The previous exact-head reviewer found that raw captcha/challenge substrings after the password POST could classify inert hidden login-page containers as an actual challenge.",
+          "repair": "Challenge classification now requires a response challenge header or a marked, active, non-hidden, enabled challenge control associated with the reviewed form. Raw response text can still veto session admission, but remains a non-challenge failure unless structured evidence exists. Identity probes retain MIME, JSON code, exact course/sub IDs and tenant checks without substring challenge classification.",
+          "synthetic_regressions": "The reviewed login fixture's hidden captchaParent/captchaDiv text is not a challenge; an active captcha or verificationCode control is; hidden, disabled, inert and disabled-fieldset controls are not, except a control in the first legend of a disabled fieldset.",
+          "network_requests": 0,
+          "remaining": "The original response body and headers were not retained, so its exact branch remains unknown. The new source still requires a fresh full gate, exact-head review and native checks."
+        },
         "lease_lifetime_repair_2026_10_21": {
           "failure": "A trusted push check failed on account-lease contention. Exec-isolating the sandbox probe alone did not resolve the default-parallel suite; the retained follow-up run had twelve lease-related failures.",
           "repair": "Explicit original-process RAII unlock on every governor acquisition path prevents inherited descriptors from extending a completed operation. An acquiring PID check prevents a fork child destructor from unlocking a live parent request. Body processing, persistence, pacing, latches and unknown-outcome barriers remain unchanged.",
