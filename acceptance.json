@@ -35,13 +35,13 @@
           "execution": "One agent-heavy guardian and Cargo lock, UID1000, one compiler job, worktree-owned target, 2 GiB address-space ceiling and bounded glibc arenas. No child agent built, tested, authenticated, fetched media or launched players.",
           "network_requests": 0,
           "credential_control_regressions": "Unique correctly typed credential controls, external and unnamed associated controls, disabled fieldsets, first-legend exceptions and nested fieldsets are covered with synthetic inputs.",
-          "remaining": "Fresh exact-head review and original-runtime online smoke remain separate gates. Physical audio, genuine live and all-cue/dual-player synchronization remain unverified. Earlier failures are retained."
+          "remaining": "Exact head e9dc437622be38fb2d6a8d9819667b52ee0711eb passed independent full-source review, original-runtime build/smoke and both GitHub Actions checks. Current online session confirmation remains blocked by the retained challenge latch and unknown original trigger. Physical audio, genuine live and all-cue/dual-player synchronization remain unverified. Earlier failures are retained."
         },
         "ci_429_deadline_assertion_2026_10_23": {
           "observed_head": "ff7751ea90fbe9170e1aefb52d8a0b9c585ef787",
           "failure": "Both native GitHub Actions offline checks failed because the test required a later remaining-time snapshot to retain the complete thirty minutes despite elapsed time.",
           "repair": "Independently assert an absolute deadline at least thirty minutes after the pre-observation clock, then assert body-failure completion preserves the observed deadline. No tolerance or production cooldown change.",
-          "local_proof": "432 library and 19 CLI cases passed with three ignored workers, strict clippy, format check, explicit offline build and complete retained native consumers. Earlier CI failures remain failures; the changed exact head requires new checks."
+          "local_proof": "432 library and 19 CLI cases passed with three ignored workers, strict clippy, format check, explicit offline build and complete retained native consumers. Earlier CI failures remain historical failures; both later exact-head GitHub Actions checks on e9dc437 succeeded."
         },
         "original_runtime_session_observation_2026_10_23": {
           "observed_head": "ff7751ea90fbe9170e1aefb52d8a0b9c585ef787",
@@ -53,7 +53,7 @@
           "session_stored": false,
           "credential_persisted": false,
           "password_submission": "The inspected code path and one-hop trail place refusal before password submission; no independent packet-level claim.",
-          "remaining": "The sanitized receipt does not preserve the initial response challenge header or form fields. At this observed head the implementation classified both explicit CAPTCHA fields and the __unreviewed_control safety sentinel as challenge_required, so the recorded classification cannot distinguish a real response/header challenge, CAPTCHA field, or extra-interaction refusal. No current selected-lesson confirmation or actual CAPTCHA requirement is established. At diagnosis the cooldown was zero and the challenge latch remained set; no automatic rearm, repeated authentication or challenge bypass occurred.",
+          "remaining": "The sanitized receipt does not preserve the initial response challenge header or form fields. At this observed head the implementation classified both explicit CAPTCHA fields and the __unreviewed_control safety sentinel as challenge_required, so the recorded classification cannot distinguish a real response/header challenge, CAPTCHA field, or extra-interaction refusal. No current selected-lesson confirmation or actual CAPTCHA requirement is established. At diagnosis the cooldown was zero and the challenge latch remains set; no automatic rearm, repeated authentication or challenge bypass occurred.",
           "privacy": "Credential values, page bodies, account references, lesson identifiers, private paths and response digests remain outside source."
         },
         "challenge_classification_repair_2026_10_23": {
@@ -67,14 +67,31 @@
           "repair": "Challenge classification now requires a response challenge header or a marked, active, non-hidden, enabled challenge control associated with the reviewed form. Raw response text can still veto session admission, but remains a non-challenge failure unless structured evidence exists. Identity probes retain MIME, JSON code, exact course/sub IDs and tenant checks without substring challenge classification.",
           "synthetic_regressions": "The reviewed login fixture's hidden captchaParent/captchaDiv text is not a challenge; an active captcha or verificationCode control is; hidden, disabled, inert and disabled-fieldset controls are not, except a control in the first legend of a disabled fieldset. CSS display:none!important and visibility:hidden !important remain hidden and take the unreviewed-interaction refusal, not the confirmed-challenge class.",
           "network_requests": 0,
-          "remaining": "The original response body and headers were not retained, so its exact branch remains unknown. The new source still requires a fresh full gate, exact-head review and native checks."
+          "verification_head": "e9dc437622be38fb2d6a8d9819667b52ee0711eb",
+          "verification": "Full offline gate, original UID1000 build/smoke, independent full-source APPROVE and both exact-head GitHub Actions checks succeeded. Copilot review was unavailable because its requester quota was exhausted; no bot approval is claimed.",
+          "remaining": "The original response body and headers were not retained, so its exact branch remains unknown; the challenge latch remains set and no authentication retry occurred."
         },
         "css_important_hidden_challenge_2026_10_23": {
           "review_finding": "Exact-head reviews found valid `display:none ! important` syntax and comments in a CSS property name could bypass the inline-hidden check and be mislabeled as an active challenge control.",
           "repair": "Remove CSS comments before declaration/property parsing, then strip the priority token even when whitespace separates `!` and `important`, before comparing display, visibility or content-visibility values. Keep hidden controls blocked as unreviewed interactions, without a confirmed-challenge classification.",
           "synthetic_regressions": "Contiguous, spaced and comment-separated `!important`, comments in property names, and `display`/`visibility` variants remain hidden and trigger only the unreviewed-interaction refusal.",
           "network_requests": 0,
-          "remaining": "The current edit requires a new full gate, exact-head review, native runtime build and GitHub checks."
+          "verification_head": "e9dc437622be38fb2d6a8d9819667b52ee0711eb",
+          "verification": "Full offline gate, original UID1000 build/smoke, independent full-source APPROVE and both exact-head GitHub Actions checks succeeded. Copilot review was unavailable because its requester quota was exhausted; no bot approval is claimed.",
+          "remaining": "The original live attempt still has an unresolved challenge latch and no stored HTML/header evidence; the session is not online-verified."
+        },
+        "final_head_verification_2026_10_23": {
+          "head": "e9dc437622be38fb2d6a8d9819667b52ee0711eb",
+          "offline_gate": "432 library + 19 CLI passed; three ignored; format, strict clippy, locked offline build and full native consumers passed.",
+          "native_manifest": "Whole 51-capability/74-entry manifest, help and schema matched.",
+          "original_runtime": "Existing UID1000 runtime built its own target and ran help/schema/manifest; source stable, no campus requests or authentication attempts.",
+          "independent_review": "Fresh full-source review explicitly APPROVE; no concrete P1/P2 findings.",
+          "github_checks": [
+            {"id":120234498579,"app_id":15368,"conclusion":"success"},
+            {"id":120234481912,"app_id":15368,"conclusion":"success"}
+          ],
+          "copilot_review": "The review bot reported requester quota exhaustion; COMMENTED is not approval.",
+          "remaining": "PR remains draft pending safe current online session acceptance and independent platform review. No linked Issue exists."
         },
         "lease_lifetime_repair_2026_10_21": {
           "failure": "A trusted push check failed on account-lease contention. Exec-isolating the sandbox probe alone did not resolve the default-parallel suite; the retained follow-up run had twelve lease-related failures.",

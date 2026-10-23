@@ -84,16 +84,21 @@ could bypass the inline-hidden check and produce a challenge receipt. The
 parser now strips CSS comments before declaration/property parsing and removes
 priority tokens before testing hidden values. Synthetic contiguous, spaced,
 comment-separated and comment-in-property `display`/`visibility` cases remain
-fail-closed as unreviewed interactions, not confirmed challenges. The latest
-source still needs its own full gate, original-runtime build, review and
-exact-head checks.
+fail-closed as unreviewed interactions, not confirmed challenges. Exact head
+`e9dc437622be38fb2d6a8d9819667b52ee0711eb` passed the full offline gate,
+original UID1000 build/smoke, and two exact-head GitHub Actions checks; a fresh
+independent full-source review explicitly approved with no concrete P1/P2.
+Copilot's review bot reported requester quota exhaustion, so that bot review
+is not an approval. The current online session remains unverified: its earlier
+challenge latch is still set and the sanitized receipt does not reveal the
+original trigger. No repeat authentication or challenge bypass occurred.
 
 Both initial exact-head GitHub offline checks exposed a remaining-time test
 assertion that ignored elapsed milliseconds. The regression now checks the
 absolute thirty-minute deadline and its retention after body failure, without
 changing production pacing or cooldown. The corrected local gate passed
-432 library and 19 CLI cases; those earlier CI failures remain failures and
-new exact-head checks are required.
+432 library and 19 CLI cases. Those earlier CI failures remain historical
+failures; the later exact-head checks for e9dc437 succeeded.
 
 Runtime admission also found two distinct governor entities: the migrated
 original runtime retains a 60-second request interval, whereas prior host
