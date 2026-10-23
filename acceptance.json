@@ -53,8 +53,14 @@
           "session_stored": false,
           "credential_persisted": false,
           "password_submission": "The inspected code path and one-hop trail place refusal before password submission; no independent packet-level claim.",
-          "remaining": "The sanitized receipt does not distinguish a response challenge signal from form-control safety refusal. No current selected-lesson confirmation or actual CAPTCHA requirement is established. At diagnosis the cooldown was zero and the challenge latch remained set; no automatic rearm, repeated authentication or challenge bypass occurred.",
+          "remaining": "The sanitized receipt does not preserve the initial response challenge header or form fields. At this observed head the implementation classified both explicit CAPTCHA fields and the __unreviewed_control safety sentinel as challenge_required, so the recorded classification cannot distinguish a real response/header challenge, CAPTCHA field, or extra-interaction refusal. No current selected-lesson confirmation or actual CAPTCHA requirement is established. At diagnosis the cooldown was zero and the challenge latch remained set; no automatic rearm, repeated authentication or challenge bypass occurred.",
           "privacy": "Credential values, page bodies, account references, lesson identifiers, private paths and response digests remain outside source."
+        },
+        "challenge_classification_repair_2026_10_23": {
+          "reason": "A real initial-page attempt was refused before password submission with an ambiguous challenge_required classification. Source inspection found that a local unreviewed-control sentinel shared the CAPTCHA classifier.",
+          "repair": "Keep an actual captcha field/response challenge distinct from an unreviewed form interaction. An unreviewed initial form stops before password submission and keeps the authentication safety latch; the latter reports unreviewed_login_interaction and does not assert that a CAPTCHA was observed. A post-submit response does not claim whether a password was submitted.",
+          "network_requests": 0,
+          "limitation": "The existing response retained no HTML or form fields, so the original refusal's exact branch remains unknown. This classification correction does not authorize clearing the latch or retrying credentials."
         },
         "lease_lifetime_repair_2026_10_21": {
           "failure": "A trusted push check failed on account-lease contention. Exec-isolating the sandbox probe alone did not resolve the default-parallel suite; the retained follow-up run had twelve lease-related failures.",

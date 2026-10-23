@@ -88,9 +88,12 @@ cannot choose another credential target. Every hop remains subject to the
 production governor's configured request gap and durable Retry-After policy.
 Challenge signals, unreadable bodies and unsuccessful application responses
 never establish a session.
-An additional enabled input, select or textarea outside the reviewed
-username/password interaction stops the flow before credential submission;
-an inert hidden CAPTCHA container alone is not a challenge control.
+Before the credential POST, an additional enabled input, select or textarea
+outside the reviewed username/password interaction stops the flow as an
+unreviewed-interaction safety refusal; it is not mislabeled as a confirmed
+CAPTCHA challenge. An inert hidden CAPTCHA container alone is not a challenge
+control. A later server response is classified separately and does not imply
+that a password was or was not submitted.
 The scan follows explicit HTML `form` associations, including controls outside
 the form element, and does not require a control to have a `name`.
 Only one username text input and one password input of the reviewed password

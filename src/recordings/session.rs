@@ -961,7 +961,18 @@ fn login_fields(html: &str) -> Result<BTreeMap<String, String>, Error> {
 fn requires_challenge(fields: &BTreeMap<String, String>) -> bool {
     fields
         .keys()
-        .any(|name| name.eq_ignore_ascii_case("captcha") || name == "__unreviewed_control")
+        .any(|name| name.eq_ignore_ascii_case("captcha"))
+}
+
+fn requires_interaction_review(fields: &BTreeMap<String, String>) -> bool {
+    fields.contains_key("__unreviewed_control")
+}
+
+fn interaction_review_required() -> Error {
+    Error::new(
+        "auth_latched",
+        "Classroom login flow encountered an unreviewed interaction and stopped for explicit operator review.",
+    )
 }
 
 /// A sanitized class of an unsuccessful authentication. The page text is
@@ -969,6 +980,7 @@ fn requires_challenge(fields: &BTreeMap<String, String>) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureClass {
     Challenge,
+    UnsafeInteraction,
     CredentialRejected,
     ServiceInvalid,
     TicketRejected,
@@ -980,6 +992,7 @@ impl FailureClass {
     fn as_str(self) -> &'static str {
         match self {
             Self::Challenge => "challenge_required",
+            Self::UnsafeInteraction => "unreviewed_login_interaction",
             Self::CredentialRejected => "credential_rejected",
             Self::ServiceInvalid => "service_parameter_rejected",
             Self::TicketRejected => "single_sign_on_ticket_rejected",
@@ -992,6 +1005,9 @@ impl FailureClass {
 fn classify(html: &str, fields: &BTreeMap<String, String>) -> FailureClass {
     if requires_challenge(fields) {
         return FailureClass::Challenge;
+    }
+    if requires_interaction_review(fields) {
+        return FailureClass::UnsafeInteraction;
     }
     let lowered = html.to_lowercase();
     if lowered.contains("password")
@@ -1350,6 +1366,17 @@ pub fn login(input: &str) -> Result<Value, Error> {
             challenge(),
         ));
     }
+    if requires_interaction_review(&fields) {
+        return Err(settle_failed_attempt(
+            lease,
+            &fingerprint,
+            FailureClass::UnsafeInteraction,
+            &trail,
+            &page.url,
+            crate::governor::Outcome::CredentialRejected,
+            interaction_review_required(),
+        ));
+    }
     let Some(execution) = fields.get("execution").filter(|value| !value.is_empty()) else {
         return Err(settle_failed_attempt(
             lease,
@@ -1493,10 +1520,10 @@ pub fn login(input: &str) -> Result<Value, Error> {
         } else {
             crate::governor::Outcome::CredentialRejected
         };
-        let error = if class == FailureClass::Challenge {
-            challenge()
-        } else {
-            rejected()
+        let error = match class {
+            FailureClass::Challenge => challenge(),
+            FailureClass::UnsafeInteraction => interaction_review_required(),
+            _ => rejected(),
         };
         return Err(settle_failed_attempt(
             lease,
@@ -1753,6 +1780,15 @@ mod tests {
         (directory, path)
     }
 
+    fn assert_unreviewed_interaction(fields: &BTreeMap<String, String>) {
+        assert!(requires_interaction_review(fields));
+        assert!(!requires_challenge(fields));
+        assert_eq!(classify("", fields), FailureClass::UnsafeInteraction);
+        let error = interaction_review_required();
+        assert_eq!(error.code, "auth_latched");
+        assert!(error.message.contains("operator review"));
+    }
+
     #[test]
     fn a_hidden_captcha_container_is_not_a_required_challenge() {
         let fields = login_fields(REVIEWED_LOGIN_PAGE).expect("login fields");
@@ -1762,6 +1798,7 @@ mod tests {
         )
         .expect("form");
         assert!(requires_challenge(&challenged));
+        assert_eq!(classify("", &challenged), FailureClass::Challenge);
     }
 
     #[test]
@@ -1773,13 +1810,16 @@ mod tests {
             r#"<textarea name="answer"></textarea>"#,
         ] {
             let page = REVIEWED_LOGIN_PAGE.replace("</form>", &format!("{control}</form>"));
-            assert!(requires_challenge(&login_fields(&page).unwrap()));
+            let fields = login_fields(&page).unwrap();
+            assert_unreviewed_interaction(&fields);
         }
         let page = REVIEWED_LOGIN_PAGE.replace(
             "</form>",
             r#"<input name="csrf" type="hidden"><input name="disabledStep" disabled></form>"#,
         );
-        assert!(!requires_challenge(&login_fields(&page).unwrap()));
+        let fields = login_fields(&page).unwrap();
+        assert!(!requires_challenge(&fields));
+        assert!(!requires_interaction_review(&fields));
     }
 
     #[test]
@@ -1791,7 +1831,8 @@ mod tests {
             format!(r#"{REVIEWED_LOGIN_PAGE}<textarea form="loginForm" required></textarea>"#),
             REVIEWED_LOGIN_PAGE.replace("</form>", "<input required></form>"),
         ] {
-            assert!(requires_challenge(&login_fields(&page).unwrap()));
+            let fields = login_fields(&page).unwrap();
+            assert_unreviewed_interaction(&fields);
         }
         let page = REVIEWED_LOGIN_PAGE.replace(
             "</form>",
@@ -1812,12 +1853,12 @@ mod tests {
             r#"<input name="password" type="password" required>"#,
         ] {
             let inside = REVIEWED_LOGIN_PAGE.replace("</form>", &format!("{control}</form>"));
-            assert!(requires_challenge(&login_fields(&inside).unwrap()));
+            assert_unreviewed_interaction(&login_fields(&inside).unwrap());
             let outside = format!(
                 "{REVIEWED_LOGIN_PAGE}{}",
                 control.replace("<input ", "<input form=\"loginForm\" ")
             );
-            assert!(requires_challenge(&login_fields(&outside).unwrap()));
+            assert_unreviewed_interaction(&login_fields(&outside).unwrap());
         }
         for (reviewed, changed) in [
             (
@@ -1830,7 +1871,7 @@ mod tests {
             ),
         ] {
             let page = REVIEWED_LOGIN_PAGE.replace(reviewed, changed);
-            assert!(requires_challenge(&login_fields(&page).unwrap()));
+            assert_unreviewed_interaction(&login_fields(&page).unwrap());
         }
     }
 
@@ -1844,24 +1885,28 @@ mod tests {
                 .replace(password, &format!("{password}{close}"))
         };
         let page = wrap("<fieldset disabled>", "</fieldset>");
-        assert!(requires_challenge(&login_fields(&page).unwrap()));
+        assert_unreviewed_interaction(&login_fields(&page).unwrap());
         let page = wrap("<fieldset disabled><legend>", "</legend></fieldset>");
-        assert!(!requires_challenge(&login_fields(&page).unwrap()));
+        let fields = login_fields(&page).unwrap();
+        assert!(!requires_challenge(&fields));
+        assert!(!requires_interaction_review(&fields));
         let page = wrap(
             "<fieldset disabled><legend>caption</legend><legend>",
             "</legend></fieldset>",
         );
-        assert!(requires_challenge(&login_fields(&page).unwrap()));
+        assert_unreviewed_interaction(&login_fields(&page).unwrap());
         let page = wrap(
             "<fieldset disabled><legend><fieldset disabled><legend>inner</legend>",
             "</fieldset></legend></fieldset>",
         );
-        assert!(requires_challenge(&login_fields(&page).unwrap()));
+        assert_unreviewed_interaction(&login_fields(&page).unwrap());
         let page = REVIEWED_LOGIN_PAGE.replace(
             "</form>",
             "<fieldset disabled><input name=\"extra\" required></fieldset></form>",
         );
-        assert!(!requires_challenge(&login_fields(&page).unwrap()));
+        let fields = login_fields(&page).unwrap();
+        assert!(!requires_challenge(&fields));
+        assert!(!requires_interaction_review(&fields));
     }
 
     #[test]

@@ -59,8 +59,14 @@ artifact's earlier libc incompatibility is not retried or hidden by copying it.
 One governed session attempt then recorded only an initial SSO HTTP 200 and
 stopped before password submission with `challenge_required`; no session was
 stored. The sanitized receipt does not identify whether a response challenge
-signal or form-control safety scan triggered the refusal. This is not proof
-that an actual CAPTCHA is required. The diagnosed cooldown was zero, while
+signal, CAPTCHA field, or form-control safety scan triggered the refusal. At
+that head the local unreviewed-control sentinel shared the CAPTCHA
+classification, so `challenge_required` did not prove an actual CAPTCHA.
+The current source separates confirmed challenge from unreviewed-interaction
+refusal; an unreviewed initial form stops before password submission, while
+later responses do not claim whether a password was submitted. This does not
+reveal which branch the original request took or authorize another login. The
+diagnosed cooldown was zero, while
 the challenge latch remained set; waiting alone does not clear that latch.
 No automatic authentication retry or challenge bypass occurred.
 
