@@ -860,6 +860,45 @@ fn form_control_belongs_to(control: ElementRef<'_>, form: ElementRef<'_>) -> boo
         == Some(form)
 }
 
+fn declaration_hides_element(property: &str, value: &str) -> bool {
+    let mut normalized = if value.contains("/*") {
+        let mut result = String::with_capacity(value.len());
+        let mut remaining = value;
+        loop {
+            let Some(start) = remaining.find("/*") else {
+                result.push_str(remaining);
+                break result;
+            };
+            result.push_str(&remaining[..start]);
+            let Some(end) = remaining[start + 2..].find("*/") else {
+                // Invalid trailing CSS is not evidence that a control is visible.
+                return true;
+            };
+            result.push(' ');
+            remaining = &remaining[start + 2 + end + 2..];
+        }
+    } else {
+        value.to_string()
+    };
+    normalized.make_ascii_lowercase();
+    let normalized = normalized.trim();
+    let without_priority = if let Some(before_important) = normalized.strip_suffix("important") {
+        if let Some(before_bang) = before_important.trim_end().strip_suffix('!') {
+            before_bang.trim_end()
+        } else {
+            normalized
+        }
+    } else {
+        normalized
+    };
+    match property {
+        "display" => without_priority == "none",
+        "visibility" => matches!(without_priority, "hidden" | "collapse"),
+        "content-visibility" => without_priority == "hidden",
+        _ => false,
+    }
+}
+
 fn element_is_inert(control: ElementRef<'_>) -> bool {
     for element in std::iter::once(control).chain(control.ancestors().filter_map(ElementRef::wrap))
     {
@@ -877,12 +916,7 @@ fn element_is_inert(control: ElementRef<'_>) -> bool {
                     continue;
                 };
                 let property = property.trim().to_ascii_lowercase();
-                let value = value.trim().to_ascii_lowercase();
-                let value = value.strip_suffix("!important").unwrap_or(&value).trim();
-                if (property == "display" && value == "none")
-                    || (property == "visibility" && matches!(value, "hidden" | "collapse"))
-                    || (property == "content-visibility" && value == "hidden")
-                {
+                if declaration_hides_element(&property, value) {
                     return true;
                 }
             }
@@ -1952,7 +1986,13 @@ mod tests {
                 "{control}"
             );
         }
-        for style in ["display:none!important", "visibility:hidden !important"] {
+        for style in [
+            "display:none!important",
+            "visibility:hidden !important",
+            "display:none ! important",
+            "display:none !/**/important",
+            "visibility:hidden ! /* priority */ important",
+        ] {
             let page = REVIEWED_LOGIN_PAGE.replace(
                 "</form>",
                 &format!(r#"<input name="captcha" type="text" style="{style}"></form>"#),

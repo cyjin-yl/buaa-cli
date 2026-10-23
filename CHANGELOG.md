@@ -36,8 +36,9 @@
   challenge markup still cannot establish a session and is not misreported as
   an interactive challenge.
 - Normalize CSS `!important` on `display`, `visibility`, and
-  `content-visibility` before recognizing hidden challenge controls; retain the
-  ordinary unreviewed-interaction refusal.
+  `content-visibility` before recognizing hidden challenge controls, including
+  valid whitespace/comment-separated priority syntax; retain the ordinary
+  unreviewed-interaction refusal.
 - Add governed classroom session acquisition (`recordings session --offline` to
   arm one attempt, `--online` to run it) with a protected-stdin credential, a
   reviewed single sign-on service and host-scoped cookies, a private

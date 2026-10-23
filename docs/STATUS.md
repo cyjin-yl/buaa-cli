@@ -79,13 +79,13 @@ itself label a challenge. Synthetic regressions cover the retained hidden
 container and hidden/disabled challenge controls; a fresh full gate and review
 are required for this exact change.
 
-The independent review of that repair then found that a valid CSS
-`display:none!important` value bypassed the inline-hidden check and could again
-produce a challenge receipt. The parser now strips CSS priority before testing
-the hiding value; synthetic `display` and `visibility` priority cases remain
-fail-closed as unreviewed interactions, not confirmed challenges. The latest
-source still needs its own full gate, original-runtime build, review and exact-
-head checks.
+The independent review of that repair then found that valid CSS
+`display:none ! important` syntax bypassed the inline-hidden check and could
+again produce a challenge receipt. The parser now strips CSS priority after
+normalizing CSS comments/whitespace; synthetic contiguous, spaced and
+comment-separated `display`/`visibility` cases remain fail-closed as
+unreviewed interactions, not confirmed challenges. The latest source still
+needs its own full gate, original-runtime build, review and exact-head checks.
 
 Both initial exact-head GitHub offline checks exposed a remaining-time test
 assertion that ignored elapsed milliseconds. The regression now checks the

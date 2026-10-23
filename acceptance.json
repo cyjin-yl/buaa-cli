@@ -70,9 +70,9 @@
           "remaining": "The original response body and headers were not retained, so its exact branch remains unknown. The new source still requires a fresh full gate, exact-head review and native checks."
         },
         "css_important_hidden_challenge_2026_10_23": {
-          "review_finding": "The exact-head reviewer showed that `display:none!important` was parsed as `none!important` and could be mislabeled as an active challenge control.",
-          "repair": "Strip the CSS `!important` priority before comparing display, visibility or content-visibility values. Keep the hidden control blocked as an unreviewed interaction, without a confirmed-challenge classification.",
-          "synthetic_regressions": "Both display:none!important and visibility:hidden !important controls remain hidden and trigger only the unreviewed-interaction refusal.",
+          "review_finding": "The exact-head reviewer showed that valid `display:none ! important` whitespace syntax was not stripped and could be mislabeled as an active challenge control.",
+          "repair": "Remove CSS comments and strip the priority token even when whitespace separates `!` and `important`, before comparing display, visibility or content-visibility values. Keep the hidden control blocked as an unreviewed interaction, without a confirmed-challenge classification.",
+          "synthetic_regressions": "Contiguous, spaced and CSS-comment-separated display/visibility priority values remain hidden and trigger only the unreviewed-interaction refusal.",
           "network_requests": 0,
           "remaining": "The current edit requires a new full gate, exact-head review, native runtime build and GitHub checks."
         },
