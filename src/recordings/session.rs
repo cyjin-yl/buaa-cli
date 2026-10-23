@@ -878,7 +878,7 @@ fn element_is_inert(control: ElementRef<'_>) -> bool {
                 };
                 let property = property.trim().to_ascii_lowercase();
                 let value = value.trim().to_ascii_lowercase();
-                let value = value.split_whitespace().next().unwrap_or("");
+                let value = value.strip_suffix("!important").unwrap_or(&value).trim();
                 if (property == "display" && value == "none")
                     || (property == "visibility" && matches!(value, "hidden" | "collapse"))
                     || (property == "content-visibility" && value == "hidden")
@@ -1951,6 +1951,13 @@ mod tests {
                 !requires_challenge(&login_fields(&page).unwrap()),
                 "{control}"
             );
+        }
+        for style in ["display:none!important", "visibility:hidden !important"] {
+            let page = REVIEWED_LOGIN_PAGE.replace(
+                "</form>",
+                &format!(r#"<input name="captcha" type="text" style="{style}"></form>"#),
+            );
+            assert_unreviewed_interaction(&login_fields(&page).unwrap());
         }
         let page = REVIEWED_LOGIN_PAGE.replace(
             "</form>",
