@@ -860,27 +860,27 @@ fn form_control_belongs_to(control: ElementRef<'_>, form: ElementRef<'_>) -> boo
         == Some(form)
 }
 
+fn strip_css_comments(value: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if !value.contains("/*") {
+        return Some(std::borrow::Cow::Borrowed(value));
+    }
+    let mut result = String::with_capacity(value.len());
+    let mut remaining = value;
+    loop {
+        let Some(start) = remaining.find("/*") else {
+            result.push_str(remaining);
+            break;
+        };
+        result.push_str(&remaining[..start]);
+        let end = remaining[start + 2..].find("*/")?;
+        result.push(' ');
+        remaining = &remaining[start + 2 + end + 2..];
+    }
+    Some(std::borrow::Cow::Owned(result))
+}
+
 fn declaration_hides_element(property: &str, value: &str) -> bool {
-    let mut normalized = if value.contains("/*") {
-        let mut result = String::with_capacity(value.len());
-        let mut remaining = value;
-        loop {
-            let Some(start) = remaining.find("/*") else {
-                result.push_str(remaining);
-                break result;
-            };
-            result.push_str(&remaining[..start]);
-            let Some(end) = remaining[start + 2..].find("*/") else {
-                // Invalid trailing CSS is not evidence that a control is visible.
-                return true;
-            };
-            result.push(' ');
-            remaining = &remaining[start + 2 + end + 2..];
-        }
-    } else {
-        value.to_string()
-    };
-    normalized.make_ascii_lowercase();
+    let normalized = value.trim().to_ascii_lowercase();
     let normalized = normalized.trim();
     let without_priority = if let Some(before_important) = normalized.strip_suffix("important") {
         if let Some(before_bang) = before_important.trim_end().strip_suffix('!') {
@@ -911,6 +911,10 @@ fn element_is_inert(control: ElementRef<'_>) -> bool {
             return true;
         }
         if let Some(style) = element.value().attr("style") {
+            let Some(style) = strip_css_comments(style) else {
+                // Malformed CSS cannot prove that a marked control is visible.
+                return true;
+            };
             for declaration in style.split(';') {
                 let Some((property, value)) = declaration.split_once(':') else {
                     continue;
@@ -1992,6 +1996,8 @@ mod tests {
             "display:none ! important",
             "display:none !/**/important",
             "visibility:hidden ! /* priority */ important",
+            "display/**/:none ! important",
+            "visibility/**/:hidden !/**/important",
         ] {
             let page = REVIEWED_LOGIN_PAGE.replace(
                 "</form>",
