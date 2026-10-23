@@ -1804,11 +1804,20 @@ mod tests {
         let mut lease = governor
             .try_acquire(RequestKind::Authentication)
             .expect("authentication lease");
+        let before_observation = super::now_ms().expect("clock");
         lease.observe_http(429, None, false).expect("observe");
+        let observed_deadline = lease.state.cooldown_until_ms;
+        assert!(observed_deadline >= before_observation + 30 * 60 * 1000);
         lease
             .finish(Outcome::NetworkFailure)
             .expect("finish after body failure");
-        assert!(governor.status().expect("status").cooldown_wait >= Duration::from_secs(30 * 60));
+        assert!(
+            governor
+                .status()
+                .expect("status")
+                .cooldown_until_boottime_ms
+                >= observed_deadline
+        );
     }
 
     #[test]

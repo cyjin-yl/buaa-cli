@@ -53,6 +53,24 @@ also matched; these checks made no campus requests and left the production
 governor unchanged. Fresh exact-head review and original-runtime online smoke
 remain separate gates; earlier login receipts are not their approval.
 
+The original UID1000 runtime subsequently built its own offline artifact and
+executed help, schema and the entire 51/74 manifest successfully. The host
+artifact's earlier libc incompatibility is not retried or hidden by copying it.
+One governed session attempt then recorded only an initial SSO HTTP 200 and
+stopped before password submission with `challenge_required`; no session was
+stored. The sanitized receipt does not identify whether a response challenge
+signal or form-control safety scan triggered the refusal. This is not proof
+that an actual CAPTCHA is required. The diagnosed cooldown was zero, while
+the challenge latch remained set; waiting alone does not clear that latch.
+No automatic authentication retry or challenge bypass occurred.
+
+Both initial exact-head GitHub offline checks exposed a remaining-time test
+assertion that ignored elapsed milliseconds. The regression now checks the
+absolute thirty-minute deadline and its retention after body failure, without
+changing production pacing or cooldown. The corrected local gate passed
+432 library and 19 CLI cases; those earlier CI failures remain failures and
+new exact-head checks are required.
+
 Runtime admission also found two distinct governor entities: the migrated
 original runtime retains a 60-second request interval, whereas prior host
 observations used a later local five-second store. Those host receipts do not

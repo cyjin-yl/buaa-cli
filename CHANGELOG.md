@@ -25,6 +25,9 @@
   POST; same-name added controls cannot inherit the credential-field exemption.
 - Honor disabled fieldsets and their first-legend exception when admitting
   credential controls and scanning for additional login interactions.
+- Check the observed 429 cooldown's absolute deadline and its retention after
+  body failure, rather than requiring a later remaining-time snapshot to retain
+  the full thirty minutes. Keep the production cooldown floor unchanged.
 - Add governed classroom session acquisition (`recordings session --offline` to
   arm one attempt, `--online` to run it) with a protected-stdin credential, a
   reviewed single sign-on service and host-scoped cookies, a private

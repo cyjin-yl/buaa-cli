@@ -34,7 +34,27 @@
           "admission_regressions": "Isolated-governor loopback transfers cover budget equality, full-file cache corruption, non-media/short/encoded/partial responses, ignored/wrong/overflow ranges and preserved challenge/Retry-After facts, including successful 200/full and 206/prefix responses. Session regressions preserve acquired cookie Path and finite expiry through private storage, filter each actual API URL, refuse expired cookies before a request, reject legacy flat files without migration and reject explicitly mismatched numeric/string tenants. A real governor wait lets a stored credential expire; the target receives zero requests and the lease finishes without authentication or network-failure changes. Max-Age deletion and finite lifetime take precedence over Expires in either attribute order. Unreviewed interactive login controls, including externally associated and unnamed controls, stop the password flow while unrelated forms and the retained hidden CAPTCHA container alone do not. Source admission rejects retargeting and unsuccessful application bodies before cache persistence; admitted layout drift remains recoverable offline.",
           "execution": "One agent-heavy guardian and Cargo lock, UID1000, one compiler job, worktree-owned target, 2 GiB address-space ceiling and bounded glibc arenas. No child agent built, tested, authenticated, fetched media or launched players.",
           "network_requests": 0,
+          "credential_control_regressions": "Unique correctly typed credential controls, external and unnamed associated controls, disabled fieldsets, first-legend exceptions and nested fieldsets are covered with synthetic inputs.",
           "remaining": "Fresh exact-head review and original-runtime online smoke remain separate gates. Physical audio, genuine live and all-cue/dual-player synchronization remain unverified. Earlier failures are retained."
+        },
+        "ci_429_deadline_assertion_2026_10_23": {
+          "observed_head": "ff7751ea90fbe9170e1aefb52d8a0b9c585ef787",
+          "failure": "Both native GitHub Actions offline checks failed because the test required a later remaining-time snapshot to retain the complete thirty minutes despite elapsed time.",
+          "repair": "Independently assert an absolute deadline at least thirty minutes after the pre-observation clock, then assert body-failure completion preserves the observed deadline. No tolerance or production cooldown change.",
+          "local_proof": "432 library and 19 CLI cases passed with three ignored workers, strict clippy, format check, explicit offline build and complete retained native consumers. Earlier CI failures remain failures; the changed exact head requires new checks."
+        },
+        "original_runtime_session_observation_2026_10_23": {
+          "observed_head": "ff7751ea90fbe9170e1aefb52d8a0b9c585ef787",
+          "native_build": "A worktree-owned offline build in the existing original UID1000 runtime executed help, schema and the complete 51-capability/74-entry manifest successfully. No binary or target directory was copied.",
+          "request_interval_ms": 60000,
+          "initial_login_http_status": 200,
+          "recorded_hops": 1,
+          "classification": "challenge_required",
+          "session_stored": false,
+          "credential_persisted": false,
+          "password_submission": "The inspected code path and one-hop trail place refusal before password submission; no independent packet-level claim.",
+          "remaining": "The sanitized receipt does not distinguish a response challenge signal from form-control safety refusal. No current selected-lesson confirmation or actual CAPTCHA requirement is established. At diagnosis the cooldown was zero and the challenge latch remained set; no automatic rearm, repeated authentication or challenge bypass occurred.",
+          "privacy": "Credential values, page bodies, account references, lesson identifiers, private paths and response digests remain outside source."
         },
         "lease_lifetime_repair_2026_10_21": {
           "failure": "A trusted push check failed on account-lease contention. Exec-isolating the sandbox probe alone did not resolve the default-parallel suite; the retained follow-up run had twelve lease-related failures.",
