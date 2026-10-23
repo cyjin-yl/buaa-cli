@@ -1,9 +1,11 @@
 //! Read-only, operator-authorized lookup over a Life-compatible local catalog.
 //! This module does not retrieve media objects or authenticate to any service.
 mod catalog;
+pub mod media;
 mod model;
 mod provenance;
 pub mod replay;
+pub mod session;
 pub mod subtitle_export;
 pub mod subtitles;
 #[cfg(test)]
@@ -213,6 +215,8 @@ pub fn schema() -> Value {
     output["subtitles"] = subtitles::schema();
     output["subtitles-online"] = subtitles::online_schema();
     output["replay"] = replay::schema();
+    output["session"] = session::schema();
+    output["media"] = media::schema();
     output
 }
 

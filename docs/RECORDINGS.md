@@ -54,9 +54,106 @@ inputs and full output remain private; no new campus request was made.
 
 ## Governed native subtitle GET
 
-`buaa recordings subtitles --online` and `--refresh` use only the reviewed fixed-origin transcript GET, with a protected-stdin existing session and the same process-shared governor/cache policy as other adapters. The request is constructed from the numeric `sub_id`; arbitrary URLs, methods and header maps are rejected. The cookie is validated as cookie pairs, marked sensitive, delivered only to the transcript target (never robots, redirects or another origin), scoped into a private cache namespace, and excluded from cache/output/report diagnostics. There is no password/master-key input, login, refresh, redirect following, automatic retry, media fetch or catalog write.
+`buaa recordings subtitles --online` and `--refresh` use only the reviewed fixed-origin transcript GET, with the same process-shared governor/cache policy as other adapters. Protected stdin supplies exactly one session source: `cookie`, or `session_ref` referencing a privately stored session. The request is constructed from the numeric `sub_id`; arbitrary URLs, methods and header maps are rejected. The cookie is validated as cookie pairs, marked sensitive, delivered only to the transcript target (never robots, redirects or another origin), scoped into a private cache namespace, and excluded from cache/output/report diagnostics. The subtitle command itself performs no login, automatic authentication refresh/retry, media fetch or catalog write.
 
-Fresh HTTP status, JSON MIME, body budget and application success are admitted before immutable-byte comparison. An indeterminate/denied/redirected session latches the shared safety outcome and does not replace a retained original. A valid application response whose selected layout is malformed is retained privately for a cache-only parser correction but still returns an error. The online original hash covers the raw HTTP body, not a constructed wrapper; a cache hit or `304` does not imply recording media retrieval. The current source/runtime gate remains pending parent validation, and no accepted authenticated target response is claimed here.
+Fresh HTTP status, reviewed JSON/HTML MIME labels, body budget and the raw
+JSON application's success code are admitted before immutable-byte comparison.
+The observed platform labels its JSON as `text/html; charset=UTF-8`; the
+receipt reports that mismatch rather than silently relabeling it. Real HTML
+sign-in pages and failed application codes still reject and latch. A valid
+application response whose selected layout is malformed is retained privately
+for a cache-only parser correction but still returns an error. The online
+original hash covers the raw `{code,list}` HTTP body, not an axios/client
+`{status,data}` wrapper. The supplied-import wrapper remains a distinct input
+contract. A cache hit or `304` does not imply recording media retrieval.
+
+An earlier candidate observed and revalidated one authorized 3,389-cue track
+from a 595,620-byte raw response. The source's missing resource identifier
+remained missing. These historical receipts do not approve later changes to
+session or media transport safety; full originals and digests stay private.
+
+## Governed classroom session
+
+`buaa recordings session --offline` accepts the exact intent
+`RESUME CLASSROOM AUTH` and arms one deliberate authentication attempt without
+network I/O. It never clears request reservations, server cooldowns or unknown
+outcomes. A failed attempt is not authorization to rearm automatically.
+
+`buaa recordings session --online` accepts `authorized`, `username`,
+`password`, the exact `LOGIN <username> classroom` intent, and
+`verification` with numeric `course_id` and `sub_id`. Credentials arrive only
+on protected stdin, not argv or ordinary files. The password-bearing request
+is pinned to the reviewed HTTPS sign-on URL and service; redirect responses
+cannot choose another credential target. Every hop remains subject to the
+production governor's configured request gap and durable Retry-After policy.
+Challenge signals, unreadable bodies and unsuccessful application responses
+never establish a session.
+Before the credential POST, an additional enabled input, select or textarea
+outside the reviewed username/password interaction stops the flow as an
+unreviewed-interaction safety refusal; it is not mislabeled as a confirmed
+CAPTCHA challenge. An inert hidden CAPTCHA container alone is not a challenge
+control. A later server response is classified separately and does not imply
+that a password was or was not submitted.
+Confirmed challenge classification requires a response challenge signal or an
+active, enabled challenge control in the reviewed form. Raw response text that
+mentions CAPTCHA or verification vocabulary can prevent session admission, but
+does not by itself assert an interactive challenge.
+The scan follows explicit HTML `form` associations, including controls outside
+the form element, and does not require a control to have a `name`.
+Only one username text input and one password input of the reviewed password
+type are exempt; duplicate names or changed credential-control types stop the
+flow rather than silently omitting an extra interaction.
+Disabled fieldsets disable their descendant controls except those inside the
+fieldset's first legend. Nested fieldsets retain their own disabledness; a
+later legend does not exempt a credential or additional interaction control.
+
+The positive confirmation is a fresh, explicitly selected lesson response
+with matching selectors and no explicitly conflicting tenant, not independent proof of account identity or course
+rights. Only then may an owner-only session be atomically stored and its
+reference returned. Session and failure artifacts remain private, and the
+command does not perform automatic authentication refresh or retries.
+
+The private version-2 session file preserves each classroom cookie's acquired
+host/domain scope, Path and absolute expiry. Single sign-on cookies are excluded.
+Each subtitle or lesson-source request filters that snapshot for its own URL
+and the current time; a cookie usable by the verification endpoint need not be
+usable by another API. A request with no applicable unexpired cookie stops
+locally. Legacy flattened files cannot recover these restrictions and are
+rejected until a new deliberate authentication succeeds; no scope or lifetime
+is invented. Stored expiry also reaches the transport: after robots processing
+and governor acquisition, an expired credential stops before transmission and
+the unused lease is finished without clearing safety history.
+An explicitly supplied `cookie` remains operator-scoped input,
+not a reconstructed stored-session snapshot.
+Cookie Max-Age takes precedence over Expires regardless of attribute order,
+including deletion declarations with an empty value.
+
+## Source-declared recording media
+
+`buaa recordings media --online` selects numeric `course_id` and `sub_id`
+through `selection` with fixed tenant `21`, authorization and exactly one of
+`cookie` or `session_ref`. Lesson-source responses use the existing private
+session-scoped, cache-first classroom client. The selected source must declare
+the exact admitted HTTPS recording URL; no caller URL, redirect or filename
+guess authorizes a download. The classroom Cookie is never sent to the media
+host.
+
+`fetch:"head"` is a bounded zero-based prefix: the returned range, total size
+and actual bytes must match the requested `byte_budget`. It is not a whole-file
+digest. `fetch:"full"` requires an explicit private 0700 `private_dir` and
+complete admitted MP4 bytes within the budget. Exclusive 0600 staging and an
+atomic completion receipt keep partial responses out of the playable output.
+Existing completed local media may be reused only after full length/hash
+verification; file presence or an ETag is not verification.
+Successful full and prefix responses retain server Retry-After instructions in
+the same shared governor before body processing, just as rejected responses do.
+
+Any `native_track` facts on input remain operator assertions. Platform
+lesson selectors, recording metadata and a full media digest establish their
+own provenance, but date/duration agreement cannot recover a native track's
+missing resource identity or prove rendered synchronization. A replay entry
+marked `course_live` is not an ongoing live stream. No live playlist, key
+scheduling, automatic reconnect, attendance or completion behavior is implied.
 
 ## Bounded local replay
 

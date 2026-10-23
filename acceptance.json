@@ -2,7 +2,7 @@
   "schema_version": 1,
   "catalog_source": "https://github.com/buaahub/awesome-buaa",
   "catalog_reviewed_on": "2026-09-20",
-  "scope_note": "Every catalog entry was read; linked implementations are historical/unverified unless specifically recorded. On 2026-09-25 the operator authorized a read-only gateway usage observation; it and diagnostic TLS probes on gw/spoc/ihome buaa.edu.cn were severed at the network edge (zero response bytes), and the operator confirmed no login is possible from this devcontainer, so gateway/ihome live-verification items remain blocked. On 2026-09-28 egress to spoc.buaa.edu.cn recovered; one governed read-only public-surface observation was recorded (docs/SPOC.md) as contract evidence, while the SPOC acceptance item remains blocked on the owner-reviewed contract and rights-cleared inventory. Pending is not implemented; catalog links are not APIs.",
+  "scope_note": "Every catalog entry was read; linked implementations are historical/unverified unless specifically recorded. Dated network-edge refusals and later public/classroom observations retain their original scope: a host becoming reachable does not implement a service. The original runtime's preserved 60-second production governor and the later host-local 5-second history are distinct entities; host observations do not prove continuity of the original account history. Further campus work must use the original production runtime and honor all known safety barriers, not switch namespaces for throughput. Pending is not implemented; catalog links are not APIs.",
   "capabilities": [
     {
       "id": "governor",
@@ -17,6 +17,82 @@
         "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention. Earlier offline suite: 118 passed across five suites (one ignored). Final merged-source gate: 197 library + 18 CLI passed, two ignored; locked offline build, strict all-target clippy and formatter check passed. The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
         "limitations": "Same UID and local filesystem lock/fsync semantics; boot mismatch, unknown outcome, missing/corrupt history fail closed. Only known pre-reboot history has an explicit offline plan/commit migration; unknown outcomes and missing/corrupt history cannot migrate. No reset or automatic recovery.",
+        "classroom_safety_gate_2026_10_23": {
+          "scope": "Hardened Rust source and deterministic offline/native consumers, before the evidence-only update; not new campus requests, authenticated service-wide acceptance or review approval.",
+          "strict_all_target_clippy": true,
+          "explicit_locked_offline_build": true,
+          "library_passed": 432,
+          "cli_passed": 19,
+          "ignored_workers": 3,
+          "failures": 0,
+          "whole_native_manifest_equal": true,
+          "capabilities": 51,
+          "catalog_entries": 74,
+          "source_stable_during_gate": true,
+          "native_consumers": "All 2,455 retained supplied cues equal their independent oracle. All 3,389 retained raw-source cues equal the native projection, with the explicitly constructed client wrapper kept distinct from HTTP wire bytes. Exported segment digests and missing resource identity match. Four invalid native inputs leave the production governor unchanged.",
+          "retained_media": "All 2,068,314,499 retained bytes were independently re-read and match the private whole-file receipt. This is local integrity, not a repeated download, decoder pass or subtitle association proof.",
+          "admission_regressions": "Isolated-governor loopback transfers cover budget equality, full-file cache corruption, non-media/short/encoded/partial responses, ignored/wrong/overflow ranges and preserved challenge/Retry-After facts, including successful 200/full and 206/prefix responses. Session regressions preserve acquired cookie Path and finite expiry through private storage, filter each actual API URL, refuse expired cookies before a request, reject legacy flat files without migration and reject explicitly mismatched numeric/string tenants. A real governor wait lets a stored credential expire; the target receives zero requests and the lease finishes without authentication or network-failure changes. Max-Age deletion and finite lifetime take precedence over Expires in either attribute order. Unreviewed interactive login controls, including externally associated and unnamed controls, stop the password flow while unrelated forms and the retained hidden CAPTCHA container alone do not. Source admission rejects retargeting and unsuccessful application bodies before cache persistence; admitted layout drift remains recoverable offline.",
+          "execution": "One agent-heavy guardian and Cargo lock, UID1000, one compiler job, worktree-owned target, 2 GiB address-space ceiling and bounded glibc arenas. No child agent built, tested, authenticated, fetched media or launched players.",
+          "network_requests": 0,
+          "credential_control_regressions": "Unique correctly typed credential controls, external and unnamed associated controls, disabled fieldsets, first-legend exceptions and nested fieldsets are covered with synthetic inputs.",
+          "remaining": "Exact head e9dc437622be38fb2d6a8d9819667b52ee0711eb passed independent full-source review, original-runtime build/smoke and both GitHub Actions checks. Current online session confirmation remains blocked by the retained challenge latch and unknown original trigger. Physical audio, genuine live and all-cue/dual-player synchronization remain unverified. Earlier failures are retained."
+        },
+        "ci_429_deadline_assertion_2026_10_23": {
+          "observed_head": "ff7751ea90fbe9170e1aefb52d8a0b9c585ef787",
+          "failure": "Both native GitHub Actions offline checks failed because the test required a later remaining-time snapshot to retain the complete thirty minutes despite elapsed time.",
+          "repair": "Independently assert an absolute deadline at least thirty minutes after the pre-observation clock, then assert body-failure completion preserves the observed deadline. No tolerance or production cooldown change.",
+          "local_proof": "432 library and 19 CLI cases passed with three ignored workers, strict clippy, format check, explicit offline build and complete retained native consumers. Earlier CI failures remain historical failures; both later exact-head GitHub Actions checks on e9dc437 succeeded."
+        },
+        "original_runtime_session_observation_2026_10_23": {
+          "observed_head": "ff7751ea90fbe9170e1aefb52d8a0b9c585ef787",
+          "native_build": "A worktree-owned offline build in the existing original UID1000 runtime executed help, schema and the complete 51-capability/74-entry manifest successfully. No binary or target directory was copied.",
+          "request_interval_ms": 60000,
+          "initial_login_http_status": 200,
+          "recorded_hops": 1,
+          "classification": "challenge_required",
+          "session_stored": false,
+          "credential_persisted": false,
+          "password_submission": "The inspected code path and one-hop trail place refusal before password submission; no independent packet-level claim.",
+          "remaining": "The sanitized receipt does not preserve the initial response challenge header or form fields. At this observed head the implementation classified both explicit CAPTCHA fields and the __unreviewed_control safety sentinel as challenge_required, so the recorded classification cannot distinguish a real response/header challenge, CAPTCHA field, or extra-interaction refusal. No current selected-lesson confirmation or actual CAPTCHA requirement is established. At diagnosis the cooldown was zero and the challenge latch remains set; no automatic rearm, repeated authentication or challenge bypass occurred.",
+          "privacy": "Credential values, page bodies, account references, lesson identifiers, private paths and response digests remain outside source."
+        },
+        "challenge_classification_repair_2026_10_23": {
+          "reason": "A real initial-page attempt was refused before password submission with an ambiguous challenge_required classification. Source inspection found that a local unreviewed-control sentinel shared the CAPTCHA classifier.",
+          "repair": "Keep an actual captcha field/response challenge distinct from an unreviewed form interaction. An unreviewed initial form stops before password submission and keeps the authentication safety latch; the latter reports unreviewed_login_interaction and does not assert that a CAPTCHA was observed. A post-submit response does not claim whether a password was submitted.",
+          "network_requests": 0,
+          "limitation": "The existing response retained no HTML or form fields, so the original refusal's exact branch remains unknown. This classification correction does not authorize clearing the latch or retrying credentials."
+        },
+        "post_submit_challenge_false_positive_2026_10_23": {
+          "review_finding": "The previous exact-head reviewer found that raw captcha/challenge substrings after the password POST could classify inert hidden login-page containers as an actual challenge.",
+          "repair": "Challenge classification now requires a response challenge header or a marked, active, non-hidden, enabled challenge control associated with the reviewed form. Raw response text can still veto session admission, but remains a non-challenge failure unless structured evidence exists. Identity probes retain MIME, JSON code, exact course/sub IDs and tenant checks without substring challenge classification.",
+          "synthetic_regressions": "The reviewed login fixture's hidden captchaParent/captchaDiv text is not a challenge; an active captcha or verificationCode control is; hidden, disabled, inert and disabled-fieldset controls are not, except a control in the first legend of a disabled fieldset. CSS display:none!important and visibility:hidden !important remain hidden and take the unreviewed-interaction refusal, not the confirmed-challenge class.",
+          "network_requests": 0,
+          "verification_head": "e9dc437622be38fb2d6a8d9819667b52ee0711eb",
+          "verification": "Full offline gate, original UID1000 build/smoke, independent full-source APPROVE and both exact-head GitHub Actions checks succeeded. Copilot review was unavailable because its requester quota was exhausted; no bot approval is claimed.",
+          "remaining": "The original response body and headers were not retained, so its exact branch remains unknown; the challenge latch remains set and no authentication retry occurred."
+        },
+        "css_important_hidden_challenge_2026_10_23": {
+          "review_finding": "Exact-head reviews found valid `display:none ! important` syntax and comments in a CSS property name could bypass the inline-hidden check and be mislabeled as an active challenge control.",
+          "repair": "Remove CSS comments before declaration/property parsing, then strip the priority token even when whitespace separates `!` and `important`, before comparing display, visibility or content-visibility values. Keep hidden controls blocked as unreviewed interactions, without a confirmed-challenge classification.",
+          "synthetic_regressions": "Contiguous, spaced and comment-separated `!important`, comments in property names, and `display`/`visibility` variants remain hidden and trigger only the unreviewed-interaction refusal.",
+          "network_requests": 0,
+          "verification_head": "e9dc437622be38fb2d6a8d9819667b52ee0711eb",
+          "verification": "Full offline gate, original UID1000 build/smoke, independent full-source APPROVE and both exact-head GitHub Actions checks succeeded. Copilot review was unavailable because its requester quota was exhausted; no bot approval is claimed.",
+          "remaining": "The original live attempt still has an unresolved challenge latch and no stored HTML/header evidence; the session is not online-verified."
+        },
+        "final_head_verification_2026_10_23": {
+          "head": "e9dc437622be38fb2d6a8d9819667b52ee0711eb",
+          "offline_gate": "432 library + 19 CLI passed; three ignored; format, strict clippy, locked offline build and full native consumers passed.",
+          "native_manifest": "Whole 51-capability/74-entry manifest, help and schema matched.",
+          "original_runtime": "Existing UID1000 runtime built its own target and ran help/schema/manifest; source stable, no campus requests or authentication attempts.",
+          "independent_review": "Fresh full-source review explicitly APPROVE; no concrete P1/P2 findings.",
+          "github_checks": [
+            {"id":120234498579,"app_id":15368,"conclusion":"success"},
+            {"id":120234481912,"app_id":15368,"conclusion":"success"}
+          ],
+          "copilot_review": "The review bot reported requester quota exhaustion; COMMENTED is not approval.",
+          "remaining": "PR remains draft pending safe current online session acceptance and independent platform review. No linked Issue exists."
+        },
         "lease_lifetime_repair_2026_10_21": {
           "failure": "A trusted push check failed on account-lease contention. Exec-isolating the sandbox probe alone did not resolve the default-parallel suite; the retained follow-up run had twelve lease-related failures.",
           "repair": "Explicit original-process RAII unlock on every governor acquisition path prevents inherited descriptors from extending a completed operation. An acquiring PID check prevents a fork child destructor from unlocking a live parent request. Body processing, persistence, pacing, latches and unknown-outcome barriers remain unchanged.",
@@ -1995,6 +2071,201 @@
         "proof": "Offline focused announcements tests and CLI smoke cover date/title filtering, null/default input, cached article paragraphs, paged operator-asserted history and advertised ordinal routing. history_accepts_paged_sources_without_relaxing_provenance_scope failed before the fix (invalid_input for /tzgg/252.htm) and passes after it; foreign hosts, userinfo, custom ports, fragments and malformed page stems stay rejected. offline_lookup_with_empty_cache_reports_unavailable uses a fixed-offline test constructor and private fixture directory; both listing/article return offline_miss without opening a governor. The adaptive CLI test accepts only offline cache-hit success or exit 7 unavailable and reads neither HOME nor unrelated cache entries; it passes with a deliberately misleading HOME. Full offline gate results are recorded in docs/STATUS.md.",
         "live_verification": [
           {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source aviation root --refresh",
+            "target": "https://aviation.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "7c035862ca04753d94e4513538827a6f10a96bfaea8b79d26bd1244d5b390c5b",
+            "response_body_bytes": 63693,
+            "cache_status": "revalidated",
+            "fetched_at_unix_ms": 1792692328557,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source beijing root --refresh",
+            "target": "https://beijing.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "ddd5e40f91c048f4f9325265a4af9a2aa28a635ee009a4e8f308b318d8955cbd",
+            "response_body_bytes": 46416,
+            "cache_status": "revalidated",
+            "fetched_at_unix_ms": 1792692611548,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source bme root --refresh",
+            "target": "https://bme.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "a816be52f47e1b1e6d75054e58a2bb4d89e44819e377f6e999993c9cf618dac4",
+            "response_body_bytes": 23189,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792692891873,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source cst root --refresh",
+            "target": "https://cst.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "1bd555365dc9222ef1b435896d47b301fadadb17c86f419ead997e473d8af83a",
+            "response_body_bytes": 49506,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792692926282,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source dept3 root --refresh",
+            "target": "https://dept3.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "6dbea208665882800c7b923f9cc45d4993f2b9fb6ae67e20c6f51b0d5fd61ba5",
+            "response_body_bytes": 47914,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792693005554,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source h3i root --refresh",
+            "target": "https://h3i.buaa.edu.cn/index.htm",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "b9c4e8dbc8ee093da1b4055229d40d0685ebcc41518e0852b7ba5858f46324ca",
+            "response_body_bytes": 50469,
+            "cache_status": "revalidated",
+            "fetched_at_unix_ms": 1792692708072,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source iai root --refresh",
+            "target": "https://iai.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "d6f102ba72e4a4f58fef2fca70333081f4504f1f7102d58a3c22bdb616245589",
+            "response_body_bytes": 32104,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792692725254,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source ic root --refresh",
+            "target": "https://ic.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "2463cbf8425b7f34596be375cb9e2b028fa93d590041cd56c6797f8579737d77",
+            "response_body_bytes": 153523,
+            "cache_status": "revalidated",
+            "fetched_at_unix_ms": 1792692318369,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source iiif root --refresh",
+            "target": "https://iiif.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "12c1d4c73fe8011c5ce4f3c1d71c054fa5705b71e8a7541d488d86b207fc4957",
+            "response_body_bytes": 27680,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792693061987,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source mse root --refresh",
+            "target": "https://mse.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "dffa1fe77452293e4990bafab95087905a07f1516396dd8ca13f0f93ce2e5117",
+            "response_body_bytes": 58142,
+            "cache_status": "revalidated",
+            "fetched_at_unix_ms": 1792693084169,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source rse root --refresh",
+            "target": "https://rse.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "ca94e84b540de76adcbf5098c0bceeea393bad6956c4c7064bdb10346f359a23",
+            "response_body_bytes": 51489,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792693101450,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source scse root --refresh",
+            "target": "https://scse.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "5b0962930b00f6acd095a67ff350c06a1fb5542054e0f19b2d76f9634805aa8f",
+            "response_body_bytes": 40850,
+            "cache_status": "revalidated",
+            "fetched_at_unix_ms": 1792692512837,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source shenyuan root --refresh",
+            "target": "https://hc.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "ba6a2f83ad2bd98a3f47c952f5ee11931dbe1f93ade1aeccb2b59ad4f3ed6cd9",
+            "response_body_bytes": 93338,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792692628733,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source ygy root --refresh",
+            "target": "https://ygy.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "c2704d6a0a92d61e7c2b770f309b172572e9e5b5a9f8a73b16f8e2bbdbcf0d5c",
+            "response_body_bytes": 28985,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792692909104,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source zfai root --refresh",
+            "target": "https://zfai.buaa.edu.cn/",
+            "result": "success",
+            "exit_code": 0,
+            "http_status": 200,
+            "response_body_sha256": "8f12d38fa866cb6ca32980932c8437dcb0b48518bc1acafb4e780d9edb2dce19",
+            "response_body_bytes": 35065,
+            "cache_status": "miss",
+            "fetched_at_unix_ms": 1792693039788,
+            "scope": "single_explicit_public_college_source_surface"
+          },
+          {
             "date": "2026-09-29",
             "command": "buaa announcements list --online",
             "target": "https://news.buaa.edu.cn/tzgg.htm",
@@ -2097,6 +2368,32 @@
           }
         ],
         "authorized_attempts": [
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source hss root --refresh",
+            "target": "https://www.hss.buaa.edu.cn/",
+            "result": "unavailable",
+            "exit_code": 7,
+            "note": "Historical governed host attempts did not complete; their failed receipts remain retained. No completed response bytes or TLS bypass are claimed.",
+            "response_body_retained": false
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source ee root --refresh",
+            "target": "https://www.ee.buaa.edu.cn/",
+            "result": "unsupported",
+            "exit_code": 3,
+            "note": "The source is surface-only: the HTTPS certificate names do not match www.ee.buaa.edu.cn and the canonical ee.buaa.edu.cn TLS session ended unexpectedly; plaintext HTTP fallback stays disabled.",
+            "response_body_retained": false
+          },
+          {
+            "date": "2026-10-23",
+            "command": "buaa announcements college-source sepe|math|soft|transportation|physics|sce|sse root --refresh",
+            "result": "refused_locally",
+            "exit_code": 4,
+            "note": "Seven CLI invocations were refused locally by the host safety latch before a network request. The sweep was then stopped; other queued targets never ran. Later authentication resumes are separate historical operations, not evidence that these selected surfaces completed. Further campus work uses the original production runtime rather than this host-local namespace.",
+            "response_body_retained": false
+          },
           {
             "command": "buaa announcements list --online (old contract)",
             "target": "https://www.buaa.edu.cn/xwzx.htm",
@@ -2647,16 +2944,104 @@
     {
       "id": "recordings-native-subtitles-online",
       "title": "Existing-session native classroom subtitle read",
-      "status": "implemented-offline",
-      "parent_items": ["recordings", "live", "recording-subtitle-service"],
-      "acceptance": "One explicitly authorized fixed-origin native subtitle GET with protected-stdin existing session, exact track selection, whole immutable wire-body provenance and the permanent shared governor. No password/master key, login, redirect, auth refresh, retry, media or catalog write.",
+      "status": "partial-live-verified",
+        "parent_items": [
+          "recordings",
+          "live",
+          "recording-subtitle-service"
+                ],
+      "acceptance": "One explicitly authorized fixed-origin native subtitle GET with a protected-stdin session or an explicit stored-session reference, exact track selection, immutable raw-body provenance and the permanent shared governor. No login, automatic refresh or retry, media or catalog write.",
       "sources": [],
       "evidence": {
         "command": "buaa recordings subtitles --online|--refresh",
-        "implementation": "Fixed-origin URL admission, existing-session cookie validation, session-scoped private cache and shared-governor request processing are restored. All five synthetic classroom transport regressions passed in the unified350-library/19-CLI offline gate; existing-session online verification remains pending.",
-        "safety": "Cookie delivery is limited to the exact transcript GET, never robots, redirects or another origin. Fresh JSON MIME/application admission precedes immutable comparison; invalid/denied/indeterminate sessions latch without replacing retained originals. No login, refresh, retry, media retrieval or catalog write exists.",
-        "limits": "This is a local adapter with a sanitized current gate, not a working authenticated subtitle/media/playback service, course inventory, complete history or campus-mutation authorization.",
-        "privacy": "No credentials, private response bodies, session identifiers, operational URLs beyond the reviewed route shape or protected receipts are included."
+        "online_observation_2026_10_23": {
+          "scope": "Prior candidate selected one authorized native track; this is not exact-head approval of subsequent safety repairs.",
+              "segments": 3389,
+          "original_bytes": 595620,
+                "revalidation_status": 200,
+          "network_access": true,
+                "content_type": "text/html; charset=UTF-8",
+                "mime_label_matches_json": false,
+                "envelope": "flat",
+          "source_order_preserved": true,
+                "resource_guid_status": "absent_in_native_track",
+          "digests": "Original and normalized-segment digests are privately retained, not published."
+    },
+        "admission": "The raw HTTP body is the flat code/list envelope. A supplied status/data capture wrapper remains a separate offline-import input, not a second raw HTTP contract. Only reviewed JSON/HTML MIME labels, bounded bytes and a successful JSON application code are admitted before immutable comparison; HTML sign-in pages and failed application codes still latch. Admitted layout failures remain privately recoverable without a new request.",
+        "limits": "One track observation is not service-wide access, account identity, media association, rights, complete history, player synchronization or realtime live proof.",
+        "privacy": "No private cue text, lesson/resource/session identifiers, private source digests or operational media locators are published."
+      }
+    },
+    {
+        "id": "recordings-classroom-session",
+        "title": "Governed classroom platform session",
+      "status": "implemented-offline",
+        "parent_items": [
+          "recordings",
+          "live",
+          "recording-subtitle-service"
+                ],
+      "acceptance": "A deliberate one-shot authentication with protected stdin, pinned SSO service, positive reviewed application confirmation, production governor pacing/cooldowns throughout all hops, and private atomic session storage. No automatic login refresh, retry or challenge bypass.",
+      "sources": [],
+      "evidence": {
+          "commands": [
+            "buaa recordings session --offline",
+            "buaa recordings session --online"
+        ],
+          "implementation": [
+            "src/recordings/session.rs",
+            "src/governor.rs",
+            "src/main.rs"
+        ],
+        "historical_observation": "Earlier candidates completed the SSO/forwarding flow and produced a privately stored platform cookie set. Successful receipts preceded independent findings in session admission, pacing, response lifetime and storage; they are not acceptance of the current hardened implementation.",
+        "safety_repair": "Require a pinned credential target, challenge-free positive selected-lesson verification with no conflicting declared tenant, one attempt per deliberate resume, actual configured request gaps, durable numeric/date Retry-After and cancel-before-unlock response lifetime. Version-2 private storage preserves acquired Cookie scope, Path and absolute expiry, excludes sign-on cookies and filters each actual target URL; legacy flat files fail closed until deliberate authentication. No new authentication while admission is under repair.",
+        "remaining": "The governor classroom_safety_gate_2026_10_23 records the current offline/native proof. Fresh exact-head review and original-runtime online session confirmation remain separate gates. Selected-lesson confirmation is not proof of account identity, media rights, live playback or course completion.",
+        "privacy": "Credential values, cookie/ticket values, private paths, account fingerprints and lesson identifiers remain outside source."
+      }
+    },
+    {
+        "id": "recordings-media",
+      "title": "Governed classroom recording media acquisition",
+      "status": "partial-live-verified",
+      "parent_items": [
+        "recordings",
+        "live",
+          "recording-replay-playback",
+        "recording-subtitle-service"
+        ],
+      "acceptance": "Cache-first source-bound recording acquisition: validate exact requested lesson selectors, admit only its declared recording URL on the reviewed HTTPS media host, and stream bounded prefix/full bytes through the shared governor. Publish only a completely verified local file. Caller-supplied native-track metadata remains operator-asserted, not independently verified source association.",
+      "sources": [],
+      "evidence": {
+          "command": "buaa recordings media --online",
+          "implementation": [
+            "src/recordings/media.rs",
+            "src/recordings/session.rs",
+          "src/net.rs"
+        ],
+        "historical_observation_2026_10_23": {
+          "scope": "Prior candidate source APIs declared a released replay and one recording asset. These observations predate later transport/output-safety repairs.",
+          "declared_duration_seconds": 8940,
+            "content_type": "video/mp4",
+          "declared_bytes": 2068314499,
+          "prefix": {
+            "status": 206,
+            "bytes": 1048576,
+              "hash_scope": "bounded_media_prefix_bytes"
+          },
+          "full": {
+            "status": 200,
+            "bytes": 2068314499,
+            "hash_scope": "entire_media_body_bytes",
+            "storage": "private owner-only local file"
+          },
+          "digests": "Both prefix and whole-file hashes are privately retained. The whole media file is retained for offline current-code readback; no repeated campus download is needed.",
+          "media_cookie_sent": false
+              },
+        "association_limits": "Platform responses associate replay metadata with a lesson. The native track has no resource identity; date equality, duration coverage and caller-supplied cue/hash facts do not certify a native media binding or rendered synchronization.",
+        "player_observation": "A prior direct mpv observation sampled nine cue windows across the track and four early cue gaps. VLC root captures were black; later window captures differed across unmatched frames. These are bounded/inconclusive observations, not full-track or dual-player synchronization acceptance.",
+        "safety_repair": "Reuse the session-scoped source cache and governor. Strict zero-based Content-Range, bounded reads, nonempty framed MP4 admission, cancel-before-finish, durable Retry-After, exclusive staging and full-file verification before local reuse/publication are required.",
+        "remaining": "The governor classroom_safety_gate_2026_10_23 records the current offline/native proof. Exact-head independent review and original-runtime online smoke remain pending; genuine realtime live, reconnect lifecycle, all-cue/dual-player synchronization and rights proof are not established.",
+        "privacy": "Private media, cue text, real lesson/resource identifiers, complete source hashes and recording paths are excluded."
       }
     },
     {
