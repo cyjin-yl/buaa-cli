@@ -332,7 +332,10 @@ fn run_announcements(args: &[String]) -> CliResult {
                 Some("root" | "notices" | "public-notices") => (args[2].as_str(), &args[2..]),
                 _ => ("root", &args[1..]),
             };
-            let output = buaa_cli::announcements::college_surface(mode(flags)?, &args[1], page)
+            let mode = mode(flags).map_err(|(code, exit, _)| {
+                (code, exit, "expected college-source category root|notices|public-notices (default root), optionally followed by one of --online or --refresh".into())
+            })?;
+            let output = buaa_cli::announcements::college_surface(mode, &args[1], page)
                 .map_err(service_error)?;
             emit(&output)
         }

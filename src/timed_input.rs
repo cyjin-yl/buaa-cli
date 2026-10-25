@@ -81,38 +81,46 @@ fn line_error(line: usize, reason: &'static str) -> String {
     format!("timed input line {line}: {reason}")
 }
 
-fn parse_seconds(seconds: &str) -> Option<u64> {
+fn parse_seconds(seconds: &str) -> Result<u64, &'static str> {
+    const INVALID: &str = "expected a non-negative decimal offset in seconds";
+    const TOO_LARGE: &str = "offset exceeds 24 hours";
     let (integer, fractional) = match seconds.split_once('.') {
         Some((integer, fractional)) => (integer, Some(fractional)),
         None => (seconds, None),
     };
     if integer.is_empty() {
-        return None;
+        return Err(INVALID);
     }
     let mut whole = 0_u64;
     for digit in integer.bytes() {
         if !digit.is_ascii_digit() {
-            return None;
+            return Err(INVALID);
         }
         whole = whole
-            .checked_mul(10)?
-            .checked_add(u64::from(digit - b'0'))?;
+            .saturating_mul(10)
+            .saturating_add(u64::from(digit - b'0'));
     }
     let mut nanos = 0_u64;
     if let Some(fractional) = fractional {
         if fractional.is_empty() || fractional.len() > 9 {
-            return None;
+            return Err(INVALID);
         }
         for digit in fractional.bytes() {
             if !digit.is_ascii_digit() {
-                return None;
+                return Err(INVALID);
             }
             nanos = nanos * 10 + u64::from(digit - b'0');
         }
         nanos *= 10_u64.pow(9 - fractional.len() as u32);
     }
-    let at_ns = whole.checked_mul(1_000_000_000)?.checked_add(nanos)?;
-    (at_ns <= MAX_OFFSET_NS).then_some(at_ns)
+    let at_ns = whole
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(nanos))
+        .ok_or(TOO_LARGE)?;
+    if at_ns > MAX_OFFSET_NS {
+        return Err(TOO_LARGE);
+    }
+    Ok(at_ns)
 }
 
 fn parse_schedule(input: &str) -> Result<Vec<Entry<'_>>, String> {
@@ -131,8 +139,7 @@ fn parse_schedule(input: &str) -> Result<Vec<Entry<'_>>, String> {
             .strip_prefix('[')
             .and_then(|row| row.split_once(']'))
             .ok_or_else(|| line_error(line, "expected [seconds]text"))?;
-        let at_ns = parse_seconds(seconds)
-            .ok_or_else(|| line_error(line, "invalid timestamp or offset exceeds 24 hours"))?;
+        let at_ns = parse_seconds(seconds).map_err(|reason| line_error(line, reason))?;
         if at_ns < previous_ns {
             return Err(line_error(line, "timestamps must be nondecreasing"));
         }

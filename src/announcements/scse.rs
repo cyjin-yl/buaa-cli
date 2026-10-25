@@ -5,8 +5,8 @@
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_BODY_PARAGRAPHS, MAX_ENTRIES, MAX_HREF, MAX_HTML,
     MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, college_html, declared_jsp_attachment_hints,
-    element_text, entry_in_scope, failed_contract, invalid_article, invalid_list, is_http,
-    parse_iso_date, retrieval, unavailable,
+    element_text, entry_in_scope, failed_contract, invalid_article, invalid_document, invalid_list,
+    is_http, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL,
@@ -352,10 +352,10 @@ struct DocumentInput {
 
 pub(super) fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
     if input.len() > 32 * 1024 {
-        return Err(invalid_article());
+        return Err(invalid_document());
     }
-    let input: DocumentInput = serde_json::from_str(input).map_err(|_| invalid_article())?;
-    let article = resolve_article(&input.article_url)?;
+    let input: DocumentInput = serde_json::from_str(input).map_err(|_| invalid_document())?;
+    let article = resolve_article(&input.article_url).map_err(|_| invalid_document())?;
     // Resolve against the retained article snapshot. An operator may refresh
     // that article separately; document --refresh revalidates only its PDF.
     let source_mode = if mode == CacheMode::Revalidate {
