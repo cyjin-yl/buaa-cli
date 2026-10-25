@@ -24,6 +24,8 @@
 - Clarify announcement-document input and college-source argument errors, and
   distinguish malformed timed-input offsets from offsets exceeding 24 hours.
   Unsupported school-8 major errors list the supported catalog majors.
+- Report marks baseline ownership/permissions validation refusals as
+  `permission` (exit 5), while retaining `invalid_input` (exit 2) for malformed input.
 - Require explicit intervals for dimensional CSS `round`, preserve aligned
   values and signed-zero rounding/modulo results, and distinguish comments
   from the real whitespace required around additive math operators.

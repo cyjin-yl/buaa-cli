@@ -31,6 +31,11 @@ const MAX_PATH: usize = 4096;
 const MAX_SAFE_CREDIT_TOTAL: f64 = f64::MAX / 20_000.0;
 const DEFAULT_PASS_MIN: u8 = 60;
 const MAX_BASELINE_BYTES: u64 = MAX_POLICY_BYTES * 4;
+// Ownership-policy refusals: the supplied value is well formed, but the
+// filesystem state violates the published baseline path policy.
+const UNSAFE_PARENT: &str =
+    "baseline parent directory must be owner-controlled and free of symlinks";
+const UNSAFE_FILE: &str = "baseline file must be a regular owner-controlled file with mode 0600";
 
 fn invalid() -> Value {
     json!({"error":"invalid_input","message":"marks input is invalid"})
@@ -38,6 +43,10 @@ fn invalid() -> Value {
 
 fn unavailable(message: &'static str) -> Value {
     json!({"error":"unavailable","message":message})
+}
+
+fn permission(message: &'static str) -> Value {
+    json!({"error":"permission","message":message})
 }
 
 // ---------------------------------------------------------------------------
@@ -547,7 +556,12 @@ fn baseline_location(path: &Path) -> Result<(File, String), Value> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("/"));
-    let directory = crate::governor::open_directory(parent, false, false).map_err(|_| invalid())?;
+    let directory = crate::governor::open_directory(parent, false, false).map_err(|error| {
+        match error.as_str() {
+            "governor directory ownership or permissions are unsafe" => permission(UNSAFE_PARENT),
+            _ => invalid(),
+        }
+    })?;
     Ok((directory, name.to_owned()))
 }
 
@@ -557,7 +571,10 @@ fn read_private_baseline(directory: &File, name: &str) -> Result<Option<String>,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(invalid()),
     };
-    crate::governor::validate_private_file(&file).map_err(|_| invalid())?;
+    crate::governor::validate_private_file(&file).map_err(|error| match error.as_str() {
+        "governor file ownership or permissions are unsafe" => permission(UNSAFE_FILE),
+        _ => invalid(),
+    })?;
     let mut text = String::new();
     file.take(MAX_BASELINE_BYTES + 1)
         .read_to_string(&mut text)
@@ -759,6 +776,7 @@ pub fn schema() -> Value {
     "baseline": {
         "operations": ["save <absolute-path>", "show <absolute-path>"],
         "path_policy": "parent must already exist, be owned by the current user and not group/other writable; symlink path components are rejected; baseline files must be regular owner-controlled mode 0600",
+        "error_codes": "ownership or permissions validation failures report permission (exit 5); malformed input reports invalid_input (exit 2)",
         "save": {"stdin":"same as gpa input","result":"saved|unchanged (idempotent, atomic, local-only)","file_mode":"0600","max_bytes":MAX_BASELINE_BYTES},
         "show": {"stdout":"the stored gpa_baseline document","requires_file_mode":"0600"}
     }
@@ -967,7 +985,7 @@ mod tests {
     }
 
     #[test]
-    fn baseline_save_rejects_symlinks_unsafe_parents_and_nonfiles() {
+    fn baseline_save_reports_ownership_policy_failures_as_permission() {
         use std::os::unix::fs::symlink;
 
         let root = std::env::temp_dir().join(format!("buaa-marks-path-{}", std::process::id()));
@@ -977,6 +995,8 @@ mod tests {
         let outside = root.join("outside.json");
         fs::write(&outside, "unchanged").unwrap();
 
+        // Symlink-open failures retain their existing classification; explicit
+        // ownership/permissions validation failures report permission.
         let file_link = root.join("baseline-link.json");
         symlink(&outside, &file_link).unwrap();
         assert_eq!(
@@ -998,13 +1018,51 @@ mod tests {
         fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
         assert_eq!(
             baseline_save(&input, shared.join("baseline.json").to_str().unwrap())["error"],
-            "invalid_input"
+            "permission"
+        );
+        assert_eq!(
+            baseline_show(shared.join("baseline.json").to_str().unwrap())["error"],
+            "permission"
         );
 
         let nonfile = root.join("directory-target");
         fs::DirBuilder::new().mode(0o700).create(&nonfile).unwrap();
         assert_eq!(
             baseline_save(&input, nonfile.to_str().unwrap())["error"],
+            "permission"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn baseline_save_keeps_malformed_values_as_invalid_input() {
+        let root = std::env::temp_dir().join(format!("buaa-marks-format-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let input = format!(r#"{{"policy":{} ,"courses":[]}}"#, TABLE_POLICY);
+        let path = root.join("baseline.json");
+
+        // A relative path is a malformed value, not an ownership failure.
+        assert_eq!(
+            baseline_save(&input, "relative/path.json")["error"],
+            "invalid_input"
+        );
+        // A path component beyond the filesystem name limit is malformed too.
+        let long_component = root.join("x".repeat(300));
+        assert_eq!(
+            baseline_save(&input, long_component.to_str().unwrap())["error"],
+            "invalid_input"
+        );
+        // A malformed stdin document stays an input error.
+        assert_eq!(
+            baseline_save("not json", path.to_str().unwrap())["error"],
+            "invalid_input"
+        );
+        assert_eq!(
+            baseline_save(
+                r#"{"policy":{"kind":"table"},"courses":[]}"#,
+                path.to_str().unwrap()
+            )["error"],
             "invalid_input"
         );
         let _ = fs::remove_dir_all(&root);
