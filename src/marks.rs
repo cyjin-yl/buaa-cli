@@ -796,7 +796,6 @@ mod tests {
         "c": 1600.0
     }"#;
 
-
     #[test]
     fn table_policy_computes_weighted_gpa_and_excludes_failures() {
         let input = format!(
