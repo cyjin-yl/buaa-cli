@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Record the merged exact-head safety/CLI verification separately from the
+  single governed classroom CAS callback 500. Authentication and
+  dependent online acceptance remain incomplete; retain the consumed arm,
+  safety latch and historical failures without automatic retry.
 - Match native CSS literal bounds, infinite Hypot/Log/Round domains and HSL /
   Display-P3 channel precision. The real login-form consumer now matches all
   1,940 bounded Chromium FormData observations, including signed zero, NaN,

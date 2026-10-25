@@ -3333,7 +3333,7 @@
               "fresh_complete_source_review": "pending_for_current_module_sha",
               "online_authentication": "not_yet_performed_for_current_module_sha"
             },
-            "latest_source_status": "Online authentication is NOT PASSED. The retained governed attempt on module 2ccfb0db reached SSO GET200, credential POST302 and classroom CAS callback500; no classroom session was established. Earlier unstarted-attempt and URL-cookie-cause claims are withdrawn. The original cookie grammar already admits colon and slash. Callback cause is undetermined; tickets are not replayed. Offline proof and review remain bound to their exact snapshots and do not certify login.",
+            "latest_source_status": "Online authentication is NOT PASSED. After exact-head review and offline proof, one deliberate governed attempt on module 0980d3e2 reached SSO GET200, credential POST302 and classroom CAS callback500; no session or positive application probe was established. The original callback body is missing and the cause remains undetermined. The known safety latch remains set, the one-shot arm is consumed and no request is pending. Earlier unstarted-attempt and URL-cookie-cause claims remain withdrawn. Offline proof and merged source reviews do not certify login.",
             "comprehensive_review_followup": {
               "reviewed_snapshot_sha256": "12d326a29a678f717fff2d7aa3cb8f13d575647724b92d98df20797fe48cc6eb",
               "review_verdict": "REQUEST_CHANGES",
@@ -3512,6 +3512,33 @@
               "resume_is_login_success": false,
               "diagnosis_scope": "fixed_label_inspection_facts_no_arbitrary_source_names_values_or_urls; shared_lease_through_body_and_DOM_processing; actual_challenges_and_HTTP401403_still_latch"
             },
+            "governed_attempt_and_integration_2026_10_26": {
+              "attempted_module_sha256": "0980d3e277fa3327b438f77369f0bd4d0f714b05397844ead514f461fcdadf29",
+              "authentication_invocations": 1,
+              "trail": ["sso_get_200", "credential_post_302", "classroom_cas_callback_500"],
+              "session_established": false,
+              "positive_application_probe": false,
+              "online_acceptance_passed": false,
+              "callback_failure_cause": "undetermined_original_response_not_retained",
+              "safety_latched": true,
+              "authentication_armed": false,
+              "request_pending": false,
+              "automatic_retry": false,
+              "ticket_replay": false,
+              "alternate_governor": false,
+              "merged_pull_requests": [125, 126, 127, 128],
+              "stack_number": 129,
+              "stack_open_after_integration": false,
+              "observed_main_commit": "004cf2f72953d48bdeed810582b482f398825144",
+              "observed_main_tree": "0d3750357ee403c1f82a7700aa3dba3abe7a0cb6",
+              "final_reviewed_source_head": "b0351ba20441bc2734a9d5d307b17378bb50a415",
+              "review": "Independent exact-head/base approval for every newly restacked layer; no surviving findings. Source review is not online acceptance.",
+              "native_ci": "Two successful GitHub App 15368 offline checks for each final exact head before merge; no bypass. Merge trees, ordered parents, PR states and actual main refs read back.",
+              "final_native_consumer": "Guarded original-runtime build and whole embedded manifest equality; actual CLI GPA schema/runtime boundaries, actionable errors and timestamps, catalog/search authorization, permission exit 5 versus JSON exit 2 and owner-only idempotent baseline saves passed. Source, binary and production governor stayed unchanged during this offline proof, with zero campus requests or authentication attempts.",
+              "historical_failures": "Intermediate schema-layer formatting failure repaired by a normal fast-forward append. Bounded linker allocation failure retained; subsequent arena-bounded build/test/Clippy gate passed. An invalid throwaway help-wording assertion was removed and only the remaining smoke resumed; it was not a product failure or a passing original assertion.",
+              "issue": "https://github.com/cyjin-yl/buaa-cli/issues/124",
+              "remaining": "Callback cause, fresh established session, ongoing live source, physical dual-player replay/live rendering and all-cue subtitle synchronization remain unaccepted. A new authentication invocation requires a separate deliberate admission, not an automatic retry."
+            },
             "absolute_math_lightness_document_followup": {
               "reviewed_snapshot_sha256": "f920d447cb9e85decdf741b15befe8c8b3a116edb1af51daf92ec073b4c2c561",
               "review_verdict": "REQUEST_CHANGES",
@@ -3597,10 +3624,10 @@
               "source_approval": false
             },
             "complete_native_gate": "passed_for_module_0980d3e2_540_library_19_cli_three_existing_ignored_before_evidence_update",
-            "complete_source_review": "pending_for_new_exact_publication_head; not_online_authentication_acceptance",
-            "online_authentication": "not_established_retained_credential_post302_then_callback500"
+            "complete_source_review": "approved_for_merged_root_680669c4_and_each_final_restacked_QA_head; evidence_only_followups_require_their_own_review; not_online_authentication_acceptance",
+            "online_authentication": "not_established_latest_module0980d3e2_credential_post302_then_callback500"
           },
-          "online_scope": "The retained governed attempt on module 2ccfb0db submitted credentials, received SSO302 and classroom CAS callback500, and established no classroom session. Failure cause is undetermined. Offline source gates, cached reads and deliberate resume do not prove authentication. Current source review and verification remain snapshot-bound; a fresh Agent must actually establish and use a governed session before online login acceptance. No callback ticket replay or alternate governor namespace is permitted. Credentials and private response values remain excluded from publication."
+          "online_scope": "The latest single deliberate governed attempt on module 0980d3e2 submitted credentials, received SSO302 and classroom CAS callback500, and established no classroom session. The original callback body is missing and the failure cause is undetermined. Offline source gates, merged source reviews, cached reads and deliberate resume do not prove authentication. A fresh Agent must actually establish and use a governed session before online login acceptance. No automatic retry, callback ticket replay or alternate governor namespace is permitted. Credentials and private response values remain excluded from publication."
         },
         "historical_observation": "Earlier candidates completed the SSO/forwarding flow and produced a privately stored platform cookie set. Successful receipts preceded independent findings in session admission, pacing, response lifetime and storage; they are not acceptance of the current hardened implementation.",
         "safety_repair": "Require a pinned credential target, challenge-free positive selected-lesson verification with no conflicting declared tenant, one attempt per deliberate resume, actual configured request gaps, durable numeric/date Retry-After and cancel-before-unlock response lifetime. Version-2 private storage preserves acquired Cookie scope, Path and absolute expiry, excludes sign-on cookies and filters each actual target URL; legacy flat files fail closed until deliberate authentication. No new authentication while admission is under repair.",
