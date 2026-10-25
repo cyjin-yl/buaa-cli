@@ -15,6 +15,29 @@ fn invoke(args: &[&str], input: &[u8]) -> Output {
 }
 
 #[test]
+fn timed_input_rejects_invalid_offsets_before_output_and_preserves_daily_boundary() {
+    for seconds in [
+        "-1",
+        "nope",
+        "1.1234567890",
+        "86400.000000001",
+        "999999999999999999999999999999",
+    ] {
+        let input = format!("[0]private-first\n[{seconds}]private-last");
+        let output = invoke(&["timed-input", "--dry-run"], input.as_bytes());
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+    }
+    let output = invoke(&["timed-input", "--dry-run"], b"[86400]boundary");
+    assert!(output.status.success());
+    let event: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(event["at_ns"], 86_400_000_000_000_u64);
+    assert_eq!(event["text"], "boundary");
+}
+
+#[test]
 fn invalid_late_input_emits_nothing_and_never_echoes_payload() {
     let output = invoke(
         &["timed-input", "--raw"],

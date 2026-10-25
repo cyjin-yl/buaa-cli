@@ -169,6 +169,13 @@ fn invalid_article() -> Error {
     )
 }
 
+fn invalid_document() -> Error {
+    Error::new(
+        "invalid_input",
+        "announcements document input is malformed; expected a JSON object with article_url naming a reviewed source-declared HTTPS SCSE article URL",
+    )
+}
+
 fn invalid_history() -> Error {
     Error::new(
         "invalid_input",

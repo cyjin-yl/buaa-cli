@@ -21,6 +21,9 @@
 - Keep bounded cookie-octet admission for URL-shaped values, which already
   permit colons and slashes. Login diagnostics reuse sanitized inspection
   facts and retain the shared governor lease through source parsing.
+- Clarify announcement-document input and college-source argument errors, and
+  distinguish malformed timed-input offsets from offsets exceeding 24 hours.
+  Unsupported school-8 major errors list the supported catalog majors.
 - Require explicit intervals for dimensional CSS `round`, preserve aligned
   values and signed-zero rounding/modulo results, and distinguish comments
   from the real whitespace required around additive math operators.

@@ -90,7 +90,10 @@ pub fn calculate(input: &str) -> Value {
         Err(_) => return invalid(),
     };
     if request.major.is_empty() || !SUPPORTED_MAJORS.contains(&request.major.as_str()) {
-        return invalid();
+        return json!({
+            "error":"invalid_input",
+            "message":format!("unsupported 2020 school-8 major; expected one of: {}", SUPPORTED_MAJORS.join(", "))
+        });
     }
     let catalog: Value = match serde_json::from_str(include_str!("credits_catalog.json")) {
         Ok(value) => value,
