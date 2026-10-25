@@ -30,6 +30,306 @@ adapters for ihome and department materials.
 
 ## Governed classroom session acquisition
 
+Online acceptance is **not passed**. The retained 2026-10-25 attempt on
+module `2ccfb0dbba267ede0f4b241ec8644494b6fd8c724ef10a7123ee1e0e34e3a10c`
+recorded initial SSO HTTP 200, credential POST HTTP 302, then classroom CAS
+callback HTTP 500. No classroom session or positive selected-lesson response
+was established. This supersedes earlier guesses that the attempt stopped
+before password submission; the sanitized attempt trail proves the POST.
+
+The asserted URL-cookie cause was incorrect: the original RFC 6265 octet
+ranges already allow colons and slashes. Synthetic Chromium acceptance of a
+URL-shaped value does not prove the CLI dropped it, nor explain callback 500.
+The unnecessary cookie grammar relaxation is withdrawn. The callback failure
+cause remains undetermined; a redirect alone does not verify account identity
+or application access. No callback ticket is replayed to recover missing
+response content.
+
+On a known safety latch, deliberate operator-authorized resume is required;
+the offline arming receipt is never login success. Existing cooldowns,
+Retry-After and scheduling floors remain effective. A fresh Agent must
+actually establish and use the session before login UX can pass acceptance.
+
+The isolated UID1000 offline gate for module
+`0980d3e277fa3327b438f77369f0bd4d0f714b05397844ead514f461fcdadf29`
+passed 129 focused session cases, 540 library cases and 19 CLI cases, with
+three existing workers ignored. Strict all-target Clippy, formatting, build,
+whole native capabilities equality and actual CLI authorization/secret-field
+refusals passed. Source and production governor bytes remained unchanged;
+this gate performed zero campus requests and zero authentication attempts.
+This gate preceded its evidence-only manifest update. The earlier scoped
+diagnosis/cookie review did not cover all root changes: a broader review found
+a missed challenge-only page and two nonfinite CSS arithmetic defects.
+The page regression failed before repair; two mathematical color regressions
+also failed after native Chromium150 FormData corroboration. All now pass.
+Challenge observations remain available when the credential form is refused,
+using one bounded DOM parse and the production settlement path for both
+credential-free readers. Independent approval of the exact publication head
+is a separate gate; this offline receipt provides neither that approval nor
+online acceptance or a callback failure cause.
+
+The subsequent full non-color review of head `5e7fe238` requested changes:
+redirected/unexpected HTML could conceal active challenges from settlement,
+non-successful authentication-kind inspection could misreport the retained
+latch, and an image's non-applicable `form` attribute could veto admission.
+All three targeted regressions failed before repair. Eight targeted offline
+regressions now pass, including existing MIME/shadow-root and table ownership
+boundaries. Native Chromium150 FormData also confirms the image behavior.
+Settlement now returns its actual durably saved latch under the same lease;
+no account-safety policy is weakened. Production governor bytes remain
+unchanged, with zero campus requests or authentication attempts. This focused
+receipt does not approve the source; a new full gate and exact-head review
+remain due.
+
+The broader native color oracle now contains 1,940 synthetic Chromium150
+FormData cases. Its initial comparison exposed 87 real mismatches; literal,
+Hypot/Log/Round and precision repairs reduced those to zero on module SHA
+`d78d3478886c5f0556d87cb186c498107b89ed49c1abefbe8f00ecf585a65134`.
+HSL uses the observed float32 conversion/quantization path; Display-P3 uses
+the observed XYZ D50 and inverse-transfer path rather than an idealized
+neutral-preserving matrix. A supplemental nonfinite batch exposed and fixed
+P3-specific NaN loss without changing other callers' parser policy; all
+thirteen permanent assertions pass. The review's pow-NaN and ideal P3-neutral claims
+were withdrawn after native contradiction; literal overflow remained valid.
+An intermediate percentage-multiplication candidate's 119 HSL failures are
+retained, not hidden. The final packet comparison passed with unchanged
+source/packet and production governor bytes and zero campus/authentication
+activity. Scoped independent review required removing its temporary comparison
+consumer and the obsolete decoder; both are removed without lint
+suppression. The first complete candidate passed its tests but failed strict
+Clippy `manual_clamp`; the expression was corrected without an exemption and
+the complete gate rerun passed. Fresh exact-head review remains; this is
+neither release approval nor online acceptance.
+
+Latest local follow-up (2026-10-25): the six reviewer10 findings were reproduced
+in the original UID1000 devcontainer: 83 session cases passed and six failed.
+Hidden `_charset_` now uses UTF-8; expired cookies cannot consume replacement
+creation positions or evict fresh sessions; range defaults and local decimal
+ties remain exact with distant bounds; foreign script/style descendants retain
+document ID membership; dirname directionality includes noscript without
+changing challenge/prose exclusion. All 89 session cases pass on module SHA
+`f0b3cae7618d4de73f67c18eed4e7d286527565f0651b9ce0fe9a8ea78d52a00`
+and shared HTML SHA
+`7dccb9d250cbbc5a25395a12b1c113c366f5d89e7d5f30e73380730c8f2bcc64`.
+The focused run held the shared heavy/Cargo locks, used the worktree-owned
+target, checked source stability and left production governor bytes unchanged.
+It made zero campus requests. Full current-source gate, fresh independent
+approval and governed authentication remain pending; no new session is claimed.
+The first full gate stopped at strict clippy `manual_contains` in the existing
+auto-dirname credential test, before complete tests or build. Candidate
+`e60722abe90c41576a04a9b72eeb58fc509a542f54d7f56dfd15518ab1a7a388`
+changes only that assertion to equivalent `contains`; its complete gate and
+independent review are separate from the earlier focused proof.
+After the formatter required that assertion on one line, module SHA
+`b8506ce46d6542354e6707020a6ef33c2296e09a4ff527b2759fc80e40514046`
+passed the complete original UID1000 gate: 500 library and 19 CLI cases, three
+existing ignored workers, strict all-target clippy, fmt check, offline build,
+actual native help/schema/refusal smoke and whole-manifest equality. Source
+and production governor bytes remained unchanged, with zero campus requests.
+Fresh exact-source independent approval and governed authentication remain
+pending; the previous Clippy/format refusals remain retained.
+That exact b8506ce4 source then received REQUEST_CHANGES for modern HSL/HWB
+channels and hard-wrap textareas. Native Chromium150 about:blank FormData
+confirmed modern numeric channels, unbounded HWB ratios and width-dependent
+textarea breaks. It contradicted the review's modern-HSL saturation example:
+both modern and legacy `hsl(15 200% 50%)` spellings retain `#ff4000`, not the
+claimed `#ff0000`; that clipping was not changed. Three new regressions failed
+before repair (89 passed), then all 92 session cases passed on module SHA
+`f920d447cb9e85decdf741b15befe8c8b3a116edb1af51daf92ec073b4c2c561`.
+Nonempty hard-wrap textareas now require interaction review instead of guessed
+submission values. Governor/source bytes stayed stable and campus requests
+were zero. The f920d447 snapshot subsequently passed its own complete native
+gate: 503 library and 19 CLI cases, three existing ignored workers, strict
+clippy, formatting, build, native CLI smoke and complete manifest equality.
+That is not independent approval: the exact-source reviews requested changes
+for absolute CSS math channels, Lab-family lightness clipping, XHTML parsed
+under HTML rules and unsupported declarative shadow roots. Native Chromium150
+confirmed all four differences without campus access. Four consumer regressions
+then failed on the reviewed implementation (92 passed, four failed). The
+integrated repair passes all 98 session cases on module SHA
+`eb3710e4481e3dbfc5794204ce0d4c7c61ba059d3663183b89ef35497b836f5d`,
+including native constant/non-finite math boundaries. Earlier integration
+syntax and legacy comma-field failures remain retained. The passing run held
+the shared heavy/Cargo locks, verified stable source and unchanged governor,
+and made zero campus requests. This changed source still requires its complete
+gate and independent approval before the prepared one-shot authentication
+operation can run.
+The subsequent c59eeccf snapshot passed its complete gate (509 library and
+19 CLI cases, three existing ignored workers), but independent review still
+requested math-domain/token/EOF corrections and parent-only optgroup
+disabledness. Synthetic Chromium confirmed six repair groups and rejected the
+review's percentage-atan2 example: that color remains invalid/black in the
+observed browser. Six new regressions failed before repair (98 passed), then
+all 104 session cases passed on module SHA
+`51236e457683760030a4475057df092b0ea6fb9a7260014db5ed947f3156ad94`.
+Source/governor stayed stable and campus requests were zero. This newer module
+then passed its own complete gate: 515 library and 19 CLI cases, three existing
+ignored workers, strict Clippy, formatting, build and native CLI refusal smoke.
+The embedded capabilities manifest matched the complete current manifest.
+Complete scoped review of that source returned REQUEST_CHANGES: four math
+boundaries (dimensional default round intervals, rounding/modulo signed zero,
+and comment-versus-additive-whitespace syntax) and four form-admission
+boundaries (submitter overrides, active document bases, effective encoding,
+and parser-associated nonancestor controls). Synthetic Chromium150 confirmed
+all eight. The last case requires an active browsing context: iframe srcdoc
+includes the table-associated hidden field, while inactive DOMParser omits it.
+Neither observation is substituted for the other. Repairs and a new exact-source
+gate/review were required. Eight new regressions produced 104 passed/eight
+failed before repair, then all 112 session cases passed on module
+`b94577fe768766d780b1e0fc096e33151dd569fa905c99240a4a94155256f31d`.
+The repair refuses unsupported source metadata and all relevant table insertion
+containers while retaining ordinary cell/caption forms and explicit external
+controls. Native boundary observations also confirm nearest-rounding exact
+multiples and near-half values, plus leading/trailing functional-color comments.
+Source and production governor stayed unchanged during the focused proof;
+campus/authentication counts remain zero. The new complete gate passed 523
+library and 19 CLI cases, with three existing ignored workers, strict Clippy,
+format check, explicit build, native CLI refusal smoke and whole-manifest
+equality. Independent review remains pending and the prepared authentication
+remains unstarted. [Issue #124](https://github.com/cyjin-yl/buaa-cli/issues/124)
+tracks the owned publication and still-unverified online acceptance; creating
+the issue is not a session or merge claim.
+
+A newly authorized original-runtime attempt on 2026-10-23 stopped with
+`unreviewed_login_interaction` after exactly one initial SSO HTTP 200. The
+inspected code path and retained trail place refusal before password submission;
+no session was stored. This is not evidence of a wrong password or a confirmed
+CAPTCHA. The original latch is retained and the response did not identify the
+rejected control. The new `recordings session inspect --online` entrypoint
+therefore exposes bounded, value-free first-rejection metadata through the same
+governor without submitting credentials. Its 26 session tests and original
+UID1000 build passed, and native help/schema/manifest plus invalid-input CLI
+smoke left production governor bytes unchanged. Its online read and the complete
+current-source gate remain separate, not-yet-claimed observations.
+Independent transport/lease and HTML/metadata privacy source reviews reported
+no concrete findings; these are not exact-head publication approvals. The full
+gate's first admission returned global heavy-slot busy exit 75 before execution.
+The shared lock is preserved, and no second instance or lock bypass is used.
+After that holder released the slot, the diagnostic-only source passed strict
+all-target clippy, fmt check, offline build, 436 library and 19 CLI cases (three
+existing library workers ignored), complete native manifest readback and exact
+source/governor stability. One deliberately authorized, credential-free initial
+page inspection then returned HTTP 200: its first rejected control was an inert,
+non-required text input named `type`, with no response or active-control
+challenge signal. Zero passwords were submitted and the latch remained set.
+The follow-on repair recognizes only existing noninteractive POST protocol
+fields with reviewed values; that newer source requires fresh proof and review.
+A complete hash-bound independent review of the first protocol representation
+repair found that the conservative challenge-visibility predicate was unsafe
+as positive admission evidence for malformed or overridden CSS. A focused
+offline regression reproduced the failure before repair and passed afterward.
+That intermediate own-inline-style repair passed a complete offline gate but
+its full-source review found further CSS bypasses: challenge buttons and a
+stylesheet `!important` override. Both were reproduced before repair. The
+intermediate exception required the protocol control's own `inert` attribute; CSS
+cannot prove this exception, and uncertain marked challenge controls require
+review even when button-like inputs would otherwise be allowed. The same
+review found cookie deletion suppressed by invalid Expires and credential-bearing
+redirect paths in receipts. Both are repaired with seeded-cookie and actual
+receipt readback regressions. That intermediate source passed all 31 session
+cases and a full 441-library/19-CLI offline gate, but its hash-bound review
+found label-only challenge actions, RFC cookie-date deletion, and query-key
+credential retention. All three were reproduced before repair (four failing
+cases). That intermediate source passed all 34 session cases, including split-node
+labels, calendar-invalid deletion refusal and actual receipt byte readback.
+Its 444-library/19-CLI gate passed after an equivalent test-only Clippy assertion
+correction, but the complete-source review found three further edges: input
+caption whitespace, negative Max-Age underflow and source-controlled names in
+ordinary output. Four regressions failed before repair (34 passed), then all
+38 session cases passed. The repaired source passed a complete 448-library/19-CLI
+offline gate with three existing ignored workers, strict clippy, fmt check,
+native build, equal whole manifest and stable source/governor bytes. A fresh
+complete-module and shared-dependency-excerpt review approved that exact source
+snapshot with no findings; this is not an exact-head publication approval.
+
+One subsequent deliberately authorized, credential-free initial-page read
+returned HTTP 200 and 11,403 bytes. It still required interaction review for a
+non-required text input labelled `type`, with its inline-hidden/inert summary
+flag true and no response or active-control challenge signal. That summary
+does not prove the control's own `inert` attribute or reveal its value. No
+password was submitted or session stored, and the safety latch remained set.
+The inspection command is exercised online; admission of the actual login form
+and positive selected-lesson authentication remain unfinished implementation
+work, not evidence of a wrong password or confirmed CAPTCHA.
+
+The follow-on diagnostic source adds only `own_inert` and
+`reviewed_protocol_value` booleans to explain that refusal without returning
+values or changing admission. It passed 39 session cases and a complete
+449-library/19-CLI offline gate. Its complete source review then found arbitrary
+MIME-subtype retention in inspection output. A serialized-output regression
+failed before the MIME projection repair (39 passed, one failed); all 40
+session cases passed. The MIME repair maps recognized types to fixed labels
+and everything else to null. That exact MIME source then passed the full
+450-library/19-CLI native offline gate (three existing ignored workers), strict
+clippy, fmt check, build, whole-manifest equality and source/governor stability.
+A complete hash-bound source review approved that snapshot with zero findings.
+Its one deliberate credential-free online read returned HTTP 200/11,403 bytes:
+the first refused `type` text input had `own_inert=false` and
+`reviewed_protocol_value=true`, without response or active-control challenge
+signals. No password was submitted and the latch remained set.
+
+The operator subsequently authorized all ordinary source-form fields, replacing
+the inert-only protocol exception rather than adding another type-specific
+exception. The current implementation collects successful source controls,
+preserves names/values/order and duplicate noncredential names, and overrides
+only the protected username/password values. Action/method live outside the
+field namespace; no protocol defaults, page-script execution, local-file reads
+or automatic choice/consent are added. Challenge signals, credential-role
+integrity, the pinned SSO destination, one deliberate authentication attempt,
+production governor spacing and fresh selected-lesson verification still gate
+the flow. The first general-field snapshot passed 41 session cases and a full
+451-library/19-CLI native gate with three existing ignored workers, strict
+clippy, fmt, build, whole-manifest equality and stable source/governor bytes.
+Its independent complete-source review requested four concrete repairs:
+associated challenge labels, first-document-ID form ownership, listbox default
+choices and radio-group source checkedness. Actual Chromium FormData/ownership
+observations corroborated the choice/ownership behavior. All four new regression
+groups failed before repair (41 passed), then all 45 session cases passed after
+repair with unchanged governor bytes and zero campus requests. The repaired
+source shares one owner resolver across selection/collection, treats associated
+challenge labels as interaction review without exposing text, and never invents
+a listbox choice or submits an obsolete radio. Its complete native gate, fresh
+source review and one governed authentication remain separate pending gates;
+the earlier passing snapshot was not approved. The next complete-source review
+found one further boundary: an absent or non-HTML initial response MIME could
+still be parsed as a login form. Its regression failed before repair (45 passed,
+one failed). Authentication and inspection now share the fixed MIME-label
+projection and require HTML/XHTML before form parsing; inspection otherwise
+returns only safe metadata with `unexpected_login_content_type`. All 46 session
+cases passed after repair with unchanged governor bytes and zero campus
+requests. The following complete-source review found that final-response
+analysis still required the original credential/execution form, allowing a
+secondary label-only challenge to disappear into a default result. It also
+found that an empty Set-Cookie value retained the previous token. Two consumer
+regressions failed before repair (46 passed), then all 48 session cases passed
+after repair. Final-response scanning now covers controls and associated labels
+without requiring a credential form, keeps a separate remaining-password veto,
+and refuses analysis errors. Empty cookies replace the old value and round-trip
+through actual request headers and private storage; Max-Age deletion is unchanged.
+The governor remained byte-identical and no campus requests occurred. That
+48-case source then passed the full 458-library/19-CLI native gate (three ignored
+workers), strict clippy, fmt, build, actual inspection-refusal CLI smoke,
+whole-manifest equality and source/governor stability. Its fresh complete-source
+review requested three further repairs: canonical cookie identity across
+host-only/Domain transitions, final-password detection independent of disabled
+submission state, and review-only classification of auxiliary label cues.
+The next complete-source review found five more boundaries: HTML-typed lesson
+probes were not scanned for embedded active challenges, `one-time-code` was
+not reviewed, initial input value attributes did not always equal Chromium's
+FormData values, and cookie headers lacked path-priority/stable replacement
+ordering. It also claimed datalist descendants were not successful controls;
+an isolated Chromium `FormData` observation included them, including a password
+input, so that proposed filter was not applied. The other four findings failed
+before repair (51 passed, 4 failed); the current 55 session cases now pass.
+Probe challenge checks precede lesson-ID admission; OTP is review-only; input
+defaults/sanitization follow the covered Chromium cases; cookies use longest
+matching path first and stable creation order. Governor bytes stayed unchanged
+and campus requests remained zero. The full native gate, fresh complete-source
+review and actual authentication for this exact SHA remain pending; no password
+has been submitted under the new field contract.
+
+The next exact-source review (module SHA `0c2a08004e4071d8804448821f75a917c7fa27c5d07913706d7488657d1cf3a1`) found three additional defects: hidden-value line breaks were sanitized, CSS color functions accepted extra components, and the body-text veto omitted supported verification markers such as `校验码`. The attempted full native gate stopped at strict clippy (`question_mark`, exit 101) before running tests. Chromium FormData separately confirmed hidden values retain LF and malformed RGB/HSL/color-space functions default to black. The code now preserves hidden values, validates exact CSS component/alpha shape, tightens number/time value syntax and shares the full challenge-marker vocabulary with the response veto. All 56 session cases passed on source SHA `5738e8c6831831845ae5059fb50651668354e9678c12dfe98a42e36eec255550`. That exact source subsequently passed the full native gate (466 library, 19 CLI, 3 ignored workers; strict clippy, fmt, build, whole-manifest equality, stable source/governor and zero campus requests), but its fresh review found two more reachable mismatches: CSS function token whitespace/uppercase hue units, and split-node active text. Both are fixed. The current 57 session cases pass on module SHA `7cc8d3f0a5883dd12f83c10bae23214475ff28495c8d58f098edc79e67b920bd`, with stable source, unchanged governor bytes and zero campus requests. Its complete native gate, fresh complete-source approval and one deliberate governed authentication remain pending.
+
 `buaa recordings session --offline` deliberately arms one authentication
 attempt without network access. `--online` receives authorization, the
 credential, the exact typed intent and an explicit selected-lesson
@@ -43,7 +343,8 @@ Positive selected-lesson application confirmation is not independent proof of
 account identity, media rights or course completion. `recordings subtitles
 --online` accepts the stored reference as `session_ref` instead of an
 operator-pasted cookie. Exactly one of `cookie` or `session_ref` is required.
-Stored version-2 sessions retain acquired cookie scope, Path and expiry and
+Stored version-3 sessions retain acquired cookie scope, declared identity
+domain, Path and expiry and
 filter each actual API URL; old flattened files require deliberate authentication.
 The hardened source passed strict all-target clippy, an explicit locked
 offline build, 432 library cases and 19 CLI cases with three worker entries
@@ -1345,3 +1646,15 @@ Document eligibility re-review additionally covered HTML legacy comments, CR/LF/
 ## Maintainer-authorized independent exact-decimal review fix
 
 Fresh reviewer ReviewCredits found that f64 deserialization could round 1.99999999999999999 into a valid two-credit witness. Credit JSON tokens are now retained with serde_json raw_value and converted to checked integer hundredths before floating-point conversion; no rounding is used for input classification or course identity. Actual CLI rejects that token (exit 2), accepts exact 0.29, 200e-2, 2.000000000000000000000000, 1e2 and 1e-2, and rejects 100.01. The source remains an operator-asserted community reference, not graduation certification. Updated exact-head review is required.
+
+## 2026-10-24: universal classroom form final admission
+
+Historical exact-source gate `5738e8c6831831845ae5059fb50651668354e9678c12dfe98a42e36eec255550` passed 466 library/19 CLI cases, strict clippy, fmt, build, manifest equality and source/governor stability, but its fresh review found CSS token and split-text gaps. The next exact-source gate `7cc8d3f0a5883dd12f83c10bae23214475ff28495c8d58f098edc79e67b920bd` passed 467 library/19 CLI cases, then failed independent review on template-owned credential fields, cross-form interaction controls and raw-source vetoes from inert payloads. Those findings are fixed: template/script/style/noscript descendants cannot establish credentials or enter selected-form payloads; active challenge controls and labels are checked across the page while payload remains selected-form-only; final/probe text vetoes use one active DOM text walk and exclude inert code/template payloads. Datalist descendants and ordinary inert-attribute values remain forwarded in accordance with the observed Chromium FormData contract. The `none%` alpha spelling is refused.
+
+The current module SHA `d58ed3f6ecb3eb156ffb43ae487960352d0da977bc690bebe0909ddb8ebed722` passes 58 session-focused cases with formatter, stable source, unchanged production governor and zero campus requests. Its full native gate and fresh complete-source approval remain pending, followed by the prepared single governed online authentication. No password has been submitted under this source contract.
+
+## 2026-10-24: bounded form/parser and Cookie contract
+
+Independent review of SHA `12d326a29a678f717fff2d7aa3cb8f13d575647724b92d98df20797fe48cc6eb` found template-option, range step-base, date/URL/datetime normalization, CSS color syntax, request-body CRLF, Cookie quoting/prefix, DOM-work, raw-error-text and MIME interpretation gaps. The current source applies exact browser-observed form defaults and wire normalization, excludes template-derived successful values while preserving datalist/inert-attribute entries, enforces cookie prefix flags/provenance and quoted values, and bounds DOM/text subtrees before submission. Failure classification and challenge vetoes now derive only from active DOM text facts; final JSON is not interpreted as embedded HTML. This SHA `f3f559000fdb2b535a0a1f6c089760dec67116cd11b7cbd23ea423665432d3f4` passes 65 focused session tests with stable source, unchanged governor and zero campus requests. A full native gate and fresh complete-source review remain pending; authenticated online confirmation has not yet run.
+
+Later, that exact SHA passed a full native gate (468 library, 19 CLI, three ignored workers; strict clippy/fmt/build, manifest equality and stable source/governor, zero campus requests). Its fresh review found that initial credential pages did not scan text-only active markers before POST. The current source applies the same review-only predicate to the initial page and exposes it in inspection without reporting an active challenge. SHA `12d326a29a678f717fff2d7aa3cb8f13d575647724b92d98df20797fe48cc6eb` passes all 59 session cases with stable source and unchanged governor. Its complete native gate, fresh complete-source approval and one deliberate governed authentication remain pending; no password has been submitted under the new contract.

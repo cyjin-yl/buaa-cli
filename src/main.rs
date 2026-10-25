@@ -45,6 +45,7 @@ fn service_error(error: buaa_cli::net::Error) -> CliError {
         "invalid_input" => ("invalid_input", 2),
         "unsupported" | "redirect_refused" | "unsupported_encoding" => ("unsupported", 3),
         "auth_latched" | "safety_latched" => ("auth_latched", 4),
+        "authorization_required" => ("authorization_required", 4),
         "permission" | "robots_denied" | "egress_denied" => ("permission", 5),
         "rate_limited" | "cooldown" | "request_gap" => ("rate_limited", 8),
         "unknown_outcome" => ("unknown_outcome", 9),
@@ -397,9 +398,9 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings media --online", "recordings subtitles [--online|--refresh]", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements/spoc/recordings subtitles --online or --refresh; recordings session/media --online; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
-            "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting"
+            "help": "timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting. A latched account is cleared by one explicit 'recordings session --offline' with intent 'RESUME CLASSROOM AUTH', which arms exactly one attempt, not a verified login; 'recordings session diagnose --online' submits no credential, while actual challenges and HTTP 401/403 retain safety latching."
         })),
         "capabilities" if args.len() == 1 => {
             let matrix: Value = serde_json::from_str(MATRIX)
@@ -435,7 +436,7 @@ fn run() -> CliResult {
                 "capabilities":{"stdout":"single JSON acceptance manifest; pending/deferred entries are not available commands"}
             },
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
-                "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
+            "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"authorization_required":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
             "network_policy":{"default":"offline","opt_in":"archive/organizations/announcements/spoc/recordings subtitles --online or --refresh; recordings session/media --online; fengrubei fetch --online; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
@@ -490,6 +491,28 @@ fn run() -> CliResult {
         "recordings" if args.len() == 2 && args[1] == "replay" => {
             let mut input = read_input()?;
             let output = buaa_cli::recordings::replay::replay(&input);
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
+        }
+        "recordings"
+            if args.len() == 4
+                && args[1] == "session"
+                && args[2] == "inspect"
+                && args[3] == "--online" =>
+        {
+            let mut input = read_input()?;
+            let output = buaa_cli::recordings::session::inspect(&input);
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
+        }
+        "recordings"
+            if args.len() == 4
+                && args[1] == "session"
+                && args[2] == "diagnose"
+                && args[3] == "--online" =>
+        {
+            let mut input = read_input()?;
+            let output = buaa_cli::recordings::session::diagnose(&input);
             input.zeroize();
             emit(&output.map_err(service_error)?)
         }

@@ -78,6 +78,73 @@ session or media transport safety; full originals and digests stay private.
 `RESUME CLASSROOM AUTH` and arms one deliberate authentication attempt without
 network I/O. It never clears request reservations, server cooldowns or unknown
 outcomes. A failed attempt is not authorization to rearm automatically.
+After a latched account, this explicit resume is the only way to arm another
+attempt. An offline arm is not an authentication success: it neither submits a
+credential nor establishes a session, and it does not by itself mean that the
+account can log in.
+
+`buaa recordings session diagnose --online` is a credential-free, read-only
+report of why the reviewed login page is refused. It sends no credential and
+stores no session. A clean response is not treated as credential rejection;
+real challenge signals and HTTP 401/403 still latch through the shared
+governor. The lease remains held through body and DOM processing. Output uses
+fixed-label inspection facts and fallback/interaction reasons, never arbitrary
+source names, action URLs, response URLs or field values.
+The top-level `active_challenge_control` is a page observation, independent of
+credential-form admission. It can be true while `form` is null and
+`fallback_reason` is `login_form_not_admitted`; both read-only readers still
+latch that confirmed active challenge. One bounded DOM parse supplies form
+and page facts. A refused source is not a claim that no challenge exists.
+This observation also applies to redirected, unexpected-URL and non-200 HTML
+responses: `fallback_reason` remains `unexpected_login_response`, but an
+admitted active challenge still latches and no credential form is admitted.
+MIME, DOM-budget and unsupported-shadow-root refusals remain in force.
+`safety_latched` reports the latch actually saved at settlement while the
+shared lease is exclusive. In particular, a challenge-free HTTP 500 retains
+an inspection's consumed authentication latch, while an interactive diagnosis
+does not manufacture an authentication failure or latch.
+
+A refused request names the next action instead of a generic refusal. An
+unarmed attempt reports that no attempt is armed and that the explicit resume
+must run first; a latched account reports the same; a cooldown or a scheduling
+gap reports which interval has not elapsed.
+
+`buaa recordings session inspect --online` is a separate, deliberate read-only
+investigation. Its stdin object contains only `authorized: true` and the exact
+intent `INSPECT CLASSROOM LOGIN`; credential fields are rejected. It requires
+an explicitly armed authentication lease, never arms one itself, and consumes
+that lease using the same pinned initial SSO URL, bounded GET redirect chain,
+request spacing and Retry-After processing. No password is submitted and no
+session is stored. Inspection makes no credential judgment, so it reports the
+observed response instead of asserting a rejection. Clean responses do not
+latch the account; actual challenges and HTTP 401/403 retain normal shared
+governor handling. An
+`inspected` result is not authentication success or permission to retry login.
+The output reports HTTP/MIME/byte-count facts and static form analysis: the
+first rejected control's fixed protocol-name label (`username`, `password`,
+`type`, `execution`, `_eventId` or `submit`), `redacted` for any other present
+name, or null for an absent name. Tag and input type are enumerated; required,
+checked, inline-hidden/inert, own-`inert`, reviewed-protocol-value-match and
+challenge-marker fields are booleans. A reviewed value match is diagnostic
+only: ordinary source fields do not require a reviewed value, CSS hiding or
+their own `inert` attribute. Challenge and credential-integrity gates remain
+separate. Field values are never returned. Missing or
+wrongly typed credential controls have separate reasons. Identifier syntax
+does not make an arbitrary source-controlled name safe to print. No action URL,
+execution value, Cookie, ticket or raw authentication HTML is returned. A non-admitted page
+returns a `fallback_reason` with safe response metadata instead of exposing
+authentication bytes. Static HTML analysis is not browser-rendered visibility.
+MIME metadata uses fixed labels for recognized HTML, XHTML, JSON, plain-text
+and binary types; unrecognized types are null. Arbitrary MIME subtypes or
+parameters are not copied into output, even when their characters look valid.
+Only explicit `text/html` permits login-form parsing. XHTML is not parsed under
+HTML semantics: self-closing XML elements can change which controls are active.
+Missing or other MIME types return safe response facts with
+`fallback_reason: unexpected_login_content_type`, even if their body resembles
+a form. The same boundary applies before any credential POST.
+Potential active declarative shadow-root templates also refuse document
+admission before extracting form or challenge facts. Unsupported shadow-tree
+semantics are interaction-review refusals, not confirmed CAPTCHA evidence.
 
 `buaa recordings session --online` accepts `authorized`, `username`,
 `password`, the exact `LOGIN <username> classroom` intent, and
@@ -88,33 +155,200 @@ cannot choose another credential target. Every hop remains subject to the
 production governor's configured request gap and durable Retry-After policy.
 Challenge signals, unreadable bodies and unsuccessful application responses
 never establish a session.
-Before the credential POST, an additional enabled input, select or textarea
-outside the reviewed username/password interaction stops the flow as an
-unreviewed-interaction safety refusal; it is not mislabeled as a confirmed
-CAPTCHA challenge. An inert hidden CAPTCHA container alone is not a challenge
-control. A later server response is classified separately and does not imply
-that a password was or was not submitted.
-Confirmed challenge classification requires a response challenge signal or an
-active, enabled challenge control in the reviewed form. Raw response text that
-mentions CAPTCHA or verification vocabulary can prevent session admission, but
-does not by itself assert an interactive challenge.
+Before the credential POST, collect the selected form's successful source
+controls, including ordinary unknown names, text inputs, selects and textareas.
+Preserve source names, values, order and duplicate noncredential names; replace
+only the unique username/password values with the protected operator input.
+Ordinary fields need no name/type/value allowlist, `inert` attribute or CSS
+visibility exception. Do not invent protocol values, check unchecked choices,
+read local files or execute page scripts. Form action and method are separate
+metadata, never magic field names: source fields such as `__action` remain data
+and cannot override the pinned HTTPS POST destination.
+An active HTML `base[href]` requires review rather than silently resolving the
+action against the response URL. The selected source submitter must not carry
+`formaction`, `formmethod`, or `formenctype` overrides. Multipart and plain-text
+form encodings are unsupported and refuse admission before credential POST;
+default and explicit URL-encoded forms retain the existing wire encoding.
+Inert template content and foreign-namespace base lookalikes do not select a
+document base.
+Challenge-marked controls and ambiguous credential roles still stop the flow;
+interaction review is not mislabeled as a confirmed CAPTCHA. An inert hidden
+CAPTCHA container alone is not an active challenge control. A later server
+response is classified separately and does not imply that a password was or
+was not submitted. A confirmed response challenge header remains the returned
+challenge classification if MIME/body parsing fails and takes precedence over
+review-only text on an HTML identity probe. Confirmed challenge classification
+requires a response
+challenge signal or an active, enabled challenge control anywhere on the
+active page, not only inside the selected credential form. Active HTML text
+matching a challenge marker can veto session admission, but does not by itself
+assert an interactive challenge; script/style/template/noscript payloads are
+excluded from the parsed-text veto. The same marker scan runs on the initial
+login form before any password POST; inspection reports review required without
+claiming an active challenge. Inspection reports
+`interaction_review_required=true` and
+`active_challenge_control=false` for text-only markers; no control text is
+invented or returned.
 The scan follows explicit HTML `form` associations, including controls outside
 the form element, and does not require a control to have a `name`.
-Only one username text input and one password input of the reviewed password
-type are exempt; duplicate names or changed credential-control types stop the
-flow rather than silently omitting an extra interaction.
+An explicit form reference resolves the first document-tree element with that
+ID after parser reparenting; a non-form element blocks association with a later
+same-ID form. Successful-control entries follow document-tree order after
+parser reparenting; radio-group membership separately follows the final
+source-checked member. Candidate selection, credential checks and field
+collection share the selected form owner. Multiple matching reviewed login
+submitters are ambiguous and fail closed. Challenge/interaction checks scan all
+active page controls, including controls owned by another form; a second form
+cannot hide an active prompt.
+Forms and controls inside script/style payloads or HTML template/noscript
+contents are excluded from credential role discovery and successful-field
+submission. Form owners and recognized controls must be in the HTML namespace.
+Foreign SVG `<form>` elements cannot own credentials; a foreign first-ID
+element still blocks a later HTML form from an explicit form reference. SVG
+`<template>` and `<noscript>` lookalikes do not create HTML inert subtrees, so
+their HTML `foreignObject` controls remain active. Without an explicit
+reference, the nearest ancestor HTML form owns a control.
+Forms parsed directly inside table insertion containers (`table`, `tbody`,
+`thead`, `tfoot`, `tr`, or `colgroup`) require review: the HTML parser can
+associate controls outside their ancestor subtree, and the static tree sink
+does not retain those associations. No missing entry is silently fabricated or
+discarded. Ordinary forms inside `td` or `caption`, including their explicit
+external controls, remain supported. Active Chromium iframe parsing, not
+inactive DOMParser, supplies the oracle for these parser-associated owners.
+Document IDs under foreign script/style remain association blockers even
+though those payloads are not active prose. HTML template contents are separate
+from document ID lookup; the template element itself remains a document node.
+Require one username text input and one password input of the reviewed password
+type. Duplicate credential names or changed credential-control types stop the
+flow rather than silently choosing a credential control; ordinary fields do
+not inherit or replace either credential role.
 Disabled fieldsets disable their descendant controls except those inside the
 fieldset's first legend. Nested fieldsets retain their own disabledness; a
-later legend does not exempt a credential or additional interaction control.
+later legend does not exempt a disabled credential control. Checked
+checkboxes, the final source-checked radio in each owned named group, selected
+options, textarea contents and the selected source login submitter contribute
+their source values. A later checked disabled radio clears an earlier checked
+group member but is not itself submitted. A single-select listbox larger than
+one row makes no implicit choice; ordinary one-row selects retain their source
+values. Disabled, unchecked and nonselected controls do not contribute values.
+Options in script/style payloads or HTML template/noscript descendants do not
+create selected values or authorize a nonempty execution token; option-text
+fallback omits those inert payloads. The submit wire body normalizes CR, LF and
+CRLF in every successful field name and value to CRLF before url-encoding.
+
+An implicit wrapping-label association selects the first live HTML labelable
+descendant; HTML-inert template descendants cannot steal the association, while
+ordinary disabled, hidden or `inert`-attribute controls retain their native
+position in the search order. Successful controls with a nonempty `dirname`
+append its direction entry immediately after the primary value. Direction is
+resolved from explicit/inherited `dir` state or the first Unicode Bidi_Class
+`L`, `AL` or `R` value for `dir="auto"`; the telephone state defaults to LTR
+when `dir` is absent. Companion names and values count against the same field
+and byte budgets. A companion named `username` or `password` requires explicit
+interaction review and cannot replace protected credentials.
+Contained-text directionality includes noscript text, unlike the intentional
+noscript exclusion in challenge and source-prose scanning.
+Initial input values retain browser submission semantics instead of blindly
+copying the `value` attribute: text/email/URL line-break normalization, email
+trimming, URL whitespace trimming, number/date/time invalid-value sanitization,
+datetime-local canonicalization, range defaults/clamping/decimal step-base
+rounding with positive-direction ties and canonical value serialization, and
+CSS color names and hex, RGB/HSL/HWB, Lab/LCH, OKLab/OKLCH, and the supported
+`color()` spaces (sRGB, sRGB-linear, Display-P3, A98 RGB, ProPhoto RGB, Rec. 2020
+and XYZ D50/D65) are covered by source fixtures. Textarea line endings are
+normalized to CRLF.
+Modern HSL/HWB numeric channels use percentage-reference units; legacy comma
+HSL still requires percentages. HWB normalization retains the original
+non-negative white/black ratio above 100%. HSL retains the upper clipping
+observed in actual Chromium FormData. A named successful, nonempty textarea
+with `wrap="hard"` requires interaction review: rendered widths can produce
+different submission breaks for identical `cols` and source text. The static
+reader neither guesses these breaks nor forwards the unwrapped value. Empty
+hard-wrap textareas remain layout-independent; disabled controls stay excluded.
+Range step calculations retain the default midpoint in decimal arithmetic and
+compute local decimal quotient/remainder without scaling a distant bound.
+Candidates undergo one binary64 conversion; overflow-safe local/global
+arithmetic remains available for values outside the bounded decimal domain. If no
+bounded candidate can be computed, login-form parsing refuses instead of
+forwarding an unaligned source value. Chromium range FormData serialization
+uses the locally observed 15-significant-digit boundary independently of the
+step calculation.
+Hidden-control values retain source line breaks, except ASCII-case-insensitive
+`_charset_` entries, whose value is the serializer's UTF-8 encoding name.
+RGB/HSL/color-space functions
+have CSS comments removed before channel/alpha parsing, must contain exactly
+three channels and an optional valid alpha, and reject malformed extra
+components to the browser's default color value. Comment token boundaries do
+not manufacture the actual whitespace required around binary math `+` and `-`.
+Dimensional `round` arguments require an explicit same-unit interval; numeric
+arguments retain the default interval. Aligned values and negative zero survive
+nearest rounding, and a zero `mod` result takes the divisor's sign.
+Number trailing-dot
+values and time values with an empty or overlong fractional part are sanitized
+to empty.
+An isolated Chromium `FormData` oracle confirmed these expected values. It also
+confirmed that datalist descendant controls are included in its form entries;
+they remain source-forwarded rather than being filtered by a stricter but
+incorrect assumption.
+Existing protocol fields, including `type`,
+`execution` and `_eventId`, use this same source-forwarding contract rather
+than a special inert-text exception. A nonempty execution token and unique,
+correctly typed credential roles remain required before any password POST.
+Challenge-marked buttons and submit/button/reset inputs cannot evade both
+refusal gates through malformed, conflicting or stylesheet-overridden CSS.
+Without structural inertness, uncertain visibility requires operator review.
+Associated `label[for]` and wrapping-label active text, button text (including
+split inline nodes), and submit/button/reset value labels are also checked
+transiently for supported challenge markers, ignoring Unicode
+whitespace consistently in both representations without copying input values.
+Label-only matches
+require interaction review, not a claim that CAPTCHA was independently confirmed;
+neither label text nor input values enter the diagnostic metadata.
+The same review-only rule applies to `aria-label`, `placeholder` and `title`
+cue text; these attributes alone never confirm an active challenge.
+An active `autocomplete="one-time-code"` cue likewise requires operator review
+without being classified as a confirmed CAPTCHA. Hidden inputs are not treated
+as interactive OTP prompts.
+
+After the credential POST, scan all final-response controls and associated
+labels independently of the original credential/execution form. A secondary
+challenge must stop the flow even when that form has disappeared; a normal
+application page need not contain any login form. Password-bearing controls
+outside structurally inert content, including disabled or unnamed password
+inputs, still veto session admission independently of submission eligibility.
+A final-response analysis error stops and settles the attempt instead of being
+treated as an empty, challenge-free page. This scan does not build a second
+submission payload or apply the login payload's field-count limit to the app.
+When the fresh lesson probe is labeled HTML, it receives the same
+interaction/password scan before lesson IDs can admit a session. XHTML is
+refused as unsupported; the declared JSON MIME path is not reinterpreted as
+embedded HTML.
+Text-only response evidence matching any supported challenge marker also vetoes
+admission, including `校验码`; text alone never confirms an active control.
+The final/probe DOM's shared active-text walk also catches markers split across
+inline elements. This produces `UnsafeInteraction`/review-only refusal, not a
+confirmed `Challenge`; script/style/template/noscript payloads are excluded.
 
 The positive confirmation is a fresh, explicitly selected lesson response
 with matching selectors and no explicitly conflicting tenant, not independent proof of account identity or course
 rights. Only then may an owner-only session be atomically stored and its
 reference returned. Session and failure artifacts remain private, and the
 command does not perform automatic authentication refresh or retries.
+Successful output retains the `session.cookie_names` array shape but emits only
+the fixed `redacted` label for each applicable cookie. Original cookie names
+and values remain only in protected session state and actual request headers;
+they are not ordinary diagnostic metadata.
 
-The private version-2 session file preserves each classroom cookie's acquired
-host/domain scope, Path and absolute expiry. Single sign-on cookies are excluded.
+The private version-3 session file preserves each classroom cookie's acquired
+host/domain scope, host-only/domain declaration, Path, Secure/HttpOnly flags
+and absolute expiry. A cookie whose declared domain lies outside the reviewed
+platform family keeps that canonical declared domain as its identity while
+delivery stays narrowed to the setting host. Single sign-on cookies are
+excluded. The `__Secure-`,
+`__Host-`, `__Http-` and `__Host-Http-` prefixes are admitted only with their
+required Secure/HttpOnly, host-only and explicitly declared `Path=/`
+properties; stored snapshots are revalidated before use. Quoted cookie values
+retain their exact quotes.
 Each subtitle or lesson-source request filters that snapshot for its own URL
 and the current time; a cookie usable by the verification endpoint need not be
 usable by another API. A request with no applicable unexpired cookie stops
@@ -125,8 +359,39 @@ and governor acquisition, an expired credential stops before transmission and
 the unused lease is finished without clearing safety history.
 An explicitly supplied `cookie` remains operator-scoped input,
 not a reconstructed stored-session snapshot.
+Cookie values retain the bounded RFC 6265 cookie-octet grammar, which already
+permits colons and slashes in URL-shaped values. Such values are not evidence
+of a rejected cookie and do not establish the cause of a callback HTTP 500.
+Paired surrounding quotes are preserved; embedded quotes, separators, spaces,
+backslashes and control characters remain refused.
 Cookie Max-Age takes precedence over Expires regardless of attribute order,
-including deletion declarations with an empty value.
+including deletion declarations with an empty value and invalid Expires.
+A valid empty cookie value replaces the previous same-name/domain/Path value;
+it remains empty in request headers and private storage rather than reviving
+the old token. An empty value alone is not a deletion declaration.
+Host-only versus Domain scope controls reach, not cookie identity: for the same
+effective domain, either declaration replaces or deletes the other. Loaded
+private snapshots with duplicate identities or noncanonical domain spelling
+are refused rather than guessing which token is current.
+A declared domain outside the reviewed platform family is narrowed to the
+setting host for delivery while its canonical declaration remains the cookie
+identity, so a later deletion of that declared identity does not remove a
+distinct host-only cookie. Earlier session files cannot recover the original
+declared identity and are refused until a new deliberate authentication
+succeeds; no identity is invented and no session is restored automatically.
+Outgoing headers order applicable cookies by descending Path length and retain
+creation order for equal-length paths. Replacing an existing identity updates
+its value in place; private serialization preserves that creation order.
+A syntactically valid negative decimal Max-Age expires immediately even when
+its magnitude exceeds machine integer ranges. Positive lifetimes remain bounded;
+malformed decimal syntax and over-cap lifetimes do not replace an existing cookie.
+Expires uses the [RFC 6265 cookie-date algorithm](https://www.rfc-editor.org/rfc/rfc6265#section-5.1.1),
+not only RFC 2822 dates, so valid asctime-style expiry deletions are honored.
+Attempt receipts retain only fixed allowlisted route labels; unknown redirect
+paths, including matrix-parameter session identifiers, become `<unknown-route>`.
+Query-name metadata likewise retains only the fixed `ticket` label; unknown or
+encoded keys and bare query tokens become `<unknown-query-name>`, never copied
+or decoded into receipt data.
 
 ## Source-declared recording media
 
@@ -154,6 +419,13 @@ own provenance, but date/duration agreement cannot recover a native track's
 missing resource identity or prove rendered synchronization. A replay entry
 marked `course_live` is not an ongoing live stream. No live playlist, key
 scheduling, automatic reconnect, attendance or completion behavior is implied.
+Read-only historical source recovery found finite MP4 replay acquisition, not
+an ongoing-live contract. The inspected finite-HLS collector requires
+`EXT-X-ENDLIST` and refuses encryption and byte-range playlists; it is not a
+governed live scheduler. No localhost helper or challenge bypass is required
+by the recovered normal replay path. Live implementation still needs a genuine
+ongoing source observation after safe session admission, preserving the existing
+account-wide request/background floors and lease through body processing.
 
 ## Bounded local replay
 

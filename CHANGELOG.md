@@ -2,6 +2,141 @@
 
 ## Unreleased
 
+- Match native CSS literal bounds, infinite Hypot/Log/Round domains and HSL /
+  Display-P3 channel precision. The real login-form consumer now matches all
+  1,940 bounded Chromium FormData observations, including signed zero, NaN,
+  infinities, large angles and conversion rounding boundaries.
+- Observe admitted HTML page challenges even after redirects or unexpected
+  login responses, without admitting their credential forms. Report the
+  actual durably settled safety latch instead of predicting it from HTTP
+  challenge facts; preserve the original governor policy and exclusive lease.
+  Do not let non-submitting image/form receipts veto credential admission.
+- Detect page-wide active challenges even when a credential form cannot be
+  admitted. Both credential-free readers retain one bounded DOM parse and a
+  shared production settlement path; expose the challenge observation outside
+  the nullable form result without weakening Retry-After or latch handling.
+- Preserve native CSS rounding with infinite intervals, signed zero and
+  negative interval magnitudes. Handle same/opposite-sign infinite modulus
+  divisors before Euclidean adjustment instead of corrupting valid colors.
+- Keep bounded cookie-octet admission for URL-shaped values, which already
+  permit colons and slashes. Login diagnostics reuse sanitized inspection
+  facts and retain the shared governor lease through source parsing.
+- Require explicit intervals for dimensional CSS `round`, preserve aligned
+  values and signed-zero rounding/modulo results, and distinguish comments
+  from the real whitespace required around additive math operators.
+- Refuse source login forms with active document bases, selected-submitter
+  method/action/encoding overrides, unsupported body encodings, or table-parser
+  form associations the static sink cannot retain. Preserve ordinary cell and
+  caption forms and explicit external controls without inventing owners.
+- Preserve math-domain NaN results, one-argument hypot magnitude and signed
+  zero; enforce native sign-token boundaries and outer-only EOF completion.
+  Limit option disabledness inherited from optgroup to its actual HTML parent.
+- Preserve absolute CSS mathematical color channels with typed iterative
+  evaluation and nested component delimiters; cover native constants and
+  non-finite results, and clip Lab-family lightness before conversion.
+  Refuse XHTML rather than apply HTML parsing rules, and refuse unsupported
+  declarative shadow trees before initial/final/probe document admission.
+- Accept modern numeric HSL/HWB channels, preserve HWB white/black ratios above
+  100%, and retain Chromium-observed HSL clipping. Refuse nonempty hard-wrap
+  textareas for interaction review rather than inventing layout-dependent
+  submission line breaks.
+- Submit hidden `_charset_` entries as UTF-8, prune expired cookies before
+  replacement/eviction, preserve default and distant-bound decimal range ties,
+  retain document ID blockers under foreign script/style, and include noscript
+  text only in directionality analysis, not challenge/prose scanning.
+- Keep classroom login parsing aligned with HTML namespaces and Chromium FormData:
+  foreign template/noscript local-name lookalikes cannot suppress live HTML
+  controls, range decimal conversion and tiny-step fallback preserve submitted
+  values, dirname companions retain order and direction, credential-name
+  collisions fail closed, and implicit labels ignore inert template decoys.
+- Add `recordings session inspect --online` for explicitly authorized,
+  credential-free login-page investigation through the existing governor.
+  Report the first refused control's bounded structural metadata, never field
+  values or authentication HTML; do not POST credentials, store sessions,
+  implicitly resume or clear the safety latch.
+- Accept ordinary successful source-form fields without a name, type, value,
+  CSS or `inert` allowlist. Preserve their order, duplicate noncredential names
+  and values; override only the unique credential values. Keep action/method
+  outside the field namespace and remove fabricated protocol defaults. Retain
+  explicit form ownership, disabled/first-legend rules, challenge refusal and
+  the pinned credential destination; do not read local files or execute scripts.
+- Resolve form and label references through the first document element with
+  the referenced ID. Detect associated challenge labels without exposing text
+  or claiming a confirmed CAPTCHA; do not invent listbox selections or submit
+  obsolete checked radios, including when a later checked radio is disabled.
+- Honor valid Max-Age cookie deletion despite invalid Expires in either
+  attribute order. Redact unrecognized redirect paths in attempt receipts so
+  path/matrix-parameter credentials cannot be persisted.
+- Detect challenge labels on button text and button-like input values without
+  exposing their contents, including NBSP and repeated whitespace in input
+  captions. Parse Expires using RFC 6265 cookie-date rules, and replace unknown
+  query keys or bare query tokens with fixed receipt labels.
+- Honor negative Max-Age deletion without signed-integer magnitude limits while
+  retaining positive lifetime bounds. Emit only fixed protocol control names
+  or `redacted`, and redact all cookie names in successful output while keeping
+  original scoped cookies available privately for actual requests.
+- Expose only boolean own-`inert` and reviewed-protocol-value-match facts for
+  the first refused control; these diagnostics never return field contents
+  or determine ordinary-field admission.
+- Project inspection MIME metadata to fixed recognized labels or null, rather
+  than echoing syntactically valid but source-controlled subtypes or parameters.
+- Require explicit HTML MIME admission before parsing an initial login
+  form or posting credentials; retain only safe fallback metadata for absent
+  or non-HTML types even when their body contains form-like markup.
+- Scan final-response controls and associated labels without requiring the
+  initial credential/execution form. Refuse secondary challenges, remaining
+  password controls and analysis errors before application confirmation.
+- Replace stale cookies with valid empty values and preserve those empty
+  values through scoped request headers and private session reloads.
+- Key cookie replacement/deletion by name, effective domain and Path rather
+  than the host-only flag; refuse ambiguous duplicate identities on reload.
+  Keep the final-page password veto independent of disabled submission state,
+  and classify auxiliary challenge cues as review-only label evidence.
+- Scan HTML lesson-probe responses for challenges and residual password
+  controls before selected-lesson admission; require operator review for the
+  `one-time-code` cue without labeling it a confirmed CAPTCHA.
+- Preserve browser initial input value sanitization, including range values,
+  CSS colors, text/email/URL line breaks, invalid numeric/date/time values and
+  textarea CRLF. Order same-name cookies by path specificity without losing
+  creation order on replacement. Keep Chromium-confirmed datalist form entries.
+- Preserve CSS Color 4 `hwb()`, `lab()`/`lch()`, `oklab()`/`oklch()` and supported
+  `color()` spaces; adapt D50 XYZ from the original components before sRGB
+  conversion.
+- Preserve the authentication safety latch on refused 2xx responses with
+  `Retry-After`, validate declared JSON before final admission, and match
+  decimal range boundaries plus CSS Color 4 chroma, missing-component,
+  whitespace and signed Display-P3 semantics.
+- Preserve confirmed response-header challenge classification through final
+  MIME/body parser failures and HTML identity-probe interaction review.
+- Remove valid CSS comments before color tokenization and reject malformed
+  cookie-date numeric tokens rather than accepting digit prefixes.
+- Resolve form ownership and successful-control/radio ordering in document tree
+  order after parser reparenting; refuse multiple matching LOGIN submitters.
+- Keep radio source-checkedness separate from tree-order serialization, preserve
+  CSS EOF comments on supported function/hex values, and choose the lower range
+  step strictly below a midpoint.
+- Preserve hidden-value newlines, reject malformed CSS colors with excess
+  components, and make text-only admission vetoes cover all reviewed challenge
+  markers without promoting text evidence to a confirmed interactive challenge.
+- Reject whitespace between CSS color function names and `(`, accept
+  case-insensitive hue units, and catch response markers split across active
+  inline text nodes as review-only vetoes.
+- Exclude inert template/code descendants from credential form selection and
+  payload fields while scanning active challenge controls across all page forms.
+  Use parsed active text for final/probe challenge vetoes, excluding inert
+  source payloads; reject malformed CSS `none%` alpha.
+- Apply the same active-text review to initial login HTML before password POST;
+  inspection separates review-required text from confirmed active controls.
+- Refuse execution values or selected option values originating in template
+  fragments, while retaining option text fallback from active nodes. Normalize
+  every urlencoded field name/value to CRLF at the wire boundary, and preserve
+  range step-base, URL/date/time initial value rules.
+- Enforce Secure/HttpOnly and host-only Path prefix rules for `__Secure-`,
+  `__Host-`, `__Http-` and `__Host-Http-` cookies across setter and private
+  storage; preserve valid quoted cookie values and replacements.
+- Bound parsed login DOM element count/depth and aggregate label/button text
+  subtree scans so hostile input cannot retain the shared authentication lease
+  in unbounded ancestry/subtree walks.
 - Harden multi-hop session scheduling and recording-media integrity after
   independent review: persist response safety facts before body/cookie
   processing, retain the configured completion-to-next-request gap, validate
@@ -14,9 +149,8 @@
   expiry metadata. Filter stored cookies for each actual request URL; legacy
   flattened session files require deliberate authentication, not silent migration.
 - Honor Cookie Max-Age over Expires independently of attribute order, including
-  empty-value deletion, and stop before password submission when a login form
-  adds an unreviewed interactive control. A hidden CAPTCHA container alone
-  remains distinct from an active input.
+  empty-value deletion. A hidden CAPTCHA container alone remains distinct
+  from an active input; challenge-marked interactions still stop the flow.
 - Include external HTML form associations and unnamed controls in the
   pre-password safety scan. Retain stored-cookie expiry through governor waits
   and reject an expired credential immediately before transmission, releasing

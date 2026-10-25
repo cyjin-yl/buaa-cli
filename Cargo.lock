@@ -47,8 +47,11 @@ version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "ego-tree",
  "fs2",
  "hmac",
+ "html5ever",
+ "icu_properties",
  "libc",
  "md-5",
  "reqwest",
