@@ -443,7 +443,7 @@ pub fn schema() -> Value {
             "properties":{
                 "authorized":{"const":true,"description":"Operator permission for these supplied private subtitles, not verified media rights."},
                 "format":{"const":"classroom-native-v1"},
-                "body_base64":{"type":"string","maxLength":MAX_BODY.div_ceil(3)*4,"description":"Exact original native response JSON encoded as Base64, at most4MiB decoded; retain the original separately. Selected track requires all_content rows with integer BeginSec/EndSec and string Text/TransText. Fractional or string times are unsupported, never rounded."},
+                "body_base64":{"type":"string","maxLength":MAX_BODY.div_ceil(3)*4,"description":"Exact original native response JSON encoded as Base64, at most4MiB decoded; retain the original separately. Envelope and synthetic body example: docs/RECORDINGS.md#classroom-native-body-structure. Selected track requires all_content rows with integer BeginSec/EndSec and string Text/TransText. Fractional or string times are unsupported, never rounded."},
                 "source_sha256":hash,
                 "selection":{"type":"object","additionalProperties":false,"required":["sub_id","resource_guid"],"properties":{"sub_id":id,"resource_guid":resource_id}},
             }},

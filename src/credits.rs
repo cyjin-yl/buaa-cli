@@ -206,7 +206,7 @@ fn round2(value: f64) -> f64 {
 pub fn schema() -> Value {
     json!({"school6":school6::schema(),"calculate": {
         "input": {"type":"object","additionalProperties":false,"required":["major","selected"],
-            "properties":{"major":{"type":"string","enum":SUPPORTED_MAJORS},
+            "properties":{"major":{"type":"string","enum":SUPPORTED_MAJORS,"description":"Exact supported 2020 school-8 major: 会计学、信息管理与信息系统、工业工程、工商管理、工程管理、经济统计、能源经济、金融工程. Other values are invalid_input (exit 2)."},
                 "selected":{"type":"array","items":{"type":"string","minLength":1}}}},
         "output": {"type":"object","additionalProperties":false,
             "required":["schema_version","type","result","policy","major","categories","total_counted","remaining","satisfied","courses","warnings"],
