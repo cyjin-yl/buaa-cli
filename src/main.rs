@@ -96,6 +96,7 @@ fn run_archive(args: &[String]) -> CliResult {
 fn marks_value(value: &Value) -> (&'static str, u8) {
     match value.get("error").and_then(serde_json::Value::as_str) {
         Some("invalid_input") => ("invalid_input", 2),
+        Some("permission") => ("permission", 5),
         Some("unavailable") => ("unavailable", 7),
         _ => ("unavailable", 7),
     }

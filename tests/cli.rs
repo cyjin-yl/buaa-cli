@@ -384,6 +384,43 @@ fn gateway_logout_recovery_is_offline_only_and_validates_typed_input() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn baseline_ownership_policy_is_permission_but_bad_input_is_invalid() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let directory =
+        std::env::temp_dir().join(format!("buaa-cli-baseline-policy-{}", std::process::id()));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let path = directory.join("baseline.json");
+    let input = br#"{"policy":{"kind":"formula","id":"synthetic","source":"synthetic","a":4,"b":3,"c":1600},"courses":[]}"#;
+    let output = invoke(
+        &["marks", "baseline", "save", path.to_str().unwrap()],
+        input,
+    );
+    assert_eq!(output.status.code(), Some(5));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"], "permission");
+    assert!(!path.exists());
+
+    for (path, input) in [
+        ("relative.json", input.as_slice()),
+        (path.to_str().unwrap(), b"not json".as_slice()),
+    ] {
+        let output = invoke(&["marks", "baseline", "save", path], input);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+    }
+    std::fs::remove_dir(&directory).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn baseline_save_stays_private_under_umask_0022() {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     use std::os::unix::process::CommandExt;
