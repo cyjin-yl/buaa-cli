@@ -23,6 +23,69 @@ Replies contain segment text, its UTF-8 SHA-256, timing, and provenance keyed by
 
 Pass `next_cursor` unchanged as `cursor` to obtain the next page. It binds the normalized phrase, exact asset filter and catalog identity. The identity hashes the canonical path plus the device/inode of a descriptor the CLI opens on the catalog, and keeps that descriptor open for the catalog's lifetime so the binding refers to the file actually opened, not to two pathname stats bracketing it; it is **not a content hash or authorization token**. Results are ordered by increasing signed SQLite `INTEGER PRIMARY KEY` value; the segment ID and cursor preserve the full signed 64-bit rowid range described in SQLite's [rowid documentation](https://www.sqlite.org/rowidtable.html). One read transaction makes a request internally consistent, but a changing catalog is not frozen across separate pages; that limitation is explicit in every reply.
 
+## Minimal local catalog schema
+
+Create a new, caller-owned local database with SQLite built with FTS5 support.
+The following empty schema is synthetic and contains no private records. The
+CLI reads an existing database; it does not create these tables for you.
+
+```sql
+CREATE TABLE asset (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, bucket TEXT NOT NULL,
+  object_key TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL,
+  mime_type TEXT, captured_at TEXT, ingested_at TEXT NOT NULL,
+  source TEXT, language TEXT, privacy TEXT NOT NULL
+);
+CREATE TABLE asset_relation (
+  source_asset_id TEXT NOT NULL, target_asset_id TEXT NOT NULL,
+  relation TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (source_asset_id, target_asset_id, relation)
+);
+CREATE TABLE transcript_segment (
+  id INTEGER PRIMARY KEY, asset_id TEXT NOT NULL,
+  segment_index INTEGER NOT NULL, start_ms INTEGER, end_ms INTEGER,
+  speaker TEXT, language TEXT, text TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE transcript_fts USING fts5(
+  text, speaker, content='transcript_segment', content_rowid='id',
+  tokenize='unicode61'
+);
+```
+
+These declared column types and primary-key positions are checked. Views are
+not substitutes for the three ordinary tables; the FTS table must use the
+shown external-content mapping and tokenizer. Extra ordinary columns such as
+`metadata_json` are not required or read. Keep the index synchronized in your
+catalog writer (for example with insert/update/delete triggers); after importing
+existing segment rows, rebuild it explicitly in the writer connection:
+
+```sql
+INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild');
+```
+
+The empty tables alone produce no matches. Populate only authorized data:
+`asset.kind` is `audio`, `video`, `transcript`, `derived` or `manifest`;
+`privacy` is `private`, `shared` or `public`; `sha256` is a 64-hex catalog
+declaration and `bytes` is nonnegative. Segment indices and known millisecond
+times are nonnegative; absent times remain SQL NULL. Relations used for ancestry
+are `transcript_of` and `derived_from`. The reader does not fetch or verify
+bucket/object-key targets. SQLite may need readable WAL sidecars and normal
+coordination-sidecar permissions; read-only catalog access is not immutable mode.
+
+## Command discoverability and maintenance surfaces
+
+There is no executable top-level `catalog` command in this CLI. The catalog is
+an explicit input to the public `recordings search` operation, not an implicit
+database-management or private-source-discovery interface.
+
+`governor boot-review-plan` and `governor boot-review-commit --offline` are
+executable operator maintenance surfaces. They already have contracts under
+`commands.governor` in `buaa schema`, even though the top-level help command list
+does not enumerate them. They are not recording retrieval or login shortcuts:
+commit still requires the exact typed protected-stdin intent and all existing
+safety checks. This documentation does not change help text or grant permission
+to inspect or mutate production governor state.
+
 ## Original and derived provenance
 
 The reviewed tables are `asset`, `asset_relation`, `transcript_segment` and the external-content FTS5 index `transcript_fts(text, speaker)`, backed by `transcript_segment.id`. Asset descriptors retain ID, kind, bucket/key, recorded SHA-256 and size, MIME type, capture/ingestion facts, source, language and privacy. Arbitrary `metadata_json`, tags, ingest-event details and credential configuration are not read.
@@ -38,6 +101,41 @@ Resolution is bounded to 16 ancestry hops, 64 loaded asset IDs and 128 retained 
 `buaa recordings subtitles` imports one explicitly selected timed track from an already retained, operator-authorized classroom-native response. It performs no network request, authentication, media download, transcription, catalog write or attendance/completion action. The original response remains caller-owned and is never persisted or reconstructed by the command.
 
 The strict input contains `authorized`, `format: "classroom-native-v1"`, the exact response as Base64, its lowercase SHA-256, and both native selection fields: `sub_id` and `resource_guid`. Exactly one track must match both values. An empty source `resource_guid` remains an explicit missing association; the importer does not borrow an identifier from another response or invent a media link. The envelope must be successful (`status: 200`, `data.code: 0`) and the selected `all_content` array must be valid in full.
+
+### Classroom-native body structure
+
+This is a wholly synthetic **decoded body**, not the outer stdin request, a
+credential or a retained classroom response:
+
+```json
+{
+  "status": 200,
+  "data": {
+    "code": 0,
+    "list": [
+      {
+        "sub_id": "synthetic-lesson",
+        "resource_guid": "",
+        "all_content": [
+          {"BeginSec": 0, "EndSec": 2, "Text": "Synthetic cue", "TransText": ""}
+        ]
+      }
+    ]
+  }
+}
+```
+
+`data.list` and each track's `all_content` are JSON arrays, not JSON-encoded
+strings. Every track declares string `sub_id` and `resource_guid`; selection
+must match exactly one pair. Each selected cue requires precisely `BeginSec`,
+`EndSec`, `Text` and `TransText`, with unsigned integer seconds and string text;
+unknown cue fields are rejected. `BeginSec <= EndSec`, and seconds must not
+exceed `floor(i64::MAX / 1000)`. An empty translation is valid. Other envelope
+or track metadata is not used as timed content. Hash the exact original body
+bytes (including their actual whitespace), Base64-encode those same bytes into
+`body_base64`, and use `selection: {"sub_id":"synthetic-lesson","resource_guid":""}`
+only with this synthetic example. Offline import accepts this synthetic string
+identifier; online subtitle GET separately requires a numeric `sub_id`.
 
 All selected cues are validated before any successful output. Current support is non-negative integer `BeginSec`/`EndSec` values converted with checked multiplication to milliseconds; fractional or string times, inverted intervals, malformed late cues and oversized text fail closed rather than being rounded, truncated or partially emitted. Cue order, repeated/overlapping intervals, exact text/translation, whitespace and escaped controls are preserved without sorting, deduplication, speaker/language inference or fallback to unsegmented transcript text. The original-byte hash and exported-segment hash are separate; the latter is computed from the actual compact JSON `segments` value in output field order.
 

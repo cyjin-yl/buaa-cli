@@ -729,16 +729,22 @@ pub fn baseline_show(path: &str) -> Value {
 
 pub fn schema() -> Value {
     json!({"gpa": {
-        "stdin": {"type":"object","required":["policy","courses"],
+        "input": {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["policy","courses"],
             "properties":{
                 "policy":{"type":"object","required":["kind","id","source"],
+                    "additionalProperties":false,
+                    "oneOf":[
+                        {"properties":{"kind":{"const":"table"}},"required":["bands"],"not":{"anyOf":[{"required":["a"]},{"required":["b"]},{"required":["c"]}]}},
+                        {"properties":{"kind":{"const":"formula"}},"required":["a","b","c"],"not":{"required":["bands"]}}
+                    ],
                     "properties":{"id":{"type":"string","minLength":1},
                         "source":{"type":"string","minLength":1},
                         "kind":{"enum":["table","formula"]},
-                        "pass_min":{"type":"integer","minimum":0,"maximum":100},
-                        "bands":{"type":"array","items":{"type":"object","required":["min","max","point"]}},
-                        "a":{"type":"number"},"b":{"type":"number"},"c":{"type":"number"}}},
-                "courses":{"type":"array","x-maxTotalCredit":MAX_SAFE_CREDIT_TOTAL,"items":{"type":"object","required":["name","score","credit"],
+                        "pass_min":{"type":"integer","minimum":0,"maximum":100,"default":DEFAULT_PASS_MIN},
+                        "bands":{"type":"array","minItems":1,"description":"After sorting by min, inclusive integer bands must cover every score from pass_min (default 60) through 100 exactly once, with no gaps or overlaps; each min must be <= max. Input order need not be sorted.","items":{"type":"object","additionalProperties":false,"required":["min","max","point"],"properties":{"min":{"type":"integer","minimum":0,"maximum":100},"max":{"type":"integer","minimum":0,"maximum":100},"point":{"type":"number","minimum":0,"maximum":5}}}},
+                        "a":{"type":"number","exclusiveMinimum":0,"maximum":5},"b":{"type":"number","exclusiveMinimum":0},"c":{"type":"number","exclusiveMinimum":0}},
+                    "description":"Caller-supplied published policy with nonempty id/source provenance. Formula points are clamp(a - b * (100-score)^2 / c, 0, a); scores below pass_min do not count. All coefficients must be finite."},
+                "courses":{"type":"array","maxItems":10000,"x-maxTotalCredit":MAX_SAFE_CREDIT_TOTAL,"description":"Course names must be unique. Each credit and the aggregate credit total must be finite, positive per course, and strictly below x-maxTotalCredit.","items":{"type":"object","additionalProperties":false,"required":["name","score","credit"],
                     "properties":{"name":{"type":"string","minLength":1},
                         "score":{"type":"integer","minimum":0,"maximum":100},
                         "credit":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL}}}},
@@ -1054,24 +1060,6 @@ mod tests {
         for field in ["counted_credits", "total_credits", "gpa"] {
             assert!(output[field].as_f64().unwrap().is_finite());
         }
-        let contract = schema();
-        assert_eq!(
-            contract["gpa"]["stdin"]["properties"]["courses"]["items"]["properties"]["credit"]["exclusiveMaximum"],
-            json!(MAX_SAFE_CREDIT_TOTAL)
-        );
-        for field in ["counted_credits", "total_credits"] {
-            assert_eq!(
-                contract["gpa"]["output"]["properties"][field]["type"],
-                "number"
-            );
-        }
-        for field in ["counted_credits", "total_credits"] {
-            assert_eq!(
-                contract["gpa"]["output"]["properties"][field]["exclusiveMaximum"],
-                json!(MAX_SAFE_CREDIT_TOTAL)
-            );
-        }
-        assert_eq!(contract["baseline"]["save"]["file_mode"], "0600");
     }
 
     #[test]

@@ -195,10 +195,10 @@ pub fn schema() -> Value {
             "links":{"type":"array","items":link},"issues":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","asset_id"],"properties":{"kind":{"enum":["missing_asset","cycle_detected","depth_limit","node_limit","edge_limit","no_original"]},"asset_id":{"type":"string"}}}},
             "complete":{"type":"boolean"},"hash_verification":{"const":"catalog_declared_not_blob_verified"}}});
     let mut output = json!({"search":{
-        "input":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["catalog","query"],
-            "properties":{"catalog":{"type":"string","minLength":1,"maxLength":4096,"description":"Absolute local SQLite path; UTF-8 byte bound applies. Not a remote URI."},
+        "input":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["catalog","query","authorized"],
+            "properties":{"catalog":{"type":"string","minLength":1,"maxLength":4096,"description":"Absolute local SQLite path; UTF-8 byte bound applies. Not a remote URI. Required tables and external-content unicode61 FTS5 index: docs/RECORDINGS.md#minimal-local-catalog-schema."},
                 "query":{"type":"string","minLength":1,"maxLength":4096,"description":"Literal text phrase under the catalog's unicode61 FTS tokenizer; UTF-8 byte bound applies."},
-                "authorized":{"type":"boolean","default":false,"description":"Must be true to attest operator permission; does not verify rights or grant remote access."},
+                "authorized":{"const":true,"description":"Required operator permission attestation; omission or false returns permission (exit 5) before catalog access. Does not verify rights or grant remote access."},
                 "asset_id":{"type":["string","null"],"minLength":1,"maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":100,"default":20},
                 "cursor":{"type":["string","null"],"maxLength":MAX_CURSOR}}},
         "output":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,

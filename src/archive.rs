@@ -582,7 +582,7 @@ pub fn schema() -> Value {
     json!({
         "lookup":{
             "input":{"type":"object","additionalProperties":false,"required":["url"],"properties":{
-                "url":original,"from":{"anyOf":[timestamp,{"type":"null"}]},"to":{"anyOf":[timestamp,{"type":"null"}]},
+                "url":original,"from":{"anyOf":[timestamp,{"type":"null"}],"description":"Optional inclusive lower bound: exactly 14 ASCII digits YYYYMMDDhhmmss representing a valid UTC civil date/time, year 0001..9999 and seconds 00..59; no abbreviated year/date. Must not exceed to."},"to":{"anyOf":[timestamp,{"type":"null"}],"description":"Optional inclusive upper bound: exactly 14 ASCII digits YYYYMMDDhhmmss representing a valid UTC civil date/time, year 0001..9999 and seconds 00..59; no abbreviated year/date. Must not precede from."},
                 "limit":{"type":"integer","minimum":1,"maximum":1000,"default":100},"cursor":cursor
             }},
             "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","query","captures","next_cursor","completeness","retrieval"],"properties":{
