@@ -1,5 +1,43 @@
 ## Development status
 
+## Current integration and authentication boundary (2026-10-26)
+
+PRs #125, #126, #127 and #128 are merged; native Stack #129 closed after
+their integration. The observed `main` commit is
+`004cf2f72953d48bdeed810582b482f398825144`, with tree
+`0d3750357ee403c1f82a7700aa3dba3abe7a0cb6`. Every newly restacked head
+received independent exact-head/base source review and two successful native
+offline CI checks before its non-bypass merge. Ordered merge parents, trees,
+PR states and the actual main ref were independently read back. Earlier
+review-pending statements below describe their historical snapshots, not
+these merged heads.
+
+The final source head `b0351ba20441bc2734a9d5d307b17378bb50a415` built in
+the original UID1000 runtime under the shared heavy-work and Cargo locks.
+Its complete embedded capabilities matched the manifest. Actual CLI consumers
+passed GPA schema/runtime boundaries, actionable errors and timestamp bounds,
+catalog/search authorization, permission exit 5 versus malformed JSON exit 2,
+and owner-only idempotent baseline saves. Source, binary and production
+governor bytes remained unchanged during this offline proof; it made zero
+campus requests and zero authentication attempts. The intermediate schema
+layer's formatter failure, bounded-linker allocation failure and invalid
+throwaway help-wording assertion remain failures, not successful proof.
+The formatter was repaired by a normal fast-forward append; the completed
+arena-bounded gate and resumed actual smoke passed without weakening policy.
+
+**Online authentication is still not passed.** Before those merges, one
+deliberate governed attempt on session module
+`0980d3e277fa3327b438f77369f0bd4d0f714b05397844ead514f461fcdadf29`
+again recorded SSO GET 200, credential POST 302 and classroom CAS callback
+500. No session or positive application probe was established. The original
+callback body was not retained, so the cause remains undetermined; neither
+password rejection nor a cookie defect is established. The safety latch is
+set, the one-shot authentication arm is consumed and no request is pending.
+No automatic retry, ticket replay or alternate governor was used. Issue #124
+remains open. Earlier failed observations below remain part of the history;
+merging these fixes does not establish live playback, dual-player rendering
+or subtitle synchronization.
+
 ## Governed public online verification round (2026-10-23)
 
 Campus egress from this host is reachable again: `classroom.msa.buaa.edu.cn`
