@@ -872,6 +872,12 @@ impl RequestLease<'_> {
     /// reserves a full request gap after completion. An I/O failure or invalid
     /// outcome returns an error, leaving the unfinished crash reservation.
     pub fn finish(self, outcome: Outcome<'_>) -> Result<(), String> {
+        self.finish_with_status_scope(outcome, false).map(|_| ())
+    }
+
+    /// Return the safety latch committed by this outcome while exclusivity is
+    /// still held, rather than predicting it or racing a subsequent status read.
+    pub(crate) fn finish_with_safety_latch(self, outcome: Outcome<'_>) -> Result<bool, String> {
         self.finish_with_status_scope(outcome, false)
     }
 
@@ -925,13 +931,14 @@ impl RequestLease<'_> {
             },
             true,
         )
+        .map(|_| ())
     }
 
     fn finish_with_status_scope(
         mut self,
         outcome: Outcome<'_>,
         archived_resource_status: bool,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let now = self.prepare_finish()?;
         let success = match outcome {
             Outcome::Success => true,
@@ -985,7 +992,8 @@ impl RequestLease<'_> {
             }
         }
         self.state.pending = None;
-        self.governor.save(&self.state, false)
+        self.governor.save(&self.state, false)?;
+        Ok(self.state.safety_latched)
     }
 }
 

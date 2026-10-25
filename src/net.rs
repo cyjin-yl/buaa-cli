@@ -2165,7 +2165,47 @@ pub(crate) fn acquire_kind(
     }
     // Exactly one attempt after at most one gap sleep. A competing owner is never
     // treated as a request gap, retried, or bypassed.
-    governor.try_acquire(kind).map_err(|_| governor_error())
+    governor
+        .try_acquire(kind)
+        .map_err(|reason| governor_denial(&reason))
+}
+
+/// Translate a governor refusal into a refusal that names the next step.
+/// The generic message used to hide the difference between a latched
+/// account, a cooldown, a scheduling gap and a missing one-shot
+/// authorization, so an operator could not tell which action was required.
+fn governor_denial(reason: &str) -> Error {
+    if reason.contains("explicit one-shot user authorization") {
+        return Error::new(
+            "authorization_required",
+            "no authentication attempt is armed; run the explicit resume first, then invoke the online command once",
+        );
+    }
+    if reason.contains("safety is latched") {
+        return Error::new(
+            "safety_latched",
+            "shared request safety is latched; run the explicit resume before the next attempt",
+        );
+    }
+    if reason.contains("cooldown has not elapsed") {
+        return Error::new(
+            "cooldown",
+            "shared request cooldown has not elapsed; wait for the recorded cooldown before the next attempt",
+        );
+    }
+    if reason.contains("request interval has not elapsed") {
+        return Error::new(
+            "request_gap",
+            "the minimum request interval has not elapsed; wait for the recorded interval before the next attempt",
+        );
+    }
+    if reason.contains("background polling interval has not elapsed") {
+        return Error::new(
+            "request_gap",
+            "the minimum background polling interval has not elapsed; wait for the recorded interval before the next poll",
+        );
+    }
+    governor_error()
 }
 
 pub(crate) fn challenge_header(name: &str, value: &[u8]) -> bool {

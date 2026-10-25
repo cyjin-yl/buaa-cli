@@ -42,7 +42,7 @@ fn normalized_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
 }
 
 fn active_html(element: ElementRef<'_>) -> Result<bool, Error> {
-    if element.value().name.ns.as_ref() != "http://www.w3.org/1999/xhtml" {
+    if !crate::html::is_html_element(element) {
         return Ok(false);
     }
     for (depth, node) in element.ancestors().enumerate() {

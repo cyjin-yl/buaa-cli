@@ -18,10 +18,13 @@ robotstxt = "0.3"
 sha2 = "0.10"
 url = "2.5"
 hmac = "0.12"
+icu_properties = "2.3.0"
 md-5 = "0.10"
 sha1 = "0.10"
 zeroize = "1.9"
 rusqlite = { version = "0.37", features = ["bundled", "hooks", "limits"] }
+ego-tree = "0.10"
+html5ever = "0.35"
 scraper = "0.24"
 
 [lib]
