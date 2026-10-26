@@ -23,27 +23,33 @@ refusals. Source and original account-state bytes remained unchanged. This
 proof made no authentication invocation and is not online acceptance.
 
 The owner requested internal Gitea development/CI with GitHub used for review
-and releases rather than CI. The first reachable internal repository
-identifies itself as a read-only mirror of GitHub and rejects Git
-receive-pack, including a nonmutating dry-run; this instance exposes no REST or
-command path that converts a mirror in place. A writable private development
-repository was therefore created beside it and received the complete imported
-history: all 66 branches and both tags were verified present at identical
-object identities, with no missing reference and no rewritten object. The
-read-only mirror was left untouched, no repository was deleted or recreated,
-and no history was forced. A push dry-run against the internal development
-repository is now accepted, where the read-only mirror refused it.
+and releases rather than CI. The installed `gitea-primary` operator performed
+the takeover with the supported migration path. The previous pull mirror was
+retained as `ezra/buaa-cli-pull-backup-20261026T141050Z` rather than deleted,
+and the repository is now the native `ezra/buaa-cli`, registered for the
+non-force per-ref fast-forward sync with the source as the checked downstream.
+The first migration request failed while fetching GitHub issue-comment
+metadata, because the container's DNS does not resolve the GitHub API host
+even though the host does. The Git objects and every branch had already
+arrived, and the operator's re-run completed the takeover and the
+registration. No repository was deleted or recreated, and no history was
+forced.
+
+The native repository's git endpoint was proved by a real clone whose fetched
+head was the current `main` commit. The clone authenticates with the
+installed operator credential adapter over HTTP, so the credential travels
+only through Git's own pipe and the job never mounts the credential file.
 
 The internal lane itself is not yet a working gate. It is dispatched manually
-against an operator-admitted exact source SHA with a scoped checkout identity,
-uses the canonical global build gate and one compiler job, and builds with
-Cargo's offline mode against a fresh exclusive target. It does not provide
-kernel-level network isolation: the job image and build environment must deny
-egress if that boundary is required. The scoped checkout identity, canonical
-lock and cache mounts, verified job-image and cache coverage, and an actual
-successful admitted run are still outstanding. Draft workflow files and a
-runner's capacity setting do not prove a working internal gate, and no
-successful internal CI run is claimed.
+against an operator-admitted exact source SHA, uses the canonical global build
+gate and one compiler job, and builds with Cargo's offline mode against a
+fresh exclusive target. It does not provide kernel-level network isolation:
+the job image and build environment must deny egress if that boundary is
+required. The job still needs the credential adapter, its configuration and
+the canonical lock and cache mounts to be present, the job image's tool and
+cache coverage to be verified, and one successful admitted run to be
+observed. Draft workflow files and a runner's capacity setting do not prove a
+working internal gate, and no successful internal CI run is claimed.
 
 The reported proxy quota consumption remains a separate investigation. Failed
 endpoint probes, cache sizes, sparse-file logical lengths and repeated file
@@ -56,11 +62,13 @@ network, while a mainland registry mirror answers in under a second. The
 original runtime's Cargo cache holds the project's complete locked set of 201
 crate archives under the mirror's source namespace, and an offline metadata
 resolution against that cache succeeds with no download. The same cache also
-holds a partial set under the upstream namespace, which shows that a mirror
-introduced under a different source name leaves the lock file resolving
-against the upstream registry and forces the whole set to be fetched again.
-The project configuration therefore replaces the canonical `crates-io` source
-with the mirror rather than declaring a parallel source name.
+holds 223 archives under the upstream namespace, including seven packages the
+lock file does not require, so the two namespaces overlap rather than
+partition the dependency set. With a mirror declared only under a separate
+source name, the lock file continued to resolve against the upstream registry
+and the offline resolution failed. The project configuration therefore
+replaces the canonical `crates-io` source with the mirror, which makes the
+already cached mirror namespace the one the lock file resolves against.
 
 Container image tags were inspected for duplication: several tag names resolve
 to one image identifier, so extra tags consume no additional layers and no

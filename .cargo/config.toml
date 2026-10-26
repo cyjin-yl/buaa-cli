@@ -1,12 +1,12 @@
-# The public crates.io CDN is unreachable from the build network, so the
+# The public crates.io CDN does not answer from the build network, so the
 # registry is replaced by a mainland mirror that answers quickly. The lock
 # file still pins every crate checksum, so the mirror only changes where the
 # identical crate bytes come from; it cannot change what is built.
 #
 # The replacement must be the canonical `crates-io` source. Cargo resolves a
-# lock file against the source it names, so a differently named mirror would
-# leave the lock file pointing at crates.io and force a second download of
-# the whole dependency set.
+# lock file against the source it names, so a differently named mirror leaves
+# the lock file pointing at crates.io and the cached archives under that
+# namespace unused.
 [source.crates-io]
 replace-with = "rsproxy"
 

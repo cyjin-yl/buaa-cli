@@ -9,20 +9,23 @@
   and lack of a validated CLI selected-lesson session. Record safe capture
   boundaries without publishing authentication bodies or session material.
 - Move the build and test lane to the internal Gitea instance and stop
-  running CI on GitHub. The previously reachable internal repository is a
-  read-only mirror that cannot be converted in place on this instance, so a
-  writable private development repository received the complete imported
-  history with every branch and tag verified at identical object identities.
-  The lane stays manual and admitted by exact source SHA, keeps the canonical
-  global build gate and one compiler job, and uses Cargo's offline mode
+  running CI on GitHub. The installed `gitea-primary` operator took the
+  repository over as a native one with the supported migration path and
+  retained the previous pull mirror as a timestamped backup instead of
+  deleting it; the repository is registered for the non-force per-ref
+  fast-forward sync. The lane stays manual and admitted by exact source SHA,
+  keeps the canonical global build gate and one compiler job, fetches through
+  the installed operator credential adapter over HTTP so the credential never
+  reaches argv, the environment or the job, and uses Cargo's offline mode
   rather than claiming kernel-level network isolation. No successful internal
   CI run is claimed.
 - Replace the canonical crates.io registry with a mainland mirror that the
   build network can actually reach. Declaring the mirror under a separate
-  source name left the lock file resolving against the unreachable upstream
-  registry, which forces the complete dependency set to be fetched again.
-  With the canonical source replaced, the locked set resolves offline from
-  the existing cache without downloading a byte.
+  source name left the lock file resolving against the upstream registry
+  that does not answer here, and the offline resolution failed even though
+  the mirror namespace already held every locked archive. With the canonical
+  source replaced, the locked set resolves offline from the existing cache
+  without downloading a byte.
 - Record the merged exact-head safety/CLI verification separately from the
   single governed classroom CAS callback 500. Authentication and
   dependent online acceptance remain incomplete; retain the consumed arm,

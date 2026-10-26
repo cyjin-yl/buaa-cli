@@ -30,14 +30,16 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$(id -u)" = 1000 ]]
-          # Authentication is supplied by a dedicated scoped SSH agent socket;
-          # no token, private key, credential helper or auth header is stored.
-          # The image must contain the independently pinned host key.
+          # Authentication uses the installed operator credential adapter. The
+          # credential travels only over Git's own pipe: nothing is written to
+          # argv, the environment, a receipt or a file in this checkout, and
+          # the job must not mount the credential file itself.
           export GIT_TERMINAL_PROMPT=0
-          export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/buaa-ci/known_hosts -o GlobalKnownHostsFile=/dev/null'
+          export GITEA_PRIMARY_CONFIG=/etc/gitea-primary/config.json
           git init -q .
-          git -c credential.helper= fetch --no-tags --depth=1 \
-            ssh://git@10.10.10.12:2222/ezra/buaa-cli-dev.git "$EXPECTED_SHA"
+          git -c credential.helper=/opt/gitea-primary/git_credential.py \
+            fetch --no-tags --depth=1 \
+            http://10.10.10.12:3002/ezra/buaa-cli.git "$EXPECTED_SHA"
           [[ "$(git rev-parse --verify FETCH_HEAD)" = "$EXPECTED_SHA" ]]
           git -c advice.detachedHead=false checkout --detach --force "$EXPECTED_SHA"
           [[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]]
