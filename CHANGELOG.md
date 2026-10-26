@@ -17,6 +17,12 @@
   global build gate and one compiler job, and uses Cargo's offline mode
   rather than claiming kernel-level network isolation. No successful internal
   CI run is claimed.
+- Replace the canonical crates.io registry with a mainland mirror that the
+  build network can actually reach. Declaring the mirror under a separate
+  source name left the lock file resolving against the unreachable upstream
+  registry, which forces the complete dependency set to be fetched again.
+  With the canonical source replaced, the locked set resolves offline from
+  the existing cache without downloading a byte.
 - Record the merged exact-head safety/CLI verification separately from the
   single governed classroom CAS callback 500. Authentication and
   dependent online acceptance remain incomplete; retain the consumed arm,

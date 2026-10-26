@@ -1,7 +1,15 @@
-# Preserve the canonical crates.io cache identity. CI never acquires crates.
-# Missing checksum-bound artifacts must be provisioned before admitting a run.
-# Select this mirror explicitly during dependency provisioning; declaring it
-# does not replace the canonical registry or force a second download.
+# The public crates.io CDN is unreachable from the build network, so the
+# registry is replaced by a mainland mirror that answers quickly. The lock
+# file still pins every crate checksum, so the mirror only changes where the
+# identical crate bytes come from; it cannot change what is built.
+#
+# The replacement must be the canonical `crates-io` source. Cargo resolves a
+# lock file against the source it names, so a differently named mirror would
+# leave the lock file pointing at crates.io and force a second download of
+# the whole dependency set.
+[source.crates-io]
+replace-with = "rsproxy"
+
 [source.rsproxy]
 registry = "sparse+https://rsproxy.cn/index/"
 

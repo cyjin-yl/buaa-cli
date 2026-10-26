@@ -50,6 +50,22 @@ endpoint probes, cache sizes, sparse-file logical lengths and repeated file
 descriptors cannot attribute the reported 700 GB to this project or to a
 particular application. No such attribution is established here.
 
+The dependency-network facts that were measured are recorded here so they are
+not re-derived. The public crates.io CDN does not answer from the build
+network, while a mainland registry mirror answers in under a second. The
+original runtime's Cargo cache holds the project's complete locked set of 201
+crate archives under the mirror's source namespace, and an offline metadata
+resolution against that cache succeeds with no download. The same cache also
+holds a partial set under the upstream namespace, which shows that a mirror
+introduced under a different source name leaves the lock file resolving
+against the upstream registry and forces the whole set to be fetched again.
+The project configuration therefore replaces the canonical `crates-io` source
+with the mirror rather than declaring a parallel source name.
+
+Container image tags were inspected for duplication: several tag names resolve
+to one image identifier, so extra tags consume no additional layers and no
+additional transfer. Redundant tags were removed; image size was unchanged.
+
 ## Current integration and authentication boundary (2026-10-26)
 
 PRs #125, #126, #127 and #128 are merged; native Stack #129 closed after
