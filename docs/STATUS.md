@@ -68,7 +68,10 @@ partition the dependency set. With a mirror declared only under a separate
 source name, the lock file continued to resolve against the upstream registry
 and the offline resolution failed. The project configuration therefore
 replaces the canonical `crates-io` source with the mirror, which makes the
-already cached mirror namespace the one the lock file resolves against.
+already cached mirror namespace the one the lock file resolves against. The
+cache directory is keyed on the registry URL rather than on the source alias,
+and the same replacement name the prebuilt job image uses is kept so both
+seats describe the registry identically.
 
 Container image tags were inspected for duplication: several tag names resolve
 to one image identifier, so extra tags consume no additional layers and no

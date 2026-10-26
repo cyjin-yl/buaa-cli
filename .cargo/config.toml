@@ -7,10 +7,14 @@
 # lock file against the source it names, so a differently named mirror leaves
 # the lock file pointing at crates.io and the cached archives under that
 # namespace unused.
+#
+# The replacement name matches the name the prebuilt job image uses, so both
+# seats describe the same registry the same way. The cache directory is keyed
+# on the registry URL rather than on this alias.
 [source.crates-io]
-replace-with = "rsproxy"
+replace-with = "rsproxy-sparse"
 
-[source.rsproxy]
+[source.rsproxy-sparse]
 registry = "sparse+https://rsproxy.cn/index/"
 
 # One compiler job keeps a build reproducible inside the shared build gate.
