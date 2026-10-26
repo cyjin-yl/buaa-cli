@@ -1,5 +1,42 @@
 ## Development status
 
+## Observation correction and CI migration prerequisites (2026-10-26)
+
+The bounded browser observations are archived in
+[`CAS-LOGIN-PROTOCOL.md`](CAS-LOGIN-PROTOCOL.md) and
+[`SSO-LOGIN-PROTOCOL.md`](SSO-LOGIN-PROTOCOL.md). They show a successful browser
+redirect sequence and the parent form's six-field order. They do not establish
+the cause of the CLI callback 500: the original error body and per-request
+timestamps are absent, and the deployed ticket lifetime was not observed.
+The upstream default is a hypothesis input, not the deployment's configuration.
+Browser HTTP 200/application code 200 also does not satisfy the CLI's required
+selected-lesson verification, which remains unpassed.
+
+An uncommitted candidate that removed required account protections and changed
+cache/refusal semantics was withdrawn before publication. The Rust source,
+account rules and capability catalog were restored to the previously reviewed
+`74b501e44bc7d4d8268b3fd20bb22d07d5db607f` baseline. Fresh original-runtime
+verification passed formatting, locked offline build, all-target tests
+(541 library passed, three ignored; 21 CLI passed), strict all-target clippy,
+whole 51-capability equality and actual local authorization/unknown-field
+refusals. Source and original account-state bytes remained unchanged. This
+proof made no authentication invocation and is not online acceptance.
+
+The owner requested internal Gitea development/CI with GitHub used for review
+and releases rather than CI. Migration is not complete: the currently reachable
+internal repository still identifies itself as a read-only mirror and rejects
+Git receive-pack, including a nonmutating dry-run. A writable-primary conversion
+through an approved management path, a scoped checkout identity, canonical
+build-lock mounts, verified cache coverage and job isolation are still required.
+Draft workflow files and a runner's capacity setting do not prove a working
+internal gate. No repository was deleted/recreated, no history was forced, and
+no new successful internal CI run is claimed.
+
+The reported proxy quota consumption remains a separate investigation. Failed
+endpoint probes, cache sizes, sparse-file logical lengths and repeated file
+descriptors cannot attribute the reported 700 GB to this project or to a
+particular application. No such attribution is established here.
+
 ## Current integration and authentication boundary (2026-10-26)
 
 PRs #125, #126, #127 and #128 are merged; native Stack #129 closed after

@@ -1,0 +1,73 @@
+name: Admitted offline Rust
+
+# No untrusted PR or branch event may execute on the shared build seat.
+# An operator must admit both the workflow revision and the source SHA before
+# dispatch. These variables are configuration, never credentials.
+on:
+  workflow_dispatch:
+
+jobs:
+  offline:
+    # Registered label portion; :host is an executor suffix, not a label.
+    runs-on: vantage
+    timeout-minutes: 30
+    container:
+      # Observed local vantage-ci-job image ID (it has no RepoDigests).
+      # Runner must use this local image without pulling. Cache/tool coverage
+      # and required mounts remain runtime admission prerequisites.
+      image: sha256:57d4ae674d627b4d170c1e5c1a07e15971ab8f608a8c2f47307e7231c257fcab
+      options: --user 1000:1000
+    steps:
+      - name: Check out the admitted immutable source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ vars.BUAA_CI_ADMITTED_SHA }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(id -u)" = 1000 ]]
+          # Authentication is supplied by a dedicated scoped SSH agent socket;
+          # no token, private key, credential helper or auth header is stored.
+          # The image must contain the independently pinned host key.
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/buaa-ci/known_hosts -o GlobalKnownHostsFile=/dev/null'
+          git init -q .
+          git -c credential.helper= fetch --no-tags --depth=1 \
+            ssh://git@10.10.10.12:2222/ezra/buaa-cli.git "$EXPECTED_SHA"
+          [[ "$(git rev-parse --verify FETCH_HEAD)" = "$EXPECTED_SHA" ]]
+          git -c advice.detachedHead=false checkout --detach --force "$EXPECTED_SHA"
+          [[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]]
+
+      - name: Verify under the canonical shared gate without network
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(id -u)" = 1000 ]]
+          # The runner must mount the real canonical OMP lock inode and the
+          # UID1000 home/Cargo lock, not private copies of either path.
+          test -x /home/ezra/.omp/agent/bin/agent-heavy
+          test -f /home/ezra/.omp/agent/locks/heavy-work.lock
+          test -f /home/ezra/.buaa-cli-cargo.lock
+          isolated_home=$(mktemp -d)
+          trap 'rm -rf -- "$isolated_home"' EXIT
+          # Fresh, exclusive artifacts for this checkout; never a shared target.
+          target=$(mktemp -d "$(pwd -P)/.ci-target.XXXXXXXX")
+          trap 'rm -rf -- "$isolated_home" "$target"' EXIT
+          /home/ezra/.omp/agent/bin/agent-heavy \
+            unshare --user --map-current-user --keep-caps --net -- \
+            env -i HOME="$isolated_home" \
+              PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin \
+              CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup \
+              CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 \
+              CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+              CARGO_TARGET_DIR="$target" \
+              bash --noprofile --norc -euo pipefail <<'OFFLINE'
+          ip link set lo up
+          sh scripts/cargo-locked fmt --all -- --check
+          sh scripts/cargo-locked build --locked --offline
+          sh scripts/cargo-locked test --locked --offline
+          sh scripts/cargo-locked clippy --all-targets --locked --offline -- -D warnings
+          "$CARGO_TARGET_DIR/debug/buaa" --help
+          "$CARGO_TARGET_DIR/debug/buaa" schema
+          "$CARGO_TARGET_DIR/debug/buaa" capabilities
+          OFFLINE

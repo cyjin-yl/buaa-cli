@@ -1,0 +1,10 @@
+# Preserve the canonical crates.io cache identity. CI never acquires crates.
+# Missing checksum-bound artifacts must be provisioned before admitting a run.
+# Select this mirror explicitly during dependency provisioning; declaring it
+# does not replace the canonical registry or force a second download.
+[source.rsproxy]
+registry = "sparse+https://rsproxy.cn/index/"
+
+# One compiler job keeps a build reproducible inside the shared build gate.
+[build]
+jobs = 1

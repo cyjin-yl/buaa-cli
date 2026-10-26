@@ -22,6 +22,12 @@ These slices do not complete the broader catalog. Full adapter coverage, general
 
 The machine-readable status projection is [`acceptance.json`](acceptance.json). See [`docs/STATUS.md`](docs/STATUS.md) for evidence and blockers; neither links nor a status entry are a substitute for an implemented command.
 
+CAS development notes are archived in
+[`docs/CAS-LOGIN-PROTOCOL.md`](docs/CAS-LOGIN-PROTOCOL.md), with the bounded
+BUAA observation in
+[`docs/SSO-LOGIN-PROTOCOL.md`](docs/SSO-LOGIN-PROTOCOL.md). Browser observations
+do not establish a CLI session or prove the cause of a callback error.
+
 ## Build and discover
 
 Use Rust 1.89 or newer on Linux. Dependency fetching is public and does not require campus access. If dependencies are not already cached, fetch them once, then build offline:

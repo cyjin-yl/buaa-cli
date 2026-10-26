@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Archive bounded CAS login and guard observations separately from hypotheses.
+  Preserve the observed parent-form/visible-frame roles and six-field request
+  order, but do not infer ticket expiration or a password verdict from HTTP
+  500. Document the observer's missing timestamps, incomplete request coverage
+  and lack of a validated CLI selected-lesson session. Record safe capture
+  boundaries without publishing authentication bodies or session material.
 - Record the merged exact-head safety/CLI verification separately from the
   single governed classroom CAS callback 500. Authentication and
   dependent online acceptance remain incomplete; retain the consumed arm,
