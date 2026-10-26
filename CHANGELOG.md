@@ -8,6 +8,15 @@
   500. Document the observer's missing timestamps, incomplete request coverage
   and lack of a validated CLI selected-lesson session. Record safe capture
   boundaries without publishing authentication bodies or session material.
+- Move the build and test lane to the internal Gitea instance and stop
+  running CI on GitHub. The previously reachable internal repository is a
+  read-only mirror that cannot be converted in place on this instance, so a
+  writable private development repository received the complete imported
+  history with every branch and tag verified at identical object identities.
+  The lane stays manual and admitted by exact source SHA, keeps the canonical
+  global build gate and one compiler job, and uses Cargo's offline mode
+  rather than claiming kernel-level network isolation. No successful internal
+  CI run is claimed.
 - Record the merged exact-head safety/CLI verification separately from the
   single governed classroom CAS callback 500. Authentication and
   dependent online acceptance remain incomplete; retain the consumed arm,

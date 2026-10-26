@@ -3,6 +3,10 @@ name: Admitted offline Rust
 # No untrusted PR or branch event may execute on the shared build seat.
 # An operator must admit both the workflow revision and the source SHA before
 # dispatch. These variables are configuration, never credentials.
+#
+# This lane runs against the writable internal development repository. The
+# read-only GitHub mirror cannot accept pushes and is not a development
+# target.
 on:
   workflow_dispatch:
 
@@ -33,7 +37,7 @@ jobs:
           export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/buaa-ci/known_hosts -o GlobalKnownHostsFile=/dev/null'
           git init -q .
           git -c credential.helper= fetch --no-tags --depth=1 \
-            ssh://git@10.10.10.12:2222/ezra/buaa-cli.git "$EXPECTED_SHA"
+            ssh://git@10.10.10.12:2222/ezra/buaa-cli-dev.git "$EXPECTED_SHA"
           [[ "$(git rev-parse --verify FETCH_HEAD)" = "$EXPECTED_SHA" ]]
           git -c advice.detachedHead=false checkout --detach --force "$EXPECTED_SHA"
           [[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]]
@@ -53,8 +57,11 @@ jobs:
           # Fresh, exclusive artifacts for this checkout; never a shared target.
           target=$(mktemp -d "$(pwd -P)/.ci-target.XXXXXXXX")
           trap 'rm -rf -- "$isolated_home" "$target"' EXIT
+          # Dependency resolution is offline and the build never contacts a
+          # registry. This is Cargo's own offline mode, not kernel-level
+          # network isolation: the job image and the build environment must
+          # still deny egress if a stronger boundary is required.
           /home/ezra/.omp/agent/bin/agent-heavy \
-            unshare --user --map-current-user --keep-caps --net -- \
             env -i HOME="$isolated_home" \
               PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin \
               CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup \
@@ -62,7 +69,6 @@ jobs:
               CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
               CARGO_TARGET_DIR="$target" \
               bash --noprofile --norc -euo pipefail <<'OFFLINE'
-          ip link set lo up
           sh scripts/cargo-locked fmt --all -- --check
           sh scripts/cargo-locked build --locked --offline
           sh scripts/cargo-locked test --locked --offline

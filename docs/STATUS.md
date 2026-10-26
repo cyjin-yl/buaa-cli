@@ -23,14 +23,27 @@ refusals. Source and original account-state bytes remained unchanged. This
 proof made no authentication invocation and is not online acceptance.
 
 The owner requested internal Gitea development/CI with GitHub used for review
-and releases rather than CI. Migration is not complete: the currently reachable
-internal repository still identifies itself as a read-only mirror and rejects
-Git receive-pack, including a nonmutating dry-run. A writable-primary conversion
-through an approved management path, a scoped checkout identity, canonical
-build-lock mounts, verified cache coverage and job isolation are still required.
-Draft workflow files and a runner's capacity setting do not prove a working
-internal gate. No repository was deleted/recreated, no history was forced, and
-no new successful internal CI run is claimed.
+and releases rather than CI. The first reachable internal repository
+identifies itself as a read-only mirror of GitHub and rejects Git
+receive-pack, including a nonmutating dry-run; this instance exposes no REST or
+command path that converts a mirror in place. A writable private development
+repository was therefore created beside it and received the complete imported
+history: all 66 branches and both tags were verified present at identical
+object identities, with no missing reference and no rewritten object. The
+read-only mirror was left untouched, no repository was deleted or recreated,
+and no history was forced. A push dry-run against the internal development
+repository is now accepted, where the read-only mirror refused it.
+
+The internal lane itself is not yet a working gate. It is dispatched manually
+against an operator-admitted exact source SHA with a scoped checkout identity,
+uses the canonical global build gate and one compiler job, and builds with
+Cargo's offline mode against a fresh exclusive target. It does not provide
+kernel-level network isolation: the job image and build environment must deny
+egress if that boundary is required. The scoped checkout identity, canonical
+lock and cache mounts, verified job-image and cache coverage, and an actual
+successful admitted run are still outstanding. Draft workflow files and a
+runner's capacity setting do not prove a working internal gate, and no
+successful internal CI run is claimed.
 
 The reported proxy quota consumption remains a separate investigation. Failed
 endpoint probes, cache sizes, sparse-file logical lengths and repeated file
