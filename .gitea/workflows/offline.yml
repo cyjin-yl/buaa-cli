@@ -45,6 +45,13 @@ jobs:
           # The executed files must be the admitted content, not merely the
           # admitted commit reference: a modified or staged launcher would
           # otherwise run under the shared build gate.
+          # A tracked file whose index carries an assume-unchanged or
+          # skip-worktree flag is invisible to the content diff; reject any
+          # such flag before trusting the comparison.
+          git ls-files -v | grep -qv '^H' && {
+            echo "the prepared tree carries suppressed content flags" >&2
+            exit 1
+          }
           git -c advice.detachedHead=false diff --quiet --exit-code "$EXPECTED_SHA" -- \
             || {
               echo "the prepared tree modifies the admitted source" >&2
@@ -54,7 +61,10 @@ jobs:
             echo "the prepared tree carries staged changes" >&2
             exit 1
           }
-          [[ -z "$(git ls-files --others --exclude-standard)" ]] || {
+          # An untracked file that is also ignored by the repository still
+          # reaches the build container; ignore-list membership must not
+          # grant admission.
+          [[ -z "$(git ls-files --others)" ]] || {
             echo "the prepared tree carries untracked files" >&2
             exit 1
           }
