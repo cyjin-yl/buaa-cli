@@ -8,6 +8,13 @@
   500. Document the observer's missing timestamps, incomplete request coverage
   and lack of a validated CLI selected-lesson session. Record safe capture
   boundaries without publishing authentication bodies or session material.
+- Record that the ticket-lifetime hypothesis was tested against the live
+  service and not supported: one issued ticket was redeemed immediately, again
+  after a sixty-second wait, and a third time, and every redemption was
+  answered with a redirect. Ticket expiration is withdrawn as the cause of the
+  callback error, and the remaining candidates are the request headers, the
+  cookies carried into the redemption and the credential submission's field
+  encoding.
 - Move the build and test lane to the internal Gitea instance and stop
   running CI on GitHub. The installed `gitea-primary` operator took the
   repository over as a native one with the supported migration path and

@@ -99,18 +99,46 @@ callback HTTP 500. The inspected callback query-name projections included
 the original error body. The CLI's source inserted the configured request gap
 between HTTP hops. The original runtime retained a 60-second request policy.
 
-Ticket expiration is a plausible timing hypothesis, not an established cause.
-Upstream Apereo CAS documentation lists a default service-ticket lifetime of
-10 seconds and permits per-service overrides. BUAA's deployed CAS version and
-actual policy were not observed. A service error can also arise from relying-
 party processing, ticket/service mismatch or another server failure. Neither
-HTTP 500 nor a redirect proves password correctness or rejection.
+### The ticket-lifetime hypothesis was tested and not supported
+
+A comparison was run against the live service for one account and one login
+page, using the same registered `service`, the same credential form fields
+and the same redirect chain as a browser. The single ticket issued by the
+credential submission was then redeemed more than once:
+
+| Redemption | Result |
+| --- | --- |
+| Immediately after the credential POST | HTTP 302 to the next hop |
+| After a 60-second wait, same ticket | HTTP 302 |
+| A third attempt, same ticket | HTTP 302 |
+
+The ticket therefore survived at least the interval the CLI used to wait
+between hops, and it also remained redeemable more than once. A ticket that
+expired during that interval, or one that could only be redeemed once, would
+have answered differently. Ticket expiration is consequently not supported as
+the cause of the observed 500, and the earlier hypothesis is withdrawn.
+
+What remains unobserved is the exact difference between that comparison and
+the CLI's own request. The comparison used a standard HTTP client with a
+browser-like user agent and a cookie jar; the CLI uses its own transport with
+its own user agent and header set, and its own cookie handling. The candidate
+differences are the request headers, the cookie set carried into the
+redemption, and the field encoding of the credential submission. A server
+error can still arise from relying-party processing, ticket/service mismatch
+or another server failure. Neither HTTP 500 nor a redirect proves password
+correctness or rejection.
+
+Upstream Apereo CAS documentation lists a default service-ticket lifetime of
+10 seconds and permits per-service overrides, so a short lifetime remains
+possible in deployments that differ from the one observed here. BUAA's
+deployed CAS version and policy were not observed either way.
 
 Missing discriminating evidence includes the completed callback's non-secret
-error reason, actual request timing, and a controlled comparison that changes
-only the suspected factor. Do not obtain it by replaying a consumed ticket or
-by bypassing required request policy. If timing policy and the service lifetime
-conflict, report the incompatibility; do not silently exempt redirects.
+error reason and a controlled comparison that changes only the candidate
+factor. Do not obtain it by replaying a consumed ticket or by bypassing
+required request policy. Report any conflict between a required request
+policy and the service's behaviour; do not silently exempt redirects.
 
 ## Acceptance and retention limits
 

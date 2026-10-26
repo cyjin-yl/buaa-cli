@@ -40,18 +40,28 @@ jobs:
             echo "the job image must provide a Git client" >&2
             exit 1
           }
-          # The build refuses a tree that does not match the admitted SHA, and
-          # refuses a tree that still carries a credential.
+          # The build refuses a tree that does not match the admitted SHA.
           [[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]]
+          # The executed files must be the admitted content, not merely the
+          # admitted commit reference: a modified or staged launcher would
+          # otherwise run under the shared build gate.
+          git -c advice.detachedHead=false diff --quiet --exit-code "$EXPECTED_SHA" -- \
+            || {
+              echo "the prepared tree modifies the admitted source" >&2
+              exit 1
+            }
+          [[ -z "$(git diff --cached --name-only)" ]] || {
+            echo "the prepared tree carries staged changes" >&2
+            exit 1
+          }
+          [[ -z "$(git ls-files --others --exclude-standard)" ]] || {
+            echo "the prepared tree carries untracked files" >&2
+            exit 1
+          }
           [[ -z "$(git config --get-all credential.helper || true)" ]] || {
             echo "the prepared tree must not carry a credential helper" >&2
             exit 1
           }
-          if grep -rIl --exclude-dir=.git -e 'gitea-operator-primary' -e 'github-owner-primary' . \
-             | grep -q .; then
-            echo "the prepared tree must not contain credential references" >&2
-            exit 1
-          fi
 
       - name: Verify under the canonical shared gate without network
         shell: bash
