@@ -37,16 +37,27 @@ forced.
 
 The native repository's git endpoint was proved by a real clone whose fetched
 head was the current `main` commit. The clone authenticates with the
-installed operator credential adapter over HTTP, so the credential travels
-only through Git's own pipe and the job never mounts the credential file.
+installed operator credential adapter over HTTP. That adapter is a local
+reader of the credential file rather than a broker, so the build job must
+not use it: doing so would hand the credential file to the build processes.
+The source is therefore fetched in the operator's protected context and
+handed to the job as a verified, credential-free tree whose identity the job
+re-checks against the admitted SHA.
+
+That hand-off is not provided by the current operator tooling, which performs
+the takeover, the metadata import and the daily sync but does not prepare a
+source tree for a job. The lane therefore verifies the tree it is given and
+fails with a clear message when the required delivery has not happened.
+Delivering that tree without exposing the credential file to the build
+processes is a remaining prerequisite and is not claimed as done.
 
 The internal lane itself is not yet a working gate. It is dispatched manually
 against an operator-admitted exact source SHA, uses the canonical global build
 gate and one compiler job, and builds with Cargo's offline mode against a
 fresh exclusive target. It does not provide kernel-level network isolation:
 the job image and build environment must deny egress if that boundary is
-required. The job still needs the credential adapter, its configuration and
-the canonical lock and cache mounts to be present, the job image's tool and
+required. The job still needs the operator-prepared source tree, the
+canonical lock and cache mounts to be present, the job image's tool and
 cache coverage to be verified, and one successful admitted run to be
 observed. Draft workflow files and a runner's capacity setting do not prove a
 working internal gate, and no successful internal CI run is claimed.

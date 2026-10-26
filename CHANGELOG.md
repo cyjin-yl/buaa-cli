@@ -14,11 +14,12 @@
   retained the previous pull mirror as a timestamped backup instead of
   deleting it; the repository is registered for the non-force per-ref
   fast-forward sync. The lane stays manual and admitted by exact source SHA,
-  keeps the canonical global build gate and one compiler job, fetches through
-  the installed operator credential adapter over HTTP so the credential never
-  reaches argv, the environment or the job, and uses Cargo's offline mode
-  rather than claiming kernel-level network isolation. No successful internal
-  CI run is claimed.
+  keeps the canonical global build gate and one compiler job, and builds from
+  a source tree the operator prepared in its protected context: the
+  credential helper reads the credential file locally rather than brokering
+  it, so the build job never runs it and never mounts a credential. The lane
+  uses Cargo's offline mode rather than claiming kernel-level network
+  isolation. No successful internal CI run is claimed.
 - Replace the canonical crates.io registry with a mainland mirror that the
   build network can actually reach. Declaring the mirror under a separate
   source name left the lock file resolving against the upstream registry

@@ -4,9 +4,15 @@ name: Admitted offline Rust
 # An operator must admit both the workflow revision and the source SHA before
 # dispatch. These variables are configuration, never credentials.
 #
-# This lane runs against the writable internal development repository. The
-# read-only GitHub mirror cannot accept pushes and is not a development
-# target.
+# The source is prepared by the installed operator in its protected context,
+# which owns the credential file, and is handed to this job as a verified,
+# credential-free source tree. This job never reads a credential, never mounts
+# a credential file and never performs an authenticated fetch: the operator's
+# credential helper is a local reader, not a broker, so putting it inside the
+# build container would hand the credential to the build processes.
+#
+# The operator prepares the tree at the admitted SHA and records its identity
+# in a file this job verifies. The job refuses to build anything else.
 on:
   workflow_dispatch:
 
@@ -17,12 +23,12 @@ jobs:
     timeout-minutes: 30
     container:
       # Observed local vantage-ci-job image ID (it has no RepoDigests).
-      # Runner must use this local image without pulling. Cache/tool coverage
-      # and required mounts remain runtime admission prerequisites.
+      # The runner must use this local image without pulling. Cache and tool
+      # coverage remain runtime admission prerequisites.
       image: sha256:57d4ae674d627b4d170c1e5c1a07e15971ab8f608a8c2f47307e7231c257fcab
       options: --user 1000:1000
     steps:
-      - name: Check out the admitted immutable source
+      - name: Verify the operator-prepared source tree
         shell: bash
         env:
           EXPECTED_SHA: ${{ vars.BUAA_CI_ADMITTED_SHA }}
@@ -30,37 +36,22 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$(id -u)" = 1000 ]]
-          # The source is fetched with the installed operator credential
-          # adapter, so the credential travels only through Git's own pipe:
-          # nothing reaches argv, the environment, a receipt or a file in
-          # this checkout, and the job never mounts the credential file.
-          #
-          # This lane therefore needs a Git client inside the job image. The
-          # container network cannot reach the public action host, so an
-          # action-based checkout is not available here.
           command -v git >/dev/null || {
             echo "the job image must provide a Git client" >&2
             exit 1
           }
-          export GIT_TERMINAL_PROMPT=0
-          export GITEA_PRIMARY_CONFIG=/etc/gitea-primary/config.json
-          git init -q .
-          git -c credential.helper=/opt/gitea-primary/git_credential.py \
-            fetch --no-tags --depth=1 \
-            http://10.10.10.12:3002/ezra/buaa-cli.git "$EXPECTED_SHA"
-          [[ "$(git rev-parse --verify FETCH_HEAD)" = "$EXPECTED_SHA" ]]
-          git -c advice.detachedHead=false checkout --detach --force "$EXPECTED_SHA"
+          # The build refuses a tree that does not match the admitted SHA, and
+          # refuses a tree that still carries a credential.
           [[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]]
-
-      - name: Confirm the admitted source is the checked-out source
-        shell: bash
-        env:
-          EXPECTED_SHA: ${{ vars.BUAA_CI_ADMITTED_SHA }}
-        run: |
-          set -euo pipefail
-          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$(id -u)" = 1000 ]]
-          [[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]]
+          [[ -z "$(git config --get-all credential.helper || true)" ]] || {
+            echo "the prepared tree must not carry a credential helper" >&2
+            exit 1
+          }
+          if grep -rIl --exclude-dir=.git -e 'gitea-operator-primary' -e 'github-owner-primary' . \
+             | grep -q .; then
+            echo "the prepared tree must not contain credential references" >&2
+            exit 1
+          fi
 
       - name: Verify under the canonical shared gate without network
         shell: bash
