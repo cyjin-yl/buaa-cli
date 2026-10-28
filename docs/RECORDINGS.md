@@ -585,6 +585,22 @@ region, so those early captures could not establish subtitle absence. A
 subtitle toggle while paused left the captured pixels unchanged; that control
 is inconclusive, not evidence of removal or general synchronization.
 
+## Offline subtitle export
+
+`buaa recordings subtitles export` reads JSON from stdin containing
+`authorized: true`, `format` (`srt` or `vtt`), an absolute `output` path and
+caller-supplied normalized `segments` with `start_ms`, `end_ms` and `text`.
+The output parent must already be an owner-controlled 0700 directory with no
+symlink path components. All cues are validated before writing. The command
+writes a 0600 staging file and atomically publishes it without replacing an
+existing target; the JSON receipt reports format, byte count and SHA-256 but
+not subtitle text or the output path. A crash may leave a private staging file,
+or a complete final file without a receipt if it occurs after publication.
+
+The exported file is a derivative of caller-supplied segments. Its receipt
+does not verify the original source, media rights or native-track association;
+it does not establish player rendering, synchronization or live updates.
+
 ## Live playback and remaining subtitle service gaps
 
 Live playback, current audio/video, reconnect/stop lifecycle and governed

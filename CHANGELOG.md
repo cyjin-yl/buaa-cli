@@ -15,6 +15,9 @@
 - Correct the gateway usage record: one authorized, governed read-only
   observation succeeded on 2026-10-21 without sending credentials. Login,
   logout and the account-specific AC identity remain unverified.
+- Add offline `recordings subtitles export` for caller-authorized normalized
+  cues. Write a new private SRT/WebVTT file atomically without replacing an
+  existing target; keep source, rights and native-track association unverified.
 - Move the build and test lane to the internal Gitea instance and stop
   running CI on GitHub. The installed `gitea-primary` operator took the
   repository over as a native one with the supported migration path and

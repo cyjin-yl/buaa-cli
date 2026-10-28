@@ -1,6 +1,7 @@
 //! Explicit native classroom subtitle selection, with separate supplied and
 //! fixed-origin governed HTTP originals. Neither path fetches recording media.
 use super::digest;
+use crate::governor;
 use crate::net::{
     CLASSROOM_ORIGIN, CLASSROOM_TRANSCRIPT_PATH, CacheMode, CacheStatus, ClassroomClient, Error,
     Response,
@@ -10,7 +11,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
+use std::ffi::CString;
 use std::io::{self, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -249,6 +255,205 @@ pub fn export_vtt(segments: &Value) -> Result<String, Error> {
     crate::recordings::subtitle_export::vtt(segments)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportInput {
+    #[serde(default)]
+    authorized: bool,
+    format: String,
+    output: String,
+    segments: Value,
+}
+
+static EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct ExportStaging<'a> {
+    directory: &'a std::fs::File,
+    name: CString,
+    file: std::fs::File,
+    id: (u64, u64),
+}
+
+impl Drop for ExportStaging<'_> {
+    fn drop(&mut self) {
+        if export_name_is_ours(self.directory, &self.name, self.id) {
+            // SAFETY: this pinned directory/name still identify our inode.
+            unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) };
+        }
+    }
+}
+
+fn create_export_staging<'a>(
+    directory: &'a std::fs::File,
+    destination: &str,
+) -> Result<ExportStaging<'a>, Error> {
+    for _ in 0..128 {
+        let name = format!(
+            ".subtitle-export-{}-{}.part",
+            std::process::id(),
+            EXPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        if name == destination {
+            continue;
+        }
+        let file = match governor::open_child(
+            directory,
+            &name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                return Err(Error::new(
+                    "unavailable",
+                    "Cannot create subtitle staging file.",
+                ));
+            }
+        };
+        let metadata = file
+            .metadata()
+            .map_err(|_| Error::new("unavailable", "Cannot inspect subtitle staging file."))?;
+        return Ok(ExportStaging {
+            directory,
+            name: CString::new(name).map_err(|_| invalid())?,
+            file,
+            id: (metadata.dev(), metadata.ino()),
+        });
+    }
+    Err(Error::new(
+        "unavailable",
+        "Cannot create subtitle staging file.",
+    ))
+}
+
+/// Write a caller-authorized derived subtitle file, without fetching a source.
+pub fn export(input: &str) -> Result<Value, Error> {
+    if input.len() > 8 * 1024 * 1024 {
+        return Err(invalid());
+    }
+    let request: ExportInput = serde_json::from_str(input).map_err(|_| invalid())?;
+    if !request.authorized {
+        return Err(Error::new(
+            "permission",
+            "Explicit authorization for the supplied subtitles is required.",
+        ));
+    }
+    let path = Path::new(&request.output);
+    if request.output.len() > 4096 || request.output.contains('\0') || !path.is_absolute() {
+        return Err(invalid());
+    }
+    let parent = path.parent().ok_or_else(invalid)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    let name_c = CString::new(name).map_err(|_| invalid())?;
+    if request
+        .segments
+        .as_array()
+        .is_none_or(|segments| segments.is_empty())
+    {
+        return Err(invalid());
+    }
+    let body = match request.format.as_str() {
+        "srt" => export_srt(&request.segments)?,
+        "vtt" => export_vtt(&request.segments)?,
+        _ => return Err(invalid()),
+    };
+    let directory = governor::open_directory(parent, false, true).map_err(|_| {
+        Error::new("permission", "Output parent must be an existing owner-controlled 0700 directory without symlink components.")
+    })?;
+    let mut staging = create_export_staging(&directory, name)?;
+    // SAFETY: staging.file is our exclusively created live descriptor.
+    if unsafe { libc::fchmod(staging.file.as_raw_fd(), 0o600) } != 0 {
+        return Err(Error::new("unavailable", "Cannot secure subtitle output."));
+    }
+    governor::validate_private_file(&staging.file).map_err(|_| {
+        Error::new(
+            "permission",
+            "Subtitle output is not a private regular file.",
+        )
+    })?;
+    staging
+        .file
+        .write_all(body.as_bytes())
+        .map_err(|_| Error::new("unavailable", "Cannot write subtitle output."))?;
+    staging
+        .file
+        .sync_all()
+        .map_err(|_| Error::new("unavailable", "Cannot synchronize subtitle output."))?;
+    governor::validate_private_file(&staging.file).map_err(|_| {
+        Error::new(
+            "permission",
+            "Subtitle output is not a private regular file.",
+        )
+    })?;
+    if !export_name_is_ours(&directory, &staging.name, staging.id) {
+        return Err(Error::new(
+            "conflict",
+            "Subtitle staging file changed during writing.",
+        ));
+    }
+    // SAFETY: both names are single components in the same pinned directory.
+    // RENAME_NOREPLACE atomically publishes only if the destination is absent.
+    if unsafe {
+        libc::renameat2(
+            directory.as_raw_fd(),
+            staging.name.as_ptr(),
+            directory.as_raw_fd(),
+            name_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } != 0
+    {
+        return Err(
+            if io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
+                Error::new("conflict", "Subtitle output already exists.")
+            } else {
+                Error::new("unavailable", "Cannot publish subtitle output atomically.")
+            },
+        );
+    }
+    let result = if !export_name_is_ours(&directory, &name_c, staging.id) {
+        Err(Error::new(
+            "conflict",
+            "Subtitle output changed during publication.",
+        ))
+    } else {
+        directory
+            .sync_all()
+            .map_err(|_| Error::new("unavailable", "Cannot synchronize subtitle directory."))
+    };
+    if result.is_err() && export_name_is_ours(&directory, &name_c, staging.id) {
+        // SAFETY: the final name still identifies the inode we published.
+        unsafe { libc::unlinkat(directory.as_raw_fd(), name_c.as_ptr(), 0) };
+    }
+    result?;
+    Ok(
+        json!({"schema_version":1,"type":"recording_subtitle_export","result":"written_new_file",
+        "format":request.format,"bytes":body.len(),"sha256":digest(body.as_bytes()),
+        "derivation":"derived-from-caller-supplied-segments","source_verified":false,
+        "rights_verified":false,"native_track_association_verified":false,"network_access":false}),
+    )
+}
+
+fn export_name_is_ours(directory: &std::fs::File, name: &CString, id: (u64, u64)) -> bool {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: name and directory are live; successful fstatat initializes stat.
+    unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        ) == 0
+            && {
+                let stat = stat.assume_init();
+                (stat.st_dev, stat.st_ino) == id
+            }
+    }
+}
+
 fn rejected_session() -> Error {
     Error::new(
         "auth_latched",
@@ -438,6 +643,18 @@ pub fn schema() -> Value {
     let id = json!({"type":"string","minLength":1,"maxLength":MAX_ID,"description":"Exact native identifier; UTF-8 byte bound applies, no control characters."});
     let resource_id = json!({"type":"string","maxLength":MAX_ID,"description":"Exact native resource_guid, including an empty string when the original track has no resource link; never inferred from another response. UTF-8 byte bound applies, no control characters."});
     json!({
+        "export":{
+            "command":"recordings subtitles export",
+            "input":{"type":"object","additionalProperties":false,"required":["authorized","format","output","segments"],"properties":{
+                "authorized":{"const":true,"description":"Caller attests authorization; rights are not verified."},
+                "format":{"enum":["srt","vtt"]},
+                "output":{"type":"string","minLength":2,"maxLength":4096,"pattern":"^/","description":"New file in an existing owner-controlled 0700 directory with no symlink path components."},
+                "segments":{"type":"array","minItems":1,"maxItems":MAX_SEGMENTS,"items":{"type":"object","required":["start_ms","end_ms","text"],"properties":{"start_ms":{"type":"integer","minimum":0},"end_ms":{"type":"integer","minimum":0},"text":{"type":"string","description":"Nonempty representable text, bounded to 8192 UTF-8 bytes; markup and control syntax are rejected."}}},"description":"Caller-supplied normalized cues; end must exceed start. Translation and other fields are not rendered."}
+            }},
+            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","format","bytes","sha256","derivation","source_verified","rights_verified","native_track_association_verified","network_access"],"properties":{
+                "schema_version":{"const":1},"type":{"const":"recording_subtitle_export"},"result":{"const":"written_new_file"},"format":{"enum":["srt","vtt"]},"bytes":{"type":"integer","minimum":1,"maximum":16777216},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"derivation":{"const":"derived-from-caller-supplied-segments"},"source_verified":{"const":false},"rights_verified":{"const":false},"native_track_association_verified":{"const":false},"network_access":{"const":false}
+            }},"stdin_max_bytes":8388608
+        },
         "input":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,
             "required":["authorized","format","body_base64","source_sha256","selection"],
             "properties":{
