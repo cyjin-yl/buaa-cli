@@ -8,13 +8,13 @@
   500. Document the observer's missing timestamps, incomplete request coverage
   and lack of a validated CLI selected-lesson session. Record safe capture
   boundaries without publishing authentication bodies or session material.
-- Record that the ticket-lifetime hypothesis was tested against the live
-  service and not supported: one issued ticket was redeemed immediately, again
-  after a sixty-second wait, and a third time, and every redemption was
-  answered with a redirect. Ticket expiration is withdrawn as the cause of the
-  callback error, and the remaining candidates are the request headers, the
-  cookies carried into the redemption and the credential submission's field
-  encoding.
+- Clarify that the classroom callback HTTP 500 and the deployed ticket
+  lifetime remain unresolved. Later ad hoc observations did not use the
+  shared governor or isolate one candidate factor, so their redirects and
+  errors do not establish the cause of the CLI failure.
+- Correct the gateway usage record: one authorized, governed read-only
+  observation succeeded on 2026-10-21 without sending credentials. Login,
+  logout and the account-specific AC identity remain unverified.
 - Move the build and test lane to the internal Gitea instance and stop
   running CI on GitHub. The installed `gitea-primary` operator took the
   repository over as a native one with the supported migration path and

@@ -93,52 +93,27 @@ replay or fabricate the payload, spoof fingerprints, or disable challenges.
 
 ## Failed CLI observations and unresolved cause
 
-Retained sanitized CLI receipts reported SSO GET 200, credential POST 302 and
-callback HTTP 500. The inspected callback query-name projections included
-`ticket`; they do not preserve ticket bytes, complete request equivalence or
-the original error body. The CLI's source inserted the configured request gap
-between HTTP hops. The original runtime retained a 60-second request policy.
+Sanitized CLI receipts reported SSO GET 200, credential POST 302 and callback
+HTTP 500. They do not establish the callback's error class, a selected-lesson
+session, credential rejection or the deployed ticket lifetime. The CLI's
+configured request gap applied to each HTTP hop in the retained attempt.
 
-party processing, ticket/service mismatch or another server failure. Neither
-### The ticket-lifetime hypothesis was tested and not supported
+A previously recorded comparison reported redirects immediately and after a
+60-second wait for a ticket that had already been redeemed. This observation
+does not establish the lifetime of a different ticket or justify replaying a
+consumed one. Later ad hoc tests observed both 302 and 500 using distinct
+credential submissions and different delays. They did not use the shared
+governor, and a cookie-comparison client could override its requested cookie
+header. Consequently they do not isolate the cause or prove that any given
+cookie, delay, TLS stack or server defect caused the CLI failure.
 
-A comparison was run against the live service for one account and one login
-page, using the same registered `service`, the same credential form fields
-and the same redirect chain as a browser. The single ticket issued by the
-credential submission was then redeemed more than once:
-
-| Redemption | Result |
-| --- | --- |
-| Immediately after the credential POST | HTTP 302 to the next hop |
-| After a 60-second wait, same ticket | HTTP 302 |
-| A third attempt, same ticket | HTTP 302 |
-
-The ticket therefore survived at least the interval the CLI used to wait
-between hops, and it also remained redeemable more than once. A ticket that
-expired during that interval, or one that could only be redeemed once, would
-have answered differently. Ticket expiration is consequently not supported as
-the cause of the observed 500, and the earlier hypothesis is withdrawn.
-
-What remains unobserved is the exact difference between that comparison and
-the CLI's own request. The comparison used a standard HTTP client with a
-browser-like user agent and a cookie jar; the CLI uses its own transport with
-its own user agent and header set, and its own cookie handling. The candidate
-differences are the request headers, the cookie set carried into the
-redemption, and the field encoding of the credential submission. A server
-error can still arise from relying-party processing, ticket/service mismatch
-or another server failure. Neither HTTP 500 nor a redirect proves password
-correctness or rejection.
-
-Upstream Apereo CAS documentation lists a default service-ticket lifetime of
-10 seconds and permits per-service overrides, so a short lifetime remains
-possible in deployments that differ from the one observed here. BUAA's
-deployed CAS version and policy were not observed either way.
-
-Missing discriminating evidence includes the completed callback's non-secret
-error reason and a controlled comparison that changes only the candidate
-factor. Do not obtain it by replaying a consumed ticket or by bypassing
-required request policy. Report any conflict between a required request
-policy and the service's behaviour; do not silently exempt redirects.
+Apereo documents a default service-ticket lifetime and per-service overrides;
+neither establishes the value deployed here. Further diagnosis must preserve
+the existing shared governor, its configured intervals and safety latch,
+honor challenges and Retry-After, and require a deliberate operator resume
+for each authentication attempt. Redirects are not automatically exempt from
+those requirements. Raw authentication bodies, cookies and tickets must not
+be logged or replayed.
 
 ## Acceptance and retention limits
 
