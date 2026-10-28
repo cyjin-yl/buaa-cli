@@ -540,6 +540,17 @@ local filesystem access. Player configuration and helper/script autoload are
 disabled so external configuration cannot enable daemon playback.
 The confinement requires Linux x86-64; unsupported platforms fail closed.
 
+An optional `media.receipt_path` selects the private acquisition receipt in
+the same pinned directory as the media. Replay checks the opened file's link
+count before reading and refuses a receipt-bound file already hard-linked at
+that point. It rechecks before binding, then compares the receipt's
+source-derived filenames, metadata, byte length and SHA-256 against the opened
+media before launching the player. Missing or mismatched receipts are refused
+rather than silently ignored. Without a receipt, the local source remains an
+operator assertion. A matching locally writable receipt does not authenticate
+remote origin, media rights or subtitle association; another link can be added
+or the opened media can change in place during or after hashing.
+
 Optional `seek_seconds` selects the initial media position. `max_seconds`
 limits the player run (default 120, maximum 3600); the parent stops and reaps
 the child when the bound expires. Media hashing precedes this player bound.

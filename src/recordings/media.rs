@@ -730,6 +730,54 @@ fn read_receipt(mut file: File) -> Result<MediaReceipt, Error> {
     serde_json::from_slice(&bytes).map_err(|_| unavailable())
 }
 
+fn validate_receipt(receipt: &MediaReceipt, url: &Url, budget: u64) -> Result<(), Error> {
+    let receipt_mime = receipt
+        .content_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if receipt.version != 1
+        || receipt.url != url.as_str()
+        || receipt.http_status != 200
+        || receipt.container != "mp4"
+        || !receipt.complete_body
+        || receipt.bytes == 0
+        || receipt.bytes > budget
+        || !lower_hex(&receipt.sha256, 64)
+        || !acceptable_media_mime(&receipt_mime)
+    {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+/// Bind an already-open replay descriptor's identity to a private local receipt.
+/// Neither this local record nor the digest authenticates the remote source.
+pub(crate) fn verify_replay_receipt(
+    directory: &File,
+    receipt_name: &str,
+    media_name: &str,
+    length: u64,
+    sha256: &str,
+    budget: u64,
+) -> Result<(), Error> {
+    let file = open_existing(directory, receipt_name)?.ok_or_else(unavailable)?;
+    let receipt = read_receipt(file)?;
+    let url = admitted_media_url(&receipt.url).map_err(|_| unavailable())?;
+    validate_receipt(&receipt, &url, budget)?;
+    let (expected_media, expected_receipt) = storage_names(&url);
+    if media_name != expected_media
+        || receipt_name != expected_receipt
+        || receipt.bytes != length
+        || receipt.sha256 != sha256
+    {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
 fn read_verified_file(file: &mut File, expected: u64) -> Result<(String, Vec<u8>), Error> {
     let mut remaining = expected;
     let mut hash = Sha256::new();
@@ -776,25 +824,7 @@ fn cached_media(target: &PrivateTarget, url: &Url, budget: u64) -> Result<Option
         }
     };
     let receipt = read_receipt(receipt)?;
-    let receipt_mime = receipt
-        .content_type
-        .split(';')
-        .next()
-        .map(str::trim)
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if receipt.version != 1
-        || receipt.url != url.as_str()
-        || receipt.http_status != 200
-        || receipt.container != "mp4"
-        || !receipt.complete_body
-        || receipt.bytes == 0
-        || receipt.bytes > budget
-        || !lower_hex(&receipt.sha256, 64)
-        || !acceptable_media_mime(&receipt_mime)
-    {
-        return Err(unavailable());
-    }
+    validate_receipt(&receipt, url, budget)?;
     if media.metadata().map_err(|_| unavailable())?.len() != receipt.bytes {
         return Err(body_incomplete());
     }
