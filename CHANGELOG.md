@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document the write-capable, repository-scoped Gitea deploy key, the lack of
+  server-side `main` protection, and the untested downstream `main` update.
 - Record that restoring Git refs and importing GitHub metadata does not prove
   recovery of any Gitea-only issues, comments or approvals from the missing
   former repository.

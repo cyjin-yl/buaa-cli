@@ -326,7 +326,12 @@ the operator cache's 138 refs were saved in a verified private Git bundle;
 afterward all 69 previously recorded primary refs were present as equal or
 descendant refs. The shared Git `origin` now names the Gitea HTTPS URL; the
 worktree uses a repository-scoped deploy key and a pinned SSH host key for Git
-transport. GitHub remains a separate downstream, not the development origin.
+transport. The rewrite and its SSH host alias are scoped to this repository's
+URL; they do not replace the SSH command for unrelated remotes. The deploy key
+can write this Gitea repository, and Gitea `main` currently has no server-side
+branch protection. Do not push directly to `main` or infer permission to bypass
+the contributor review and acceptance gates from that absence of protection.
+GitHub remains a separate downstream, not the development origin.
 
 The new repository imported the available GitHub issue and pull-request
 metadata. The former Gitea repository ID and its issue and pull-request rows
@@ -345,7 +350,9 @@ Its receipt reported 72 equal refs and two new downstream branches, without
 conflicts or force pushes. Independent readback matched Gitea and GitHub for
 `main` and both newly published development branches. This verifies that
 manual invocation and those refs; the next automatic scheduled invocation has
-not yet occurred. Every Gitea branch and tag is eligible for publication to
+not yet occurred. Run 641 did not update GitHub `main`: that ref was already
+equal, so the path for publishing a later primary `main` change has not yet
+been exercised. Every Gitea branch and tag is eligible for publication to
 the public GitHub downstream on a successful sync, including draft and
 checkpoint branches. Downstream-only refs are preserved, so deleting a Gitea
 ref does not automatically retract its published counterpart. Do not commit

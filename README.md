@@ -19,13 +19,18 @@ therefore publish pushed drafts and checkpoints as well as `main`; deletion
 from Gitea does not automatically delete a downstream ref. Treat every push
 as public publication and never commit credentials, private responses, or
 other non-public material. A private Gitea visibility setting is not an
-exclusion from this synchronization.
+exclusion from this synchronization. Removing a published downstream ref
+requires a separately authorized GitHub-side action; deletion does not prove
+that already distributed content has been erased.
 
 Gitea and GitHub pull requests have separate numbers, reviews and checks.
 An approval or successful check on one host is not evidence of an approval or
-check on the other. Follow the repository's existing `gh stack`, exact-head
-review and acceptance requirements; a Gitea draft does not itself register a
-GitHub native stack or authorize a merge.
+check on the other. Use `gh stack` for the ordered local branches required by
+the contributor contract, and review the Gitea pull-request chain on the
+primary. A Gitea draft does not itself register a GitHub native stack or
+authorize a merge. Do not merge the GitHub downstream as a substitute for
+integrating the primary; integrate on Gitea only after the exact-head review
+and acceptance gates are satisfied.
 
 ## Status boundary
 
