@@ -329,10 +329,11 @@ worktree uses a repository-scoped deploy key and a pinned SSH host key for Git
 transport. GitHub remains a separate downstream, not the development origin.
 
 The new repository imported the available GitHub issue and pull-request
-metadata. The former Gitea repository ID and its issue, pull-request and comment
-rows are absent from the current Gitea database; the retained older backup
-repositories have no such rows. A restorable pre-deletion database snapshot
-has not been identified. Therefore the Git and GitHub import readbacks do not
+metadata. The former Gitea repository ID and its issue and pull-request rows
+are absent from the current database, so no comments can be attributed through
+its current issue rows; the retained older backup repositories also have no
+issue or pull-request rows. A restorable pre-deletion database snapshot has
+not been identified. Therefore the Git and GitHub import readbacks do not
 establish whether any Gitea-only issues, comments or approvals existed or
 were recovered. The backup repositories and private ref bundle remain intact.
 
