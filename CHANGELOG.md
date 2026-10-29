@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Restore the private Gitea repository as the development primary, retain its
+  previous backups and frozen refs, and keep GitHub as a checked non-force
+  downstream. One manual run of the existing daily synchronization succeeded;
+  the next scheduled run has not yet been observed.
 - Require the offline CI image's UID1000 passwd home to match the canonical
   `/home/ezra` Cargo-lock directory before admitting a build. A mounted file
   at that path alone does not establish which lock the wrapper will acquire.

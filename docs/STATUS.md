@@ -286,7 +286,10 @@ remains offline and unbound.
 ## Native verification still open (2026-10-30)
 
 The integration source was checkpointed locally as
-`9cbc4cdf08deb294c20451a1e22f9b32cf23b8ea`, without publishing or deploying it.
+`9cbc4cdf08deb294c20451a1e22f9b32cf23b8ea` and rebased onto the subtitle-export
+layer as `3f4f0345246cb22b1a815c562a9f4548d279eaa2`. It is published as a
+[Gitea draft](https://doesvm.icefish-exponential.ts.net:8444/ezra/buaa-cli/pulls/158),
+but has not been deployed.
 A subsequent locked, offline default-profile build acquired the shared
 heavy-work slot but failed while creating encoded library metadata with
 `Cannot allocate memory (os error 12)` under the unchanged 2 GiB address-space
@@ -311,6 +314,30 @@ conditional CI lock-path mismatch. The candidate now requires the effective
 UID's passwd home to be `/home/ezra` before checking the canonical mounted
 lock. This matches `scripts/cargo-locked`, which derives its lock from passwd
 rather than `HOME`. No successful internal CI run is claimed.
+
+## Gitea primary restoration (2026-10-30)
+
+The development primary is the private, native
+[`ezra/buaa-cli`](https://doesvm.icefish-exponential.ts.net:8444/ezra/buaa-cli)
+repository. The formerly registered Gitea repository ID was no longer
+available. The existing operator recreated and enrolled the native repository
+as ID 161, leaving both prior backup repositories intact. Before restoration,
+the operator cache's 138 refs were saved in a verified private Git bundle;
+afterward all 69 previously recorded primary refs were present as equal or
+descendant refs. The shared Git `origin` now names the Gitea HTTPS URL; the
+worktree uses a repository-scoped deploy key and a pinned SSH host key for Git
+transport. GitHub remains a separate downstream, not the development origin.
+
+The existing Gitea workflow is scheduled daily at 19:30 UTC, or 03:30 Beijing
+time. One manual execution of that same workflow,
+[run 641](https://doesvm.icefish-exponential.ts.net:8444/ezra/gitea-primary/actions/runs/641),
+completed successfully and used the existing dedicated GitHub credential.
+Its receipt reported 72 equal refs and two new downstream branches, without
+conflicts or force pushes. Independent readback matched Gitea and GitHub for
+`main` and both newly published development branches. This verifies that
+manual invocation and those refs; the next automatic scheduled invocation has
+not yet occurred. The two development PRs remain drafts, and synchronization
+is not evidence of a successful build, merge, login or online acceptance.
 
 ## Drive source-contract boundary
 
