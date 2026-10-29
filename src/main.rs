@@ -1,12 +1,20 @@
 use serde_json::{Value, json};
 use std::io::{self, Read, Write};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const MAX_INPUT: u64 = 8 * 1024 * 1024;
 const MATRIX: &str = include_str!("../acceptance.json");
+const NETWORK_OPT_IN: &str = "Network-capable reads and authentication require --online or --refresh where supported; contribution scan requires online:true on stdin. Report may invoke an authenticated GitHub Issue writer. See each command schema for operation-specific gates.";
 
 type CliError = (&'static str, u8, String);
 type CliResult = Result<(), CliError>;
+
+/// The recordings capability schema plus the live-stream sub-capability.
+fn recordings_schema() -> Value {
+    let mut schema = buaa_cli::recordings::schema();
+    schema["live"] = buaa_cli::recordings::live::schema();
+    schema
+}
 
 fn emit(value: &Value) -> CliResult {
     let mut out = io::stdout().lock();
@@ -16,10 +24,10 @@ fn emit(value: &Value) -> CliResult {
 }
 
 fn read_input() -> Result<String, CliError> {
-    let mut input = String::new();
+    let mut input = Zeroizing::new(Vec::new());
     io::stdin()
         .take(MAX_INPUT + 1)
-        .read_to_string(&mut input)
+        .read_to_end(&mut input)
         .map_err(|error| match error.kind() {
             io::ErrorKind::InvalidData => ("invalid_input", 2, "stdin must be UTF-8".into()),
             _ => ("unavailable", 7, "stdin is unavailable".into()),
@@ -27,7 +35,13 @@ fn read_input() -> Result<String, CliError> {
     if input.len() as u64 > MAX_INPUT {
         return Err(("invalid_input", 2, "input exceeds 8 MiB limit".into()));
     }
-    Ok(input)
+    match String::from_utf8(std::mem::take(&mut *input)) {
+        Ok(text) => Ok(text),
+        Err(error) => {
+            let _invalid_bytes = Zeroizing::new(error.into_bytes());
+            Err(("invalid_input", 2, "stdin must be UTF-8".into()))
+        }
+    }
 }
 
 /// Read stdin only when data is actually piped; interactive terminals fall
@@ -45,6 +59,7 @@ fn service_error(error: buaa_cli::net::Error) -> CliError {
         "invalid_input" => ("invalid_input", 2),
         "unsupported" | "redirect_refused" | "unsupported_encoding" => ("unsupported", 3),
         "auth_latched" | "safety_latched" => ("auth_latched", 4),
+        "scoped_cookie_unusable" => ("scoped_cookie_unusable", 7),
         "authorization_required" => ("authorization_required", 4),
         "permission" | "robots_denied" | "egress_denied" => ("permission", 5),
         "rate_limited" | "cooldown" | "request_gap" => ("rate_limited", 8),
@@ -293,6 +308,61 @@ fn run_spoc(args: &[String]) -> CliResult {
     emit(&output)
 }
 
+fn run_departments(args: &[String]) -> CliResult {
+    let operation = match args.first().map(String::as_str) {
+        Some("inventory") => "inventory",
+        Some("retrieve") => "retrieve",
+        _ => {
+            return Err((
+                "unsupported",
+                3,
+                "expected departments inventory or retrieve".into(),
+            ));
+        }
+    };
+    let online = match args.get(1).map(String::as_str) {
+        None => false,
+        Some("--online") if args.len() == 2 => true,
+        _ => {
+            return Err((
+                "invalid_input",
+                2,
+                "expected at most one of --online".into(),
+            ));
+        }
+    };
+    let input = Zeroizing::new(read_input()?);
+    let output = if operation == "inventory" {
+        buaa_cli::departments::inventory(&input, online)
+    } else {
+        buaa_cli::departments::retrieve(&input, online)
+    }
+    .map_err(service_error)?;
+    emit(&output)
+}
+
+/// Shared dispatcher for the JSON-input capability modules: the module reads
+/// one JSON object from standard input and returns its structured output.
+fn run_json_module(
+    args: &[String],
+    entry: fn(&str, bool) -> Result<serde_json::Value, buaa_cli::net::Error>,
+) -> CliResult {
+    let online = match args.first().map(String::as_str) {
+        None => false,
+        Some("--online") if args.len() == 1 => true,
+        _ => {
+            return Err((
+                "invalid_input",
+                2,
+                "expected at most one of --online".into(),
+            ));
+        }
+    };
+    let input = Zeroizing::new(read_input()?);
+    let output = entry(input.as_str(), online).map_err(service_error)?;
+    emit(&output)
+}
+
 fn run_announcements(args: &[String]) -> CliResult {
     use buaa_cli::net::CacheMode;
     let mode = |args: &[String]| -> Result<CacheMode, CliError> {
@@ -389,6 +459,236 @@ fn run_credits(args: &[String]) -> CliResult {
     }
     emit(&output)
 }
+
+/// Parse the optional `--online` flag that follows a sub-action.
+fn online_flag(args: &[String]) -> Result<bool, CliError> {
+    match args.first().map(String::as_str) {
+        None => Ok(false),
+        Some("--online") if args.len() == 1 => Ok(true),
+        _ => Err(("invalid_input", 2, "expected at most one of --online".into())),
+    }
+}
+
+fn run_ihome(args: &[String]) -> CliResult {
+    let operation = match args.first().map(String::as_str) {
+        Some(operation @ ("list" | "detail")) => operation,
+        _ => return Err(("unsupported", 3, "expected ihome list or detail".into())),
+    };
+    let online = online_flag(&args[1..])?;
+    let input = Zeroizing::new(read_input()?);
+    let output = if operation == "list" {
+        buaa_cli::ihome::list(&input, online)
+    } else {
+        buaa_cli::ihome::detail(&input, online)
+    }
+    .map_err(service_error)?;
+    emit(&output)
+}
+
+fn run_welearn(args: &[String]) -> CliResult {
+    let operation = match args.first().map(String::as_str) {
+        Some(operation @ ("materials" | "search" | "fetch" | "practice")) => operation,
+        _ => {
+            return Err((
+                "unsupported",
+                3,
+                "expected welearn materials, search, fetch or practice".into(),
+            ));
+        }
+    };
+    let online = online_flag(&args[1..])?;
+    let input = read_input()?;
+    let output = match operation {
+        "materials" => buaa_cli::welearn::materials(&input, online),
+        "search" => buaa_cli::welearn::search(&input, online),
+        "fetch" => buaa_cli::welearn::fetch(&input, online),
+        _ => buaa_cli::welearn::practice(&input),
+    }
+    .map_err(service_error)?;
+    emit(&output)
+}
+
+fn run_aerospace(args: &[String]) -> CliResult {
+    let operation = match args.first().map(String::as_str) {
+        Some(operation @ ("materials" | "search" | "fetch" | "practice")) => operation,
+        _ => {
+            return Err((
+                "unsupported",
+                3,
+                "expected aerospace materials, search, fetch or practice".into(),
+            ));
+        }
+    };
+    let online = online_flag(&args[1..])?;
+    let input = read_input()?;
+    let output = match operation {
+        "materials" => buaa_cli::aerospace::materials(&input, online),
+        "search" => buaa_cli::aerospace::search(&input, online),
+        "fetch" => buaa_cli::aerospace::fetch(&input, online),
+        _ => buaa_cli::aerospace::practice(&input),
+    }
+    .map_err(service_error)?;
+    emit(&output)
+}
+
+fn json_input(input: &str) -> Result<Value, CliError> {
+    serde_json::from_str(input).map_err(|_| ("invalid_input", 2, "expected JSON input".to_string()))
+}
+
+fn json_text(value: &Value, key: &str) -> String {
+            value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn run_os_lab(args: &[String]) -> CliResult {
+    let operation = match args.first().map(String::as_str) {
+        Some(operation @ ("read" | "plan")) => operation,
+        _ => return Err(("unsupported", 3, "expected os-lab read or plan".into())),
+    };
+    let online = online_flag(&args[1..])?;
+    if operation == "read" && !online {
+        return Err(("invalid_input", 2, "os-lab read requires --online".into()));
+    }
+    let input = Zeroizing::new(read_input()?);
+    let output = if operation == "read" {
+        buaa_cli::os_lab::read_stdin(&input, online)
+    } else {
+        buaa_cli::os_lab::connection_plan(input.as_str())
+    }
+    .map_err(service_error)?;
+    emit(&output)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoursegradingStatusInput {
+    #[serde(deserialize_with = "zeroizing_string")]
+    body_base64: Zeroizing<String>,
+    #[serde(default, deserialize_with = "optional_zeroizing_string")]
+    content_type: Option<Zeroizing<String>>,
+}
+
+fn zeroizing_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Zeroizing<String>, D::Error> {
+    <String as serde::Deserialize>::deserialize(deserializer).map(Zeroizing::new)
+}
+
+fn optional_zeroizing_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Zeroizing<String>>, D::Error> {
+    <Option<String> as serde::Deserialize>::deserialize(deserializer).map(|value|value.map(Zeroizing::new))
+}
+
+fn run_coursegrading(args: &[String]) -> CliResult {
+    let operation = match args.first().map(String::as_str) {
+        Some(operation @ ("unsupported" | "probe-https" | "preview" | "status")) => operation,
+        _ => {
+            return Err((
+                "unsupported",
+                3,
+                "expected coursegrading unsupported, probe-https, preview or status".into(),
+            ));
+        }
+    };
+    let online = online_flag(&args[1..])?;
+    let output = match operation {
+        "unsupported" => buaa_cli::coursegrading::unsupported(),
+        "probe-https" => {
+            if !online {
+                return Err((
+                    "invalid_input",
+                    2,
+                    "the HTTPS probe requires --online".into(),
+                ));
+            }
+            buaa_cli::coursegrading::probe_https(online).map_err(service_error)?
+        }
+        "preview" => {
+            let input = read_input()?;
+            let value = json_input(&input)?;
+            let path = std::path::PathBuf::from(json_text(&value, "local_file"));
+            let preview = buaa_cli::coursegrading::preview(
+                &json_text(&value, "course_id"),
+                &json_text(&value, "assignment_id"),
+                &json_text(&value, "problem_id"),
+                &path,
+            )
+            .map_err(service_error)?;
+            serde_json::to_value(preview)
+                .map_err(|_| ("unavailable", 7, "preview serialization failed".into()))?
+        }
+        _ => {
+            let input = Zeroizing::new(read_input()?);
+            if !input.trim_start_matches([' ', '\t', '\r', '\n']).starts_with('{') {
+                return Err(("invalid_input", 2, "coursegrading status requires a JSON object".into()));
+            }
+            let value: CoursegradingStatusInput = serde_json::from_str(input.as_str())
+                .map_err(|_| ("invalid_input", 2, "invalid coursegrading status input".into()))?;
+            let bytes = Zeroizing::new(base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                value.body_base64.as_str(),
+            )
+            .map_err(|_| ("invalid_input", 2, "body_base64 must be base64".to_string()))?);
+            buaa_cli::coursegrading::parse_status(
+                &bytes,
+                value.content_type.as_ref().map(|value|value.as_str()),
+            )
+        }
+    };
+    emit(&output)
+}
+
+// Build the growing command map outside json! to avoid recursive macro depth.
+fn command_schemas() -> Value {
+    let commands: serde_json::Map<String, Value> = [
+        ("archive", buaa_cli::archive::schema()),
+        ("marks", buaa_cli::marks::schema()),
+        ("fengrubei", buaa_cli::fengrubei::schema()),
+        ("gateway", buaa_cli::gateway::schema()),
+        ("governor", buaa_cli::governor::boot_review_schema()),
+        ("recordings", recordings_schema()),
+        ("report", buaa_cli::report::schema()),
+        ("organizations", buaa_cli::organizations::schema()),
+        ("spoc", buaa_cli::spoc::schema()),
+        ("announcements", buaa_cli::announcements::schema()),
+        ("credits", buaa_cli::credits::schema()),
+        ("drift", buaa_cli::drift::schema()),
+        ("timetable", buaa_cli::timetable::schema()),
+        ("timetable-pg", buaa_cli::timetable_pg::schema()),
+        ("departments", buaa_cli::departments::schema()),
+        ("contribution", buaa_cli::contribution::schema()),
+        ("smart", buaa_cli::smart::schema()),
+        ("ihome", buaa_cli::ihome::schema()),
+        ("welearn", buaa_cli::welearn::schema()),
+        ("aerospace", buaa_cli::aerospace::schema()),
+        ("electricity", buaa_cli::electricity::schema()),
+        ("enrol", buaa_cli::enrol::schema()),
+        ("evaluation", buaa_cli::evaluation::schema()),
+        ("checkin", buaa_cli::checkin::schema()),
+        ("boya", buaa_cli::boya::schema()),
+        ("drive", buaa_cli::drive::schema()),
+        ("shuttle", buaa_cli::shuttle::schema()),
+        ("os-lab", buaa_cli::os_lab::schema()),
+        ("coursegrading", buaa_cli::coursegrading::schema()),
+        ("physics", buaa_cli::physics::schema()),
+        ("physics-experiment", buaa_cli::physics_experiment::schema()),
+        ("timed-input", json!({
+                    "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
+                        "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
+                        "order":"nondecreasing; stable for equal timestamps", "max_rows":100000, "max_seconds":86400},
+                    "options":{"--raw":"explicit raw text lines, not JSON", "--dry-run":"NDJSON validated schedule without waiting; incompatible with --raw"},
+                    "stdout_schema": {"$schema":"https://json-schema.org/draft/2020-12/schema",
+                        "type":"object", "required":["type","sequence","at_ns","text"],
+                        "properties":{"type":{"const":"timed_input"},"sequence":{"type":"integer","minimum":1},"at_ns":{"type":"integer","minimum":0,"maximum":86400000000000_u64},"text":{"type":"string"}},"additionalProperties":false}
+                })),
+        ("capabilities", json!({"stdout":"single JSON acceptance manifest; pending/deferred entries are incomplete capabilities and may expose partial or blocked commands"})),
+    ]
+    .into_iter()
+    .map(|(name, schema)| (name.to_owned(), schema))
+    .collect();
+    Value::Object(commands)
+}
+
 fn run() -> CliResult {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
@@ -402,8 +702,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
-            "network_policy": {"default":"offline", "opt_in":"archive/organizations/announcements/spoc/recordings subtitles --online or --refresh; recordings session/media --online; fengrubei fetch --online; gateway explicit online flags", "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "departments inventory|retrieve [--online]", "contribution scan", "timetable-pg parse", "smart [--online]", "ihome list|detail [--online]", "welearn materials|search|fetch|practice [--online]", "aerospace materials|search|fetch|practice [--online]", "enrol [--online]", "evaluation [--online]", "checkin [--online]", "boya [--online]", "drive [--online]", "shuttle [--online]", "electricity [--online]", "os-lab read|plan [--online]", "coursegrading unsupported|probe-https|preview|status [--online]", "physics-experiment [--online]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "network_policy": {"default":"offline", "opt_in":NETWORK_OPT_IN, "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
             "help": "recordings subtitles export reads authorized caller-supplied normalized segments, srt/vtt format and absolute new output path from JSON stdin; it is offline and does not verify source, rights or native track association. timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting. A latched account is cleared by one explicit 'recordings session --offline' with intent 'RESUME CLASSROOM AUTH', which arms exactly one attempt, not a verified login; 'recordings session diagnose --online' submits no credential, while actual challenges and HTTP 401/403 retain safety latching."
         })),
         "capabilities" if args.len() == 1 => {
@@ -413,35 +713,10 @@ fn run() -> CliResult {
         }
         "schema" if args.len() == 1 => emit(&json!({
             "schema_version": 1,
-            "commands": {
-                "archive": buaa_cli::archive::schema(),
-                "marks": buaa_cli::marks::schema(),
-                "fengrubei": buaa_cli::fengrubei::schema(),
-                "gateway": buaa_cli::gateway::schema(),
-                "governor": buaa_cli::governor::boot_review_schema(),
-                "recordings": buaa_cli::recordings::schema(),
-                "report": buaa_cli::report::schema(),
-                "organizations": buaa_cli::organizations::schema(),
-                "spoc": buaa_cli::spoc::schema(),
-                "announcements": buaa_cli::announcements::schema(),
-                "credits": buaa_cli::credits::schema(),
-                "drift": buaa_cli::drift::schema(),
-                "timetable": buaa_cli::timetable::schema(),
-                "physics": buaa_cli::physics::schema(),
-                "timed-input": {
-                    "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
-                        "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
-                        "order":"nondecreasing; stable for equal timestamps", "max_rows":100000, "max_seconds":86400},
-                    "options":{"--raw":"explicit raw text lines, not JSON", "--dry-run":"NDJSON validated schedule without waiting; incompatible with --raw"},
-                    "stdout_schema": {"$schema":"https://json-schema.org/draft/2020-12/schema",
-                        "type":"object", "required":["type","sequence","at_ns","text"],
-                        "properties":{"type":{"const":"timed_input"},"sequence":{"type":"integer","minimum":1},"at_ns":{"type":"integer","minimum":0,"maximum":86400000000000_u64},"text":{"type":"string"}},"additionalProperties":false}
-                },
-                "capabilities":{"stdout":"single JSON acceptance manifest; pending/deferred entries are not available commands"}
-            },
+            "commands": command_schemas(),
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
-            "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"authorization_required":4,"permission":5,"unavailable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
-            "network_policy":{"default":"offline","opt_in":"archive/organizations/announcements/spoc/recordings subtitles --online or --refresh; recordings session/media --online; fengrubei fetch --online; gateway explicit online flags","campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
+            "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"authorization_required":4,"permission":5,"unavailable":7,"scoped_cookie_unusable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
+            "network_policy":{"default":"offline","opt_in":NETWORK_OPT_IN,"campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
             let mut raw = false;
@@ -577,6 +852,61 @@ fn run() -> CliResult {
             emit(&output.map_err(service_error)?)
         }
         "organizations" => run_organizations(&args[1..]),
+        "departments" => run_departments(&args[1..]),
+        "smart" => run_json_module(&args[1..], buaa_cli::smart::read),
+        "ihome" => run_ihome(&args[1..]),
+        "welearn" => run_welearn(&args[1..]),
+        "aerospace" => run_aerospace(&args[1..]),
+        "os-lab" => run_os_lab(&args[1..]),
+        "coursegrading" => run_coursegrading(&args[1..]),
+        "enrol" => run_json_module(&args[1..], buaa_cli::enrol::run),
+        "evaluation" => {
+            let online = online_flag(&args[1..])?;
+            let input = Zeroizing::new(read_input()?);
+            let output = buaa_cli::evaluation::run(&input, online).map_err(|error| {
+                let message = match &error {
+                    buaa_cli::evaluation::Error::Invalid(reason) => reason.to_string(),
+                    buaa_cli::evaluation::Error::Unsupported(reason) => reason.to_string(),
+                    buaa_cli::evaluation::Error::Local(reason) => reason.clone(),
+                    buaa_cli::evaluation::Error::Remote(evidence) => {
+                        format!("remote response not admitted: {}", evidence.fallback_reason)
+                    }
+                };
+                match &error {
+                    buaa_cli::evaluation::Error::Invalid(_) => ("invalid_input", 2, message),
+                    buaa_cli::evaluation::Error::Unsupported(_) => ("unsupported", 3, message),
+                    _ => ("unavailable", 7, message),
+                }
+            })?;
+            emit(&output)
+        }
+        "checkin" => run_json_module(&args[1..], buaa_cli::checkin::run),
+        "boya" => run_json_module(&args[1..], buaa_cli::boya::run),
+        "drive" => run_json_module(&args[1..], buaa_cli::drive::run),
+        "shuttle" => run_json_module(&args[1..], buaa_cli::shuttle::run),
+        "electricity" => run_json_module(&args[1..], buaa_cli::electricity::run),
+        "physics-experiment" => run_json_module(&args[1..], buaa_cli::physics_experiment::run),
+        "contribution" if args.len() == 2 && args[1] == "scan" => {
+            let input = Zeroizing::new(read_input()?);
+            let output = buaa_cli::contribution::scan(input.as_str()).map_err(service_error)?;
+            emit(&output)
+        }
+        "timetable-pg" if args.len() == 2 && args[1] == "parse" => {
+            let input = read_input()?;
+            let output = buaa_cli::timetable_pg::check(&input);
+            if output.get("error").is_some() {
+                return Err((
+                    "invalid_input",
+                    2,
+                    output
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("timetable-pg parse failed")
+                        .to_string(),
+                ));
+            }
+            emit(&output)
+        }
         "spoc" => run_spoc(&args[1..]),
         "announcements" => run_announcements(&args[1..]),
         "drift" if args.len() == 2 && args[1] == "check" => {

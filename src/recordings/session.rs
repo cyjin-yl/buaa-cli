@@ -80,6 +80,35 @@ fn challenge() -> Error {
     )
 }
 
+fn cached_safety_observed() -> Error {
+    Error::new(
+        "safety_latched",
+        "A confirmed account-safety challenge was observed in retained data; no further request was sent.",
+    )
+}
+
+fn governor_state_unknown() -> Error {
+    Error::new(
+        "governor_unavailable",
+        "The shared safety admission could not be completed; the pending outcome remains for offline review.",
+    )
+}
+
+fn scoped_cookie_unusable() -> Error {
+    Error::new(
+        "scoped_cookie_unusable",
+        "A selected classroom cookie expired or became invalid before transmission; no further request was sent.",
+    )
+}
+
+fn finish_send_failure(lease: RequestLease<'_>, error: &Error) -> Result<(), String> {
+    match error.code {
+        "scoped_cookie_unusable" => lease.finish_without_request(),
+        "safety_latched" => lease.finish(crate::governor::Outcome::SafetyObserved),
+        _ => lease.finish(crate::governor::Outcome::NetworkFailure),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResumeInput<'a> {
@@ -207,6 +236,12 @@ impl Cookie {
 #[derive(Default)]
 struct Jar {
     cookies: Vec<Cookie>,
+}
+
+enum ScopedCookies {
+    Anonymous,
+    Ready(Zeroizing<String>, Option<SystemTime>),
+    Unusable,
 }
 
 #[derive(Deserialize)]
@@ -729,25 +764,32 @@ impl Jar {
         Ok(())
     }
 
-    fn cookie_text(&self, url: &Url) -> Option<(Zeroizing<String>, Option<SystemTime>)> {
-        let host = url.host_str()?.to_ascii_lowercase();
-        let mut text = Zeroizing::new(String::new());
-        let mut expires = None;
+    fn select_cookies(&self, url: &Url, reject_expired: bool) -> ScopedCookies {
+        let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+            return ScopedCookies::Unusable;
+        };
         let mut order = [usize::MAX; MAX_COOKIE_COUNT];
         let mut count = 0;
         for (index, cookie) in self.cookies.iter().enumerate() {
-            if cookie_expired(cookie.expiry) || !cookie_path_matches(&cookie.path, url.path()) {
+            if !cookie_path_matches(&cookie.path, url.path()) {
                 continue;
             }
             let permitted = match &cookie.scope {
                 Scope::Host(scope) => *scope == host,
-                Scope::Platform(domain) => host == *domain || host.ends_with(&format!(".{domain}")),
+                Scope::Platform(domain) => host == *domain
+                    || host.strip_suffix(domain.as_str()).is_some_and(|prefix| prefix.ends_with('.')),
             };
             if !permitted {
                 continue;
             }
+            if cookie_expired(cookie.expiry) {
+                if reject_expired {
+                    return ScopedCookies::Unusable;
+                }
+                continue;
+            }
             if count == order.len() {
-                return None;
+                return ScopedCookies::Unusable;
             }
             let mut insert_at = count;
             while insert_at > 0 && self.cookies[order[insert_at - 1]].path.len() < cookie.path.len()
@@ -758,6 +800,11 @@ impl Jar {
             order[insert_at] = index;
             count += 1;
         }
+        if count == 0 {
+            return ScopedCookies::Anonymous;
+        }
+        let mut text = Zeroizing::new(String::new());
+        let mut expires = None;
         for index in &order[..count] {
             let cookie = &self.cookies[*index];
             if let Some(expiry) = cookie.expiry {
@@ -771,9 +818,16 @@ impl Jar {
             text.push_str(&cookie.value);
         }
         if text.is_empty() || text.len() > MAX_COOKIE_BYTES {
-            return None;
+            return ScopedCookies::Unusable;
         }
-        Some((text, expires))
+        ScopedCookies::Ready(text, expires)
+    }
+
+    fn cookie_text(&self, url: &Url) -> Option<(Zeroizing<String>, Option<SystemTime>)> {
+        match self.select_cookies(url, false) {
+            ScopedCookies::Ready(text, expiry) => Some((text, expiry)),
+            ScopedCookies::Anonymous | ScopedCookies::Unusable => None,
+        }
     }
 
     fn header(&self, url: &Url) -> Option<HeaderValue> {
@@ -3291,8 +3345,18 @@ fn send(
     let mut first = initial;
     let mut had_redirect = false;
     for _ in 0..=MAX_REDIRECTS {
+        // Snapshot the scoped cookie and its earliest expiry before any
+        // pacing or mailbox wait. The zeroizing buffer stays local.
+        let cookie_snapshot = match jar.select_cookies(&url, true) {
+            ScopedCookies::Anonymous => None,
+            ScopedCookies::Ready(cookie, expiry) => Some((cookie, expiry)),
+            ScopedCookies::Unusable => return Err(scoped_cookie_unusable()),
+        };
         if !first {
-            let reservation = lease.reserve_followup().map_err(|_| unavailable())?;
+            let reservation = lease.reserve_followup().map_err(|error| match error {
+                crate::governor::FollowupError::CachedChallenge => cached_safety_observed(),
+                crate::governor::FollowupError::Governor(_) => governor_state_unknown(),
+            })?;
             if !reservation.cooldown_wait.is_zero() {
                 return Err(unavailable());
             }
@@ -3304,22 +3368,41 @@ fn send(
         if !allowed(&url) {
             return Err(invalid());
         }
-        let mut request = client.request(method.clone(), url.clone());
-        if let Some(cookie) = jar.header(&url) {
-            request = request.header(reqwest::header::COOKIE, cookie);
+        enum SessionStart {
+            CookieUnusable,
+            Sent(Result<Response, reqwest::Error>),
         }
-        if let Some((_, referer)) = form {
-            request = request.header(reqwest::header::REFERER, referer.as_str());
-        }
-        if let Some((fields, _)) = form {
-            request = request
-                .header(
-                    reqwest::header::CONTENT_TYPE,
-                    "application/x-www-form-urlencoded",
-                )
-                .body(form_urlencoded_body(fields));
-        }
-        let response = request.send().map_err(|_| unavailable())?;
+        let response = match lease.start_request(|| {
+            if cookie_snapshot.as_ref().is_some_and(|(_, expiry)|cookie_expired(*expiry)) {
+                return SessionStart::CookieUnusable;
+            }
+            let mut request = client.request(method.clone(), url.clone()).timeout(Duration::from_secs(30));
+            if let Some((cookie, _)) = &cookie_snapshot {
+                let Ok(mut header) = HeaderValue::from_str(cookie.as_str()) else {
+                    return SessionStart::CookieUnusable;
+                };
+                header.set_sensitive(true);
+                request = request.header(reqwest::header::COOKIE, header);
+            }
+            if let Some((_, referer)) = form {
+                request = request.header(reqwest::header::REFERER, referer.as_str());
+            }
+            if let Some((fields, _)) = form {
+                request = request
+                    .header(
+                        reqwest::header::CONTENT_TYPE,
+                        "application/x-www-form-urlencoded",
+                    )
+                    .body(form_urlencoded_body(fields));
+            }
+            SessionStart::Sent(request.send())
+        }) {
+            Ok(SessionStart::Sent(Ok(response))) => response,
+            Ok(SessionStart::Sent(Err(_))) => return Err(unavailable()),
+            Ok(SessionStart::CookieUnusable) => return Err(scoped_cookie_unusable()),
+            Err(crate::governor::FollowupError::CachedChallenge) => return Err(cached_safety_observed()),
+            Err(crate::governor::FollowupError::Governor(_)) => return Err(governor_state_unknown()),
+        };
         let status = response.status().as_u16();
         let challenged = response
             .headers()
@@ -3330,22 +3413,27 @@ fn send(
             .get(RETRY_AFTER)
             .map(|value| value.to_str().map(str::to_owned).map_err(|_| unavailable()))
             .transpose();
-        let retry_after_for_governor = retry_after_result
-            .as_ref()
-            .ok()
-            .and_then(|value| value.as_deref());
-        let observed_result = lease.observe_http(status, retry_after_for_governor, challenged);
+        let observed_result = lease.observe_http_many(
+            status,
+            response.headers().get_all(RETRY_AFTER).iter().map(|value|value.to_str().ok()),
+            challenged,
+        );
+        if observed_result.is_err() {
+            drop(response);
+            return Err(governor_state_unknown());
+        }
         trail.record(&url, status);
-        let content_type_result = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .map(|value| value.to_str().map(str::to_owned).map_err(|_| unavailable()))
-            .transpose();
+        let all_content_types = response.headers().get_all(CONTENT_TYPE);
+        let mut content_types = all_content_types.iter();
+        let content_type_result = match (content_types.next(), content_types.next()) {
+            (None, _) => Ok(None),
+            (Some(value), None) => value.to_str().map(str::to_owned).map(Some).map_err(|_| unavailable()),
+            (Some(_), Some(_)) => Err(unavailable()),
+        };
         let location = response.headers().get(LOCATION).cloned();
         let cookies_result = jar.absorb(&url, response.headers());
         let body_result = body_text(response);
         let retry_after = retry_after_result?;
-        observed_result.map_err(|_| unavailable())?;
         let content_type = content_type_result?;
         cookies_result?;
         let body = body_result?;
@@ -4879,6 +4967,8 @@ fn interaction_review_required() -> Error {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureClass {
     Challenge,
+    SafetyObservation,
+    ScopedCookieUnusable,
     UnsafeInteraction,
     CredentialRejected,
     ServiceInvalid,
@@ -4891,6 +4981,8 @@ impl FailureClass {
     fn as_str(self) -> &'static str {
         match self {
             Self::Challenge => "challenge_required",
+            Self::SafetyObservation => "cached_safety_observation",
+            Self::ScopedCookieUnusable => "scoped_cookie_unusable",
             Self::UnsafeInteraction => "unreviewed_login_interaction",
             Self::CredentialRejected => "credential_rejected",
             Self::ServiceInvalid => "service_parameter_rejected",
@@ -5120,9 +5212,8 @@ pub fn inspect(input: &str) -> Result<Value, Error> {
     let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true) {
         Ok(page) => page,
         Err(error) => {
-            lease
-                .finish(crate::governor::Outcome::NetworkFailure)
-                .map_err(|_| unavailable())?;
+            if error.code == "governor_unavailable" { return Err(error); }
+            finish_send_failure(lease, &error).map_err(|_| unavailable())?;
             return Err(error);
         }
     };
@@ -5160,9 +5251,8 @@ pub fn diagnose(input: &str) -> Result<Value, Error> {
     let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true) {
         Ok(page) => page,
         Err(error) => {
-            lease
-                .finish(crate::governor::Outcome::NetworkFailure)
-                .map_err(|_| unavailable())?;
+            if error.code == "governor_unavailable" { return Err(error); }
+            finish_send_failure(lease, &error).map_err(|_| unavailable())?;
             return Err(error);
         }
     };
@@ -5347,6 +5437,15 @@ fn settle_failed_attempt(
     outcome: crate::governor::Outcome<'_>,
     error: Error,
 ) -> Error {
+    if error.code == "governor_unavailable" {
+        drop(lease);
+        return error;
+    }
+    let (class, outcome) = match error.code {
+        "safety_latched" => (FailureClass::SafetyObservation, crate::governor::Outcome::SafetyObserved),
+        "scoped_cookie_unusable" => (FailureClass::ScopedCookieUnusable, outcome),
+        _ => (class, outcome),
+    };
     let receipt = session_directory().and_then(|directory| {
         write_attempt_receipt(
             &directory,
@@ -5356,7 +5455,11 @@ fn settle_failed_attempt(
             query_names(final_url),
         )
     });
-    let finished = lease.finish(outcome);
+    let finished = if error.code == "scoped_cookie_unusable" {
+        lease.finish_without_request()
+    } else {
+        lease.finish(outcome)
+    };
     if receipt.is_err() || finished.is_err() {
         unavailable()
     } else {
@@ -5816,8 +5919,13 @@ pub fn login(input: &str) -> Result<Value, Error> {
             },
         );
     }
-    if lease.finish(crate::governor::Outcome::Success).is_err() {
-        return Err(unavailable());
+    match lease.finish_with_safety_latch(crate::governor::Outcome::Success) {
+        Ok(false) => {}
+        Ok(true) => return Err(Error::new(
+            "safety_latched",
+            "A retained account-safety observation requires review; a private session was already stored.",
+        )),
+        Err(_) => return Err(unavailable()),
     }
 
     Ok(json!({
@@ -7570,6 +7678,84 @@ mod tests {
         (directory, path)
     }
 
+    #[test]
+    fn selected_cookie_expiring_during_pacing_prevents_the_next_post() {
+        use std::io::Write;
+        use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let (worker_stopped, worker_requests) = (Arc::clone(&stopped), Arc::clone(&requests));
+        let worker = std::thread::spawn(move || {
+            while !worker_stopped.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                        worker_requests.fetch_add(1, Ordering::SeqCst);
+                        let _ = socket.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        let (_directory, path) = temporary_directory("cookie-expires-before-fenced-post");
+        let governor = Governor::isolated_for_test(&path).unwrap();
+        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        let mut lease = governor.try_acquire(RequestKind::Authentication).unwrap();
+        let url = pinned_login_url().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.append(SET_COOKIE, HeaderValue::from_static("sid=synthetic; Path=/; Max-Age=1"));
+        let mut jar = Jar::default();
+        jar.absorb(&url, &headers).unwrap();
+        let proxy = reqwest::Proxy::all(format!("http://{address}")).unwrap();
+        let client = Client::builder().https_only(true).proxy(proxy).build().unwrap();
+        let fields = [("username", "synthetic"), ("password", "synthetic")];
+        let mut trail = Trail::new();
+        let result = send(&mut lease, &client, &mut jar, &url, Some((&fields, &url)), &mut trail, false);
+        stopped.store(true, Ordering::SeqCst);
+        worker.join().unwrap();
+        let error = result.err().expect("expired cookie must refuse the next request");
+        assert_eq!(error.code, "scoped_cookie_unusable");
+        finish_send_failure(lease, &error).unwrap();
+        let status = governor.status().unwrap();
+        assert!(status.safety_latched);
+        assert_eq!(status.consecutive_network_failures, 0);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn expired_scoped_cookie_refusal_preserves_interactive_governor_state() {
+        let (_directory, path) = temporary_directory("already-expired-scoped-cookie");
+        let governor = Governor::isolated_for_test(&path).unwrap();
+        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+        let url = pinned_login_url().unwrap();
+        let other = Url::parse("https://classroom.msa.buaa.edu.cn/").unwrap();
+        let mut jar = Jar::default();
+        assert!(matches!(jar.select_cookies(&url, true), ScopedCookies::Anonymous));
+        let mut headers = HeaderMap::new();
+        headers.append(SET_COOKIE, HeaderValue::from_static("sid=synthetic; Path=/; Max-Age=60"));
+        jar.absorb(&url, &headers).unwrap();
+        jar.cookies[0].expiry = Some(UNIX_EPOCH);
+        assert!(matches!(jar.select_cookies(&other, true), ScopedCookies::Anonymous));
+        assert!(matches!(jar.select_cookies(&url, true), ScopedCookies::Unusable));
+        let proxy = reqwest::Proxy::all("http://127.0.0.1:1").unwrap();
+        let client = Client::builder().https_only(true).proxy(proxy).build().unwrap();
+        let mut trail = Trail::new();
+        let error = send(&mut lease, &client, &mut jar, &url, None, &mut trail, true)
+            .err().expect("an expired applicable cookie must refuse the request");
+        assert_eq!(error.code, "scoped_cookie_unusable");
+        finish_send_failure(lease, &error).unwrap();
+        let status = governor.status().unwrap();
+        assert!(!status.safety_latched);
+        assert!(status.authentication_armed);
+        assert_eq!(status.consecutive_network_failures, 0);
+    }
+
     fn assert_unreviewed_interaction(fields: &ParsedLoginForm) {
         assert!(requires_interaction_review(fields));
         assert!(!requires_challenge(fields));
@@ -9278,6 +9464,33 @@ mod tests {
         assert!(jar.header(&classroom).is_none());
         assert!(jar.header(&sso).is_some());
     }
+
+    #[test]
+    fn sso_domain_cookie_remains_confined_and_overlong_replacement_is_rejected() {
+        let sso = Url::parse("https://sso.buaa.edu.cn/login").unwrap();
+        let callback = Url::parse("https://yjapi.msa.buaa.edu.cn/casapi/index.php").unwrap();
+        let mut jar = Jar::default();
+        let mut headers = HeaderMap::new();
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("opaque_session=old; Domain=buaa.edu.cn; Path=/; Max-Age=3600"),
+        );
+        jar.absorb(&sso, &headers).unwrap();
+        assert_eq!(jar.header(&sso).unwrap(), "opaque_session=old");
+        assert!(jar.header(&callback).is_none());
+
+        let mut overlong = HeaderMap::new();
+        overlong.append(
+            SET_COOKIE,
+            HeaderValue::from_static(
+                "opaque_session=new; Domain=buaa.edu.cn; Path=/; Max-Age=34560000",
+            ),
+        );
+        jar.absorb(&sso, &overlong).unwrap();
+        assert_eq!(jar.header(&sso).unwrap(), "opaque_session=old");
+        assert!(jar.header(&callback).is_none());
+    }
+
 
     #[test]
     fn cookie_paths_and_expiry_never_widen_or_retain_stale_sessions() {

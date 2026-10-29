@@ -312,41 +312,66 @@ impl GatewayTransport {
                 query.append_pair(key, &value);
             }
         }
-        let lease = net::acquire_kind(&self.governor, kind)?;
-        if let Err(error) = before_send() {
-            lease.finish_without_request().map_err(|_| unavailable())?;
-            return Err(error);
-        }
-        let mut response = match self
+        let mut lease = net::acquire_kind(&self.governor, kind)?;
+        let request = self
             .client
             .get(self.request_url(&original))
-            .header("Accept-Encoding", "identity")
-            .send()
-        {
-            Ok(response) => response,
-            Err(_) => {
+            .timeout(Duration::from_secs(30))
+            .header("Accept-Encoding", "identity");
+        enum StartAttempt {
+            PreflightFailed(Error),
+            Sent(Result<reqwest::blocking::Response, reqwest::Error>),
+        }
+        let started = lease.start_request(|| match before_send() {
+            Ok(()) => StartAttempt::Sent(request.send()),
+            Err(error) => StartAttempt::PreflightFailed(error),
+        });
+        let mut response = match started {
+            Ok(StartAttempt::Sent(Ok(response))) => response,
+            Ok(StartAttempt::PreflightFailed(error)) => {
+                lease.finish_without_request().map_err(|_| unavailable())?;
+                return Err(error);
+            }
+            Ok(StartAttempt::Sent(Err(_))) => {
                 lease
                     .finish(Outcome::NetworkFailure)
                     .map_err(|_| unavailable())?;
+                return Err(unavailable());
+            }
+            Err(governor::FollowupError::CachedChallenge) => {
+                lease.finish(Outcome::SafetyObserved).map_err(|_| unavailable())?;
+                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the gateway request."));
+            }
+            Err(governor::FollowupError::Governor(_)) => {
+                // Keep the pending reservation: safety admission itself could
+                // not be durably settled and no request was sent.
                 return Err(unavailable());
             }
         };
         let status = response.status().as_u16();
         let retry_after = response
             .headers()
-            .get("retry-after")
-            .and_then(|value| value.to_str().ok())
+            .get_all("retry-after")
+            .iter()
+            .find_map(|value| value.to_str().ok())
             .map(str::to_owned);
         let challenge_header = response
             .headers()
-            .get_all("cf-mitigated")
             .iter()
-            .any(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"));
+            .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
+        if lease.observe_http_many(
+            status,
+            response.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()),
+            challenge_header,
+        ).is_err() {
+            drop(response);
+            return Err(unavailable());
+        }
         let mut body = Vec::new();
         let read = response.by_ref().take(MAX_BODY + 1).read_to_end(&mut body);
-        let network_failure = read.is_err();
         let too_large = body.len() as u64 > MAX_BODY;
-        let processed = if network_failure || too_large || !(200..300).contains(&status) {
+        let network_failure = read.is_err() || too_large;
+        let processed = if network_failure || challenge_header || !(200..300).contains(&status) {
             None
         } else {
             let parsed = parse_jsonp(&callback, &body);
@@ -385,15 +410,18 @@ impl GatewayTransport {
             challenge: challenge_header || application_latch || indeterminate_authentication,
             network_failure,
         };
-        lease.finish(outcome).map_err(|_| unavailable())?;
+        let safety_latched = lease.finish_with_safety_latch(outcome).map_err(|_| unavailable())?;
         if challenge_header || matches!(status, 401 | 403) {
             return Err(rejected());
         }
         if status == 429 {
             return Err(Error::new("rate_limited", "gateway requested a cooldown"));
         }
-        if network_failure || too_large || !(200..300).contains(&status) {
+        if network_failure || !(200..300).contains(&status) {
             return Err(unavailable());
+        }
+        if safety_latched && !application_latch && !indeterminate_authentication {
+            return Err(Error::new("safety_latched", "A retained account-safety observation requires operator review."));
         }
         processed.expect("processed successful HTTP body").result
     }
@@ -1489,31 +1517,7 @@ mod tests {
             let worker_count = Arc::clone(&count);
             let worker_stop = Arc::clone(&stop);
             let worker = thread::spawn(move || {
-                while !worker_stop.load(Ordering::SeqCst) {
-                    match listener.accept() {
-                        Ok((mut socket, _)) => {
-                            socket
-                                .set_read_timeout(Some(Duration::from_secs(5)))
-                                .unwrap();
-                            let mut request = Vec::new();
-                            let mut byte = [0u8];
-                            while !request.ends_with(b"\r\n\r\n") && request.len() < 64 * 1024 {
-                                match socket.read(&mut byte) {
-                                    Ok(1) => request.push(byte[0]),
-                                    _ => break,
-                                }
-                            }
-                            let request = String::from_utf8(request).unwrap();
-                            let index = worker_count.fetch_add(1, Ordering::SeqCst);
-                            sender.send((Instant::now(), request.clone())).unwrap();
-                            handler(&mut socket, &request, index);
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(2))
-                        }
-                        Err(error) => panic!("loopback gateway failed: {error}"),
-                    }
-                }
+                Self::serve(listener, worker_stop, sender, worker_count, &mut handler);
             });
             Self {
                 address,
@@ -1521,6 +1525,39 @@ mod tests {
                 count,
                 stop,
                 worker: Some(worker),
+            }
+        }
+        fn serve(
+            listener: TcpListener,
+            stop: Arc<AtomicBool>,
+            sender: mpsc::Sender<(Instant, String)>,
+            count: Arc<AtomicUsize>,
+            handler: &mut dyn FnMut(&mut TcpStream, &str, usize),
+        ) {
+            while !stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                        socket
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut request = Vec::new();
+                        let mut byte = [0u8];
+                        while !request.ends_with(b"\r\n\r\n") && request.len() < 64 * 1024 {
+                            match socket.read(&mut byte) {
+                                Ok(1) => request.push(byte[0]),
+                                _ => break,
+                            }
+                        }
+                        let request = String::from_utf8(request).unwrap();
+                        let index = count.fetch_add(1, Ordering::SeqCst);
+                        sender.send((Instant::now(), request.clone())).unwrap();
+                        handler(&mut socket, &request, index);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2))
+                    }
+                    Err(error) => panic!("loopback gateway failed: {error}"),
+                }
             }
         }
     }
@@ -1936,6 +1973,37 @@ mod tests {
             .code,
             "unknown_outcome"
         );
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn challenged_logout_cannot_commit_a_success_receipt() {
+        let fixture = Fixture::new();
+        let cache = fixture.cache();
+        let plan = plan_logout(r#"{"username":"student","ip":"10.0.0.2","ac_id":62}"#).unwrap();
+        let input = json!({
+            "username":"student","ip":"10.0.0.2","ac_id":62,
+            "operation_id":plan["operation_id"],"plan_hash":plan["plan_hash"],
+            "intent":plan["required_intent"]
+        }).to_string();
+        let server = Server::new(|socket, request, _| {
+            let (callback, _) = callback_and_query(request);
+            let body = format!("{callback}({})", json!({"error":"ok","res":"ok"}));
+            write!(socket, "HTTP/1.1 200 OK\r\nConnection: close\r\nX-Challenge: required\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let transport = transport(&fixture, &server);
+        let error = commit_logout_from(parse_logout_commit(&input).unwrap(), &cache, |request| {
+            commit_logout_with(request, &transport, &cache)
+        }).unwrap_err();
+        assert_eq!(error.code, "unknown_outcome");
+        assert!(transport.governor.status().unwrap().safety_latched);
+        let account = logout_account_fingerprint("student");
+        assert!(load_logout_unknown(&cache, &account).unwrap().is_some());
+        assert!(load_logout_receipt(&cache, plan["plan_hash"].as_str().unwrap(), &account,
+            plan["operation_id"].as_str().unwrap()).unwrap().is_none());
+        assert_eq!(commit_logout_from(parse_logout_commit(&input).unwrap(), &cache, |_| {
+            panic!("unknown logout must not be retried")
+        }).unwrap_err().code, "unknown_outcome");
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
     #[test]

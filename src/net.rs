@@ -5,7 +5,10 @@
 //! is validated and cache persistence completes. Errors contain no remote data.
 
 use crate::governor::{self, Governor, Outcome, RequestKind, RequestLease};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE},
+};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,6 +20,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
+use zeroize::Zeroizing;
 
 const MAX_BODY: usize = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 12 * 1024 * 1024;
@@ -1604,7 +1608,7 @@ impl ArchiveClient {
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let lease = acquire(governor)?;
+        let mut lease = acquire(governor)?;
         let cached = match self.load(url) {
             Ok(value) => value,
             Err(error) => {
@@ -1645,20 +1649,44 @@ impl ArchiveClient {
                 "Stored classroom cookie expired before transmission; deliberate authentication is required.",
             ));
         }
-        let mut raw = match request.send() {
-            Ok(response) => response,
-            Err(_) => {
+        enum StartAttempt {
+            CredentialExpired,
+            Sent(Result<reqwest::blocking::Response, reqwest::Error>),
+        }
+        let started = lease.start_request(|| {
+            if session.cookie.is_some_and(|cookie|cookie.expires.is_some_and(|expiry|expiry <= SystemTime::now())) {
+                StartAttempt::CredentialExpired
+            } else {
+                StartAttempt::Sent(request.send())
+            }
+        });
+        let mut raw = match started {
+            Ok(StartAttempt::Sent(Ok(response))) => response,
+            Ok(StartAttempt::CredentialExpired) => {
+                lease.finish_without_request().map_err(|_| governor_error())?;
+                return Err(Error::new(
+                    "unavailable",
+                    "Stored classroom cookie expired before transmission; deliberate authentication is required.",
+                ));
+            }
+            Ok(StartAttempt::Sent(Err(_))) => {
                 lease
                     .finish(Outcome::NetworkFailure)
                     .map_err(|_| governor_error())?;
                 return Err(network_error());
             }
+            Err(governor::FollowupError::CachedChallenge) => {
+                lease.finish(Outcome::SafetyObserved).map_err(|_| governor_error())?;
+                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the request."));
+            }
+            Err(governor::FollowupError::Governor(reason)) => return Err(governor_denial(&reason)),
         };
         let status = raw.status().as_u16();
         let retry_after = raw
             .headers()
-            .get("retry-after")
-            .and_then(|value| value.to_str().ok())
+            .get_all("retry-after")
+            .iter()
+            .find_map(|value| value.to_str().ok())
             .map(str::to_owned);
         // Observe challenge facts before filtering retained metadata. Header
         // values remain private; only the safety decision survives filtering.
@@ -1667,6 +1695,8 @@ impl ArchiveClient {
             .iter()
             .any(|(name, value)| challenge_header(name.as_str(), value.as_bytes()));
         let mut attributed_archive_status = false;
+        let mut observation_failed = false;
+        let mut body_complete = false;
         let body_budget =
             if self.profile == SourceProfile::Classroom && classroom_transcript_url_allowed(url) {
                 crate::recordings::subtitles::MAX_BODY
@@ -1674,10 +1704,19 @@ impl ArchiveClient {
                 MAX_BODY
             };
         let result = (|| {
-            let headers = collect_headers(raw.headers())?;
-            attributed_archive_status = (400..=599).contains(&status)
-                && !challenge
-                && is_attributed_archive_status(status, &headers);
+            let header_result = collect_headers(raw.headers());
+            attributed_archive_status = header_result.as_ref().is_ok_and(|headers|
+                (400..=599).contains(&status) && !challenge
+                    && is_attributed_archive_status(status, headers));
+            if !attributed_archive_status && lease.observe_http_many(
+                status,
+                raw.headers().get_all("retry-after").iter().map(|value|value.to_str().ok()),
+                challenge,
+            ).is_err() {
+                observation_failed = true;
+                return Err(governor_error());
+            }
+            let headers = header_result?;
             if challenge || (!attributed_archive_status && matches!(status, 401 | 403)) {
                 return Err(Error::new(
                     "safety_latched",
@@ -1725,6 +1764,7 @@ impl ArchiveClient {
             if body.len() > body_budget {
                 return Err(body_limit());
             }
+            body_complete = true;
             // Validate fresh metadata before retained immutable headers can
             // hide MIME drift. Cached output repeats the same admission policy.
             if status == 200 {
@@ -1814,9 +1854,9 @@ impl ArchiveClient {
             }
             Ok(processed)
         })();
-        let network_failure = result
-            .as_ref()
-            .is_err_and(|error| error.code == "network_error");
+        let network_failure = result.as_ref().is_err_and(|error|
+            matches!(error.code, "network_error" | "body_limit"))
+            || (status == 200 && !body_complete && !challenge);
         // A session is rejected by what the response actually is, not by the
         // transport's content label: the classroom platform serves its native
         // transcript envelope with an HTML content type, and an HTML sign-in
@@ -1835,8 +1875,14 @@ impl ArchiveClient {
         // A validated Memento error status belongs to the archived resource, not
         // the current source. The independent challenge/body facts still apply.
         // Dropping an unread response cancels it before releasing shared ownership.
-        // No early return between receiving headers and this durable finish.
+        // A failed safety-state write keeps the reservation pending; otherwise
+        // every response is durably settled after cancellation.
         drop(raw);
+        if observation_failed {
+            // The safety observation itself was not durably recorded. Keep
+            // the pending reservation for explicit offline investigation.
+            return Err(governor_error());
+        }
         let finished = if attributed_archive_status {
             lease.finish_attributed_archive_status(status, challenge, network_failure)
         } else {
@@ -2222,6 +2268,124 @@ pub(crate) fn challenge_header(name: &str, value: &[u8]) -> bool {
     }
 }
 
+/// These fixed-credential readers do not maintain a cookie jar. Refuse any
+/// Set-Cookie response without copying its values or guessing cookie names.
+/// Issuance alone is not a challenge or an authentication rejection.
+pub(crate) fn issues_session_cookie(headers: &reqwest::header::HeaderMap) -> bool {
+    headers.contains_key(reqwest::header::SET_COOKIE)
+}
+
+/// Compare the reversible forms supported by these readers: literal and
+/// JSON-escaped text, standard/URL-safe base64 with or without padding, and
+/// form/percent-decoded fields. JSON token decoding stays with each caller.
+pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
+    // None of the supported spellings is shorter than the credential's UTF-8
+    // bytes. Reject short field names/values before allocating encodings.
+    if secret.is_empty() || candidate.len() < secret.len() {
+        return false;
+    }
+    let escaped = secret.bytes().any(|byte| byte < 0x20 || matches!(byte, b'"' | b'\\'))
+        .then(|| Zeroizing::new(serde_json::to_string(secret).expect("string serialization")));
+    let encoded = Zeroizing::new(STANDARD.encode(secret));
+    let url_encoded = encoded.bytes().any(|byte| matches!(byte, b'+' | b'/'))
+        .then(|| Zeroizing::new(URL_SAFE.encode(secret)));
+    let matches = |part: &[u8]| {
+        let contains = |text: &str| {
+            text.contains(secret)
+                || escaped.as_ref().is_some_and(|value| text.contains(&value[1..value.len() - 1]))
+                || text.contains(encoded.trim_end_matches('='))
+                || url_encoded.as_ref().is_some_and(|value| text.contains(value.trim_end_matches('=')))
+        };
+        // Every needle is valid UTF-8, so a match cannot cross an invalid
+        // sequence. Search valid chunks linearly rather than comparing a long
+        // needle at every byte of an invalid decoded response.
+        let mut remaining = part;
+        loop {
+            match std::str::from_utf8(remaining) {
+                Ok(text) => return contains(text),
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    let text = std::str::from_utf8(&remaining[..valid])
+                        .expect("UTF-8 error identifies a valid prefix");
+                    if contains(text) { return true; }
+                    let Some(invalid) = error.error_len() else { return false };
+                    remaining = &remaining[valid + invalid..];
+                }
+            }
+        }
+    };
+    if matches(candidate) {
+        return true;
+    }
+    let has_percent = candidate.contains(&b'%');
+    let has_plus = candidate.contains(&b'+');
+    if !has_percent && !has_plus {
+        return false;
+    }
+    // A visible string is not necessarily a form field. Decode the entire
+    // candidate before splitting on `=` or `&`, retaining both literal-plus
+    // and form-plus interpretations. Each view starts from the original bytes.
+    fn decode_whole(input: &[u8], plus_as_space: bool, out: &mut Vec<u8>) {
+        fn hex(byte: u8) -> Option<u8> {
+            match byte {
+                b'0'..=b'9' => Some(byte - b'0'),
+                b'a'..=b'f' => Some(byte - b'a' + 10),
+                b'A'..=b'F' => Some(byte - b'A' + 10),
+                _ => None,
+            }
+        }
+        let mut index = 0;
+        while index < input.len() {
+            if input[index] == b'%' && index + 2 < input.len()
+                && let (Some(high), Some(low)) = (hex(input[index + 1]), hex(input[index + 2]))
+            {
+                out.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+            out.push(if plus_as_space && input[index] == b'+' { b' ' } else { input[index] });
+            index += 1;
+        }
+    }
+    let mut decoded = Zeroizing::new(Vec::with_capacity(candidate.len()));
+    if has_percent {
+        decode_whole(candidate, false, &mut decoded);
+        if matches(&decoded) { return true; }
+    }
+    if has_plus {
+        decoded.fill(0);
+        decoded.clear();
+        decode_whole(candidate, true, &mut decoded);
+        if matches(&decoded) { return true; }
+    }
+    url::form_urlencoded::parse(candidate).any(|(mut key, mut value)| {
+        let reflected = matches(key.as_bytes()) || matches(value.as_bytes());
+        // Borrowed fields need no copies. Wipe only newly decoded buffers.
+        if let std::borrow::Cow::Owned(text) = &mut key {
+            zeroize::Zeroize::zeroize(text);
+        }
+        if let std::borrow::Cow::Owned(text) = &mut value {
+            zeroize::Zeroize::zeroize(text);
+        }
+        reflected
+    })
+}
+
+/// Check the exact JSON spelling emitted for a scalar without allocating per
+/// value. If the bounded buffer is insufficient, refuse rather than expose it.
+pub(crate) fn json_scalar_matches(value: &serde_json::Value, predicate: impl FnOnce(&[u8]) -> bool) -> bool {
+    if !matches!(value, serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null) {
+        return true;
+    }
+    let mut bytes = [0u8; 64];
+    let mut output = &mut bytes[..];
+    if serde_json::to_writer(&mut output, value).is_err() {
+        return true;
+    }
+    let used = 64 - output.len();
+    predicate(&bytes[..used])
+}
+
 fn collect_headers(raw: &reqwest::header::HeaderMap) -> Result<BTreeMap<String, String>, Error> {
     let mut headers = BTreeMap::new();
     let mut total = 0;
@@ -2345,6 +2509,37 @@ mod tests {
 
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     const TARGET: &str = "https://web.archive.org/web/20240102030405id_/https://www.buaa.edu.cn/";
+
+    #[test]
+    fn carried_secrets_cover_every_reversible_encoding() {
+        let secret = "abc_123";
+        assert!(carries_secret(b"abc_123", secret));
+        assert!(carries_secret(br#"{"echo":"abc_123"}"#, secret));
+        assert!(carries_secret(
+            base64::engine::general_purpose::STANDARD.encode(secret).as_bytes(),
+            secret
+        ));
+        assert!(carries_secret(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(secret)
+                .as_bytes(),
+            secret
+        ));
+        assert!(carries_secret(b"echo=%61%62%63%5F%31%32%33", secret));
+        assert!(carries_secret(b"echo=abc%2B123", "abc+123"));
+        assert!(carries_secret(b"echo=a+b", "a b"));
+        assert!(carries_secret(br#"{"echo":"private\"token"}"#, "private\"token"));
+        let alphabet_secret="~~~???x";
+        for encoding in [STANDARD.encode(alphabet_secret),URL_SAFE.encode(alphabet_secret)] {
+            assert!(carries_secret(encoding.as_bytes(),alphabet_secret));
+            assert!(carries_secret(encoding.trim_end_matches('=').as_bytes(),alphabet_secret));
+        }
+        assert!(carries_secret(b"echo=%59%57%4A%6A%58%7A%45%79%4D%77%3D%3D",secret));
+        assert!(!carries_secret(b"an unrelated body", secret));
+        assert!(!carries_secret(b"anything", ""));
+        assert!(!carries_secret(b"%zz",secret));
+        assert!(!carries_secret(b"id",&"x".repeat(4096)));
+    }
 
     #[test]
     fn sse_profile_admits_only_declared_board_and_article_namespaces() {
@@ -2483,36 +2678,13 @@ mod tests {
             let server_stop = Arc::clone(&stop);
             let server_count = Arc::clone(&request_count);
             let worker = thread::spawn(move || {
-                while !server_stop.load(Ordering::SeqCst) {
-                    match listener.accept() {
-                        Ok((mut socket, _)) => {
-                            socket
-                                .set_read_timeout(Some(Duration::from_secs(5)))
-                                .unwrap();
-                            socket
-                                .set_write_timeout(Some(Duration::from_secs(5)))
-                                .unwrap();
-                            let mut bytes = Vec::new();
-                            let mut byte = [0];
-                            while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 32 * 1024 {
-                                match socket.read(&mut byte) {
-                                    Ok(1) => bytes.push(byte[0]),
-                                    _ => break,
-                                }
-                            }
-                            let request = String::from_utf8(bytes).unwrap();
-                            server_requests
-                                .send((Instant::now(), request.clone()))
-                                .unwrap();
-                            server_count.fetch_add(1, Ordering::SeqCst);
-                            handler(&mut socket, &request);
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(2))
-                        }
-                        Err(error) => panic!("loopback listener failed: {error}"),
-                    }
-                }
+                Self::serve(
+                    listener,
+                    server_stop,
+                    server_requests,
+                    server_count,
+                    &mut handler,
+                );
             });
             Self {
                 address,
@@ -2520,6 +2692,43 @@ mod tests {
                 request_count,
                 stop,
                 worker: Some(worker),
+            }
+        }
+
+        fn serve(
+            listener: TcpListener,
+            stop: Arc<AtomicBool>,
+            requests: mpsc::Sender<(Instant, String)>,
+            count: Arc<AtomicUsize>,
+            handler: &mut dyn FnMut(&mut TcpStream, &str),
+        ) {
+            while !stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                        socket
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        socket
+                            .set_write_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut bytes = Vec::new();
+                        let mut byte = [0];
+                        while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 32 * 1024 {
+                            match socket.read(&mut byte) {
+                                Ok(1) => bytes.push(byte[0]),
+                                _ => break,
+                            }
+                        }
+                        let request = String::from_utf8(bytes).unwrap();
+                        requests.send((Instant::now(), request.clone())).unwrap();
+                        count.fetch_add(1, Ordering::SeqCst);
+                        handler(&mut socket, &request);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2))
+                    }
+                    Err(error) => panic!("loopback listener failed: {error}"),
+                }
             }
         }
 

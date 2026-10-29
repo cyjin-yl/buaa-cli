@@ -553,12 +553,19 @@ fn response_challenged(response: &reqwest::blocking::Response) -> bool {
         .any(|(name, value)| crate::net::challenge_header(name.as_str(), value.as_bytes()))
 }
 
-fn response_retry_after(response: &reqwest::blocking::Response) -> Option<String> {
-    response
-        .headers()
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
+fn ambiguous_content_type(response: &reqwest::blocking::Response) -> bool {
+    let all = response.headers().get_all(reqwest::header::CONTENT_TYPE);
+    let mut values = all.iter();
+    let Some(first) = values.next() else {
+        return false;
+    };
+    let Ok(first) = first.to_str() else {
+        return true;
+    };
+    values.any(|value| match value.to_str() {
+        Ok(value) => !value.trim().eq_ignore_ascii_case(first.trim()),
+        Err(_) => true,
+    })
 }
 
 fn header_text(
@@ -1068,6 +1075,8 @@ fn download_media(
     let mut retry_after = None;
     let mut challenge = false;
     let mut body_failure = false;
+    let mut safety_observed = false;
+    let mut governor_failure = false;
     let result = (|| {
         let mut request = client
             .request(Method::GET, url.clone())
@@ -1080,23 +1089,55 @@ fn download_media(
             let last = budget.checked_sub(1).ok_or_else(invalid)?;
             request = request.header(reqwest::header::RANGE, format!("bytes=0-{last}"));
         }
-        let response = match request.send() {
-            Ok(response) => response,
-            Err(_) => return Err(unavailable()),
+        let response = match lease.start_request(|| request.send()) {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) => return Err(unavailable()),
+            Err(governor::FollowupError::CachedChallenge) => {
+                safety_observed = true;
+                return Err(Error::new(
+                    "safety_latched",
+                    "Classroom media safety state requires explicit operator review.",
+                ));
+            }
+            Err(governor::FollowupError::Governor(_)) => {
+                governor_failure = true;
+                return Err(unavailable());
+            }
         };
         status = Some(response.status().as_u16());
-        retry_after = response_retry_after(&response);
+        retry_after = response.headers().get_all(reqwest::header::RETRY_AFTER)
+            .iter().find_map(|value| value.to_str().ok()).map(str::to_owned);
         challenge = response_challenged(&response);
-        lease
-            .observe_http(
+        if lease
+            .observe_http_many(
                 response.status().as_u16(),
-                retry_after.as_deref(),
+                response.headers().get_all(reqwest::header::RETRY_AFTER)
+                    .iter().map(|value| value.to_str().ok()),
                 challenge,
             )
-            .map_err(|_| unavailable())?;
+            .is_err()
+        {
+            governor_failure = true;
+            return Err(unavailable());
+        }
+        if matches!(status, Some(401 | 403)) {
+            drop(response);
+            return Err(rejected());
+        }
+        if status == Some(429) {
+            drop(response);
+            return Err(Error::new("rate_limited", "Classroom media request was rate limited."));
+        }
         if challenge {
             drop(response);
             return Err(rejected());
+        }
+        // Ambiguous media framing is unreviewed, not evidence of a challenge.
+        // Cancel the body after observing status and every Retry-After field.
+        if ambiguous_content_type(&response) {
+            drop(response);
+            body_failure = true;
+            return Err(media_invalid());
         }
 
         if mode == "head" {
@@ -1106,11 +1147,10 @@ fn download_media(
                 drop(response);
                 return Err(unavailable());
             }
-            let range = response
-                .headers()
-                .get(reqwest::header::CONTENT_RANGE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| parse_content_range(Some(value)));
+            let mut ranges = response.headers().get_all(reqwest::header::CONTENT_RANGE)
+                .iter().map(|value| value.to_str().ok().and_then(|value| parse_content_range(Some(value))));
+            let range = ranges.next().flatten();
+            let range = range.filter(|first| ranges.all(|value| value == Some(*first)));
             let Some((first, last, total)) = range else {
                 drop(response);
                 body_failure = true;
@@ -1239,11 +1279,20 @@ fn download_media(
         result
     })();
 
-    let outcome = if result.is_ok() {
+    // An indeterminate governor write must retain its pending reservation;
+    // it is not evidence that an HTTP request failed on the network.
+    if governor_failure {
+        return result;
+    }
+    let outcome = if safety_observed {
+        Outcome::SafetyObserved
+    } else if result.is_ok() {
         Outcome::Success
     } else if let Some(status) = status {
         Outcome::Http {
             status,
+            // All fields were observed; retain a representative field so a
+            // valid 429 deadline does not acquire the missing-header floor.
             retry_after: retry_after.as_deref(),
             challenge,
             network_failure: body_failure || (!challenge && (200..=299).contains(&status)),
@@ -1677,7 +1726,7 @@ mod tests {
             let (status, headers, body, mode, budget) = if full {
                 (
                     200,
-                    "Content-Type: video/mp4\r\nRetry-After: 3600\r\n",
+                    "Content-Type: video/mp4\r\nRetry-After: 1\r\nRetry-After: 3600\r\nRetry-After: 2\r\n",
                     MP4,
                     "full",
                     MP4.len() as u64,
@@ -1685,7 +1734,7 @@ mod tests {
             } else {
                 (
                     206,
-                    "Content-Type: video/mp4\r\nContent-Range: bytes 0-15/24\r\nRetry-After: 3600\r\n",
+                    "Content-Type: video/mp4\r\nContent-Range: bytes 0-15/24\r\nRetry-After: 1\r\nRetry-After: 3600\r\nRetry-After: 2\r\n",
                     &MP4[..16],
                     "head",
                     16,
@@ -1704,6 +1753,88 @@ mod tests {
             assert_eq!(output["bytes_read"], body.len());
             server.join().unwrap();
             assert!(fixture.governor.status().unwrap().cooldown_wait > Duration::from_secs(3590));
+        }
+    }
+
+    #[test]
+    fn conflicting_media_content_types_refuse_without_inventing_a_challenge() {
+        let fixture = TransferFixture::new();
+        let (client, url, server) = serve_once(raw_reply(
+            200,
+            "Content-Type: video/mp4\r\nContent-Type: text/html\r\nRetry-After: 3600\r\nRetry-After: 1\r\n",
+            MP4.len(),
+            MP4,
+        ));
+        assert!(download_media(
+            &client,
+            &fixture.governor,
+            &url,
+            "full",
+            32,
+            Some(&fixture.private),
+        ).is_err());
+        server.join().unwrap();
+        let status = fixture.governor.status().unwrap();
+        assert!(!status.safety_latched);
+        assert!(status.cooldown_wait > Duration::from_secs(3590));
+        assert_eq!(std::fs::read_dir(&fixture.private.display).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn unauthorized_media_with_ambiguous_type_keeps_real_status_latch() {
+        let fixture = TransferFixture::new();
+        let (client, url, server) = serve_once(raw_reply(
+            401,
+            "Content-Type: video/mp4\r\nContent-Type: text/html\r\n",
+            MP4.len(),
+            MP4,
+        ));
+        assert!(download_media(
+            &client,
+            &fixture.governor,
+            &url,
+            "full",
+            32,
+            Some(&fixture.private),
+        ).is_err());
+        server.join().unwrap();
+        assert!(fixture.governor.status().unwrap().safety_latched);
+        assert_eq!(std::fs::read_dir(&fixture.private.display).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn media_status_refusals_precede_ambiguous_framing() {
+        for (status, code) in [(401, "auth_latched"), (403, "auth_latched"), (429, "rate_limited")] {
+            let fixture = TransferFixture::new();
+            let (client, url, server) = serve_once(raw_reply(
+                status,
+                "Content-Type: video/mp4\r\nContent-Type: text/html\r\nRetry-After: 60\r\n",
+                MP4.len(),
+                MP4,
+            ));
+            let error = download_media(&client, &fixture.governor, &url, "head", 16, None).unwrap_err();
+            assert_eq!(error.code, code);
+            server.join().unwrap();
+            let state = fixture.governor.status().unwrap();
+            assert_eq!(state.safety_latched, status != 429);
+            assert!(state.cooldown_wait > Duration::from_secs(50));
+            assert!(state.cooldown_wait <= Duration::from_secs(61));
+            assert_eq!(std::fs::read_dir(&fixture.private.display).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn prefix_media_checks_every_content_range_field() {
+        for second in ["bytes 0-15/25", "invalid"] {
+            let fixture = TransferFixture::new();
+            let headers = format!(
+                "Content-Type: video/mp4\r\nContent-Range: bytes 0-15/24\r\nContent-Range: {second}\r\n"
+            );
+            let (client, url, server) = serve_once(raw_reply(206, &headers, 16, &MP4[..16]));
+            let error = download_media(&client, &fixture.governor, &url, "head", 16, None).unwrap_err();
+            assert_eq!(error.code, "invalid_media");
+            server.join().unwrap();
+            assert!(!fixture.governor.status().unwrap().safety_latched);
         }
     }
 

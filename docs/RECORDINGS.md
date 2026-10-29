@@ -604,11 +604,13 @@ it does not establish player rendering, synchronization or live updates.
 ## Live playback and remaining subtitle service gaps
 
 Live playback, current audio/video, reconnect/stop lifecycle and governed
-playlist/fragment/key/range scheduling remain unimplemented. Local replay and
-the observed derived subtitle track do not complete live updates, whole
-native-track/media binding or all-player synchronization acceptance. The
-whole supplied-native-track import proof above is a separate input-processing
-result, not proof that its missing media association has been recovered.
+playlist/fragment/key/range scheduling remain unverified. A draft live
+implementation and an exploratory source declaration are not evidence of a
+working CLI command, authorized media access or real player output. Local
+replay and the observed derived subtitle track do not establish live updates,
+whole native-track/media binding or all-player synchronization. The supplied
+native-track import proof above is an input-processing result, not proof that
+its missing media association has been recovered.
 
 ## Object-storage interface facts — source-only draft
 

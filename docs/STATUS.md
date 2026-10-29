@@ -1,5 +1,303 @@
 ## Development status
 
+## Classroom CAS callback: evidence boundary
+
+`sso.buaa.edu.cn` is the sign-on service in the observed classroom flow;
+`yjapi.msa.buaa.edu.cn/casapi/index.php` is the classroom relying-party
+callback. Sanitized CLI receipts recorded a credential POST redirect followed
+by callback HTTP 500, without a positively verified selected-lesson session.
+The callback error cause, the deployed ticket lifetime and a password verdict
+remain unknown; an HTTP status or redirect alone does not establish them.
+
+On 2026-10-29, one newly authorized attempt ran under the shared heavy-work
+guardian and the existing v2 account governor. An explicit resume armed one
+attempt; the CLI then observed SSO HTTP 200, a credential POST redirect, and
+classroom callback HTTP 500. The login returned `auth_latched`, stored no
+session and did not positively confirm the selected lesson. After completion
+the account governor was latched, authentication was disarmed and no outcome
+was pending. The one-shot authorization was consumed; no automatic retry or
+challenge bypass was performed. These facts do not identify the HTTP 500 cause
+or establish a password verdict, media access or playback rights.
+
+Earlier ad hoc clients returned both redirects and HTTP 500 at different delays,
+but their distinct credential submissions and cookie handling were not a
+controlled same-request comparison. Those scripts did not use the production
+shared governor, and their outcomes are not admitted as online acceptance or
+proof of a ticket-expiration threshold, cookie necessity, playback permission
+or a server defect. The attempted shorter redirect interval and broader SSO
+cookie delivery were withdrawn; the existing configured governor floor,
+cooldowns and sign-on cookie isolation remain in force.
+
+[Issue #132](https://github.com/cyjin-yl/buaa-cli/issues/132) was corrected
+on 2026-10-28 to withdraw its unsupported claims about all tickets and a PHP
+defect. The issue remains open for an independently supported investigation.
+
+An ungoverned exploratory course-list response and source-code references to
+live URLs do not prove access rights, successful media delivery or real player
+output. The live goal remains open until an authorized source, a governed media
+path and actual player and subtitle observations are bound together.
+
+Open GitHub acceptance trackers now cover source-bound replay and subtitle
+synchronization ([#133](https://github.com/cyjin-yl/buaa-cli/issues/133)), iHome
+([#134](https://github.com/cyjin-yl/buaa-cli/issues/134)), aerospace study
+([#135](https://github.com/cyjin-yl/buaa-cli/issues/135)), department materials
+([#136](https://github.com/cyjin-yl/buaa-cli/issues/136)), drive reads
+([#137](https://github.com/cyjin-yl/buaa-cli/issues/137)), live playback
+([#138](https://github.com/cyjin-yl/buaa-cli/issues/138)), gateway login
+([#139](https://github.com/cyjin-yl/buaa-cli/issues/139)) and WE Learn
+([#140](https://github.com/cyjin-yl/buaa-cli/issues/140)). Further trackers
+cover shuttle ([#141](https://github.com/cyjin-yl/buaa-cli/issues/141)), smart
+services ([#142](https://github.com/cyjin-yl/buaa-cli/issues/142)), OS lab
+([#143](https://github.com/cyjin-yl/buaa-cli/issues/143)), physics selection
+and references ([#144](https://github.com/cyjin-yl/buaa-cli/issues/144),
+[#145](https://github.com/cyjin-yl/buaa-cli/issues/145)), postgraduate timetable
+([#146](https://github.com/cyjin-yl/buaa-cli/issues/146)), enrolment
+([#147](https://github.com/cyjin-yl/buaa-cli/issues/147)), contribution
+([#148](https://github.com/cyjin-yl/buaa-cli/issues/148)), evaluation
+([#149](https://github.com/cyjin-yl/buaa-cli/issues/149)), Boya
+([#150](https://github.com/cyjin-yl/buaa-cli/issues/150)), electricity
+([#151](https://github.com/cyjin-yl/buaa-cli/issues/151)), check-in
+([#152](https://github.com/cyjin-yl/buaa-cli/issues/152)) and CourseGrading
+([#153](https://github.com/cyjin-yl/buaa-cli/issues/153)). These issues record
+remaining work and prerequisites; they are not PRs or evidence of acceptance.
+
+The documentation correction is published as draft
+[#154](https://github.com/cyjin-yl/buaa-cli/pull/154), exact head
+`c34353fc5882d539dee6c42ddaf510bfa8357960`, above PR #131 in native
+[stack #155](https://github.com/cyjin-yl/buaa-cli/stack/155). The local replay
+receipt-binding layer is draft [#156](https://github.com/cyjin-yl/buaa-cli/pull/156),
+exact head `d3e9ca17cd2852f3441ace022268eaa7b5f49091`, directly above #154.
+Its five offline CLI cases and a separate inotify smoke passed; the container
+has no mpv or VLC, so this does not establish playback or media rights. Scoped
+independent source reviews found no remaining concrete issues in these two
+layers. Offline subtitle export is draft
+[#157](https://github.com/cyjin-yl/buaa-cli/pull/157), exact head
+`a613fdfcd9bbc238e7a988d86b105d779af36cf7`, directly above #156. After
+rebasing, four CLI cases and an independent SRT/WebVTT byte, permission,
+no-replace, schema and full-manifest smoke passed; the production governor
+was unchanged. None of these drafts has formal platform approval, online
+acceptance or a merge, and local export does not prove player synchronization.
+
+## Unverified integration: cached-challenge compatibility
+
+The current uncommitted integration candidate adds a durable mailbox for a
+challenge discovered in cached content. The older governor in the root worktree
+does not read that mailbox. A candidate process and an older process sharing one
+account governor therefore cannot be assumed to enforce the same challenge
+observation before a request. Do not mix such binaries for campus access; a
+coordinated rollout and an independent compatibility decision are still needed.
+The candidate has completed an offline build but not behavioral tests or a
+fresh exact-source review of this compatibility boundary. This is not online
+acceptance.
+
+An independent source review also found a conditional legacy migration hazard:
+the pre-patch integration lock explicitly unlocks in the owner process, while
+a forked child can retain an old lease snapshot whose completion path does not
+re-read the on-disk format. A version bump alone therefore cannot prove that
+all old writers are fenced after the parent unlocks. This is a source-derived
+process transition, not an observation that such a child exists. A proposed
+format cutover would additionally require verified old-actor quiescence, the
+same pinned directory and account lock, known outcomes, and explicit approval;
+neither that migration nor an authentication resume has been performed.
+
+## Unverified response-admission candidate (2026-10-28)
+
+Source review found that several service readers discarded `Set-Cookie`
+before screening body output. A newly issued opaque cookie value could then
+escape through a normal data field or raw fallback; this is a synthetic
+source-level finding, not an observed campus response. The candidate service
+readers without a cookie jar now refuse such content on any `Set-Cookie`
+header. This intentionally may refuse benign cookie rotation or preferences;
+it neither adopts the cookie, retries, refreshes authentication nor treats
+issuance alone as a confirmed challenge. The department Git-source transport
+uses the same header refusal and reuses the learning-material privacy screen
+for abnormal source evidence, not for identity-verified teaching-file content.
+
+The candidate also compares submitted credentials against supported base64
+and percent/form encodings and completes response admission before releasing
+the original shared request lease. Actual HTTP authentication refusals,
+challenge observations and `Retry-After` remain independent settlement facts.
+These source changes are not a claim to recognize arbitrary secret encodings.
+
+iHome cache version 4 and department cache version 2 mark the new admission
+boundary. Earlier files omitted cookie-issuance evidence and cannot establish
+that their bodies are safe to publish. The candidate preserves those files
+but refuses replay; it does not delete them or automatically make a new
+request. Independently recognizable cached safety refusals remain observable.
+Operator-controlled private recovery or a separately authorized retrieval is
+needed; old cache bytes are not silently relabelled as newly reviewed data.
+
+The integration passed a locked native build and an offline
+help/schema/capabilities smoke before later source changes. Focused synthetic
+tests have since passed, but the full test suite and a renewed review of every
+changed source remain incomplete. Previous standalone compiler probes
+and approximate algorithm harnesses were not compliant native proof and must
+not be used as acceptance evidence. All nineteen pending capability criteria
+remain pending in `acceptance.json`; no new authentication, media request,
+session resume, rights approval or campus mutation is asserted here.
+
+The first guarded native offline build on this candidate did acquire both
+locks as UID1000 and compile the actual crate, then failed with four errors:
+a physics privacy match returned `Option` where a statement required unit;
+the learning identity stored a static error code in an owned-string field;
+a borrowed entry slice was borrowed again for iteration; and a JSON privacy
+scanner called `find` through an immutable iterator. Those four sites were
+corrected, with static error codes retained by reference. The subsequent
+guarded attempt returned 75 before Cargo started because the shared heavy
+slot was occupied again. A later guarded build compiled the library but
+failed in the CLI's oversized schema `json!` expansion. That command map was
+replaced with ordinary map construction, without raising macro recursion
+limits, and a now-unused local helper was removed. The next attempt again
+returned 75 before Cargo started. A later guarded offline build succeeded as
+UID1000 with a worktree-owned target and one compiler job. The resulting native
+binary's help and 33-command schema ran successfully; its full 51-capability
+manifest matched `acceptance.json`, the recorded 87 build inputs stayed stable,
+and the production governor snapshot was unchanged during the offline smoke.
+Subsequent full-test attempts returned 75 before Cargo started because another
+project held the shared heavy-work slot. A later attempt reached Cargo but
+failed to compile two privacy assertions because `net::Error` does not implement
+`Display`; those assertions were corrected to inspect its `Debug` fields.
+The next attempt failed while compiling the library tests with a 7,471,120-byte
+allocation failure under the 2 GiB address-space limit, before any tests ran.
+A retry with incremental compilation disabled and test debug information
+stripped also failed in LLVM from memory exhaustion while compiling the library
+tests. The same process limit and shared locks were retained. A separate CLI
+integration run executed 26 cases: 25 passed and the baseline privacy case
+failed because the chosen temporary path had group-writable workspace
+ancestors, which the existing baseline safety policy correctly rejects. That
+failure is retained. A further library-test compilation with 256 codegen units
+also exhausted the 2 GiB address-space limit before any library test ran; the
+full library suite has not passed.
+
+A separate synthetic `enrol` CLI regression ran under both locks and failed
+all six groups before repair: missing MIME challenge, malformed charset,
+credential metadata, late stylesheet, popover/button cues, and quoted MIME
+parameters. Each group stopped at its first failing assertion. These are
+offline consumer observations, not a campus response or online acceptance.
+After the first repair those six groups passed, while two new regressions
+failed: an invalid tag opener hid a late stylesheet from the tail scan, and
+adjacent button text nodes hid a challenge cue. A further source review also
+identified the need to carry cookie-issuance and credential-echo facts from
+the unbound Session before admitting structured responses. After a subsequent repair,
+ten synthetic CLI admission cases passed under both locks. A later
+bogus-comment regression also passed after repair, but two adjacent cases
+still failed: an invalid end tag and foreign-content CDATA could obscure a
+late stylesheet. These are retained synthetic failures, not campus responses;
+no new campus request or authenticated Session was exercised.
+
+A temporary, default-off offline proof feature then linked the ordinary
+library into selected integration tests rather than compiling the full unit
+test crate. Under the same locks and 2 GiB limit, all thirteen HTML/`enrol`
+CLI cases passed. The other targets reproduced four separate defects:
+learning transport/cached evidence (three failures), iHome literal-JSON safety
+facts (three), Smart reserved-marker admission (one), and electricity source
+scalar semantics (two). Their ordinary-data and independent safety controls
+passed. After the corresponding repairs, the five selected targets passed
+27 cases: 13 HTML/`enrol` CLI, 5 learning transport/cache, 4 iHome,
+2 Smart and 3 electricity cases. A separate temporary native consumer also
+exercised those four response-admission families; its source remained stable
+and the production governor was unchanged. These are synthetic observations,
+not fresh service observations, a default-feature full-suite pass or online
+acceptance. The first temporary proof interface was then removed.
+
+Independent source review subsequently identified two additional learning
+cache defects. A fixed synthetic loopback run reproduced both: an existing
+rejected original made a later degraded response fail with `cache_error`,
+and a cache reader observed a newly published two-link inode as
+`corrupt_cache`. The same guarded run passed three separate `enrol` scenarios
+using a synthetic Session: privacy facts gate probe/list/verify, and
+challenge, Retry-After and incomplete-body facts survive settlement. The
+Session supplies those facts directly; it does not validate real response
+headers, credential echoes, authentication or application binding. After the
+postcondition fixture was strengthened to use the exact target, all three
+scenarios passed again; an exact target in this synthetic HTML still cannot
+establish an authoritative selected-course postcondition. A candidate atomic
+no-replace cache publication and separate rejected-original naming were added
+after the red run. Two guarded reruns returned 75 before Cargo started because
+the shared heavy-work slot was busy; a subsequent run passed both learning
+cases, preserving the v1/v2 rejected originals and reading the new evidence.
+Those assertions were then strengthened to require the publication callback
+and compare retained metadata and repeated originals. After a further cleanup
+change, both strengthened cases passed. Neither actual target-name exhaustion
+nor directory-fsync failure was exercised. The second temporary proof
+interface and its example were removed after the fixed native consumer ran;
+permanent unit and actual-CLI regressions remain.
+
+A separate synthetic encrypted Boya response with a literal `token: null`
+reproduced an unnecessary privacy fallback; a non-null token remained withheld.
+The historical UBAA response model includes a nullable token but is not proof
+of the current campus contract. The candidate now exempts only a `token` member
+whose JSON value is null, while retaining the other credential checks. Two
+post-fix tests passed, including escaped null and non-null credential controls.
+A scoped source review found no new concrete issue; the fixed synthetic native
+consumer also exercised the repaired path.
+
+Fresh independent review found two more synthetic privacy defects: evaluation
+could project a numeric submitted-cookie value as a task total, and shuttle
+could project a percent-encoded CSRF value as visible text. Each was reproduced
+before repair. The evaluation admission case and two shuttle CLI cases then
+passed under both locks, including ordinary-data and encoded/normalized-value
+controls. A further source review found that partially percent-encoded secrets
+containing a literal `=` can evade the shared form-field matcher. The new
+whole-candidate decoding passed two evaluation and three shuttle cases after
+repair, including literal separators, plus-sign interpretations, malformed
+escapes and invalid UTF-8. The specific mixed-separator pre-fix runs did not
+start because the shared heavy slot was busy; that earlier finding is
+source-derived, not an executed red test. Two scoped source reviews found no
+new concrete issue. A separate fixed synthetic native consumer exercised both
+paths; it did not exercise production transport or authentication. These
+fixtures are not observed campus responses.
+
+Two additional source reviews found that submitted credentials can reappear
+after JSON scalar projection even when the wire bytes do not contain the same
+spelling: a decrypted Boya boolean or number, and normalized numeric fields in
+Checkin, Drive and Smart. The fixed synthetic consumers reproduced all four
+families before repair. A shared bounded scalar matcher now checks the actual
+JSON output spelling; Smart checks its projected numbers before releasing the
+original lease. The subsequent guarded run passed 39 cases across ten targets,
+including ordinary, denial and raw-fallback controls. Independent review found
+that local fallback/status metadata, and then synthesized nulls for missing
+Boya fields, could be mistaken for source credential echoes. Those failures
+were reproduced and repaired without exempting explicit source nulls. A
+separate allocation regression reproduced per-number Running credential
+re-encoding and passed after the length guard. A separately launched fixed
+synthetic native consumer passed against stable selected source inputs. Direct
+admission fixtures do not establish transport behavior or actual lease
+settlement; these are not campus disclosures or online acceptance. Scoped
+independent source reviews found no further issue.
+
+Four physical-experiment replay cases also passed through the actual CLI, with
+operator-supplied HTML and no network. Independent review then identified a
+long numeric HTML reference that hides private vocabulary and a quoted-pair
+charset that is rejected despite spelling UTF-8. Two CLI cases reproduced
+those failures and passed after repair. Four further CLI cases demonstrated
+that numeric and legacy named references without semicolons can hide private
+markers, including references that decode to printable characters. Further
+review and CLI red tests found discarded source content, inert `srcdoc`,
+private labels in comments and an unbounded first DOM parse. After repairs,
+twenty CLI replay cases passed, including unconsumed-reference controls,
+discarded text, nested `srcdoc`, 100,000 attributes in one refused token and
+64 sets of 512 short attributes. Independent source reviews found no further
+issue. Ambiguous provenance or the configured 1 MiB/4,096-candidate limits
+withhold output; the attribute HashMap is not a worst-case-linear guarantee.
+This is not a claim that every HTML source is supported. The physics service
+remains offline and unbound.
+
+## Drive source-contract boundary
+
+Pinned public clients describe candidate AnyShare OAuth, listing and transfer
+requests, but they are not proof of the campus deployment or account rights.
+[Pansh](https://github.com/Fucov/Pansh/blob/a17516ff8c058bc5682727d45845d6820f426a66/src/pansh/api.py#L288-L324)
+uses `ondup=1` as its default and `2` for rename; a separate
+[AnyShare client](https://github.com/isHarryh/AnyShare-Unofficial/blob/c1b6e265ea82d227c233272d49832825b28bd5ad/anyshare_unofficial/types/enums.py#L34-L39)
+labels `1` as rename and `0` as forbid. Neither mapping is admitted as the
+current BUAA contract. The candidate rejects a contradictory `ondup=3` with
+`overwrites=false`, but its remaining structured preview only binds the
+caller's intent; it does not verify remote collision behavior or a resulting
+name. Commit is blocked. Directory-list request construction and token
+exchange also remain blocked pending their own source and security contracts.
+No online drive operation or mutation is established by this research.
+
 ## Observation correction and CI migration prerequisites (2026-10-26)
 
 The bounded browser observations are archived in

@@ -324,6 +324,17 @@ fn occurrences(semester_start: i64, weeks: u32, course: &Course) -> Vec<Occurren
 /// Compare a timetable schedule against the ICS mapping contract and emit a
 /// standards-compliant RFC 5545 document. Offline: no network, no writes.
 pub fn check(input: &str) -> Value {
+    check_inner(input, None)
+}
+
+/// Internal source-bound identity for adapters that split one source schedule
+/// row into several engine courses. The public generic timetable retains its
+/// existing positional identity contract.
+pub(crate) fn check_with_source_identity(input: &str, source_ids: &[&str]) -> Value {
+    check_inner(input, Some(source_ids))
+}
+
+fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
     let parsed: Value = match serde_json::from_str(input) {
         Ok(v) => v,
         Err(_) => {
@@ -383,6 +394,10 @@ pub fn check(input: &str) -> Value {
             Err(message) => return invalid(message),
         }
     }
+    if source_ids.is_some_and(|ids| ids.len() != courses.len() || ids.iter().any(|id|
+        id.len() != 64 || !id.bytes().all(|byte|byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))) {
+        return invalid("invalid or mismatched source identities".into());
+    }
 
     // Build the ICS document.
     let stamp = format!("{}T000000Z", {
@@ -400,12 +415,18 @@ pub fn check(input: &str) -> Value {
     ];
 
     let mut event_count = 0usize;
+    let mut seen_source_occurrences = std::collections::HashSet::new();
     for (ci, course) in courses.iter().enumerate() {
         for occ in occurrences(start_date, weeks, course) {
-            let uid = format!(
-                "buaa-cli/timetable/{semester_start_iso}/{ci}/{}",
-                occ.date_z
-            );
+            let uid = if let Some(ids) = source_ids {
+                let id = ids[ci];
+                if !seen_source_occurrences.insert((id, occ.date_z)) {
+                    return invalid("ambiguous duplicate source occurrence".into());
+                }
+                format!("buaa-cli/timetable-pg/{semester_start_iso}/{id}/{}", occ.date_z)
+            } else {
+                format!("buaa-cli/timetable/{semester_start_iso}/{ci}/{}", occ.date_z)
+            };
             logical.push("BEGIN:VEVENT".into());
             logical.push(format!("UID:{uid}"));
             logical.push(format!("DTSTAMP:{stamp}"));

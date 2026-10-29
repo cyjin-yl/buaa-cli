@@ -11,6 +11,13 @@
 //! Cooperating same-user clients are assumed; the account owner or root can remove
 //! state or bypass this library. Filesystem locking and fsync must
 //! have local-filesystem semantics. No credential or account identifier is stored.
+//!
+//! A cached HTTP response can confirm an account challenge without any request
+//! being in flight. Such an observation is published into a durable mailbox
+//! inside the same canonical directory, using its own lock, so publication
+//! never waits for the account request lock. Every account-locked entrypoint
+//! reconciles the mailbox into the durable latch before it admits or
+//! authorizes anything.
 
 use chrono::{Datelike, Timelike};
 use fs2::FileExt;
@@ -33,7 +40,123 @@ const MISSING_RETRY_AFTER_MS: u64 = 30 * 60 * 1_000;
 const MAX_STATE_BYTES: u64 = 16 * 1_024;
 const LOCK_NAME: &str = "governor.lock";
 const STATE_NAME: &str = "state.json";
+// The mailbox lives inside the canonical governor directory. Publications
+// before consumption coalesce; publication after consumption creates a new
+// marker under the same permanent mailbox lock.
+const CHALLENGE_NAME: &str = "cached-challenge";
+const CHALLENGE_LOCK_NAME: &str = "cached-challenge.lock";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static TEST_PAUSE_AFTER_CHALLENGE_LATCH: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Publish only an already-confirmed challenge from admitted cached bytes.
+/// This never takes the request lock, creates governor history, or sends HTTP.
+/// The separate permanent mailbox lock serializes publication with
+/// consumption; its critical section contains only local filesystem
+/// operations. A missing canonical directory is created with the same rules
+/// as governor initialization. An error means publication is indeterminate;
+/// callers must not treat it as a recorded observation.
+pub(crate) fn publish_cached_challenge() -> Result<(), String> {
+    let home = identity_home()?;
+    let parent = open_directory(&home, false, false)?;
+    let directory = open_directory(&home.join(".buaa-cli-governor"), true, true)?;
+    publish_challenge_in(&directory)?;
+    // Also cover a directory concurrently created by another process whose
+    // parent-directory fsync has not yet completed.
+    parent.sync_all().map_err(|_| "cannot synchronize governor parent directory".into())
+}
+
+#[cfg(test)]
+pub(crate) fn publish_cached_challenge_for_test(path: &Path) -> Result<(), String> {
+    let parent = open_directory(path.parent().ok_or("missing governor parent")?, false, false)?;
+    let directory = open_directory(path, true, true)?;
+    publish_challenge_in(&directory)?;
+    parent.sync_all().map_err(|_| "cannot synchronize governor parent directory".into())
+}
+
+fn challenge_lock(directory: &File) -> Result<GovernorLock, String> {
+    validate_directory(directory, true, true)?;
+    let file = match open_child(
+        directory,
+        CHALLENGE_LOCK_NAME,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+    ) {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
+            open_child(directory, CHALLENGE_LOCK_NAME, libc::O_RDWR)
+                .map_err(|_| "cannot open cached challenge lock".to_string())?
+        }
+        Err(_) => return Err("cannot open cached challenge lock".into()),
+    };
+    validate_private_file(&file)?;
+    if file.metadata().map_err(|_| "cannot inspect cached challenge lock")?.len() != 0 {
+        return Err("cached challenge lock is invalid".into());
+    }
+    // The mailbox lock is a permanent companion of the account lock. It is
+    // never removed, so a crashed publisher cannot leave a stale lock behind.
+    FileExt::lock_exclusive(&file).map_err(|_| "cannot lock cached challenge mailbox")?;
+    Ok(GovernorLock::held(file))
+}
+
+// The empty private marker is a coalesced observation. Reject links, unsafe
+// permissions, non-regular files and unexpected payloads before reading.
+fn validate_challenge(file: &File) -> Result<(), String> {
+    validate_private_file(file)?;
+    if file.metadata().map_err(|_| "cannot inspect cached challenge marker")?.len() != 0 {
+        return Err("cached challenge marker is invalid".into());
+    }
+    Ok(())
+}
+
+// Call under the permanent mailbox lock; ENOENT is the only absent case.
+fn challenge_marker_present(directory: &File) -> Result<bool, String> {
+    let file = match open_child(directory, CHALLENGE_NAME, libc::O_RDONLY) {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT) => return Ok(false),
+        Err(_) => return Err("cannot inspect cached challenge marker".into()),
+    };
+    validate_challenge(&file)?;
+    Ok(true)
+}
+
+fn publish_challenge_in(directory: &File) -> Result<(), String> {
+    let _lock = challenge_lock(directory)?;
+    publish_challenge_locked(directory)
+}
+
+// Caller holds the permanent mailbox lock.
+fn publish_challenge_locked(directory: &File) -> Result<(), String> {
+    let marker = match open_child(directory, CHALLENGE_NAME, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL) {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) =>
+            open_child(directory, CHALLENGE_NAME, libc::O_RDONLY)
+                .map_err(|_| "cannot publish cached challenge marker")?,
+        Err(_) => return Err("cannot publish cached challenge marker".into()),
+    };
+    validate_challenge(&marker)?;
+    marker.sync_all().map_err(|_| "cannot synchronize cached challenge marker")?;
+    directory.sync_all().map_err(|_| "cannot synchronize cached challenge directory".into())
+}
+
+/// Adopt a published cached-challenge observation into the given state.
+///
+/// The caller holds the canonical account lock. This persists the latch but
+/// never consumes an observation: only an explicit resume may do that, so a
+/// concurrent publication is never erased and a resume that is
+/// already in progress cannot silently acknowledge the observation it has just
+/// discovered. Pending outcomes, cooldowns, request and background deadlines,
+/// failure counts and raised limits are never modified here.
+fn observe_cached_challenge(governor: &Governor, state: &mut State) -> Result<bool, String> {
+    let _mailbox = challenge_lock(&governor.directory)?;
+    let present = challenge_marker_present(&governor.directory)?;
+    if present {
+        state.safety_latched = true;
+        state.authentication_armed = false;
+        governor.save(state, false)?;
+    }
+    Ok(present)
+}
 
 /// Scheduling limits. Constructors reject values below the safety minimums.
 /// A directory remembers the greatest limits ever requested; reopening it with
@@ -85,6 +208,9 @@ pub enum RequestKind {
 #[derive(Clone, Copy, Debug)]
 pub enum Outcome<'a> {
     Success,
+    /// An independently confirmed account safety observation, not a claim that
+    /// this request received a challenge or encountered a network failure.
+    SafetyObserved,
     Http {
         status: u16,
         retry_after: Option<&'a str>,
@@ -141,6 +267,14 @@ pub struct RequestLease<'a> {
     _lock: GovernorLock,
     state: State,
     kind: RequestKind,
+    cached_challenge_observed: bool,
+}
+
+/// The fenced closure retains both the mailbox lock and this mutable lease
+/// borrow until its synchronous send returns headers or an error.
+struct RequestStartFence<'lease, 'governor> {
+    _mailbox: GovernorLock,
+    _lease: &'lease mut RequestLease<'governor>,
 }
 
 /// A request slot reserved while the current lease remains pending. The
@@ -150,6 +284,21 @@ pub struct RequestLease<'a> {
 pub(crate) struct FollowupReservation {
     pub(crate) request_wait: Duration,
     pub(crate) cooldown_wait: Duration,
+}
+
+/// A follow-up or request-start check was refused for a confirmed cached
+/// challenge, or because the governor could not safely admit it. A cached
+/// challenge is not a network error.
+#[derive(Debug)]
+pub(crate) enum FollowupError {
+    CachedChallenge,
+    Governor(String),
+}
+
+impl From<String> for FollowupError {
+    fn from(error: String) -> Self {
+        Self::Governor(error)
+    }
 }
 
 struct GovernorLock {
@@ -477,10 +626,20 @@ impl Governor {
             if child_exists(&self.directory, STATE_NAME)? {
                 return Err("governor lock history is missing; refusing requests".into());
             }
-            self.save(&State::initial(limits, now, self.boot_id.clone()), true)?;
+            let mut state = State::initial(limits, now, self.boot_id.clone());
+            self.save(&state, true)?;
+            // A first installation adopts an already-published observation
+            // instead of starting from a clean slate. The observation stays
+            // pending: only an explicit resume may acknowledge it, so a resume
+            // in the same invocation cannot silently clear the observation it
+            // has just discovered.
+            observe_cached_challenge(self, &mut state)?;
         } else {
             let mut state = self.load()?;
             state.observe(now)?;
+            // Adopt a published observation into the durable latch. The
+            // observation itself stays pending until an explicit resume.
+            observe_cached_challenge(self, &mut state)?;
             state.ensure_outcome_known()?;
             let raised = state.request_interval_ms < limits.request_interval_ms
                 || state.background_interval_ms < limits.background_interval_ms;
@@ -516,6 +675,7 @@ impl Governor {
         let (lock, _) = self.open_lock(false)?;
         let lock = lock_exclusive(lock)?;
         let mut state = self.load()?;
+        observe_cached_challenge(self, &mut state)?;
         let now = now_ms()?;
         state.observe(now)?;
         state.ensure_outcome_known()?;
@@ -549,6 +709,7 @@ impl Governor {
             _lock: lock,
             state,
             kind,
+            cached_challenge_observed: false,
         })
     }
 
@@ -561,6 +722,33 @@ impl Governor {
         let mut state = self.load()?;
         let now = now_ms()?;
         state.observe(now)?;
+        // Serialize the decision and its durable save against publication. An
+        // observation found here refuses this resume: first fsync the latch,
+        // then acknowledge exactly one observation, and require a new explicit
+        // resume after the caller has seen the refusal.
+        let _mailbox = challenge_lock(&self.directory)?;
+        if challenge_marker_present(&self.directory)? {
+            state.safety_latched = true;
+            state.authentication_armed = false;
+            self.save(&state, false)?;
+            // An unknown outcome remains pending and cannot acknowledge even
+            // a known cached challenge. Leave its marker untouched.
+            state.ensure_outcome_known()?;
+            #[cfg(test)]
+            if TEST_PAUSE_AFTER_CHALLENGE_LATCH.swap(false, Ordering::Relaxed) {
+                println!("LATCH_DURABLE");
+                std::io::stdout().flush().map_err(|_| "cannot flush test boundary")?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).map_err(|_| "cannot wait at test boundary")?;
+            }
+            let name = CString::new(CHALLENGE_NAME).map_err(|_| "invalid challenge name")?;
+            // SAFETY: pinned directory, fixed component, mailbox lock held.
+            if unsafe { libc::unlinkat(self.directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+                return Err("cannot consume cached challenge marker".into());
+            }
+            self.directory.sync_all().map_err(|_| "cannot synchronize cached challenge consumption")?;
+            return Err("cached challenge observed; review it and resume again to authorize one attempt".into());
+        }
         state.ensure_outcome_known()?;
         state.authentication_armed = true;
         state.safety_latched = false;
@@ -573,6 +761,7 @@ impl Governor {
         let (lock, _) = self.open_lock(false)?;
         let _lock = lock_exclusive(lock)?;
         let mut state = self.load()?;
+        observe_cached_challenge(self, &mut state)?;
         let now = now_ms()?;
         state.observe(now)?;
         state.ensure_outcome_known()?;
@@ -800,7 +989,51 @@ impl Governor {
     }
 }
 
-impl RequestLease<'_> {
+impl<'governor> RequestLease<'governor> {
+    fn request_start_fence<'lease>(
+        &'lease mut self,
+    ) -> Result<RequestStartFence<'lease, 'governor>, FollowupError> {
+        if self.state.pending != Some(self.kind) {
+            return Err(FollowupError::Governor("request lease is no longer pending".into()));
+        }
+        // The lease already holds the account lock. Publishers take only the
+        // mailbox lock; no path takes the locks in the opposite order.
+        let mailbox = challenge_lock(&self.governor.directory)?;
+        if challenge_marker_present(&self.governor.directory)? || self.cached_challenge_observed {
+            self.state.safety_latched = true;
+            self.state.authentication_armed = false;
+            self.governor.save(&self.state, false)?;
+            self.cached_challenge_observed = true;
+            return Err(FollowupError::CachedChallenge);
+        }
+        Ok(RequestStartFence { _mailbox: mailbox, _lease: self })
+    }
+
+    /// Linearize one actual request against cached-challenge publication.
+    /// Call after all pacing waits and request construction, immediately before
+    /// sending, including the initial request. The closure may first perform a
+    /// local preflight (such as a durable journal write); if that succeeds, it
+    /// must perform one synchronous send and return on response headers or send
+    /// error. A preflight failure must return without sending. The closure must
+    /// not sleep, read the response body, publish a challenge, re-enter governor
+    /// operations, or acquire another lock in an incompatible order. The fence
+    /// is released before this method returns, including on unwinding, so the
+    /// caller may then observe or finish the lease. Publishers ordered before
+    /// admission are observed and refused.
+    /// A request admitted first cannot be retroactively cancelled: its publisher
+    /// waits for this mailbox fence, not the account lock. That wait depends on
+    /// transport/system progress, including the request timeout. A request
+    /// builder's timeout starts at `send`; it does not bound the mailbox flock
+    /// or fsync wait before the closure starts. This is not an end-to-end hard
+    /// deadline, and establishes admission order, not proof all request body
+    /// bytes have been transmitted when response headers arrive.
+    pub(crate) fn start_request<T>(&mut self, start: impl FnOnce() -> T) -> Result<T, FollowupError> {
+        let fence = self.request_start_fence()?;
+        let result = start();
+        drop(fence);
+        Ok(result)
+    }
+
     /// Durably retain response status, Retry-After and challenge facts before
     /// any caller-owned cookie or body processing can fail. The request remains
     /// pending and the same lock stays held; the caller still must finish the
@@ -813,6 +1046,19 @@ impl RequestLease<'_> {
         retry_after: Option<&str>,
         challenge: bool,
     ) -> Result<(), String> {
+        self.observe_http_many(status, std::iter::once(retry_after), challenge)
+    }
+
+    /// Record one response's complete set of Retry-After fields. `None` is an
+    /// undecodable or missing field; an empty iterator means no such header.
+    /// For 429, any missing/invalid field retains the thirty-minute floor,
+    /// even if another field is valid. Every valid deadline is retained too.
+    pub(crate) fn observe_http_many<'a>(
+        &mut self,
+        status: u16,
+        values: impl IntoIterator<Item = Option<&'a str>>,
+        challenge: bool,
+    ) -> Result<(), String> {
         if !(100..=599).contains(&status) {
             return Err("invalid HTTP response status".into());
         }
@@ -821,10 +1067,18 @@ impl RequestLease<'_> {
         if self.state.pending != Some(self.kind) {
             return Err("request lease is no longer pending".into());
         }
-        let retry_deadline = retry_after.and_then(|value| retry_after_deadline(value, now));
-        if let Some(until) = retry_deadline {
-            self.state.cooldown_until_ms = self.state.cooldown_until_ms.max(until);
-        } else if status == 429 {
+        let mut saw_field = false;
+        let mut invalid_field = false;
+        for value in values {
+            saw_field = true;
+            match value.and_then(|value| retry_after_deadline(value, now)) {
+                Some(until) => {
+                    self.state.cooldown_until_ms = self.state.cooldown_until_ms.max(until);
+                }
+                None => invalid_field = true,
+            }
+        }
+        if status == 429 && (!saw_field || invalid_field) {
             self.state.cooldown_until_ms = self
                 .state
                 .cooldown_until_ms
@@ -842,11 +1096,18 @@ impl RequestLease<'_> {
     /// outcome, so callers never need to call `Governor::status` while an I/O
     /// lease is held. Any cooldown previously observed on this lease remains
     /// durable and causes the caller to stop instead of retrying.
-    pub(crate) fn reserve_followup(&mut self) -> Result<FollowupReservation, String> {
+    pub(crate) fn reserve_followup(&mut self) -> Result<FollowupReservation, FollowupError> {
         let now = now_ms()?;
         self.state.observe(now)?;
         if self.state.pending != Some(self.kind) {
-            return Err("request lease is no longer pending".into());
+            return Err(FollowupError::Governor("request lease is no longer pending".into()));
+        }
+        // A marker published after lease acquisition must stop further hops on
+        // this attempt: credentials may not follow an observed challenge. The
+        // pending outcome and every deadline stay untouched and durable.
+        if observe_cached_challenge(self.governor, &mut self.state)? {
+            self.cached_challenge_observed = true;
+            return Err(FollowupError::CachedChallenge);
         }
         let cooldown_wait = self.state.cooldown_until_ms.saturating_sub(now);
         if cooldown_wait != 0 {
@@ -875,16 +1136,28 @@ impl RequestLease<'_> {
         self.finish_with_status_scope(outcome, false).map(|_| ())
     }
 
-    /// Return the safety latch committed by this outcome while exclusivity is
-    /// still held, rather than predicting it or racing a subsequent status read.
+    /// Return the combined outcome and cached-observation latch, committed
+    /// while exclusivity is still held, rather than racing a status read.
     pub(crate) fn finish_with_safety_latch(self, outcome: Outcome<'_>) -> Result<bool, String> {
         self.finish_with_status_scope(outcome, false)
     }
 
-    /// Release a lease when local preflight failed before any request was sent.
-    /// Preserve existing cooldown/latch/failure state while retaining the gap.
+    /// Release a lease when local preflight prevents the next request. Earlier
+    /// observed hops may exist; preserve their cooldown/latch/failure state and
+    /// retain the request gap without inventing a network or safety outcome.
     pub(crate) fn finish_without_request(mut self) -> Result<(), String> {
         self.prepare_finish()?;
+        self.state.pending = None;
+        self.governor.save(&self.state, false)
+    }
+
+    /// A cache race may reveal a confirmed challenge after acquiring a lease
+    /// but before sending any request. Latch it under that same lock so another
+    /// process cannot acquire a request between release and observation.
+    pub(crate) fn finish_cached_challenge(mut self) -> Result<(), String> {
+        self.prepare_finish()?;
+        self.state.safety_latched = true;
+        self.state.authentication_armed = false;
         self.state.pending = None;
         self.governor.save(&self.state, false)
     }
@@ -904,6 +1177,7 @@ impl RequestLease<'_> {
         }
         Ok(now)
     }
+
 
     /// Finish a response whose validated non-2xx status describes the archived
     /// resource, not the archive service. Challenge and body-failure facts remain
@@ -942,6 +1216,11 @@ impl RequestLease<'_> {
         let now = self.prepare_finish()?;
         let success = match outcome {
             Outcome::Success => true,
+            Outcome::SafetyObserved => {
+                self.state.safety_latched = true;
+                self.state.authentication_armed = false;
+                false
+            }
             Outcome::Http {
                 status,
                 retry_after,
@@ -985,9 +1264,22 @@ impl RequestLease<'_> {
                 false
             }
         };
+        // Hold the mailbox lock across the final observation and outcome
+        // commit. A publisher linearizes before this read or remains pending
+        // after the commit; no marker is consumed by a lease. Pending is not
+        // cleared until this outcome and its combined latch are saved.
+        let _mailbox = challenge_lock(&self.governor.directory)?;
+        let marker_present = challenge_marker_present(&self.governor.directory)?;
+        if marker_present {
+            self.cached_challenge_observed = true;
+            self.state.safety_latched = true;
+            self.state.authentication_armed = false;
+        }
         if success {
             self.state.network_failures = 0;
-            if self.kind == RequestKind::Authentication {
+            // An authentication success clears only the latch committed by its
+            // own outcome; a concurrently observed cached challenge remains.
+            if self.kind == RequestKind::Authentication && !self.cached_challenge_observed {
                 self.state.safety_latched = false;
             }
         }
@@ -1530,6 +1822,625 @@ mod tests {
     include!("../tests/governor_process.rs");
     governor_process_regressions!();
 
+    fn mailbox_worker(path: &Path, action: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        let module = module_path!().split_once("::").unwrap().1;
+        command.args([
+            "--exact", &format!("{module}::cached_challenge_worker"),
+            "--ignored", "--nocapture",
+        ]);
+        command.env("BUAA_MAILBOX_PATH", path).env("BUAA_MAILBOX_ACTION", action);
+        command
+    }
+
+    #[test]
+    #[ignore = "offline subprocess entry point"]
+    fn cached_challenge_worker() {
+        let Some(path) = std::env::var_os("BUAA_MAILBOX_PATH") else { return };
+        let directory = super::open_directory(Path::new(&path), false, true).unwrap();
+        match std::env::var("BUAA_MAILBOX_ACTION").unwrap().as_str() {
+            "publish" => super::publish_challenge_in(&directory).unwrap(),
+            "publish-signaled" => {
+                println!("PUBLISH_ATTEMPT");
+                std::io::stdout().flush().unwrap();
+                super::publish_challenge_in(&directory).unwrap();
+            }
+            "publish-hold" => {
+                let _mailbox = super::challenge_lock(&directory).unwrap();
+                super::publish_challenge_locked(&directory).unwrap();
+                println!("PUBLISHED_HELD");
+                std::io::stdout().flush().unwrap();
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).unwrap();
+            }
+            "resume" => {
+                let governor = Governor { directory, boot_id: super::current_boot_id().unwrap() };
+                let _ = governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest);
+            }
+            "hold-auth-report" => {
+                let governor = Governor { directory, boot_id: super::current_boot_id().unwrap() };
+                governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+                let lease = governor.try_acquire(RequestKind::Authentication).unwrap();
+                println!("LEASE_READY");
+                std::io::stdout().flush().unwrap();
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).unwrap();
+                let latch = lease.finish_with_safety_latch(Outcome::Success).unwrap();
+                println!("FINISH_LATCH={latch}");
+                std::io::stdout().flush().unwrap();
+            }
+            "hold-fenced-start" => {
+                let governor = Governor { directory, boot_id: super::current_boot_id().unwrap() };
+                let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+                lease.start_request(|| {
+                    println!("FENCE_HELD");
+                    std::io::stdout().flush().unwrap();
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).unwrap();
+                }).unwrap();
+                lease.finish(Outcome::Success).unwrap();
+            }
+            "hold-mailbox" => {
+                let _lock = super::challenge_lock(&directory).unwrap();
+                println!("MAILBOX_LOCKED");
+                std::io::stdout().flush().unwrap();
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).unwrap();
+            }
+            "hold-after-latch" => {
+                let governor = Governor { directory, boot_id: super::current_boot_id().unwrap() };
+                super::TEST_PAUSE_AFTER_CHALLENGE_LATCH.store(true, Ordering::Relaxed);
+                // The real resume path pauses just after its latch fsync. The
+                // parent kills this process before marker consumption.
+                let _ = governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest);
+            }
+            _ => panic!("unknown mailbox worker action"),
+        }
+    }
+
+    #[test]
+    fn cached_challenge_publishes_during_another_process_active_lease() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut held = HeldProcess::start(&fixture.state_dir(), "hold-auth");
+        assert!(Governor::open_at(fixture.state_dir(), Limits::default()).is_err());
+        assert!(mailbox_worker(&fixture.state_dir(), "publish").status().unwrap().success());
+        assert!(super::child_exists(&governor.directory, super::CHALLENGE_NAME).unwrap());
+        held.finish();
+        let status = governor.status().unwrap();
+        assert!(status.safety_latched);
+        assert!(!status.authentication_armed);
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+    }
+
+    #[test]
+    fn cached_challenge_concurrent_process_finish_reports_combined_latch() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut child = mailbox_worker(&fixture.state_dir(), "hold-auth-report")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            if line.contains("LEASE_READY") { break; }
+        }
+        // The publisher does not wait for the account lock held in the child.
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        assert_eq!(governor.load().unwrap().pending, Some(RequestKind::Authentication));
+        writeln!(child.stdin.take().unwrap(), "finish").unwrap();
+        loop {
+            line.clear();
+            assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            if line.contains("FINISH_LATCH=true") { break; }
+        }
+        assert!(child.wait().unwrap().success());
+        let state = governor.load().unwrap();
+        assert!(state.safety_latched);
+        assert!(!state.authentication_armed);
+        assert_eq!(state.pending, None);
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+    }
+
+    #[test]
+    fn request_fence_refuses_first_request_when_publisher_already_holds_mailbox() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+        let mut publisher = mailbox_worker(&fixture.state_dir(), "publish-hold")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut output = BufReader::new(publisher.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            if line.contains("PUBLISHED_HELD") { break; }
+        }
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        std::thread::scope(|scope| {
+            let attempt = scope.spawn(|| {
+                entered_tx.send(()).unwrap();
+                matches!(
+                    lease.start_request(|| called.store(true, Ordering::SeqCst)),
+                    Err(super::FollowupError::CachedChallenge)
+                )
+            });
+            entered_rx.recv().unwrap();
+            writeln!(publisher.stdin.take().unwrap(), "release").unwrap();
+            assert!(attempt.join().unwrap());
+        });
+        assert!(publisher.wait().unwrap().success());
+        assert!(!called.load(Ordering::SeqCst));
+        let pending = governor.load().unwrap();
+        assert_eq!(pending.pending, Some(RequestKind::Interactive));
+        assert!(pending.safety_latched);
+        assert!(lease.finish_with_safety_latch(Outcome::SafetyObserved).unwrap());
+    }
+
+    #[test]
+    fn request_fence_keeps_later_process_publication_until_send_returns() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+        let mut queued = None;
+        let result = lease.start_request(|| {
+            let mut publisher = mailbox_worker(&fixture.state_dir(), "publish-signaled")
+                .stdout(Stdio::piped()).spawn().unwrap();
+            let mut output = BufReader::new(publisher.stdout.take().unwrap());
+            let mut line = String::new();
+            loop {
+                line.clear();
+                assert_ne!(output.read_line(&mut line).unwrap(), 0);
+                if line.contains("PUBLISH_ATTEMPT") { break; }
+            }
+            assert!(publisher.try_wait().unwrap().is_none());
+            queued = Some((publisher, output));
+            // This is the synthetic return from one blocking send, not network I/O.
+            Ok::<(), &'static str>(())
+        });
+        assert!(matches!(result, Ok(Ok(()))));
+        let (mut publisher, _output) = queued.take().unwrap();
+        assert!(publisher.wait().unwrap().success());
+        // The lease still owns the account lock, but the publisher completed as
+        // soon as the request-start fence was dropped.
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(matches!(lease.start_request(|| ()), Err(super::FollowupError::CachedChallenge)));
+        assert!(lease.finish_with_safety_latch(Outcome::SafetyObserved).unwrap());
+    }
+
+    #[test]
+    fn request_fence_rechecks_after_followup_pacing_wait() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+        let reservation = lease.reserve_followup().unwrap();
+        assert!(!reservation.request_wait.is_zero());
+        let before = governor.load().unwrap();
+        let mut publisher = mailbox_worker(&fixture.state_dir(), "publish").spawn().unwrap();
+        // Publication can arrive during the caller's real pacing sleep, after
+        // reserve_followup's first check but before this final request fence.
+        std::thread::sleep(reservation.request_wait);
+        assert!(publisher.wait().unwrap().success());
+        let mut sent = false;
+        assert!(matches!(lease.start_request(|| { sent = true; }), Err(super::FollowupError::CachedChallenge)));
+        assert!(!sent);
+        let after = governor.load().unwrap();
+        assert_eq!(after.pending, before.pending);
+        assert_eq!(after.next_request_ms, before.next_request_ms);
+        assert_eq!(after.next_background_ms, before.next_background_ms);
+        assert_eq!(after.cooldown_until_ms, before.cooldown_until_ms);
+        assert!(lease.finish_with_safety_latch(Outcome::SafetyObserved).unwrap());
+    }
+
+    #[test]
+    fn request_fence_releases_after_send_error_and_unwind() {
+        for panic_in_send in [false, true] {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            if panic_in_send {
+                let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = lease.start_request(|| -> () { panic!("synthetic send panic") });
+                }));
+                assert!(caught.is_err());
+            } else {
+                let result = lease.start_request(|| Err::<(), _>("synthetic send error"));
+                assert!(matches!(result, Ok(Err("synthetic send error"))));
+            }
+            // Both normal error return and unwind release only the mailbox:
+            // publication succeeds while the lease's account lock is retained.
+            assert!(mailbox_worker(&fixture.state_dir(), "publish").status().unwrap().success());
+            assert_eq!(governor.load().unwrap().pending, Some(RequestKind::Interactive));
+            assert!(matches!(lease.start_request(|| ()), Err(super::FollowupError::CachedChallenge)));
+            assert!(lease.finish_with_safety_latch(Outcome::SafetyObserved).unwrap());
+        }
+    }
+
+    #[test]
+    fn killed_fenced_process_releases_mailbox_and_keeps_unknown_pending() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut holder = mailbox_worker(&fixture.state_dir(), "hold-fenced-start")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut holder_output = BufReader::new(holder.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(holder_output.read_line(&mut line).unwrap(), 0);
+            if line.contains("FENCE_HELD") { break; }
+        }
+        let mut publisher = mailbox_worker(&fixture.state_dir(), "publish-signaled")
+            .stdout(Stdio::piped()).spawn().unwrap();
+        let mut publisher_output = BufReader::new(publisher.stdout.take().unwrap());
+        loop {
+            line.clear();
+            assert_ne!(publisher_output.read_line(&mut line).unwrap(), 0);
+            if line.contains("PUBLISH_ATTEMPT") { break; }
+        }
+        assert!(publisher.try_wait().unwrap().is_none());
+        holder.kill().unwrap();
+        assert!(!holder.wait().unwrap().success());
+        assert!(publisher.wait().unwrap().success());
+        assert_eq!(governor.load().unwrap().pending, Some(RequestKind::Interactive));
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(governor.status().is_err());
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        assert_eq!(governor.load().unwrap().pending, Some(RequestKind::Interactive));
+    }
+
+    #[test]
+    fn cached_challenge_survives_creation_and_first_resume_consumption() {
+        let fixture = Fixture::new();
+        let state_dir = fixture.state_dir();
+        // Finding 1: a confirmed challenge must persist even before any
+        // governor history exists; creation cannot treat it as absent.
+        super::publish_cached_challenge_for_test(&state_dir).unwrap();
+        let governor = Governor::isolated_for_test(&state_dir).unwrap();
+        assert!(super::child_exists(&governor.directory, super::CHALLENGE_NAME).unwrap());
+        assert!(governor.load().unwrap().safety_latched);
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+        // Finding 3: initialization does not consume the marker, so a caller
+        // that resumes right after open() cannot clear the fresh observation.
+        assert!(
+            governor
+                .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+                .is_err()
+        );
+        assert!(governor.load().unwrap().safety_latched);
+        assert!(!governor.load().unwrap().authentication_armed);
+        // The same resume immediately afterwards is an explicit new decision.
+        governor
+            .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+            .unwrap();
+        let state = governor.load().unwrap();
+        assert!(!state.safety_latched);
+        assert!(state.authentication_armed);
+    }
+
+    #[test]
+    fn cached_challenge_reopen_cannot_authorize_the_observation_it_just_found() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        drop(governor);
+        let reopened = Governor::open_at(fixture.state_dir(), Limits::default()).unwrap();
+        assert!(reopened.load().unwrap().safety_latched);
+        assert!(super::challenge_marker_present(&reopened.directory).unwrap());
+        assert!(reopened.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        let state = reopened.load().unwrap();
+        assert!(state.safety_latched);
+        assert!(!state.authentication_armed);
+    }
+
+    #[test]
+    fn cached_challenge_published_during_first_process_initialization_is_adopted() {
+        let fixture = Fixture::new();
+        let mut creator = HeldProcess::start(&fixture.state_dir(), "contended-initialization");
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        creator.finish();
+        let governor = fixture.open();
+        assert!(governor.status().unwrap().safety_latched);
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+    }
+
+    #[test]
+    fn cached_challenge_preserves_refused_half_initialized_and_missing_lock_history() {
+        // Existing permanent lock with no state is an interrupted first open,
+        // not permission to initialize a clean account.
+        let half = Fixture::new();
+        super::publish_cached_challenge_for_test(&half.state_dir()).unwrap();
+        let lock_path = half.state_dir().join(super::LOCK_NAME);
+        fs::write(&lock_path, b"").unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(Governor::open_at(half.state_dir(), Limits::default()).is_err());
+        let directory = super::open_directory(&half.state_dir(), false, true).unwrap();
+        assert!(super::challenge_marker_present(&directory).unwrap());
+        assert!(!super::child_exists(&directory, super::STATE_NAME).unwrap());
+
+        // Existing state with its permanent lock removed is missing history,
+        // not a fresh installation. Publication must not reset that state.
+        let missing = Fixture::new();
+        let governor = missing.open();
+        let mut state = governor.load().unwrap();
+        state.network_failures = 3;
+        state.cooldown_until_ms = super::now_ms().unwrap() + 60_000;
+        governor.save(&state, false).unwrap();
+        let bytes = fs::read(missing.state_dir().join(super::STATE_NAME)).unwrap();
+        fs::remove_file(missing.state_dir().join(super::LOCK_NAME)).unwrap();
+        super::publish_cached_challenge_for_test(&missing.state_dir()).unwrap();
+        assert!(Governor::open_at(missing.state_dir(), Limits::default()).is_err());
+        assert_eq!(fs::read(missing.state_dir().join(super::STATE_NAME)).unwrap(), bytes);
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+    }
+
+    #[test]
+    fn cached_challenge_preserves_unknown_outcome_and_all_scheduling_history() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut state = governor.load().unwrap();
+        state.pending = Some(RequestKind::BackgroundPoll);
+        state.next_request_ms = super::now_ms().unwrap() + 60_000;
+        state.next_background_ms = state.next_request_ms + 900_000;
+        state.cooldown_until_ms = state.next_background_ms + 60_000;
+        state.network_failures = 3;
+        state.request_interval_ms = 60_000;
+        state.background_interval_ms = 1_800_000;
+        state.authentication_armed = true;
+        governor.save(&state, false).unwrap();
+        super::publish_challenge_in(&governor.directory).unwrap();
+        assert!(governor.status().is_err());
+        let retained = governor.load().unwrap();
+        state.safety_latched = true;
+        state.authentication_armed = false;
+        assert_eq!(serde_json::to_value(&state).unwrap(), serde_json::to_value(&retained).unwrap());
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        assert_eq!(governor.load().unwrap().pending, Some(RequestKind::BackgroundPoll));
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(Governor::open_at(fixture.state_dir(), Limits::default()).is_err());
+        assert!(governor.try_acquire(RequestKind::BackgroundPoll).is_err());
+    }
+
+    #[test]
+    fn cached_challenge_republication_cannot_be_consumed_by_prior_resume() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        super::publish_challenge_in(&governor.directory).unwrap();
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        // A distinct later observation after consumption must survive and
+        // cause its own refusal.
+        assert!(mailbox_worker(&fixture.state_dir(), "publish").status().unwrap().success());
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        assert!(governor.load().unwrap().safety_latched);
+        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        assert!(mailbox_worker(&fixture.state_dir(), "publish").status().unwrap().success());
+        assert!(governor.try_acquire(RequestKind::Authentication).is_err());
+        assert!(!governor.load().unwrap().authentication_armed);
+    }
+
+    #[test]
+    fn cached_challenge_repeated_cache_hits_coalesce_before_consumption() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut first = mailbox_worker(&fixture.state_dir(), "publish").spawn().unwrap();
+        let mut second = mailbox_worker(&fixture.state_dir(), "publish").spawn().unwrap();
+        assert!(first.wait().unwrap().success());
+        assert!(second.wait().unwrap().success());
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        // All pre-consumption publications represent one pending challenge.
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        assert!(!super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(governor.load().unwrap().safety_latched);
+        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        let state = governor.load().unwrap();
+        assert!(state.authentication_armed);
+        assert!(!state.safety_latched);
+    }
+
+    #[test]
+    fn cached_challenge_mailbox_lock_serializes_process_publishers() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let mut holder = mailbox_worker(&fixture.state_dir(), "hold-mailbox")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut output = BufReader::new(holder.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            if line.contains("MAILBOX_LOCKED") { break; }
+        }
+        let mut publisher = mailbox_worker(&fixture.state_dir(), "publish").spawn().unwrap();
+        // Release by process exit; publication must then create a durable marker.
+        writeln!(holder.stdin.take().unwrap(), "release").unwrap();
+        assert!(holder.wait().unwrap().success());
+        assert!(publisher.wait().unwrap().success());
+        assert!(governor.status().unwrap().safety_latched);
+    }
+
+    #[test]
+    fn cached_challenge_concurrent_consume_resume_and_publish_never_lose_observation() {
+        for _ in 0..8 {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+            let mut holder = mailbox_worker(&fixture.state_dir(), "hold-mailbox")
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            let mut output = BufReader::new(holder.stdout.take().unwrap());
+            let mut line = String::new();
+            loop {
+                line.clear();
+                assert_ne!(output.read_line(&mut line).unwrap(), 0);
+                if line.contains("MAILBOX_LOCKED") { break; }
+            }
+            let mut resume = mailbox_worker(&fixture.state_dir(), "resume").spawn().unwrap();
+            let mut publisher = mailbox_worker(&fixture.state_dir(), "publish").spawn().unwrap();
+            writeln!(holder.stdin.take().unwrap(), "release").unwrap();
+            assert!(holder.wait().unwrap().success());
+            assert!(resume.wait().unwrap().success());
+            assert!(publisher.wait().unwrap().success());
+            // Regardless of which mailbox waiter wins, resume encounters the
+            // original marker and cannot authorize over either observation.
+            assert!(governor.status().unwrap().safety_latched);
+            assert!(!governor.load().unwrap().authentication_armed);
+            assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+        }
+    }
+
+    #[test]
+    fn cached_challenge_stops_followup_and_cannot_be_cleared_by_success() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        governor
+            .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+            .unwrap();
+        let mut lease = governor.try_acquire(RequestKind::Authentication).unwrap();
+        let before = governor.load().unwrap();
+        // Finding 4: a concurrent publisher during an active credentials
+        // attempt must terminate the follow-up reservation without touching
+        // pending, cooldown, request/background deadlines or failure history.
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        assert!(matches!(lease.reserve_followup(), Err(super::FollowupError::CachedChallenge)));
+        let retained = governor.load().unwrap();
+        assert!(retained.safety_latched);
+        assert!(!retained.authentication_armed);
+        assert_eq!(retained.pending, Some(RequestKind::Authentication));
+        assert_eq!(retained.next_request_ms, before.next_request_ms);
+        assert_eq!(retained.next_background_ms, before.next_background_ms);
+        assert_eq!(retained.cooldown_until_ms, before.cooldown_until_ms);
+        assert_eq!(retained.network_failures, before.network_failures);
+        assert_eq!(retained.request_interval_ms, before.request_interval_ms);
+        assert_eq!(retained.background_interval_ms, before.background_interval_ms);
+        // A later successful outcome on this lease cannot clear the observed
+        // challenge latch, even for the authentication kind.
+        assert!(lease.finish_with_safety_latch(Outcome::Success).unwrap());
+        let state = governor.load().unwrap();
+        assert!(state.safety_latched);
+        assert_eq!(state.pending, None);
+        assert_eq!(state.network_failures, 0);
+    }
+
+    #[test]
+    fn cached_challenge_safety_outcome_preserves_http_facts_and_failure_history() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        let mut lease = governor.try_acquire(RequestKind::Authentication).unwrap();
+        lease.observe_http(429, Some("90"), false).unwrap();
+        lease.state.network_failures = 3;
+        lease.governor.save(&lease.state, false).unwrap();
+        let before = governor.load().unwrap();
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        assert!(matches!(lease.reserve_followup(), Err(super::FollowupError::CachedChallenge)));
+        assert!(lease.finish_with_safety_latch(Outcome::SafetyObserved).unwrap());
+        let after = governor.load().unwrap();
+        assert_eq!(after.pending, None);
+        assert!(after.safety_latched);
+        assert!(!after.authentication_armed);
+        assert_eq!(after.network_failures, before.network_failures);
+        assert_eq!(after.cooldown_until_ms, before.cooldown_until_ms);
+        assert!(after.next_request_ms >= before.next_request_ms);
+        assert_eq!(after.next_background_ms, before.next_background_ms);
+        assert_eq!(after.request_interval_ms, before.request_interval_ms);
+        assert_eq!(after.background_interval_ms, before.background_interval_ms);
+    }
+
+    #[test]
+    fn cached_challenge_crash_boundaries_keep_marker_or_durable_latch() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        super::publish_challenge_in(&governor.directory).unwrap();
+        // Publisher exit before reconciliation leaves the durable marker.
+        assert!(super::child_exists(&governor.directory, super::CHALLENGE_NAME).unwrap());
+        let mut child = mailbox_worker(&fixture.state_dir(), "hold-after-latch")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            if line.contains("LATCH_DURABLE") { break; }
+        }
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+        assert!(governor.load().unwrap().safety_latched);
+        assert!(super::child_exists(&governor.directory, super::CHALLENGE_NAME).unwrap());
+        assert!(governor.status().unwrap().safety_latched);
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        assert!(!super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(governor.load().unwrap().safety_latched);
+    }
+
+    #[test]
+    fn cached_challenge_publication_blocked_by_consume_survives_after_it() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        let mut consumer = mailbox_worker(&fixture.state_dir(), "hold-after-latch")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut consumer_output = BufReader::new(consumer.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(consumer_output.read_line(&mut line).unwrap(), 0);
+            if line.contains("LATCH_DURABLE") { break; }
+        }
+        let mut publisher = mailbox_worker(&fixture.state_dir(), "publish-signaled")
+            .stdout(Stdio::piped()).spawn().unwrap();
+        let mut publisher_output = BufReader::new(publisher.stdout.take().unwrap());
+        loop {
+            line.clear();
+            assert_ne!(publisher_output.read_line(&mut line).unwrap(), 0);
+            if line.contains("PUBLISH_ATTEMPT") { break; }
+        }
+        // The real resume holds the mailbox lock after fsyncing the latch but
+        // before unlinking. The child's later publication must survive it.
+        writeln!(consumer.stdin.take().unwrap(), "continue").unwrap();
+        assert!(consumer.wait().unwrap().success());
+        assert!(publisher.wait().unwrap().success());
+        assert!(super::challenge_marker_present(&governor.directory).unwrap());
+        assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+        assert!(governor.load().unwrap().safety_latched);
+    }
+
+    #[test]
+    fn cached_challenge_rejects_unsafe_markers_and_mailbox_locks() {
+        for name in [super::CHALLENGE_NAME, super::CHALLENGE_LOCK_NAME] {
+            for kind in ["permissions", "symlink", "hardlink", "payload"] {
+                let fixture = Fixture::new();
+                let governor = fixture.open();
+                let path = fixture.state_dir().join(name);
+                if path.exists() { fs::remove_file(&path).unwrap(); }
+                let source = fixture.0.join("source");
+                fs::write(&source, b"").unwrap();
+                fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+                match kind {
+                    "symlink" => symlink(&source, &path).unwrap(),
+                    "hardlink" => fs::hard_link(&source, &path).unwrap(),
+                    "permissions" => fs::write(&path, b"").unwrap(),
+                    "payload" => {
+                        fs::write(&path, b"invalid").unwrap();
+                        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                if kind == "permissions" {
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+                }
+                assert!(super::publish_challenge_in(&governor.directory).is_err());
+                assert!(governor.status().is_err());
+                assert!(governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).is_err());
+                assert!(Governor::open_at(fixture.state_dir(), Limits::default()).is_err());
+            }
+        }
+    }
+
     fn old_boot_fixture() -> (Fixture, Governor) {
         let fixture = Fixture::new();
         let governor = fixture.open();
@@ -1826,6 +2737,160 @@ mod tests {
                 .cooldown_until_boottime_ms
                 >= observed_deadline
         );
+    }
+
+    #[test]
+    fn observed_duplicate_retry_after_retains_longest_in_either_order() {
+        for values in [
+            [Some("0"), Some("1800")],
+            [Some("1800"), Some("0")],
+        ] {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            let before = super::now_ms().unwrap();
+            lease.observe_http_many(429, values, false).unwrap();
+            let after = super::now_ms().unwrap();
+            let observed = lease.state.cooldown_until_ms;
+            assert!(observed >= before + 1_800_001);
+            assert!(observed <= after + 1_800_001);
+            assert_eq!(lease.state.pending, Some(RequestKind::Interactive));
+            lease.finish(Outcome::Http {
+                status: 429,
+                retry_after: Some("0"),
+                challenge: false,
+                network_failure: true,
+            }).unwrap();
+            let state = governor.load().unwrap();
+            assert!(state.cooldown_until_ms >= observed);
+            assert_eq!(state.network_failures, 1);
+            assert_eq!(state.pending, None);
+        }
+    }
+
+    #[test]
+    fn observed_429_any_invalid_or_missing_retry_after_keeps_default_floor() {
+        let cases: &[&[Option<&str>]] = &[
+            &[],
+            &[None],
+            &[Some("not-a-date")],
+            &[Some("0"), None],
+            &[None, Some("0")],
+            &[Some("0"), Some("invalid")],
+            &[Some("invalid"), Some("0")],
+            &[Some("3600"), Some("invalid")],
+        ];
+        for values in cases {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            let before = super::now_ms().unwrap();
+            lease.observe_http_many(429, values.iter().copied(), false).unwrap();
+            let floor = before + 1_800_001;
+            assert!(lease.state.cooldown_until_ms >= floor);
+            if values.contains(&Some("3600")) {
+                assert!(lease.state.cooldown_until_ms >= before + 3_600_001);
+            }
+            assert_eq!(governor.load().unwrap().cooldown_until_ms, lease.state.cooldown_until_ms);
+            lease.finish(Outcome::NetworkFailure).unwrap();
+            assert!(governor.load().unwrap().cooldown_until_ms >= floor);
+        }
+    }
+
+    #[test]
+    fn observed_retry_after_zero_and_non_429_invalid_keep_existing_semantics() {
+        for (status, values) in [
+            (429, vec![Some("0")]),
+            (429, vec![Some("0"), Some("0")]),
+            (503, vec![Some("0"), None]),
+        ] {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            lease.observe_http_many(status, values, false).unwrap();
+            let after = super::now_ms().unwrap();
+            assert!(lease.state.cooldown_until_ms <= after + 1);
+            lease.finish(Outcome::Http {
+                status,
+                retry_after: Some("0"),
+                challenge: false,
+                network_failure: false,
+            }).unwrap();
+            let after_finish = super::now_ms().unwrap();
+            assert!(governor.load().unwrap().cooldown_until_ms <= after_finish + 1);
+        }
+    }
+
+    #[test]
+    fn observed_multiple_headers_keep_challenge_and_network_failure_distinct() {
+        for (status, challenge) in [(401, false), (403, false), (200, true)] {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            let before = super::now_ms().unwrap();
+            lease.observe_http_many(status, [Some("0"), Some("15")], challenge).unwrap();
+            let observed = lease.state.cooldown_until_ms;
+            assert!(observed >= before + 15_001);
+            assert!(lease.state.safety_latched);
+            lease.finish(Outcome::NetworkFailure).unwrap();
+            let state = governor.load().unwrap();
+            assert!(state.safety_latched);
+            assert!(!state.authentication_armed);
+            assert!(state.cooldown_until_ms >= observed);
+            assert_eq!(state.network_failures, 1);
+            assert_eq!(state.pending, None);
+        }
+    }
+
+    #[test]
+    fn cached_challenge_latches_during_cooldown_without_changing_deadlines() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+        lease.finish(Outcome::Http {
+            status: 429,
+            retry_after: Some("1800"),
+            challenge: false,
+            network_failure: false,
+        }).unwrap();
+        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        let before = governor.status().unwrap();
+        assert!(before.authentication_armed);
+        assert!(before.cooldown_wait > Duration::ZERO);
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        let after = governor.status().unwrap();
+        assert!(after.safety_latched);
+        assert!(!after.authentication_armed);
+        assert_eq!(after.next_request_boottime_ms, before.next_request_boottime_ms);
+        assert_eq!(after.next_background_boottime_ms, before.next_background_boottime_ms);
+        assert_eq!(after.cooldown_until_boottime_ms, before.cooldown_until_boottime_ms);
+        assert_eq!(after.request_interval, before.request_interval);
+        assert_eq!(after.background_interval, before.background_interval);
+        assert_eq!(after.consecutive_network_failures, before.consecutive_network_failures);
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+    }
+
+    #[test]
+    fn cached_challenge_cannot_clear_an_unknown_request_outcome() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+        drop(lease);
+        super::publish_cached_challenge_for_test(&fixture.state_dir()).unwrap();
+        assert!(governor.status().is_err());
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+    }
+
+    #[test]
+    fn cached_challenge_found_after_admission_latches_before_release() {
+        let fixture = Fixture::new();
+        let governor = fixture.open();
+        let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+        lease.finish_cached_challenge().unwrap();
+        let status = governor.status().unwrap();
+        assert!(status.safety_latched);
+        assert!(!status.authentication_armed);
+        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
     }
 
     #[test]

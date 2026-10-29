@@ -40,7 +40,7 @@ cargo build --locked --offline
 ./target/debug/buaa schema
 ```
 
-`help` describes the command surface, `capabilities` emits the acceptance manifest, and `schema` emits the input/output contracts and error codes. Pending or deferred capabilities are not available commands. The public [devcontainer definition](.devcontainer/README.md) describes a pinned, credential-free environment; the definition alone does not prove a successful image build.
+`help` describes the command surface, `capabilities` emits the acceptance manifest, and `schema` emits the input/output contracts and error codes. Pending or deferred capabilities are incomplete; some expose bounded partial or blocked commands, which do not establish acceptance. The public [devcontainer definition](.devcontainer/README.md) describes a pinned, credential-free environment; the definition alone does not prove a successful image build.
 
 ## Command overview
 

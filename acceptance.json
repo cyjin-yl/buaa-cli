@@ -302,6 +302,10 @@
       "title": "Smart BUAA services",
       "status": "pending",
       "acceptance": "Typed discovery and supported service reads; exams, rooms, library seats, study rooms and sunlight check-in individually gated; no bogus attendance.",
+      "evidence": {
+        "candidate_offline": "Synthetic cases exercised reserved RawValue-marker refusal and ordinary controls. Normalized numeric credential echoes were reproduced and withheld; generated HTTP status no longer masks a session denial, and a 2,001-number allocation regression passed after a length guard. Scoped source review found no further issue.",
+        "remaining": "Current source identity, rights, per-service discovery, cache-first behavior and governed online reads remain unverified. Synthetic admission does not prove a live request or authorize attendance."
+      },
       "sources": [
         "https://github.com/BUAASubnet/UBAA",
         "https://github.com/roife/BUAAIcsGen",
@@ -316,6 +320,10 @@
       "title": "Undergraduate/postgraduate course selection/drop",
       "status": "pending",
       "acceptance": "Preview typed intent, idempotent commit and postcondition; no autonomous grabs.",
+      "evidence": {
+        "candidate_offline": "Thirteen synthetic CLI admission cases passed. Three additional synthetic Session cases exercised probe/list/verify privacy-fact gating and original-lease settlement, including an exact-target postcondition that remains unknown.",
+        "remaining": "The Session supplied its privacy facts and trusted-base claim; no production transport, authenticated account, current selected-course contract or authorized mutation was verified. Writes remain blocked."
+      },
       "sources": [
         "https://github.com/Colorfulshadow/buaa_course_enrollment",
         "https://github.com/Errno1024/BUAA-Course-Grab"
@@ -326,6 +334,10 @@
       "title": "Teaching evaluations",
       "status": "pending",
       "acceptance": "Owner-authored answers with preview, typed confirmation and idempotency.",
+      "evidence": {
+        "candidate_offline": "A synthetic admission test reproduced a numeric submitted-cookie echo in a task total; the repaired path passed the same test with an ordinary control and a normalized numeric course-field case.",
+        "remaining": "Mixed-separator credentials passed focused synthetic post-fix cases; the pre-fix variant was source-traced but its run was blocked by the heavy-work slot. A trusted current session, task contract, owner-authored mutation workflow and authorized postcondition remain unverified."
+      },
       "sources": [
         "https://github.com/bearbattle/buaa-teacher-evaluation",
         "https://github.com/APassbyDreg/BUAA_JW_Utils",
@@ -396,6 +408,10 @@
       "title": "Classroom QR/direct check-in",
       "status": "pending",
       "acceptance": "Owner-present, authorized current session only, preview and confirmed idempotent commit.",
+      "evidence": {
+        "candidate_offline": "Synthetic admission cases reproduced and then withheld normalized numeric session-credential echoes, including structured and fallback outputs. Separate Checkin/OS-lab admission cases passed; they do not exercise real transport or lease settlement.",
+        "remaining": "No authenticated current session, owner presence, authorized lesson, idempotent commit or postcondition has been established. The review does not authorize attendance."
+      },
       "sources": [
         "https://github.com/Fucov/BUAASignTool",
         "https://github.com/singledog957/duaa",
@@ -408,6 +424,10 @@
       "title": "Boya browse/enrol/drop/check/status",
       "status": "pending",
       "acceptance": "Paginated reads; confirmed owner-present mutations and status reconciliation.",
+      "evidence": {
+        "candidate_offline": "Synthetic AES-encrypted responses reproduced an unnecessary token:null fallback, decrypted scalar credential echoes and generated-null false positives. Post-fix cases passed with missing-versus-explicit-null, ordinary, upstream-error and denial controls; scoped source review found no further issue.",
+        "remaining": "Current response contract, authorized session, complete pagination and owner-present mutation/postcondition are unverified. Synthetic encrypted data is not a live response."
+      },
       "sources": [
         "https://github.com/Colorfulshadow/buaa_course_enrollment",
         "https://github.com/Errno1024/BUAA-Course-Grab",
@@ -425,6 +445,10 @@
       "title": "ihome announcements",
       "status": "pending",
       "acceptance": "Incremental dated full text, exact source and attachments.",
+      "evidence": {
+        "candidate_offline": "Four synthetic integration cases and a separate native consumer exercised literal JSON and session-safety facts; scoped source review found no new concrete issue.",
+        "remaining": "Current authorized source, incremental history, full-text and attachment behavior remain unverified online. Legacy cache entries without cookie-admission facts are retained but not replayed."
+      },
       "sources": [
         "https://github.com/buaahub/ihome-crawler",
         "https://github.com/shiyake/php-ihome"
@@ -435,6 +459,10 @@
       "title": "Electricity query/alerts",
       "status": "pending",
       "acceptance": "Authorized meter balance and cached threshold transitions; polling at least 15 minutes.",
+      "evidence": {
+        "candidate_offline": "Three synthetic integration cases and a separate native consumer exercised literal identifier and numeric-history source types; scoped source review found no new concrete issue.",
+        "remaining": "No current authorized meter, threshold transition, background observation or online service contract was verified."
+      },
       "sources": [
         "https://github.com/Apodead/BuaaAmmeterBot",
         "https://github.com/LaciliaExe/BUAA-ECC",
@@ -446,6 +474,10 @@
       "title": "Physics experiment selection",
       "status": "pending",
       "acceptance": "Availability read plus explicit idempotent select/drop, never rapid polling.",
+      "evidence": {
+        "candidate_offline": "Twenty synthetic CLI replay cases passed after reference, charset, discarded-source, nested-srcdoc and pre-parse budget defects were reproduced and repaired. A 100,000-attribute token is refused within a bounded worker deadline; a separate 64-by-512 attribute case completed and retained exact source bytes. Scoped independent source reviews found no further issue.",
+        "remaining": "Provenance ambiguity and configured resource bounds withhold evidence; HashMap collision-case work remains bounded but not worst-case linear. Current service identity, authorization, availability and selection/drop remain unverified."
+      },
       "sources": [
         "https://www.wzk.plus/project/phyexp/",
         "https://gitee.com/PhisicsExperiment/PhysicsExperiment",
@@ -501,6 +533,10 @@
       "title": "Aerospace study/questions",
       "status": "pending",
       "acceptance": "Authorized material retrieval and local study practice, no assessment impersonation.",
+      "evidence": {
+        "candidate_offline": "The shared learning transport passed five synthetic cookie/cache cases before later publication changes; this is not a separate aerospace online observation.",
+        "remaining": "The shared cache publication fix passed two strengthened synthetic cases and scoped review; fsync-failure and collision-exhaustion behavior were not exercised. Source rights and authorized material retrieval remain unverified."
+      },
       "sources": [
         "https://github.com/Caniformia/HangGai"
       ]
@@ -510,6 +546,10 @@
       "title": "AnyShare campus drive",
       "status": "pending",
       "acceptance": "List/tree/upload/download/move/copy/delete; byte integrity and paginated cursors; destructive writes plan/commit.",
+      "evidence": {
+        "source_research": "Pinned public AnyShare clients declare candidate OAuth and transfer requests but disagree on collision-policy values and do not establish the current BUAA deployment, pagination completeness or mutation postconditions.",
+        "remaining": "Normalized numeric credential echoes were reproduced and withheld in synthetic admission and operator-supplied CLI cases; scoped source review found no further issue. Directory listing and token exchange remain blocked without admitted contracts; authorized reads, transfer integrity and mutation postconditions remain unverified."
+      },
       "sources": [
         "https://github.com/xdedss/dist_bhpan",
         "https://github.com/Fucov/PanCLI"
@@ -628,6 +668,10 @@
       "title": "Shuttle tickets",
       "status": "pending",
       "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
+      "evidence": {
+        "candidate_offline": "An operator-supplied CLI page reproduced a percent-encoded CSRF echo in visible text; two post-fix cases passed, including an ordinary page control and encoded variants.",
+        "remaining": "Mixed-separator CSRF values passed focused synthetic post-fix cases; their pre-fix variant was source-traced but its run was blocked by the heavy-work slot. No authenticated timetable, availability, booking, payment or cancellation contract has been verified."
+      },
       "sources": [
         "https://github.com/zeroduhyy/school_buss_ticket"
       ]
@@ -637,6 +681,10 @@
       "title": "WE Learn materials/practice",
       "status": "pending",
       "acceptance": "Rights-reviewed learning materials and local practice, no fabricated completion or graded auto-answers.",
+      "evidence": {
+        "candidate_offline": "Five synthetic transport/cache cases and a separate native consumer passed before independent review found two additional cache regressions. Both were reproduced; after atomic no-replace publication and distinct rejected-evidence naming, the two focused synthetic cases passed.",
+        "remaining": "Strengthened assertions passed and scoped source review found no new issue; fsync-failure and collision-exhaustion behavior were not exercised. Current source rights and online retrieval remain unverified."
+      },
       "sources": [
         "https://github.com/Micraow/WE-Learn-Answers"
       ]
@@ -2994,6 +3042,12 @@
             "src/governor.rs",
             "src/main.rs"
         ],
+        "authorized_attempt_2026_10_29": {
+          "scope": "One deliberately resumed classroom authentication under the existing v2 shared governor and heavy-work guardian, using the previously bound native replay-worktree binary.",
+          "observed": "Initial SSO HTTP 200, credential POST redirect and classroom relying-party callback HTTP 500. The CLI returned auth_latched; no session was stored and the selected lesson was not positively confirmed.",
+          "settlement": "After completion the governor was latched, authentication disarmed and no outcome pending. One authorization was consumed; no automatic retry or challenge bypass was performed.",
+          "limits": "The callback error cause, password verdict, ticket lifetime, media rights and live or playback access remain unknown. The redirect is not application authentication proof."
+        },
         "login_inspection_2026_10_23": {
           "latest_attempt": "A newly authorized original-runtime attempt stopped with unreviewed_login_interaction after one initial SSO HTTP 200. Code and retained trail place refusal before password submission; no session was stored. No wrong-password or confirmed-CAPTCHA claim.",
           "contract": "Explicit credential-free INSPECT CLASSROOM LOGIN input; existing explicitly armed authentication lease, pinned GET flow and full-body governor lifetime. Report only bounded structural first-rejection metadata; no password POST, session storage, implicit resume or latch clearing.",

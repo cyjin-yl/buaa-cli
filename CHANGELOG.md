@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+- Keep the shared HTML challenge assessment honest about truncated sources. A
+  retained prefix that cannot show the document-wide stylesheet or charset
+  context no longer confirms a challenge control; the whole body is scanned
+  once for those facts, with an unclosed tag or an unresolved character
+  reference keeping the uncertainty. The scan is linear, so a body that
+  repeats one attribute name cannot stall request settlement.
+- For the nine fixed-credential readers that do not maintain a cookie jar,
+  withhold content from responses with any `Set-Cookie` header rather than
+  guessing whether an opaque value is a session credential. This conservative
+  rule also refuses benign preference-cookie responses; it does not adopt or
+  refresh the cookie, retry, or classify its issuance as a challenge. iHome
+  never caches a new refused body; historical entries without retained cookie
+  headers cannot be independently classified by this change.
+- Extend submitted-credential echo checks to standard and URL-safe base64,
+  padded or unpadded, and to decoded percent/form fields. These checks are not
+  a claim to recognize every possible transformation of a credential.
+- Retain each affected request's shared lease through response admission and
+  settle it once afterward, preserving independently observed denial,
+  challenge, cooldown and body-failure facts. Some focused synthetic consumers
+  passed; comprehensive proof across all affected readers remains pending.
+- Preserve literal JSON safety facts in iHome, refuse Smart's reserved raw-value
+  marker before generic JSON projection, and retain electricity source scalar
+  types instead of treating marker objects as numbers or identifiers.
+- Require an enrol Session to distinguish absent, present and unknown cookie
+  issuance and credential-echo facts before admitting network output. A
+  synthetic Session is not proof that a production transport checks them.
+- Keep learning-material cache entries that predate cookie admission as
+  unreviewed originals instead of replaying or automatically refetching them.
+  Atomic cache publication and collision-safe rejected evidence passed focused
+  synthetic regressions and scoped source review; fsync-failure behavior was
+  not exercised.
+- Treat a literal Boya `token: null` as an empty response field rather than an
+  issued credential; keep non-null tokens and other credential fields withheld.
+  Focused synthetic encrypted-response regressions passed.
+- Refuse submitted evaluation-cookie values rendered as JSON numbers and
+  shuttle CSRF values encoded in visible text; keep ordinary synthetic
+  responses available. Decode whole mixed-encoding candidates before form
+  field splitting, retaining literal separators and plus-sign interpretations.
+  Focused post-fix synthetic regressions passed; the mixed-separator pre-fix
+  run was blocked by the shared heavy-work slot.
+- Withhold submitted credentials that reappear after Boya decryption or JSON
+  scalar normalization in Checkin, Drive and Smart. Preserve missing-versus-null
+  source fields and independent refusal metadata; avoid re-encoding credentials
+  that cannot fit in a numeric value. Synthetic regressions passed; these are
+  not authenticated service observations.
+- For physical-experiment replay, use bounded native-parser provenance before
+  admitting originals where consumed character references could split private
+  vocabulary. Inspect tokens that the tree builder discards, withhold unreviewed
+  nested `srcdoc`, and enforce work limits before the first DOM parse. Ambiguous
+  provenance or exhausted bounds withhold evidence; offline replay does not
+  verify an enrollment.
+
+- Treat an explicit ihome authentication refusal as a refusal rather than an
+  empty listing, and latch it on the original lease. A body that echoes the
+  submitted bearer token is refused, withheld and never cached, while an
+  independently observed cached HTTP rejection still latches. A refusal is
+  recognised only when the message is the refusal itself, so an ordinary
+  business sentence that mentions one no longer disarms the account.
+- Keep the physics experiment admission from inventing privacy facts: only
+  real character references are stripped, a seat count separated from its
+  continuation by replaced-widget text stays refused, a trailing media-type
+  separator without a parameter is invalid, and a confirmed sensitive control
+  keeps its own reason beside unrelated fallback text.
+- The candidate lock file lists reqwest's rustls dependencies and OpenSSL. An
+  earlier source snapshot passed a locked offline build; later source changes
+  still require their own verification.
+
+- Clarify that the classroom callback HTTP 500, ticket lifetime and playback
+  authorization remain unresolved. Withdraw an unverified change that lowered
+  configured governor intervals inside the authentication redirect chain and
+  broadened sign-on cookie delivery; retain the existing account-safety rules.
+
 - Archive bounded CAS login and guard observations separately from hypotheses.
   Preserve the observed parent-form/visible-frame roles and six-field request
   order, but do not infer ticket expiration or a password verdict from HTTP

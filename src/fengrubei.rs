@@ -312,16 +312,10 @@ impl<'a> Downloader<'a> {
         network_failure: bool,
     ) -> Result<(u16, Option<String>, bool), Error> {
         let status = response.status().as_u16();
-        let retry = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        let challenge = response
-            .headers()
-            .get_all("cf-mitigated")
-            .iter()
-            .any(|v| v.as_bytes().eq_ignore_ascii_case(b"challenge"));
+        let retry = response.headers().get("retry-after")
+            .and_then(|value| value.to_str().ok()).map(str::to_owned);
+        let challenge = response.headers().iter()
+            .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
         drop(response);
         lease
             .finish(Outcome::Http {
@@ -350,15 +344,20 @@ impl<'a> Downloader<'a> {
     }
 
     fn small_get(&self, original: &Url, max: u64) -> Result<SmallResponse, Error> {
-        let lease = net::acquire(&self.governor)?;
-        let mut response = match self
+        let mut lease = net::acquire(&self.governor)?;
+        let request = self
             .client
             .get(self.request_url(original))
             .header("Accept-Encoding", "identity")
-            .send()
-        {
-            Ok(response) => response,
-            Err(_) => {
+            .timeout(Duration::from_secs(90));
+        let mut response = match lease.start_request(|| request.send()) {
+            Ok(Ok(response)) => response,
+            Err(governor::FollowupError::CachedChallenge) => {
+                lease.finish(Outcome::SafetyObserved).map_err(|_| unavailable())?;
+                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the request."));
+            }
+            Err(governor::FollowupError::Governor(_)) => return Err(unavailable()),
+            Ok(Err(_)) => {
                 lease
                     .finish(Outcome::NetworkFailure)
                     .map_err(|_| unavailable())?;
@@ -371,17 +370,16 @@ impl<'a> Downloader<'a> {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
         let status = response.status().as_u16();
-        let retry = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        let challenge = response
-            .headers()
-            .get_all("cf-mitigated")
-            .iter()
-            .any(|v| v.as_bytes().eq_ignore_ascii_case(b"challenge"));
+        let retry = response.headers().get("retry-after")
+            .and_then(|value| value.to_str().ok()).map(str::to_owned);
+        let challenge = response.headers().iter()
+            .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
         let mut body = Vec::new();
+        lease.observe_http_many(
+            status,
+            response.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()),
+            challenge,
+        ).map_err(|_| unavailable())?;
         let read = response.by_ref().take(max + 1).read_to_end(&mut body);
         let failed = read.is_err() || body.len() as u64 > max;
         drop(response);
@@ -390,7 +388,7 @@ impl<'a> Downloader<'a> {
                 status,
                 retry_after: retry.as_deref(),
                 challenge,
-                network_failure: read.is_err(),
+                network_failure: failed,
             })
             .map_err(|_| unavailable())?;
         if challenge || matches!(status, 401 | 403) {
@@ -477,15 +475,21 @@ impl<'a> Downloader<'a> {
         temporary_name: &CString,
         mut temporary: File,
     ) -> Result<(), Error> {
-        let lease = net::acquire(&self.governor)?;
-        let mut response = match self
+        let mut lease = net::acquire(&self.governor)?;
+        // Connection and idle reads retain their configured bounds; the pinned
+        // original may legitimately require a long full-body transfer.
+        let request = self
             .client
             .get(self.request_url(target))
-            .header("Accept-Encoding", "identity")
-            .send()
-        {
-            Ok(response) => response,
-            Err(_) => {
+            .header("Accept-Encoding", "identity");
+        let mut response = match lease.start_request(|| request.send()) {
+            Ok(Ok(response)) => response,
+            Err(governor::FollowupError::CachedChallenge) => {
+                lease.finish(Outcome::SafetyObserved).map_err(|_| unavailable())?;
+                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the request."));
+            }
+            Err(governor::FollowupError::Governor(_)) => return Err(unavailable()),
+            Ok(Err(_)) => {
                 lease
                     .finish(Outcome::NetworkFailure)
                     .map_err(|_| unavailable())?;
@@ -493,21 +497,20 @@ impl<'a> Downloader<'a> {
             }
         };
         let status = response.status().as_u16();
-        let retry = response
-            .headers()
-            .get("retry-after")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let challenge = response
-            .headers()
-            .get_all("cf-mitigated")
-            .iter()
-            .any(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"));
+        let retry = response.headers().get("retry-after")
+            .and_then(|value| value.to_str().ok()).map(str::to_owned);
+        let challenge = response.headers().iter()
+            .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
         let encoding_ok = response
             .headers()
             .get_all("content-encoding")
             .iter()
             .all(|value| value.as_bytes().eq_ignore_ascii_case(b"identity"));
+        lease.observe_http_many(
+            status,
+            response.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()),
+            challenge,
+        ).map_err(|_| unavailable())?;
         if status != 200 || challenge || !encoding_ok {
             let _ = Self::classify(lease, response, false)?;
             return Err(unavailable());
@@ -537,6 +540,7 @@ impl<'a> Downloader<'a> {
                 }
                 total = total.checked_add(read as u64).ok_or_else(unavailable)?;
                 if total > self.spec.bytes {
+                    body_read_failed = true;
                     return Err(conflict());
                 }
                 temporary
@@ -712,31 +716,7 @@ mod tests {
             let worker_stop = Arc::clone(&stop);
             let worker_count = Arc::clone(&count);
             let worker = thread::spawn(move || {
-                while !worker_stop.load(Ordering::SeqCst) {
-                    match listener.accept() {
-                        Ok((mut socket, _)) => {
-                            socket
-                                .set_read_timeout(Some(Duration::from_secs(5)))
-                                .unwrap();
-                            let mut bytes = Vec::new();
-                            let mut byte = [0u8];
-                            while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 32 * 1024 {
-                                match socket.read(&mut byte) {
-                                    Ok(1) => bytes.push(byte[0]),
-                                    _ => break,
-                                }
-                            }
-                            let request = String::from_utf8(bytes).unwrap();
-                            let index = worker_count.fetch_add(1, Ordering::SeqCst);
-                            sender.send((Instant::now(), request.clone())).unwrap();
-                            handler(&mut socket, &request, index);
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(2))
-                        }
-                        Err(error) => panic!("loopback listener failed: {error}"),
-                    }
-                }
+                Self::serve(listener, worker_stop, sender, worker_count, &mut handler);
             });
             Self {
                 address,
@@ -744,6 +724,39 @@ mod tests {
                 count,
                 stop,
                 worker: Some(worker),
+            }
+        }
+        fn serve(
+            listener: TcpListener,
+            stop: Arc<AtomicBool>,
+            sender: mpsc::Sender<(Instant, String)>,
+            count: Arc<AtomicUsize>,
+            handler: &mut dyn FnMut(&mut TcpStream, &str, usize),
+        ) {
+            while !stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                        socket
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut bytes = Vec::new();
+                        let mut byte = [0u8];
+                        while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 32 * 1024 {
+                            match socket.read(&mut byte) {
+                                Ok(1) => bytes.push(byte[0]),
+                                _ => break,
+                            }
+                        }
+                        let request = String::from_utf8(bytes).unwrap();
+                        let index = count.fetch_add(1, Ordering::SeqCst);
+                        sender.send((Instant::now(), request.clone())).unwrap();
+                        handler(&mut socket, &request, index);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2))
+                    }
+                    Err(error) => panic!("loopback listener failed: {error}"),
+                }
             }
         }
     }
@@ -866,6 +879,37 @@ mod tests {
             "conflict"
         );
         assert_eq!(fs::read(first_path).unwrap(), b"synthetic-template-zip");
+    }
+
+    #[test]
+    fn oversized_small_body_records_failure_without_losing_retry_headers() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _, _| {
+            reply(socket, 200, "Retry-After: 1\r\nRetry-After: 3600\r\n", b"oversized");
+        });
+        let cache = fixture.cache();
+        let downloader = test_downloader(&fixture, &cache, &server);
+        let url = Url::parse("https://github.com/robots.txt").unwrap();
+        assert_eq!(downloader.small_get(&url, 2).err().unwrap().code, "unavailable");
+        let status = downloader.governor.status().unwrap();
+        assert_eq!(status.consecutive_network_failures, 1);
+        assert!(status.cooldown_wait > Duration::from_secs(3500));
+        assert!(!status.safety_latched);
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn duplicate_invalid_retry_after_retains_rate_limit_floor() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _, _| {
+            reply(socket, 429, "Retry-After: invalid\r\nRetry-After: 1\r\n", b"");
+        });
+        let cache = fixture.cache();
+        let downloader = test_downloader(&fixture, &cache, &server);
+        let url = Url::parse("https://github.com/robots.txt").unwrap();
+        assert_eq!(downloader.small_get(&url, MAX_ROBOTS).err().unwrap().code, "rate_limited");
+        assert!(downloader.governor.status().unwrap().cooldown_wait > Duration::from_secs(1700));
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
 
     #[test]
