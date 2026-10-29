@@ -3,18 +3,23 @@
 //! `.fy-list` with direct date spans and anchors; articles use the scoped
 //! `.c-content` title/date/body layout. Source links are never followed unless
 //! they remain inside the reviewed Chemistry host and path namespace.
+//! Original embedded PDFs resolve only through the owned viewer declaration;
+//! derived preview images are never fetched or promoted to the original.
 
 use super::{
-    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, article_body,
-    article_category_from_url, article_output, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
-    inert_element, invalid_article, invalid_list, is_admitted_html, is_safe_public_fallback,
-    parse_iso_date, retrieval, unavailable,
+    DocumentInput, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
+    article_body, article_category_from_url, article_output, college_directory_attribution,
+    college_html, describe_college_surface, element_text, entry_in_scope, failed_contract,
+    html_fallback, inert_element, invalid_article, invalid_list, is_admitted_html,
+    is_safe_public_fallback, parse_iso_date, refuse_unsafe_listing, retrieval, unavailable,
+    viewer::{self, validate_pdf},
 };
 use crate::net::{
-    ArchiveClient, CacheMode, Error, SCE_NOTICES_URL, SCE_ROOT_URL, sce_path_allowed,
+    ArchiveClient, CacheMode, Error, SCE_NOTICES_URL, SCE_ROOT_URL, cms_pdf_path_allowed,
+    sce_path_allowed,
 };
-use scraper::{Html, Selector};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -55,6 +60,7 @@ fn bind_board(client: &ArchiveClient, attribution: &mut Value) -> Result<(), Err
     let board = Url::parse(SCE_NOTICES_URL).map_err(|_| unavailable())?;
     let root_source = client.get(&root, false, |response| {
         let document = college_html(response)?;
+        refuse_unsafe_listing(response, &document)?;
         let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
         if !document.select(&links).any(|node| {
             !inert_element(node)
@@ -165,8 +171,10 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
-        advertised_sce_page_url(&response.body, &latest, page)
+        college_html(response).and_then(|document| {
+            refuse_unsafe_listing(response, &document)?;
+            advertised_sce_page_url(&response.body, &latest, page)
+        })
     })
 }
 
@@ -357,12 +365,12 @@ fn parse_sce_date(raw: &str) -> Option<String> {
     parse_iso_date(value)
 }
 
-fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
+fn content_element(document: &Html) -> Result<ElementRef<'_>, Error> {
     let containers = Selector::parse("div.c-content").map_err(|_| unavailable())?;
     let mut containers = document
         .select(&containers)
         .filter(|node| !inert_element(*node));
-    let content = containers
+    containers
         .next()
         .filter(|_| containers.next().is_none())
         .ok_or_else(|| {
@@ -371,7 +379,77 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
                 file!(),
                 line!(),
             )
-        })?;
+        })
+}
+
+fn body_element(content: ElementRef<'_>) -> Result<ElementRef<'_>, Error> {
+    let bodies = Selector::parse(":scope > div.nr-info > div#vsb_content > div.v_news_content")
+        .map_err(|_| unavailable())?;
+    let mut bodies = content.select(&bodies);
+    bodies
+        .next()
+        .filter(|_| bodies.next().is_none())
+        .ok_or_else(|| {
+            failed_contract(
+                "Chemistry article requires one scoped vsb_content/v_news_content body",
+                file!(),
+                line!(),
+            )
+        })
+}
+
+/// Literal first argument of one active, owned, top-level classic
+/// `showVsbpdfIframe` declaration inside the article body. The script is never
+/// executed, and derived `vsb_pdf_image_data` previews are not the original.
+fn declared_pdf(body: ElementRef<'_>, article: &Url) -> Result<Option<Url>, Error> {
+    let scripts = Selector::parse("script").map_err(|_| unavailable())?;
+    let mut selected: Option<Url> = None;
+    for node in body.select(&scripts).filter(|node| !inert_element(*node)) {
+        if node.value().attr("src").is_some() {
+            continue;
+        }
+        let Some(kind) = crate::html::script_kind(node) else {
+            continue;
+        };
+        if kind == crate::html::ScriptKind::Module {
+            if node.text().any(|text| text.contains("showVsbpdfIframe")) {
+                return Err(unavailable());
+            }
+            continue;
+        }
+        for text in node.text() {
+            for raw in viewer::declarations(text)? {
+                if raw.len() > MAX_HREF
+                    || raw.chars().any(char::is_control)
+                    || raw.contains(['%', '\\'])
+                {
+                    return Err(unavailable());
+                }
+                let url = article.join(&raw).map_err(|_| unavailable())?;
+                if !plain_url(&url) || !cms_pdf_path_allowed(url.path()) {
+                    return Err(failed_contract(
+                        "source-declared PDF must use the reviewed college document namespace",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                if selected.as_ref().is_some_and(|previous| previous != &url) {
+                    return Err(failed_contract(
+                        "article declares ambiguous original PDF documents",
+                        file!(),
+                        line!(),
+                    ));
+                }
+                selected = Some(url);
+            }
+        }
+    }
+    Ok(selected)
+}
+
+fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
+    refuse_unsafe_listing(response, document)?;
+    let content = content_element(document)?;
     let titles = Selector::parse(":scope > h1.c-title").map_err(|_| unavailable())?;
     let mut titles = content.select(&titles);
     let title = titles
@@ -393,20 +471,14 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
         .filter(|_| metadata.next().is_none())
         .map(element_text);
     let published_at = published_at_raw.as_deref().and_then(parse_sce_date);
-    let bodies = Selector::parse(":scope > div.nr-info > div#vsb_content > div.v_news_content")
-        .map_err(|_| unavailable())?;
-    let mut bodies = content.select(&bodies);
-    let body = bodies
-        .next()
-        .filter(|_| bodies.next().is_none())
-        .ok_or_else(|| {
-            failed_contract(
-                "Chemistry article requires one scoped vsb_content/v_news_content body",
-                file!(),
-                line!(),
-            )
-        })?;
-    let (paragraphs, attachment_hints, attachments_found) = article_body(body, false)?;
+    let body = body_element(content)?;
+    let original_pdf = declared_pdf(
+        body,
+        &Url::parse(&response.url).map_err(|_| unavailable())?,
+    )?;
+    let (has_previews, previews) = viewer::preview_paths(content)?;
+    let (paragraphs, attachment_hints, attachments_found) =
+        article_body(body, original_pdf.is_some())?;
     let has_attachments = attachments_found;
     let images = Selector::parse("img").map_err(|_| unavailable())?;
     let has_images = body.select(&images).any(|image| !inert_element(image));
@@ -415,13 +487,14 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
         .select(&tables)
         .filter(|table| !inert_element(*table))
         .count();
-    if paragraphs.is_empty() {
+    if paragraphs.is_empty() && !(original_pdf.is_some() || has_previews) {
         return Err(failed_contract(
             "Chemistry article requires source paragraphs; image-only content is not reconstructed",
             file!(),
             line!(),
         ));
     }
+    let document_only = paragraphs.is_empty();
     let mut output = article_output(
         response,
         super::ArticleDocument {
@@ -450,6 +523,24 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
             "attachment bytes, image text and nonparagraph table content are not reconstructed or downloaded"
         );
     }
+    output["embedded_document"] = json!({
+        "present":original_pdf.is_some() || has_previews,
+        "original_pdf_url":original_pdf.as_ref().map(Url::as_str),
+        "preview_paths":previews,
+        "preview_kind":"source_declared_derived_images",
+        "assets_fetched":false,
+        "text_extracted":false,
+        "ocr_performed":false,
+        "original_document_verified":false,
+    });
+    if original_pdf.is_some() || has_previews {
+        output["result"] = json!(if document_only {
+            "embedded_document"
+        } else {
+            "partial_text"
+        });
+        output["completeness"]["missing_document_text"] = json!("not_reconstructed");
+    }
     Ok(output)
 }
 
@@ -469,12 +560,56 @@ pub(crate) fn article_with_client(
     source_page: u32,
     mut attribution: Value,
 ) -> Result<Value, Error> {
-    bind_board(&client, &mut attribution)?;
-    let source = listing_url(&client, source_page)?;
+    let listing = bind_article_listing(&client, target, &mut attribution, source_page)?;
+    client.with_cache_mode(mode).get(target, false, |response| {
+        let document = match college_html(response) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_article",
+                    "sce",
+                    "sce_article_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut value = match normalize(response, &document) {
+            Ok(value) => value,
+            Err(_) if is_safe_public_fallback(response) => html_fallback(
+                response,
+                "announcements_article",
+                "sce",
+                "sce_article_selector_contract",
+            ),
+            Err(error) => return Err(error),
+        };
+        Ok({
+            value["directory_attribution"] = attribution;
+            value["source_listing"] = listing;
+            value
+        })
+    })
+}
+
+/// Verify retained root/board/selected-listing membership for one article.
+/// Returns the listing's retrieval facts; all discovery reads stay cache-first
+/// on the client's bound mode even under `--refresh`/`--online`.
+fn bind_article_listing(
+    client: &ArchiveClient,
+    target: &Url,
+    attribution: &mut Value,
+    source_page: u32,
+) -> Result<Value, Error> {
+    bind_board(client, attribution)?;
+    let source = listing_url(client, source_page)?;
     let listing = client.get(&source, false, |response| {
         let base = Url::parse(&response.url).map_err(|_| unavailable())?;
         let document =
-            match college_html(response).and_then(|html| parse_listing_document(&html, &base)) {
+            match college_html(response).and_then(|html| {
+                refuse_unsafe_listing(response, &html)?;
+                parse_listing_document(&html, &base)
+            }) {
                 Ok(document) => document,
                 Err(_) if is_safe_public_fallback(response) => {
                     return Ok(html_fallback(
@@ -504,34 +639,61 @@ pub(crate) fn article_with_client(
             "retained Chemistry listing could not be parsed; the admitted board snapshot was retained for offline repair",
         ));
     }
-    client.with_cache_mode(mode).get(target, false, |response| {
-        let document = match college_html(response) {
-            Ok(document) => document,
-            Err(_) if is_safe_public_fallback(response) => {
-                return Ok(html_fallback(
-                    response,
-                    "announcements_article",
-                    "sce",
-                    "sce_article_selector_contract",
-                ));
-            }
-            Err(error) => return Err(error),
-        };
-        let mut value = match normalize(response, &document) {
-            Ok(value) => value,
-            Err(_) if is_safe_public_fallback(response) => html_fallback(
-                response,
-                "announcements_article",
-                "sce",
-                "sce_article_selector_contract",
-            ),
-            Err(error) => return Err(error),
-        };
-        Ok({
-            value["directory_attribution"] = attribution;
-            value["source_listing"] = listing;
-            value
-        })
+    Ok(listing)
+}
+
+/// Retrieve the one original PDF declared by the owned viewer of a retained
+/// Chemistry article. Directory, root, listing and article reads are
+/// cache-first; `mode` revalidates only the selected immutable document.
+pub(super) fn document(mode: CacheMode, input: &DocumentInput) -> Result<Value, Error> {
+    if input.source_page == Some(0) {
+        return Err(invalid_article());
+    }
+    let article = resolve_article(&input.article_url)?;
+    let page = input.source_page.unwrap_or(1);
+    let (client, attribution) = bound_client(mode)?;
+    document_with_client(client, mode, &article, page, attribution)
+}
+
+pub(crate) fn document_with_client(
+    client: ArchiveClient,
+    mode: CacheMode,
+    article: &Url,
+    source_page: u32,
+    mut attribution: Value,
+) -> Result<Value, Error> {
+    let client = client.with_cache_mode(discovery_mode(mode));
+    let listing = bind_article_listing(&client, article, &mut attribution, source_page)?;
+    let (target, source) = client.get::<Result<(Url, Value), Error>>(article, false, |response| {
+        let document = college_html(response)?;
+        refuse_unsafe_listing(response, &document)?;
+        Ok(content_element(&document).and_then(|content| {
+            let body = body_element(content)?;
+            declared_pdf(body, article)?
+                .map(|target| (target, retrieval(response)))
+                .ok_or_else(|| {
+                    Error::new(
+                        "unsupported",
+                        "retained Chemistry original declares no reviewed original PDF",
+                    )
+                })
+        }))
+    })??;
+    client.with_cache_mode(mode).get(&target, true, |response| {
+        if response.status != 200 {
+            return Err(unavailable());
+        }
+        validate_pdf(response)?;
+        Ok(json!({
+            "schema_version":1,"type":"announcement_document","result":"source_document_bytes",
+            "publisher":PUBLISHER,"college":"sce","source_article":source,"source_listing":listing,"directory_attribution":attribution,
+            "reference_policy":"retained article and source-listing snapshots; refresh them separately to discover changed declarations",
+            "relationship":"original PDF declared by the owned source viewer; not its derived preview images",
+            "document":{"media_type":"application/pdf","byte_length":response.body.len(),"sha256":response.sha256,"content_base64":STANDARD.encode(&response.body)},
+            "retrieval":retrieval(response),
+            "verification":{"hash_scope":"retrieved_document_bytes","pdf_framing_checked":true,"external_published_checksum_verified":false,"publisher_signature_verified":false,"document_safety_scan_performed":false},
+            "completeness":{"scope":"single_source_declared_pdf","other_attachments_fetched":false,"preview_images_fetched":false,"text_extracted":false,"ocr_performed":false},
+        }))
     })
 }
 
@@ -649,5 +811,177 @@ mod tests {
                 .code,
             "unavailable"
         );
+    }
+
+    const SCE_PDF: &str =
+        "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+
+    fn article_fixture(body: &str, metadata: &str) -> String {
+        format!(
+            "<div class='c-content'><h1 class='c-title'>Original chemistry heading</h1>{metadata}<div class='nr-info'><div id='vsb_content'><div class='v_news_content'>{body}</div></div></div></div>"
+        )
+    }
+
+    fn normalize_fixture(page: &str) -> Result<Value, Error> {
+        let response = response(page);
+        normalize(&response, &college_html(&response)?)
+    }
+
+    #[test]
+    fn sce_embedded_pdf_is_not_prose_and_does_not_authorize_image_only_success() {
+        let viewer = format!(
+            r#"<script>var vsb_pdf_image_data=["/__local/preview.jpg"];showVsbpdfIframe("{SCE_PDF}","100%","600","1","viewer",vsb_pdf_image_data);</script>"#
+        );
+        let metadata = "<div class='other-s'>发布日期：2000-02-29 作者：source</div>";
+        let result = normalize_fixture(&article_fixture(&viewer, metadata)).unwrap();
+        assert_eq!(result["result"], "embedded_document");
+        assert_eq!(result["title"], "Original chemistry heading");
+        assert_eq!(result["published_at"], "2000-02-29");
+        assert_eq!(result["body_paragraphs"], json!([]));
+        assert_eq!(result["embedded_document"]["present"], true);
+        assert_eq!(
+            result["embedded_document"]["original_pdf_url"],
+            format!("https://sce.buaa.edu.cn{SCE_PDF}")
+        );
+        assert_eq!(result["embedded_document"]["original_document_verified"], false);
+        let mixed = article_fixture(&(viewer + "<p>Whole source paragraph.</p>"), metadata);
+        let out = normalize_fixture(&mixed).unwrap();
+        assert_eq!(out["result"], "partial_text");
+        assert_eq!(out["body_paragraphs"], json!(["Whole source paragraph."]));
+        assert_eq!(
+            out["completeness"]["missing_document_text"],
+            "not_reconstructed"
+        );
+        assert_eq!(
+            normalize_fixture(&article_fixture(
+                "<p><img src='/untranscribed.png'></p>",
+                metadata
+            ))
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn sce_pdf_must_be_active_owned_classic_and_unambiguous() {
+        let call = format!(r#"showVsbpdfIframe("{SCE_PDF}","100%");"#);
+        let metadata = "<div class='other-s'>发布日期：2000-02-29</div>";
+        for (open, close) in [
+            ("<template>", "</template>"),
+            ("<noscript>", "</noscript>"),
+            ("<svg><style>", "</style></svg>"),
+        ] {
+            let inert = format!(
+                "{open}<script>var vsb_pdf_image_data=[\"/__local/inert-preview.jpg\"];{call}</script>{close}"
+            );
+            let out = normalize_fixture(&article_fixture(
+                &format!("<p>Source prose.</p>{inert}"),
+                metadata,
+            ))
+            .unwrap();
+            assert_eq!(out["result"], "full_text", "inert context {open}");
+            assert_eq!(out["embedded_document"]["present"], false);
+            assert!(out["embedded_document"]["original_pdf_url"].is_null());
+            assert!(normalize_fixture(&article_fixture(&inert, metadata)).is_err());
+        }
+        for body in [
+            format!("<p>Source prose.</p><script type='application/json'>{call}</script>"),
+            format!("<p>Source prose.</p><script src='/external.js'>{call}</script>"),
+            format!("<p>Source prose.</p><script>// {call}\n</script>"),
+            format!(r#"<p>Source prose.</p><script>var inert='showVsbpdfIframe("{SCE_PDF}","100%");';</script>"#),
+        ] {
+            let page = article_fixture(&body, metadata);
+            let out = normalize_fixture(&page).unwrap();
+            assert_eq!(out["result"], "full_text", "inactive declaration {body}");
+            assert_eq!(out["body_paragraphs"], json!(["Source prose."]));
+            assert_eq!(out["embedded_document"]["present"], false);
+            assert!(out["embedded_document"]["original_pdf_url"].is_null());
+        }
+        for body in [
+            format!("<script type='module'>{call}</script>"),
+            "<script>showVsbpdfIframe(\"/__local/preview.jpg\");</script>".to_owned(),
+            "<script>var vsb_pdf_image_data=[\"/__local/preview.jpg\"];</script>".to_owned(),
+        ] {
+            let page = article_fixture(&body, metadata);
+            assert_eq!(
+                normalize_fixture(&page)
+                    .unwrap_err()
+                    .code,
+                "unavailable",
+                "unsupported declaration {body}"
+            );
+        }
+        for body in [
+            format!(
+                "<script>{}</script>",
+                call.replace(SCE_PDF, &format!("https://scse.buaa.edu.cn{SCE_PDF}"))
+            ),
+            format!(
+                "<script>{call}{}</script>",
+                call.replace("BBBBBBBB", "CCCCCCCC")
+            ),
+            format!(
+                "<script>{}</script>",
+                call.replace(
+                    SCE_PDF,
+                    "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_%42BBBBBBB_123.pdf"
+                )
+            ),
+        ] {
+            let page = article_fixture(&format!("<p>Source prose.</p>{body}"), metadata);
+            assert_eq!(
+                normalize_fixture(&page)
+                    .unwrap_err()
+                    .code,
+                "unavailable",
+                "foreign or ambiguous declaration {body}"
+            );
+        }
+        let duplicate = article_fixture(&format!("<script>{call}{call}</script>"), metadata);
+        let out = normalize_fixture(&duplicate).unwrap();
+        assert_eq!(out["result"], "embedded_document");
+        assert_eq!(
+            out["embedded_document"]["original_pdf_url"],
+            format!("https://sce.buaa.edu.cn{SCE_PDF}")
+        );
+        let inert_declares_other = "<template><script>var vsb_pdf_image_data=[\"/__local/inert-preview.jpg\"];showVsbpdfIframe(\"/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_CCCCCCCC_123.pdf\",\"100%\");</script></template>";
+        let page = article_fixture(
+            &format!("{inert_declares_other}<script>{call}</script>"),
+            metadata,
+        );
+        let out = normalize_fixture(&page).unwrap();
+        assert_eq!(out["result"], "embedded_document");
+        assert_eq!(
+            out["embedded_document"]["original_pdf_url"],
+            format!("https://sce.buaa.edu.cn{SCE_PDF}")
+        );
+    }
+
+    #[test]
+    fn sce_document_input_rejects_unsupported_selector_and_zero_page() {
+        for (raw, expected) in [
+            (
+                r#"{"article_url":"https://sce.buaa.edu.cn/info/1013/42.htm","attachment_ordinal":1}"#,
+                "invalid_input",
+            ),
+            (
+                r#"{"article_url":"https://sce.buaa.edu.cn/info/1013/42.htm","source_page":0}"#,
+                "invalid_input",
+            ),
+        ] {
+            assert_eq!(
+                crate::announcements::document(CacheMode::Offline, raw)
+                    .unwrap_err()
+                    .code,
+                expected
+            );
+        }
+        for raw in [
+            r#"{"article_url":"https://sce.buaa.edu.cn/info/1013/42.htm","source_page":null}"#,
+            r#"{"article_url":"https://sce.buaa.edu.cn/info/1013/42.htm","attachment_ordinal":null}"#,
+        ] {
+            assert!(serde_json::from_str::<DocumentInput>(raw).is_err());
+        }
     }
 }

@@ -47,6 +47,7 @@ pub(crate) mod shenyuan;
 pub(crate) mod soft;
 pub(crate) mod sse;
 pub(crate) mod transportation;
+pub(crate) mod viewer;
 pub(crate) mod wrj;
 pub(crate) mod ygy;
 pub(crate) mod yqgdxy;
@@ -172,7 +173,7 @@ fn invalid_article() -> Error {
 fn invalid_document() -> Error {
     Error::new(
         "invalid_input",
-        "announcements document input is malformed; expected a JSON object with article_url naming a reviewed source-declared HTTPS SCSE article URL",
+        "announcements document input is malformed; expected a JSON object with article_url naming a reviewed source-declared HTTPS SCSE or Chemistry (sce) article URL",
     )
 }
 
@@ -1348,10 +1349,37 @@ pub fn article(mode: CacheMode, input: &str) -> Result<Value, Error> {
     client.get(&url, false, normalize_article)
 }
 
-/// Retrieve one original PDF explicitly declared by a reviewed college article.
-/// Does not infer a document from preview names or follow unreviewed links.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentInput {
+    article_url: String,
+    #[serde(default, deserialize_with = "document_selector")]
+    source_page: Option<u32>,
+}
+
+fn document_selector<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // A present null must not erase a selector and relax the input contract.
+    <u32 as serde::Deserialize<'de>>::deserialize(deserializer).map(Some)
+}
+
+/// Retrieve one supported original explicitly declared by a retained article.
+/// Does not infer a document from preview names or automatically follow hints.
 pub fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
-    scse::document(mode, input)
+    if input.len() > 32 * 1024 {
+        return Err(invalid_document());
+    }
+    let input: DocumentInput = serde_json::from_str(input).map_err(|_| invalid_document())?;
+    let article = Url::parse(&input.article_url).map_err(|_| invalid_document())?;
+    match article.host_str() {
+        Some("sce.buaa.edu.cn") => sce::document(mode, &input),
+        Some("scse.buaa.edu.cn") if input.source_page.is_none() => {
+            scse::document(mode, &input.article_url)
+        }
+        _ => Err(invalid_document()),
+    }
 }
 
 /// Fixed public college pages, not a unified college crawler or a verified
@@ -1872,8 +1900,20 @@ pub fn schema() -> Value {
         .collect();
     let mut output = json!({
         "document": {
-            "input":{"type":"object","additionalProperties":false,"required":["article_url"],"properties":{"article_url":{"type":"string","description":"Reviewed HTTPS SCSE notice article; the viewer must declare exactly one supported original PDF."}}},
-            "output":{"type":"object","description":"Original source-declared PDF bytes as base64, byte length, SHA-256 and separate article/document retrieval facts. Immutable byte cache; header/EOF framing only, not publisher-signature validation or a document safety scan. No OCR, text extraction or other-attachment download."}
+            "input":{
+                "type":"object","additionalProperties":false,"required":["article_url"],
+                "properties":{
+                    "article_url":{"type":"string","pattern":"^https://(?:scse|sce)\\.buaa\\.edu\\.cn/","description":"Reviewed HTTPS SCSE or Chemistry(sce) article declaring one active original PDF. Chemistry additionally binds its exact directory member, retained root and selected 学院新闻 listing, with canonical /info/1013 articles only."},
+                    "attachment_ordinal":{"type":"integer","minimum":1,"maximum":MAX_ATTACHMENT_HINTS,"description":"Reserved for attachment-hint colleges; this slice rejects the field for both SCSE and Chemistry."},
+                    "source_page":{"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Chemistry source listing ordinal, default 1; later ordinals must be advertised by the retained latest listing. Omit for SCSE; explicit null is not accepted."}
+                },
+                "allOf":[
+                    {"not":{"required":["attachment_ordinal"]}},
+                    {"if":{"properties":{"article_url":{"pattern":"^https://scse\\.buaa\\.edu\\.cn/"}}},"then":{"not":{"required":["source_page"]}}},
+                    {"if":{"properties":{"article_url":{"pattern":"^https://sce\\.buaa\\.edu\\.cn/"}}},"then":{"properties":{"article_url":{"pattern":"^https://sce[.]buaa[.]edu[.]cn/info/1013/[0-9]{1,10}[.]htm$"}}}}
+                ]
+            },
+            "output":{"type":"object","description":"One source-declared original PDF as base64, byte length, SHA-256 and separate article/document retrieval facts. PDF header/EOF framing only; not a package/signature/safety certificate. Immutable byte cache; fresh PDF MIME admission precedes equality. The existing PDF missing-MIME allowance is retained. Discovery stays cache-first; document --refresh revalidates only the selected document. No OCR, text extraction, implicit article refresh, preview-image or other-attachment download."}
         },
         "college_source": {
             "input":{"description":"Fixed directory-bound college-source pages for scse, ic, aviation, beijing, shenyuan, h3i, iai, zfai, iiif, mse, rse, sepe, math, soft, transportation, physics, sce, sse, sem, fld, me, wrj, yqgdxy, ase, sa, hss, bme, ygy, cst, dept3 and ee. Select root or a reviewed notices board; aviation also supports public-notices. Rse and Sa support root only. ME and EE remain explicit transport blockers, not successful snapshots. Preserve literal directory URLs separately from deliberate HTTPS observations; bind boards through source declarations, follow no returned hints, and never infer missing routes or claim complete coverage."},
@@ -2493,6 +2533,42 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static OFFLINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn document_null_selector_cannot_disappear_from_input_contract() {
+        for field in ["attachment_ordinal", "source_page"] {
+            let input = format!(
+                r#"{{"article_url":"https://scse.buaa.edu.cn/info/1099/42.htm","{field}":null}}"#
+            );
+            assert!(
+                serde_json::from_str::<DocumentInput>(&input).is_err(),
+                "null {field} must stay a contract violation"
+            );
+        }
+        let input = r#"{"article_url":"https://sce.buaa.edu.cn/info/1013/42.htm","source_page":null}"#;
+        assert!(serde_json::from_str::<DocumentInput>(input).is_err());
+    }
+
+    #[test]
+    fn document_dispatch_rejects_unsupported_hosts_and_selectors_before_reads() {
+        for raw in [
+            r#"{"article_url":"https://math.buaa.edu.cn/info/1294/42.htm"}"#,
+            r#"{"article_url":"https://sepe.buaa.edu.cn/info/1078/42.htm"}"#,
+            r#"{"article_url":"https://scse.buaa.edu.cn/info/1099/42.htm","source_page":1}"#,
+            r#"{"article_url":"https://scse.buaa.edu.cn/info/1099/42.htm","attachment_ordinal":1}"#,
+            r#"{"article_url":"https://sce.buaa.edu.cn/info/1013/42.htm","attachment_ordinal":1}"#,
+            r#"{"article_url":"https://sce.buaa.edu.cn/info/1013/42.htm","source_page":0}"#,
+            r#"{"article_url":"https://scse.buaa.edu.cn/info/1099/42.htm","unknown":1}"#,
+            r#"not json"#,
+            r#"{"article_url":42}"#,
+        ] {
+            assert_eq!(
+                document(CacheMode::Offline, raw).unwrap_err().code,
+                "invalid_input",
+                "input {raw}"
+            );
+        }
+    }
 
     /// Hermetic offline contract: an empty cache directory must yield
     /// `offline_miss` for both listing and article URLs, without touching the

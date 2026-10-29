@@ -229,6 +229,9 @@ pub(crate) const SCE_NOTICES_URL: &str = "https://sce.buaa.edu.cn/xwzx/xyxw.htm"
 const SCE_ROBOTS_URL: &str = "https://sce.buaa.edu.cn/robots.txt";
 
 pub(crate) fn sce_path_allowed(path: &str) -> bool {
+    if cms_pdf_path_allowed(path) {
+        return true;
+    }
     if matches!(path, "/" | "/robots.txt" | "/xwzx/xyxw.htm") {
         return true;
     }
@@ -625,7 +628,7 @@ pub(crate) fn cst_path_allowed(path: &str) -> bool {
         })
 }
 
-pub(crate) fn scse_document_path_allowed(path: &str) -> bool {
+pub(crate) fn cms_pdf_path_allowed(path: &str) -> bool {
     let Some(tail) = path.strip_prefix("/__local/") else {
         return false;
     };
@@ -662,7 +665,7 @@ pub(crate) fn scse_document_path_allowed(path: &str) -> bool {
 }
 
 pub(crate) fn scse_path_allowed(path: &str) -> bool {
-    if scse_document_path_allowed(path) {
+    if cms_pdf_path_allowed(path) {
         return true;
     }
     if matches!(path, "/" | "/robots.txt" | "/xwgg/gggs.htm") {
@@ -1781,6 +1784,12 @@ impl ArchiveClient {
                     SourceProfile::Spoc if spoc_script_path_allowed(url.path()) => {
                         crate::spoc::validate_script(status, content_type, body.len())?;
                     }
+                    SourceProfile::Scse | SourceProfile::Sce
+                        if cms_pdf_path_allowed(url.path()) =>
+                    {
+                        crate::announcements::viewer::validate_document_mime(content_type)?;
+                        crate::announcements::viewer::validate_document_body(&body)?;
+                    }
                     _ => {}
                 }
             }
@@ -2788,6 +2797,414 @@ mod tests {
             .headers
             .insert("content-type".into(), "text/html; charset=utf-8".into());
         client.save(&entry).unwrap();
+    }
+
+    const SCE_XYXW_ROOT: &str = "<div class='news-box'><a href='xwzx/xyxw.htm'>学院新闻</a></div>";
+    const SCE_XYXW_BOARD: &str = "<head><title>学院新闻-化学学院</title></head><div class='fy-list'><ul><li><span>2000-02-29</span><a href='../info/1013/42.htm'>Distinct listing teaser</a></li></ul></div>";
+    const SCE_XYXW_PDF_PATH: &str =
+        "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+    const SCE_XYXW_ARTICLE: &str = "<div class='c-content'><h1 class='c-title'>Own complete original</h1><div class='other-s'>发布日期：2000-02-29</div><div class='nr-info'><div id='vsb_content'><div class='v_news_content'><p>Whole source paragraph.</p><script>showVsbpdfIframe(\"/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf\",\"100%\");</script></div></div></div></div>";
+    const SCE_ORIGINAL: &[u8] = b"%PDF-1.7\nSynthetic retained document.\n%%EOF\n";
+
+    fn seed_sce_pdf_sources(client: &ArchiveClient) {
+        seed(client, SCE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        seed_college_html(client, SCE_ROOT_URL, SCE_XYXW_ROOT.as_bytes());
+        seed_college_html(client, SCE_NOTICES_URL, SCE_XYXW_BOARD.as_bytes());
+        seed_college_html(
+            client,
+            "https://sce.buaa.edu.cn/info/1013/42.htm",
+            SCE_XYXW_ARTICLE.as_bytes(),
+        );
+    }
+
+    #[test]
+    fn cms_pdf_refresh_rejects_wrong_mime_without_revalidating_identical_original_bytes() {
+        for (profile, robots, target_url) in [
+            (
+                SourceProfile::Scse,
+                SCSE_ROBOTS_URL,
+                "https://scse.buaa.edu.cn/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf",
+            ),
+            (
+                SourceProfile::Sce,
+                SCE_ROBOTS_URL,
+                "https://sce.buaa.edu.cn/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf",
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let mut refresh_number = 0;
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /__local/C/C7/70/"));
+                refresh_number += 1;
+                let headers = if refresh_number == 1 {
+                    "Content-Type: text/html\r\n"
+                } else {
+                    "Content-Type: application/pdf\r\n"
+                };
+                reply(socket, 200, headers, SCE_ORIGINAL);
+            });
+            let mut client = fixture.client(CacheMode::Offline, &server);
+            client.profile = profile;
+            seed(&client, robots, b"User-agent: *\nAllow: /\n", false);
+            seed(&client, target_url, SCE_ORIGINAL, true);
+            let target = Url::parse(target_url).unwrap();
+            let mut original = client.load(&target).unwrap().unwrap();
+            original
+                .response
+                .headers
+                .insert("content-type".into(), "application/pdf".into());
+            client.save(&original).unwrap();
+            let observe = |response: &Response| {
+                crate::announcements::viewer::validate_document_mime(
+                    response.headers.get("content-type").map(String::as_str),
+                )?;
+                Ok((
+                    response.body.clone(),
+                    response.headers.clone(),
+                    response.fetched_at_unix_ms,
+                    response.revalidated_at_unix_ms,
+                    response.revalidation_status,
+                ))
+            };
+            let before = client.get(&target, true, observe).unwrap();
+            let client = client.with_cache_mode(CacheMode::Revalidate);
+            assert_eq!(
+                client.get(&target, true, observe).unwrap_err().code,
+                "unavailable"
+            );
+            let client = client.with_cache_mode(CacheMode::Offline);
+            let after = client.get(&target, true, observe).unwrap();
+            assert_eq!(after, before);
+            let revalidated = client
+                .with_cache_mode(CacheMode::Revalidate)
+                .get(&target, true, observe)
+                .unwrap();
+            assert_eq!(revalidated.0, before.0);
+            assert_eq!(revalidated.1, before.1);
+            assert_eq!(revalidated.2, before.2);
+            assert!(revalidated.3.is_some());
+            assert_eq!(revalidated.4, Some(200));
+            assert_eq!(server.count(), 2);
+        }
+    }
+
+    #[test]
+    fn chemistry_probe_does_not_admit_computer_science_sources() {
+        const BODY: &[u8] = b"<html><title>Synthetic chemistry root</title></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET / HTTP/1.1"));
+            let headers = request.to_ascii_lowercase();
+            assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
+            reply(socket, 200, "Content-Type: text/html\r\n", BODY);
+        });
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Sce;
+        for raw in [
+            "https://scse.buaa.edu.cn/",
+            "https://sce.buaa.edu.cn/xwgg/gggs.htm",
+        ] {
+            assert_eq!(
+                client
+                    .snapshot(&Url::parse(raw).unwrap(), false)
+                    .unwrap_err()
+                    .code,
+                "egress_denied"
+            );
+        }
+        assert_eq!(server.count(), 0);
+        seed(&client, SCE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+        let original = client
+            .snapshot(&Url::parse(SCE_ROOT_URL).unwrap(), false)
+            .unwrap();
+        assert_eq!(original.body, BODY);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn sce_pdf_paths_join_reviewed_namespace_without_widening_html_scope() {
+        assert!(sce_path_allowed(SCE_XYXW_PDF_PATH));
+        for path in [
+            "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.jpg",
+            "/__local/C/C7/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf",
+            "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf",
+            "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB.pdf",
+        ] {
+            assert!(!sce_path_allowed(path), "unreviewed path {path}");
+        }
+        for path in [
+            "/",
+            "/robots.txt",
+            "/xwzx/xyxw.htm",
+            "/xwzx/xyxw/30.htm",
+            "/info/1013/42.htm",
+        ] {
+            assert!(sce_path_allowed(path), "reviewed path {path}");
+        }
+        for path in [
+            "/info/1032/42.htm",
+            "/bksjy/jxgg.htm",
+            "/xwzx/xyxw/x.htm",
+            "/info/1013/12345678901.htm",
+        ] {
+            assert!(!sce_path_allowed(path), "retired or invalid path {path}");
+        }
+    }
+
+    #[test]
+    fn sce_document_requires_retained_membership_and_refreshes_only_the_original() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(request.starts_with("GET /__local/C/C7/70/"));
+            let headers = request.to_ascii_lowercase();
+            assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
+            reply(socket, 200, "Content-Type: application/pdf\r\n", SCE_ORIGINAL);
+        });
+        let mut client = fixture.client(CacheMode::Revalidate, &server);
+        client.profile = SourceProfile::Sce;
+        seed_sce_pdf_sources(&client);
+        let missing = Url::parse("https://sce.buaa.edu.cn/info/1013/43.htm").unwrap();
+        assert_eq!(
+            crate::announcements::sce::document_with_client(
+                client,
+                CacheMode::Revalidate,
+                &missing,
+                1,
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .code,
+            "unsupported"
+        );
+        assert_eq!(server.count(), 0);
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Sce;
+        let article = Url::parse("https://sce.buaa.edu.cn/info/1013/42.htm").unwrap();
+        let result = crate::announcements::sce::document_with_client(
+            client,
+            CacheMode::Revalidate,
+            &article,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(result["type"], "announcement_document");
+        assert_eq!(result["result"], "source_document_bytes");
+        assert_eq!(
+            result["document"]["byte_length"],
+            serde_json::json!(SCE_ORIGINAL.len())
+        );
+        assert_eq!(result["document"]["sha256"], hash(SCE_ORIGINAL));
+        let exported = STANDARD
+            .decode(result["document"]["content_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(exported, SCE_ORIGINAL);
+        assert_eq!(
+            result["retrieval"]["source_url"],
+            format!("https://sce.buaa.edu.cn{SCE_XYXW_PDF_PATH}")
+        );
+        assert_eq!(
+            result["source_article"]["response_body_sha256"],
+            hash(SCE_XYXW_ARTICLE.as_bytes())
+        );
+        assert_eq!(
+            result["source_listing"]["response_body_sha256"],
+            hash(SCE_XYXW_BOARD.as_bytes())
+        );
+        assert_eq!(
+            result["directory_attribution"]["root_retrieval"]["response_body_sha256"],
+            hash(SCE_XYXW_ROOT.as_bytes())
+        );
+        assert_eq!(result["retrieval"]["cache_status"], "miss");
+        assert_eq!(result["source_listing"]["cache_status"], "hit");
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Sce;
+        let cached = crate::announcements::sce::document_with_client(
+            client,
+            CacheMode::Offline,
+            &article,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(cached["retrieval"]["cache_status"], "hit");
+        assert_eq!(cached["document"], result["document"]);
+        assert_eq!(cached["source_article"], result["source_article"]);
+        assert_eq!(cached["source_listing"], result["source_listing"]);
+        assert_eq!(cached["directory_attribution"], result["directory_attribution"]);
+        assert_eq!(server.count(), 1);
+        let mut client = fixture.client(CacheMode::PreferCache, &server);
+        client.profile = SourceProfile::Sce;
+        let revalidated = crate::announcements::sce::document_with_client(
+            client,
+            CacheMode::Revalidate,
+            &article,
+            1,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(revalidated["retrieval"]["cache_status"], "revalidated");
+        assert_eq!(revalidated["document"], result["document"]);
+        assert_eq!(revalidated["source_article"], result["source_article"]);
+        assert_eq!(revalidated["source_listing"], result["source_listing"]);
+        assert_eq!(revalidated["directory_attribution"], result["directory_attribution"]);
+        assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn sce_document_refuses_unbound_or_unsafe_source_snapshots_before_document_transport() {
+        for (url, body, expected) in [
+            (SCE_ROOT_URL, "<title>No reviewed board</title>".to_owned(), "unsupported"),
+            (
+                SCE_ROOT_URL,
+                "<template><a href='xwzx/xyxw.htm'>学院新闻</a></template>".to_owned(),
+                "unsupported",
+            ),
+            (
+                SCE_ROOT_URL,
+                format!("{SCE_XYXW_ROOT}<input type='password'>"),
+                "unavailable",
+            ),
+            (
+                SCE_NOTICES_URL,
+                SCE_XYXW_BOARD.replace("1013/42", "1013/43"),
+                "unsupported",
+            ),
+            (
+                SCE_NOTICES_URL,
+                format!("{SCE_XYXW_BOARD}<input name='csrf_token' value='synthetic'>"),
+                "unavailable",
+            ),
+            (
+                "https://sce.buaa.edu.cn/info/1013/42.htm",
+                SCE_XYXW_ARTICLE.replace("showVsbpdfIframe(", "unreviewedViewer("),
+                "unsupported",
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(|_, _| panic!("unbound document must not reach transport"));
+            let mut client = fixture.client(CacheMode::Revalidate, &server);
+            client.profile = SourceProfile::Sce;
+            seed_sce_pdf_sources(&client);
+            seed_college_html(&client, url, body.as_bytes());
+            let article = Url::parse("https://sce.buaa.edu.cn/info/1013/42.htm").unwrap();
+            assert_eq!(
+                crate::announcements::sce::document_with_client(
+                    client,
+                    CacheMode::Revalidate,
+                    &article,
+                    1,
+                    serde_json::json!({}),
+                )
+                .unwrap_err()
+                .code,
+                expected,
+                "refused source {url}"
+            );
+            assert_eq!(server.count(), 0);
+        }
+    }
+
+    #[test]
+    fn sce_document_later_page_requires_a_retained_advertised_destination() {
+        let fixture = Fixture::new();
+        let server = Server::new(|_, _| panic!("all selected sources are retained"));
+        let mut client = fixture.client(CacheMode::Offline, &server);
+        client.profile = SourceProfile::Sce;
+        seed_sce_pdf_sources(&client);
+        let latest = format!("{SCE_XYXW_BOARD}<a href='xyxw/30.htm'>2</a>");
+        seed_college_html(&client, SCE_NOTICES_URL, latest.as_bytes());
+        let selected = "https://sce.buaa.edu.cn/xwzx/xyxw/30.htm";
+        let page_two_board =
+            SCE_XYXW_BOARD.replace("../info/", "../../info/");
+        seed_college_html(&client, selected, page_two_board.as_bytes());
+        let pdf = format!("https://sce.buaa.edu.cn{SCE_XYXW_PDF_PATH}");
+        seed(&client, &pdf, SCE_ORIGINAL, true);
+        let article = Url::parse("https://sce.buaa.edu.cn/info/1013/42.htm").unwrap();
+        let result = crate::announcements::sce::document_with_client(
+            client,
+            CacheMode::Offline,
+            &article,
+            2,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(result["source_listing"]["source_url"], selected);
+        let mut client = fixture.client(CacheMode::Revalidate, &server);
+        client.profile = SourceProfile::Sce;
+        assert_eq!(
+            crate::announcements::sce::document_with_client(
+                client,
+                CacheMode::Revalidate,
+                &article,
+                3,
+                serde_json::json!({}),
+            )
+            .unwrap_err()
+            .code,
+            "unavailable"
+        );
+        assert_eq!(server.count(), 0);
+    }
+
+    #[test]
+    fn sce_document_article_admission_keeps_safe_layout_failures_not_unsafe_bodies() {
+        for (content_type, body, retained) in [
+            ("text/html", "<title>Changed article layout</title>".to_owned(), true),
+            ("text/plain", SCE_XYXW_ARTICLE.to_owned(), false),
+            (
+                "text/html",
+                format!("<base href='https://foreign.example/'>{SCE_XYXW_ARTICLE}"),
+                false,
+            ),
+            (
+                "text/html",
+                format!("{SCE_XYXW_ARTICLE}<input type='password'>"),
+                false,
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let original: Arc<[u8]> = Arc::from(body.as_bytes());
+            let served = Arc::clone(&original);
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /info/1013/42.htm HTTP/1.1"));
+                reply(
+                    socket,
+                    200,
+                    &format!("Content-Type: {content_type}\r\n"),
+                    &served,
+                );
+            });
+            let mut client = fixture.client(CacheMode::PreferCache, &server);
+            client.profile = SourceProfile::Sce;
+            seed(&client, SCE_ROBOTS_URL, b"User-agent: *\nAllow: /\n", false);
+            seed_college_html(&client, SCE_ROOT_URL, SCE_XYXW_ROOT.as_bytes());
+            seed_college_html(&client, SCE_NOTICES_URL, SCE_XYXW_BOARD.as_bytes());
+            let article = Url::parse("https://sce.buaa.edu.cn/info/1013/42.htm").unwrap();
+            assert_eq!(
+                crate::announcements::sce::document_with_client(
+                    client,
+                    CacheMode::PreferCache,
+                    &article,
+                    1,
+                    serde_json::json!({}),
+                )
+                .unwrap_err()
+                .code,
+                "unavailable"
+            );
+            let mut cached = fixture.client(CacheMode::Offline, &server);
+            cached.profile = SourceProfile::Sce;
+            if retained {
+                let source = cached.snapshot(&article, false).unwrap();
+                assert_eq!(source.body.as_slice(), original.as_ref());
+                assert_eq!(source.sha256, hash(&original));
+            } else {
+                assert!(cached.load(&article).unwrap().is_none());
+            }
+            assert_eq!(server.count(), 1);
+        }
     }
 
     #[test]

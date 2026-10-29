@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add source-bound original-PDF retrieval for Chemistry's current
+  `/xwzx/xyxw.htm` board and `/info/1013/` article contract, without reviving
+  the older undergraduate-teaching routes. Resolve only an active owned
+  viewer's literal reviewed same-host PDF URL, not derived preview names.
+  Keep directory/root/listing/article discovery cache-first and refresh only
+  the selected immutable document; admit fresh PDF MIME before cache equality.
+  Return original bytes, hashes and separate provenance, not extracted text,
+  publisher-signature or document-safety certification. SCSE retains its
+  existing input shape and PDF framing policy; SEPE documents are not added.
+  These changes have no new live-service acceptance claim.
 - Document the write-capable, repository-scoped Gitea deploy key, the lack of
   server-side `main` protection, and the untested downstream `main` update.
 - Record that restoring Git refs and importing GitHub metadata does not prove

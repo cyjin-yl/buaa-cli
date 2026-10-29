@@ -5,12 +5,13 @@
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_BODY_PARAGRAPHS, MAX_ENTRIES, MAX_HREF, MAX_HTML,
     MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, college_html, declared_jsp_attachment_hints,
-    element_text, entry_in_scope, failed_contract, invalid_article, invalid_document, invalid_list,
-    is_http, parse_iso_date, retrieval, unavailable,
+    element_text, entry_in_scope, failed_contract, inert_element, invalid_article, invalid_document,
+    invalid_list, is_http, parse_iso_date, retrieval, unavailable,
+    viewer::{self, validate_pdf},
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, Response, SCSE_NOTICES_URL, SCSE_ROOT_URL,
-    scse_document_path_allowed, scse_path_allowed,
+    cms_pdf_path_allowed, scse_path_allowed,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::NaiveDateTime;
@@ -19,8 +20,6 @@ use serde_json::{Value, json};
 use url::Url;
 
 pub(super) const PUBLISHER: &str = "北京航空航天大学计算机学院";
-
-pub(super) mod viewer;
 
 fn source_mode(mode: CacheMode) -> CacheMode {
     if mode == CacheMode::Revalidate {
@@ -304,7 +303,10 @@ pub(super) fn article_with_client(
 fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
     let scripts = Selector::parse("div.v_news_content script").map_err(|_| unavailable())?;
     let mut selected: Option<Url> = None;
-    for node in document.select(&scripts) {
+    for node in document
+        .select(&scripts)
+        .filter(|node| !inert_element(*node))
+    {
         if node.value().attr("src").is_some() {
             continue;
         }
@@ -323,7 +325,7 @@ fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
                     return Err(unavailable());
                 }
                 let url = article.join(&path).map_err(|_| unavailable())?;
-                if !plain_url(&url, false) || !scse_document_path_allowed(url.path()) {
+                if !plain_url(&url, false) || !cms_pdf_path_allowed(url.path()) {
                     return Err(failed_contract(
                         "source-declared PDF must use the reviewed college document namespace",
                         file!(),
@@ -344,18 +346,8 @@ fn declared_pdf(document: &Html, article: &Url) -> Result<Option<Url>, Error> {
     Ok(selected)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DocumentInput {
-    article_url: String,
-}
-
-pub(super) fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
-    if input.len() > 32 * 1024 {
-        return Err(invalid_document());
-    }
-    let input: DocumentInput = serde_json::from_str(input).map_err(|_| invalid_document())?;
-    let article = resolve_article(&input.article_url).map_err(|_| invalid_document())?;
+pub(super) fn document(mode: CacheMode, article_url: &str) -> Result<Value, Error> {
+    let article = resolve_article(article_url).map_err(|_| invalid_document())?;
     // Resolve against the retained article snapshot. An operator may refresh
     // that article separately; document --refresh revalidates only its PDF.
     let source_mode = if mode == CacheMode::Revalidate {
@@ -387,67 +379,6 @@ pub(super) fn document(mode: CacheMode, input: &str) -> Result<Value, Error> {
             "completeness":{"scope":"single_source_declared_pdf","other_attachments_fetched":false,"preview_images_fetched":false,"text_extracted":false,"ocr_performed":false},
         }))
     })
-}
-
-fn validate_pdf(response: &Response) -> Result<(), Error> {
-    let tail = &response.body[response.body.len().saturating_sub(1024)..];
-    let mime_ok = response.headers.get("content-type").is_none_or(|value| {
-        let media = value.split(';').next().unwrap_or_default().trim();
-        media.eq_ignore_ascii_case("application/pdf")
-            || media.eq_ignore_ascii_case("application/octet-stream")
-    });
-    if !mime_ok
-        || !response.body.starts_with(b"%PDF-")
-        || !tail.windows(5).any(|window| window == b"%%EOF")
-    {
-        return Err(failed_contract(
-            "source document lacks reviewed PDF MIME/framing; bytes are not cached as a PDF",
-            file!(),
-            line!(),
-        ));
-    }
-    Ok(())
-}
-
-fn preview_paths(document: &Html) -> Result<(bool, Vec<String>), Error> {
-    let selector = Selector::parse("div.v_news_content script").map_err(|_| unavailable())?;
-    for node in document.select(&selector) {
-        // Inspect a bounded JSON string array declared by this observed CMS;
-        // never evaluate the script or treat its contents as article prose.
-        for text in node.text() {
-            let Some(marker) = text.find("vsb_pdf_image_data") else {
-                continue;
-            };
-            let Some(tail) = text[marker..]
-                .split_once('=')
-                .map(|(_, tail)| tail.trim_start())
-            else {
-                continue;
-            };
-            if !tail.starts_with('[') {
-                continue;
-            }
-            let Some(end) = tail.find(']') else {
-                continue;
-            };
-            if end + 1 > 64 * 1024 {
-                return Err(unavailable());
-            }
-            let paths: Vec<String> =
-                serde_json::from_str(&tail[..=end]).map_err(|_| unavailable())?;
-            if paths.len() > 128
-                || paths.iter().any(|path| {
-                    path.len() > MAX_HREF
-                        || !path.starts_with("/__local/")
-                        || path.chars().any(char::is_control)
-                })
-            {
-                return Err(unavailable());
-            }
-            return Ok((true, paths));
-        }
-    }
-    Ok((false, Vec::new()))
 }
 
 #[cfg(test)]
@@ -484,7 +415,7 @@ fn normalize_article_document(response: &Response, document: &Html) -> Result<Va
         }
         paragraphs.push(text);
     }
-    let (has_previews, previews) = preview_paths(document)?;
+    let (has_previews, previews) = viewer::preview_paths(document.root_element())?;
     let original_pdf = declared_pdf(
         document,
         &Url::parse(&response.url).map_err(|_| unavailable())?,
@@ -638,6 +569,50 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn original_pdf_requires_active_declaration_not_inert_ancestry() {
+        let article = Url::parse("https://scse.buaa.edu.cn/info/1099/42.htm").unwrap();
+        let active = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+        let other = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_CCCCCCCC_123.pdf";
+        let header = r#"<div class="d1"><p class="bt">Fixture document</p></div>"#;
+        for (open, close) in [
+            ("<template>", "</template>"),
+            ("<noscript>", "</noscript>"),
+            ("<svg><style>", "</style></svg>"),
+        ] {
+            let inert =
+                format!("{open}<script>var vsb_pdf_image_data=[\"/__local/inert-preview.jpg\"];showVsbpdfIframe(\"{other}\",\"100%\");</script>{close}");
+            let prose = format!(
+                r#"{header}<div class="v_news_content"><p>Source prose.</p>{inert}</div>"#
+            );
+            let out = normalize_article(&response(&prose)).unwrap();
+            assert_eq!(out["result"], "full_text", "inert context {open}");
+            assert_eq!(out["body_paragraphs"], json!(["Source prose."]));
+            assert_eq!(out["embedded_document"]["present"], false);
+            assert!(out["embedded_document"]["original_pdf_url"].is_null());
+            assert_eq!(out["embedded_document"]["preview_paths"], json!([]));
+            let only_inert = format!(r#"{header}<div class="v_news_content">{inert}</div>"#);
+            assert_eq!(
+                normalize_article(&response(&only_inert)).unwrap_err().code,
+                "unavailable",
+                "inert context {open}"
+            );
+            let mixed = format!(
+                r#"{header}<div class="v_news_content">{inert}<script>showVsbpdfIframe("{active}","100%");</script></div>"#
+            );
+            let out = normalize_article(&response(&mixed)).unwrap();
+            assert_eq!(out["result"], "embedded_document", "inert context {open}");
+            assert_eq!(out["body_paragraph_count"], 0);
+            assert_eq!(
+                out["embedded_document"]["original_pdf_url"],
+                article.join(active).unwrap().as_str(),
+                "inert context {open}"
+            );
+            assert_eq!(out["embedded_document"]["preview_paths"], json!([]));
+            assert_eq!(out["embedded_document"]["original_document_verified"], false);
+        }
     }
 
     #[test]

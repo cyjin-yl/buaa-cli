@@ -33,9 +33,11 @@
 //!   Those exact bytes are also stored in a
 //!   private, credential-scoped cache so the degraded evidence can be re-read
 //!   offline without another request.
-//! * The supplied bearer token is never echoed. Every response body is
-//!   compared with the exact token bytes, with its percent-encoded form and
-//!   with every decoded JSON string before anything is projected or exported.
+//! * The supplied bearer token is never echoed. Every response body and
+//!   decoded JSON string is inspected for the token and the reversible forms
+//!   supported by `net::carries_secret` before projection or export. Matching
+//!   is conservative: even an accidental substring match, especially with a
+//!   short token, withholds the body rather than risking disclosure.
 //!   A body that echoes the token is refused as `credential_echo`: no entry is
 //!   projected, no raw bytes are exported and the body is not cached.
 //!   Responses whose nested token inspection exceeds its bound are withheld as
@@ -189,29 +191,13 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Percent-encode every byte outside the unreserved set, as a URL query
-/// component would. Used to recognize a token that a response re-encoded
-/// instead of repeating verbatim.
-fn percent_encode_token(token: &str) -> String {
-    let mut encoded = String::with_capacity(token.len());
-    for byte in token.as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(*byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
-}
 
 // Construct literal JSON values ourselves: serde_json's Value visitor treats
 // a reserved first member as RawValue when that feature is enabled. Inspect
 // every member before last-member-wins insertion, including duplicates.
 struct TokenInspection<'a> {
     token: &'a str,
-    percent: String,
-    standard: Zeroizing<String>,
-    url_safe: Zeroizing<String>,
+    scan_decoded: bool,
     echo: bool,
     incomplete: bool,
 }
@@ -219,13 +205,8 @@ struct TokenInspection<'a> {
 impl TokenInspection<'_> {
     fn inspect(&mut self, text: &str, embedded_depth: usize, allow_embedded: bool) {
         if self.token.is_empty() { return; }
-        if self.token.len() >= 8 {
-            self.echo |= net::carries_secret(text.as_bytes(), self.token)
-                || (self.percent != self.token && text.contains(&self.percent));
-        } else {
-            self.echo |= text == self.token || text == self.percent
-                || text == self.standard.as_str() || text == self.standard.trim_end_matches('=')
-                || text == self.url_safe.as_str() || text == self.url_safe.trim_end_matches('=');
+        if self.scan_decoded && !self.echo {
+            self.echo = net::carries_secret(text.as_bytes(), self.token);
         }
         let trimmed = text.trim();
         if allow_embedded && trimmed.starts_with(['{', '[', '"']) {
@@ -300,16 +281,13 @@ fn literal_document(bytes: &[u8], inspection: &mut TokenInspection<'_>) -> Optio
 }
 
 fn token_inspection(token: &str) -> TokenInspection<'_> {
-    TokenInspection { token, percent: percent_encode_token(token),
-        standard: Zeroizing::new(STANDARD.encode(token)),
-        url_safe: Zeroizing::new(base64::engine::general_purpose::URL_SAFE.encode(token)),
-        echo: false, incomplete: false }
+    TokenInspection { token, scan_decoded: true, echo: false, incomplete: false }
 }
 
 /// Does any JSON string literal of this body carry the token once decoded?
 /// Duplicate members are all inspected: a parsed document keeps only the
 /// last member, so the raw literals are the complete evidence.
-fn decoded_strings_carry_token(body: &[u8], token: &str, encoded: &str) -> bool {
+fn decoded_strings_carry_token(body: &[u8], token: &str) -> bool {
     let mut index = 0;
     while index < body.len() {
         if body[index] != b'"' {
@@ -320,7 +298,7 @@ fn decoded_strings_carry_token(body: &[u8], token: &str, encoded: &str) -> bool 
             index += 1;
             continue;
         };
-        if net::carries_secret(literal.as_bytes(),token) || (encoded != token && literal.contains(encoded)) {
+        if net::carries_secret(literal.as_bytes(), token) {
             return true;
         }
         index = next;
@@ -399,12 +377,17 @@ fn analyze_body(body: &[u8], token: &str) -> ResponseFacts {
         session_denied: false,
         document: None,
     };
-    // The body is decoded exactly once here and reused by the envelope
-    // parser, so a JSON body is never parsed twice.
+    // Always examine the original, even for a short token or non-JSON body.
+    // Continue parsing after an echo so session denial remains an independent
+    // fact for the original lease. Without escapes, decoded literals are
+    // already covered by the original scan; nested parsing still runs.
     let mut inspection = token_inspection(token);
+    let raw_echo = net::carries_secret(body, token);
+    inspection.echo = raw_echo;
+    inspection.scan_decoded = !raw_echo && !token.is_empty() && body.contains(&b'\\');
     let document = literal_document(body, &mut inspection);
-    facts.token_echo = (document.is_some() && inspection.echo) || (token.len() >= 8 &&
-        (net::carries_secret(body, token) || decoded_strings_carry_token(body, token, &inspection.percent)));
+    facts.token_echo = raw_echo || (document.is_some() && inspection.echo)
+        || (document.is_none() && inspection.scan_decoded && decoded_strings_carry_token(body, token));
     facts.inspection_incomplete = inspection.incomplete;
     if let Some(document) = document {
         facts.session_denied = session_denied_document(&document);
@@ -2571,7 +2554,7 @@ fn token_schema() -> Value {
         "minLength": 1,
         "maxLength": MAX_TOKEN_BYTES,
         "pattern": "^[!-~]+$",
-        "description": "The ihome bearer token produced by the session layer from the SSO redirect chain (?token= or #token=) or from the appeal_pc_token cookie. It is read from stdin only, is never persisted, logged, echoed, or written to any file, and this module never logs in. A missing or null token is accepted by the parser and then refused with authorization_required before any cache or network access.",
+        "description": "The ihome bearer token produced by the session layer from the SSO redirect chain (?token= or #token=) or from the appeal_pc_token cookie. It is read from stdin only, is never persisted, logged, echoed, or written to any file, and this module never logs in. A missing or null token is accepted by the parser and then refused with authorization_required before any cache or network access. Credential-echo inspection is conservative: an accidental substring or supported encoded-form match in an upstream body is also withheld, which is more likely with short tokens.",
     })
 }
 
@@ -3040,8 +3023,7 @@ mod rawvalue_regressions {
             assert_eq!(page.success, Some(false));
             assert!(page.evidence.is_none());
         }
-        let (facts, _, _) = pages(br#"{"message":"prefix abc_123 suffix"}"#, "abc_123");
-        assert!(!facts.token_echo, "short substrings are not exact echoes");
+
         for (body, token) in [
             (br#"{"message":"abc_123"}"#.as_slice(), "abc_123"),
             (br#"{"message":"prefix abc_1234 suffix"}"#.as_slice(), "abc_1234"),
@@ -3067,14 +3049,12 @@ mod rawvalue_regressions {
         assert!(facts.token_echo && !facts.session_denied);
         let (facts, _, _) = pages(br#"{"nested":"{\"$serde_json::private::RawValue\":\"\\u0061bc_123\"}"}"#, "abc_123");
         assert!(facts.token_echo);
-        let (facts, _, _) = pages(br#"{"nested":"{\"value\":\"prefix abc_123 suffix\"}"}"#, "abc_123");
-        assert!(!facts.token_echo);
+
         let (facts, _, _) = pages(br#"{"value":"\ud83d\ude00"}"#, "😀");
         assert!(facts.token_echo);
         let (facts, _, _) = pages(br#"{"value":"YWJj"}"#, "abc");
         assert!(facts.token_echo);
-        let (facts, _, _) = pages(br#"{"value":"abc"} trailing"#, "abc");
-        assert!(!facts.token_echo && facts.document.is_none());
+
         let mut urls = Vec::new();
         collect_declared_urls(&Value::String(r#"{"$serde_json::private::RawValue":"\"https://example.invalid/file\""}"#.to_owned()), &mut urls, 0);
         assert!(urls.is_empty());
@@ -3672,6 +3652,78 @@ mod tests {
         assert!(page.entries.is_empty());
         let found = page.evidence.clone().expect("evidence");
         assert_eq!(found["fallback_reason"], "authentication_refused");
+    }
+
+    #[test]
+    fn short_token_substrings_are_not_projected_by_list_or_detail() {
+        let cases = [
+            ("q", r#""0q0""#),
+            ("abc", r#""0abc0""#),
+            ("abc", r#""0\u0061bc0""#),
+            ("abc", r#""0YWJj0""#),
+            ("a+b", r#""0a\u00252bb0""#),
+            ("abc", r#""{\"nested\":\"0\\u0061bc0\"}""#),
+        ];
+        for (token, title) in cases {
+            let token_json = serde_json::to_string(token).unwrap();
+            let request = parse_list_input(&format!(r#"{{"token":{token_json}}}"#)).unwrap();
+            let detail = parse_detail_input(&format!(r#"{{"token":{token_json},"id":41}}"#)).unwrap();
+            let entry = format!(r#"{{"id":41,"title":{title},"content":"ordinary","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}}"#);
+            let list_body = format!(r#"{{"success":true,"data":{{"data":[{entry}]}}}}"#);
+            let original = response(&list_url(20, 1).unwrap(), list_body.as_bytes(), Some("application/json"));
+            let facts = analyze_body(&original.body, token);
+            let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+            let envelope = build_list_envelope(&request, vec![page], None);
+            assert_eq!(envelope["result"], "degraded", "token={token} title={title}");
+            assert_eq!(envelope["entry_count"], 0);
+            assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
+            assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
+
+            let detail_body = format!(r#"{{"success":true,"data":{entry}}}"#);
+            let original = response(&detail_url(41).unwrap(), detail_body.as_bytes(), Some("application/json"));
+            let facts = analyze_body(&original.body, token);
+            let page = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
+            assert!(page.entries.is_empty(), "token={token} title={title}");
+            let evidence = page.evidence.expect("withheld detail evidence");
+            assert_eq!(evidence["fallback_reason"], "credential_echo");
+            assert!(evidence.get("raw_response_base64").is_none());
+        }
+    }
+
+    #[test]
+    fn short_token_raw_fallback_is_withheld_but_safe_entries_remain_visible() {
+        let request = parse_list_input(r#"{"token":"abc"}"#).unwrap();
+        let detail = parse_detail_input(r#"{"token":"abc","id":41}"#).unwrap();
+        let body = b"prefix abc suffix";
+        let original = response(&list_url(20, 1).unwrap(), body, Some("text/plain"));
+        let facts = analyze_body(body, "abc");
+        let list = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+        let envelope = build_list_envelope(&request, vec![list], None);
+        assert_eq!(envelope["result"], "degraded");
+        assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
+        assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
+        let page = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(page.entries.is_empty());
+        let evidence = page.evidence.expect("withheld detail evidence");
+        assert_eq!(evidence["fallback_reason"], "credential_echo");
+        assert!(evidence.get("raw_response_base64").is_none());
+
+        let entry = r#"{"id":41,"title":"Quiet hallway","content":"ordinary","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}"#;
+        let list_body = format!(r#"{{"success":true,"data":{{"data":[{entry}]}}}}"#);
+        let original = response(&list_url(20, 1).unwrap(), list_body.as_bytes(), Some("application/json"));
+        let facts = analyze_body(&original.body, "abc");
+        let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+        let envelope = build_list_envelope(&request, vec![page], None);
+        assert_eq!(envelope["result"], "entries");
+        assert_eq!(envelope["entries"][0]["title"], "Quiet hallway");
+        assert!(envelope["upstream_evidence"].is_null());
+
+        let detail_body = format!(r#"{{"success":true,"data":{entry}}}"#);
+        let original = response(&detail_url(41).unwrap(), detail_body.as_bytes(), Some("application/json"));
+        let facts = analyze_body(&original.body, "abc");
+        let page = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(page.evidence.is_none());
+        assert_eq!(page.entries[0]["title"], "Quiet hallway");
     }
 
     #[test]

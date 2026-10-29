@@ -1,6 +1,6 @@
 //! Foreign-languages college notices: exact HTTP directory identity and a
 //! deliberately separate HTTPS observation of the public site.
-use super::scse::viewer;
+use super::viewer;
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_HREF, MAX_TEXT, advertised_page_url,
     article_category_from_url, article_paragraphs, bind_college_board,
