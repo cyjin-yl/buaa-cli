@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Require the offline CI image's UID1000 passwd home to match the canonical
+  `/home/ezra` Cargo-lock directory before admitting a build. A mounted file
+  at that path alone does not establish which lock the wrapper will acquire.
 - Keep the shared HTML challenge assessment honest about truncated sources. A
   retained prefix that cannot show the document-wide stylesheet or charset
   context no longer confirms a challenge control; the whole body is scanned

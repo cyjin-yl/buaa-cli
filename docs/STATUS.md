@@ -80,7 +80,7 @@ acceptance or a merge, and local export does not prove player synchronization.
 
 ## Unverified integration: cached-challenge compatibility
 
-The current uncommitted integration candidate adds a durable mailbox for a
+The current integration candidate adds a durable mailbox for a
 challenge discovered in cached content. The older governor in the root worktree
 does not read that mailbox. A candidate process and an older process sharing one
 account governor therefore cannot be assumed to enforce the same challenge
@@ -282,6 +282,35 @@ issue. Ambiguous provenance or the configured 1 MiB/4,096-candidate limits
 withhold output; the attribute HashMap is not a worst-case-linear guarantee.
 This is not a claim that every HTML source is supported. The physics service
 remains offline and unbound.
+
+## Native verification still open (2026-10-30)
+
+The integration source was checkpointed locally as
+`9cbc4cdf08deb294c20451a1e22f9b32cf23b8ea`, without publishing or deploying it.
+A subsequent locked, offline default-profile build acquired the shared
+heavy-work slot but failed while creating encoded library metadata with
+`Cannot allocate memory (os error 12)` under the unchanged 2 GiB address-space
+ceiling. All 98 recorded build inputs remained unchanged. No current binary
+or full-library-test pass is established by that run. The test-only server
+dispatch deduplication has not yet established that the full library suite
+fits within the existing limit.
+
+A separate guarded host probe attempted mpv and VLC with synthetic local
+media and subtitles. Both CLI invocations exited 2, producing no replay
+receipt or screenshot. The probe placed its files below group-writable OMP
+ancestors, which do not satisfy the replay path policy, and failed to retain
+the child diagnostics. Its overall zero exit was a probe-classification bug,
+not successful playback. The corrected probe uses an exclusive directory
+below the passwd home, preserves synthetic diagnostics and requires both
+successful CLI receipts and all expected player captures. A completed
+collection will still require visual inspection and will not establish
+campus media rights, physical audio or live playback.
+
+Independent review of the published documentation prefix identified a
+conditional CI lock-path mismatch. The candidate now requires the effective
+UID's passwd home to be `/home/ezra` before checking the canonical mounted
+lock. This matches `scripts/cargo-locked`, which derives its lock from passwd
+rather than `HOME`. No successful internal CI run is claimed.
 
 ## Drive source-contract boundary
 

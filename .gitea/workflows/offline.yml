@@ -80,6 +80,10 @@ jobs:
           [[ "$(id -u)" = 1000 ]]
           # The runner must mount the real canonical OMP lock inode and the
           # UID1000 home/Cargo lock, not private copies of either path.
+          [[ "$(getent passwd "$(id -u)" | cut -d: -f6)" = /home/ezra ]] || {
+            echo "the job image must map UID 1000 to the canonical home" >&2
+            exit 1
+          }
           test -x /home/ezra/.omp/agent/bin/agent-heavy
           test -f /home/ezra/.omp/agent/locks/heavy-work.lock
           test -f /home/ezra/.buaa-cli-cargo.lock
