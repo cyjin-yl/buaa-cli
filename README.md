@@ -10,6 +10,23 @@ implementation includes local calculators and bounded, cache-first read slices;
 network observations are deliberately opt-in and remain subject to the shared
 governor.
 
+## Repository and publication boundary
+
+Development uses the private [Gitea primary](https://doesvm.icefish-exponential.ts.net:8444/ezra/buaa-cli).
+Its existing daily synchronization considers **every branch and tag** for
+non-force publication to the public GitHub downstream. A successful sync can
+therefore publish pushed drafts and checkpoints as well as `main`; deletion
+from Gitea does not automatically delete a downstream ref. Treat every push
+as public publication and never commit credentials, private responses, or
+other non-public material. A private Gitea visibility setting is not an
+exclusion from this synchronization.
+
+Gitea and GitHub pull requests have separate numbers, reviews and checks.
+An approval or successful check on one host is not evidence of an approval or
+check on the other. Follow the repository's existing `gh stack`, exact-head
+review and acceptance requirements; a Gitea draft does not itself register a
+GitHub native stack or authorize a merge.
+
 ## Status boundary
 
 Implemented or available as bounded slices:

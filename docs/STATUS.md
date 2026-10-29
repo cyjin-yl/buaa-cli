@@ -336,8 +336,17 @@ Its receipt reported 72 equal refs and two new downstream branches, without
 conflicts or force pushes. Independent readback matched Gitea and GitHub for
 `main` and both newly published development branches. This verifies that
 manual invocation and those refs; the next automatic scheduled invocation has
-not yet occurred. The two development PRs remain drafts, and synchronization
-is not evidence of a successful build, merge, login or online acceptance.
+not yet occurred. Every Gitea branch and tag is eligible for publication to
+the public GitHub downstream on a successful sync, including draft and
+checkpoint branches. Downstream-only refs are preserved, so deleting a Gitea
+ref does not automatically retract its published counterpart. Do not commit
+private source evidence or credentials to any branch.
+
+The two development pull requests are Gitea drafts; their numbers and reviews
+are independent of GitHub pull requests and native `gh stack` metadata.
+Neither host's checks or approvals automatically transfer to the other.
+Synchronization is not evidence of a successful build, merge, login or online
+acceptance.
 
 ## Drive source-contract boundary
 

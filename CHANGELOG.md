@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- State explicitly that all Gitea branches and tags are eligible for public
+  GitHub synchronization, including drafts, and that approvals and checks
+  belong to the host on which they were recorded.
 - Restore the private Gitea repository as the development primary, retain its
   previous backups and frozen refs, and keep GitHub as a checked non-force
   downstream. One manual run of the existing daily synchronization succeeded;
