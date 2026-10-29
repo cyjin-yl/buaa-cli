@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Record that restoring Git refs and importing GitHub metadata does not prove
+  recovery of any Gitea-only issues, comments or approvals from the missing
+  former repository.
 - State explicitly that all Gitea branches and tags are eligible for public
   GitHub synchronization, including drafts, and that approvals and checks
   belong to the host on which they were recorded.

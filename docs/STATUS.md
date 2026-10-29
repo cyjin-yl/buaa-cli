@@ -328,6 +328,14 @@ descendant refs. The shared Git `origin` now names the Gitea HTTPS URL; the
 worktree uses a repository-scoped deploy key and a pinned SSH host key for Git
 transport. GitHub remains a separate downstream, not the development origin.
 
+The new repository imported the available GitHub issue and pull-request
+metadata. The former Gitea repository ID and its issue, pull-request and comment
+rows are absent from the current Gitea database; the retained older backup
+repositories have no such rows. A restorable pre-deletion database snapshot
+has not been identified. Therefore the Git and GitHub import readbacks do not
+establish whether any Gitea-only issues, comments or approvals existed or
+were recovered. The backup repositories and private ref bundle remain intact.
+
 The existing Gitea workflow is scheduled daily at 19:30 UTC, or 03:30 Beijing
 time. One manual execution of that same workflow,
 [run 641](https://doesvm.icefish-exponential.ts.net:8444/ezra/gitea-primary/actions/runs/641),
