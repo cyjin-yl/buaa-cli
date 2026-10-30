@@ -922,13 +922,12 @@ mod tests {
         );
         assert!(contract["fetch"]["output"]["oneOf"].is_array());
         assert_eq!(
-            contract["practice"]["input"]["oneOf"]
+            contract["practice"]["input"]["input"]["oneOf"]
                 .as_array()
-                .unwrap()
-                .len(),
-            4
+                .map(Vec::len),
+            Some(4)
         );
-        let question_set = &contract["practice"]["input"]["oneOf"][1]["properties"]["question_set"];
+        let question_set = &contract["practice"]["input"]["input"]["oneOf"][1]["properties"]["question_set"];
         assert!(question_set["properties"]["questions"]["items"]["properties"]
             .get("answer")
             .is_none());

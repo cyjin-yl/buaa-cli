@@ -1863,9 +1863,13 @@ mod tests {
         let (before, after) = ascii.split_once("ROOM").unwrap();
         let mut bytes = b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=GBK\">".to_vec();
         bytes.extend_from_slice(before.as_bytes());
+        // The same rule applies when the charset comes from the legacy meta:
+        // the page tail must be GBK bytes for the address label to survive.
+        const GBK_TAIL: &[u8] =
+            b"<p class='shadow'>\xb5\xd8\xd6\xb7:ADDR</p></div><table><tbody><tr><td>2024-05-01</td><td>100</td></tr></tbody></table><script>x={data:[\"2024-05-01\"],series:{data:[1.2]}};</script>";
         // C2 A9 is valid UTF-8 as ©, but the explicit GBK source means 漏.
         bytes.extend_from_slice(b"\xc2\xa9");
-        bytes.extend_from_slice(after.as_bytes());
+        bytes.extend_from_slice(GBK_TAIL);
         let output = parse_balance_fixture(&bytes, Some("text/html")).unwrap();
         assert_eq!(output["result"], "parsed");
         assert_eq!(output["balance"]["room"], "漏");
@@ -1895,10 +1899,15 @@ mod tests {
 
         let ascii = PAGE.replace("知行楼", "ROOM").replace("北京市", "ADDR");
         let (before, after) = ascii.split_once("ROOM").unwrap();
+        // The declared charset governs the whole page, so the tail must be
+        // GBK bytes too: an in-GBK "地址:" label is the only way the room
+        // address survives the decode the way a real legacy page would.
+        const GBK_TAIL: &[u8] =
+            b"<p class='shadow'>\xb5\xd8\xd6\xb7:ADDR</p></div><table><tbody><tr><td>2024-05-01</td><td>100</td></tr></tbody></table><script>x={data:[\"2024-05-01\"],series:{data:[1.2]}};</script>";
         let mut bytes = format!("{meta}<div style='width:100%'></div>{before}").into_bytes();
         // C2 A9 is valid UTF-8, but an explicit GBK header selects 漏.
         bytes.extend_from_slice(b"\xc2\xa9");
-        bytes.extend_from_slice(after.as_bytes());
+        bytes.extend_from_slice(GBK_TAIL);
         let output = parse_balance_fixture(&bytes, Some("text/html; charset=GBK")).unwrap();
         assert_eq!(output["result"], "parsed");
         assert_eq!(output["balance"]["room"], "漏");
@@ -2593,4 +2602,6 @@ mod tests {
         let mixed = r#"{"operation":"balance","selector":{"identity_no":"a","campus":"b"},"authorization_confirmed":true}"#;
         assert!(run(mixed, false).is_err());
     }
+
+
 }

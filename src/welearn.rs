@@ -3914,7 +3914,10 @@ fn questions_from_practice_page(
 
 fn is_choice_control(control_type: &str) -> bool {
     let lower = control_type.to_ascii_lowercase();
-    lower.contains("choice") || lower.contains("tf") || lower.contains("radiobox")
+    // The platform spells the radio family both as Radiobox and as Radio on
+    // reviewed practice pages; a plain "radio" is also a single-choice
+    // control, not a free-text one.
+    lower.contains("choice") || lower.contains("tf") || lower.contains("radio")
 }
 
 fn is_fill_control(control_type: &str) -> bool {
@@ -4846,11 +4849,11 @@ mod tests {
         assert!(contract["materials"]["output"]["oneOf"].is_array());
         assert!(contract["fetch"]["output"]["oneOf"].is_array());
         assert_eq!(
-            contract["practice"]["input"]["oneOf"]
+            contract["practice"]["input"]["input"]["oneOf"]
                 .as_array()
-                .unwrap()
-                .len(),
-            4
+                .map(Vec::len),
+            Some(4)
         );
     }
+
 }

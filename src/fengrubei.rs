@@ -849,9 +849,10 @@ mod tests {
         let observations: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(observations.len(), 4);
         assert!(
-            observations
-                .windows(2)
-                .all(|pair| pair[1].0.duration_since(pair[0].0) >= Duration::from_secs(5))
+            observations.windows(2).all(|pair| {
+                pair[1].0.duration_since(pair[0].0)
+                    >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+            })
         );
         let second_path = fixture.0.join("second.zip");
         let second = fetch_from(

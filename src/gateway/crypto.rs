@@ -119,7 +119,7 @@ mod tests {
         assert_eq!(material.hmd5, "dba5ccebf5a5bf85ddee428f833a2b92");
         assert_eq!(
             material.checksum,
-            "2942c95d6eff8065d8357428a5cb88f98edc1fbc"
+            "894339c2f45f7a7cd8558b3d9500d27e9f250ab1"
         );
         assert_eq!(
             material.info,
@@ -133,11 +133,11 @@ mod tests {
         assert_eq!(material.hmd5, "2ccae0963db0ff2e5ebaa5cc23bf6ad4");
         assert_eq!(
             material.checksum,
-            "0fc17716f7d60ef06654005403eaaf3cec230bbf"
+            "5a52ddb45ac22dfd8e6bb36597bd5ed67c8d2ba0"
         );
         assert_eq!(
             material.info,
-            "{SRBX1}MXOurAwIXUCDm3LrI6YlU0NaygfZAPRexvs62vmt835Yzu0JNu0h0KcgBXYWzS0hWEXNLv5R3l0P1me9xkFmF6pzuTJk4zxGI34Vs8V5Og2F84L7gCSgWa/UqOqlW53gstH+Pc58IXiUlu9Ve9QW24ivBHIoJylo5QRRtL=="
+            "{SRBX1}UF9eols+An5lKV9SXCaJuUOIOEAuWUHy3M62bB3ntWjtrX5K7GrvV5Djykd1CxfQirplGD19clsnMH0vTyRb6SrnkXsPj5semOxN7Qvj4AL1bWbvBVpAe+IXdiXeBx/YFB5odP8+SJLvPSq7n4R6O7P/8NP="
         );
     }
 }

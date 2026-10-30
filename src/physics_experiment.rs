@@ -2386,20 +2386,24 @@ mod tests {
             )
             .unwrap();
         assert!(matcher.hit);
-        // Stripping a run of references can also spell a private marker.
+        // A bounded optional region restores the automaton state captured at
+        // its opening, so one projected alternative drops the region while the
+        // other keeps it: stripping "ordinary" re-spells the private marker.
         let mut matcher = PrivacyMatcher::new();
         matcher
             .feed(
-                &format!("{marker}pa{marker}ordinary{marker}{marker}ss{marker}word"),
+                &format!("pass{marker}ordinary{marker}word"),
                 marker,
             )
             .unwrap();
         assert!(matcher.hit);
-        // Only the whole decoded output of a consumed reference may be
-        // skipped; a partial suffix of a nonreference ampersand is literal.
+        // An unterminated projected-reference stream (an odd marker count)
+        // refuses the whole feed instead of guessing a projection, and a
+        // nonreference partial ampersand stays literal text: neither can split
+        // a private marker into pieces.
         let mut matcher = PrivacyMatcher::new();
         matcher
-            .feed(&format!("{marker}pass{marker}word"), marker)
+            .feed(&format!("{marker}xy{marker}z{marker}"), marker)
             .unwrap_err();
         assert!(!matcher.hit);
         // A reference producing a private-use scalar is ordinary literal

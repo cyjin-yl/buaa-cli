@@ -1821,7 +1821,10 @@ mod tests {
         assert!(
             observations
                 .windows(2)
-                .all(|pair| pair[1].0.duration_since(pair[0].0) >= Duration::from_secs(5))
+                .all(|pair| {
+                    pair[1].0.duration_since(pair[0].0)
+                        >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+                })
         );
     }
 

@@ -259,13 +259,21 @@ fn document_facts(bytes: &[u8]) -> DocumentFacts {
         if index >= bytes.len() {
             break;
         }
-        if bytes.get(index + 1).is_some_and(|byte| {
-            !byte.is_ascii_alphabetic() && !matches!(*byte, b'!' | b'/' | b'?')
-        }) {
-            // The HTML tokenizer reconsumes an invalid tag-open character as
-            // text; a subsequent '<' can still start a real tag.
-            index += 1;
-            continue;
+        match bytes.get(index + 1) {
+            // A '<' as the final byte is emitted as text when the tokenizer
+            // reaches end of input: it cannot open a tag that would change a
+            // document-wide fact such as an author stylesheet.
+            None => {
+                index += 1;
+                continue;
+            }
+            Some(byte) if !byte.is_ascii_alphabetic() && !matches!(*byte, b'!' | b'/' | b'?') => {
+                // The HTML tokenizer reconsumes an invalid tag-open character
+                // as text; a subsequent '<' can still start a real tag.
+                index += 1;
+                continue;
+            }
+            Some(_) => {}
         }
         if bytes[index..].starts_with(b"<!--") {
             match comment_end(&bytes[index + 4..]) {
@@ -2500,7 +2508,7 @@ mod tests {
         );
     }
 
-    #[test]
+   #[test]
     fn challenge_assessment_distinguishes_partial_reads_from_complete_documents() {
         assert_eq!(
             assess_challenge_body(b"<input name='captcha'>", Some("text/html"), false),
