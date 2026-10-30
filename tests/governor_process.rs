@@ -625,6 +625,30 @@ macro_rules! governor_process_regressions {
         }
 
         #[test]
+        fn a_state_written_by_the_latched_governor_no_longer_gates_requests() {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut state = governor.load().unwrap();
+            // Commit 5148607 removed the durable latch and the one-shot arming
+            // gate, but a state file written before it can still carry both.
+            state.safety_latched = true;
+            state.authentication_armed = true;
+            governor.save(&state, false).unwrap();
+            drop(governor);
+
+            let reopened = fixture.open();
+            // The retained field is history: it survives verbatim so the boot
+            // review can show what the older build recorded.
+            assert!(reopened.status().unwrap().safety_latched);
+            // No gate consults it, so a request is still admitted.
+            reopened
+                .try_acquire(RequestKind::Interactive)
+                .expect("a retired latch field must not deny a request")
+                .finish(Outcome::Success)
+                .unwrap();
+        }
+
+        #[test]
         fn unsafe_permissions_symlinks_and_hardlinks_fail_closed() {
             let fixture = Fixture::new();
             let governor = fixture.open();
