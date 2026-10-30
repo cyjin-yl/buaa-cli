@@ -355,7 +355,14 @@
         "https://github.com/APassbyDreg/BUAA_JW_Utils",
         "https://github.com/el-ev/BUAA-Teacher-Evaluation",
         "https://github.com/ZenAlexa/BUAA_TeachingEvaluation_2024Winter"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa evaluation with an empty object",
+          "observed": "returned a typed status object with exit 0; no request performed",
+          "live_blocker": "Live evaluation reads need an authenticated JWXT session that is not established here."
+        }
+      }
     },
     {
       "id": "marks",
@@ -413,7 +420,14 @@
         "https://github.com/Bhipee/BeiHangPostgraduateTimetable",
         "https://github.com/yinwoods/Fuck-BUAA-JiaoWu-Anyway",
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa timetable-pg parse with an empty object",
+          "observed": "invalid_input exit 2: the parser requires an operator-supplied timetable payload",
+          "live_blocker": "No live postgraduate timetable source is authorized for this run."
+        }
+      }
     },
     {
       "id": "checkin",
@@ -429,7 +443,14 @@
         "https://github.com/singledog957/duaa",
         "https://github.com/zeroduhyy/iclass_buaa",
         "https://github.com/Yiki21/iclass_buaa_tui"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa checkin with an empty object",
+          "observed": "blocked exit 0 with a stated reason",
+          "live_blocker": "Live check-in needs an authenticated sunlight-clockin session and is a campus mutation."
+        }
+      }
     },
     {
       "id": "boya",
@@ -479,7 +500,14 @@
         "https://github.com/Apodead/BuaaAmmeterBot",
         "https://github.com/LaciliaExe/BUAA-ECC",
         "https://github.com/Colorfulshadow/buaa-power-monitor"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa electricity with an empty object",
+          "observed": "invalid_input exit 2: typed resolve/balance input required",
+          "live_blocker": "Live balance reads need a campus electricity session."
+        }
+      }
     },
     {
       "id": "physics-select",
@@ -538,7 +566,14 @@
         "https://github.com/wtdcode/BUAAPhyhelper",
         "https://github.com/wwlyeye/PhysicalExperimentSelector",
         "https://github.com/qgjyf2001/queryJiwu"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa physics-reference",
+          "observed": "unsupported exit 3: subcommand form required",
+          "live_blocker": "Reference material retrieval is not source-authorized in this run."
+        }
+      }
     },
     {
       "id": "aerospace",
@@ -551,7 +586,14 @@
       },
       "sources": [
         "https://github.com/Caniformia/HangGai"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa aerospace materials",
+          "observed": "unavailable exit 7: no retained cache and no --online opt-in",
+          "live_blocker": "Live material fetch needs a governed GitHub tree read; not performed here."
+        }
+      }
     },
     {
       "id": "drive",
@@ -584,7 +626,14 @@
         "https://cc.hobeedzc.cn",
         "https://github.com/grandchicken/1708SEM_ISIM",
         "https://github.com/Soft-Where-21/21CoreDocs"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa departments inventory with an empty object",
+          "observed": "invalid_input exit 2: explicit school selector required",
+          "live_blocker": "Live inventory needs a governed directory read; cached snapshots serve offline only."
+        }
+      }
     },
     {
       "id": "os-lab",
@@ -612,7 +661,14 @@
         "https://github.com/dhy2000/TimeInput",
         "https://github.com/TrickEye/can_I_Graduate",
         "https://trickeye.github.io/can_I_Graduate/"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa coursegrading unsupported",
+          "observed": "unsupported exit 0: HTTP-only upstream, HTTPS equivalence unestablished",
+          "live_blocker": "Live probing would target an HTTP-only upstream and is refused by design."
+        }
+      }
     },
     {
       "id": "timed-input",
@@ -686,7 +742,14 @@
       },
       "sources": [
         "https://github.com/zeroduhyy/school_buss_ticket"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa shuttle with an empty object",
+          "observed": "invalid_input exit 2: typed request required",
+          "live_blocker": "No authorized live shuttle page read in this run."
+        }
+      }
     },
     {
       "id": "welearn",
@@ -2747,7 +2810,14 @@
       "title": "Governed autonomous contribution",
       "status": "pending",
       "acceptance": "Bounded unclaimed issue selection, linked PR, independent review, real permissions and maintainer merge gates.",
-      "sources": []
+      "sources": [],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa contribution scan with an empty object",
+          "observed": "invalid_input exit 2: scan target required",
+          "live_blocker": "Contribution scanning is local analysis; no remote service is claimed."
+        }
+      }
     },
     {
       "id": "drift",
