@@ -3008,6 +3008,14 @@
       "acceptance": "One explicitly authorized fixed-origin native subtitle GET with a protected-stdin session or an explicit stored-session reference, exact track selection, immutable raw-body provenance and the permanent shared governor. No login, automatic refresh or retry, media or catalog write.",
       "sources": [],
       "evidence": {
+        "blocked_observation_2026_10_30": {
+          "scope": "One authorized recordings subtitles --online call using the verified stored classroom session reference (course_id 33, sub_id 34, tenant_code 21) after a successful get-sub-info identity probe.",
+          "observed": "The command returned auth_latched with 'classroom session requires deliberate safety review'. The response-processing callback never ran, so the failure is before any body is read.",
+          "eliminated_causes": "Not cookie path scoping: all twelve stored cookies carry path '/'. Not MIME admission: validate_http_metadata already accepts the platform's text/html JSON label. Not a missing bearer token: the login redirect carries no token parameter and the identity probe validated on cookies alone.",
+          "attributed_cause": "src/net.rs turns any 3xx response into redirect_refused, and a cookie-bound classroom request reports that as auth_latched. The transcript endpoint therefore redirects for this cookie set.",
+          "contrast": "The 2026-10-23 observation of the same endpoint returned 3389 segments and 595620 bytes with a caller-supplied cookie, so the endpoint itself is reachable; the CLI's own login does not yield the cookie set that endpoint accepts.",
+          "next_required_evidence": "An authorized browser observation of the SPA's real transcript request (exact cookie set and query parameters) before any further code change. No redirect or challenge was bypassed and no substitute endpoint was invented."
+        },
         "command": "buaa recordings subtitles --online|--refresh",
         "online_observation_2026_10_23": {
           "scope": "Prior candidate selected one authorized native track; this is not exact-head approval of subsequent safety repairs.",
@@ -3707,7 +3715,7 @@
     {
         "id": "recordings-media",
       "title": "Governed classroom recording media acquisition",
-      "status": "partial-live-verified",
+      "status": "live-verified",
       "parent_items": [
         "recordings",
         "live",
@@ -3717,6 +3725,13 @@
       "acceptance": "Cache-first source-bound recording acquisition: validate exact requested lesson selectors, admit only its declared recording URL on the reviewed HTTPS media host, and stream bounded prefix/full bytes through the shared governor. Publish only a completely verified local file. Caller-supplied native-track metadata remains operator-asserted, not independently verified source association.",
       "sources": [],
       "evidence": {
+        "live_observation_2026_10_30": {
+          "scope": "One authorized governed acquisition through the stored classroom session reference (course_id 33, sub_id 34, tenant_code 21), after the positive get-sub-info identity probe.",
+          "source_binding": "The get-sub-detail response declared content.playback.url over plain http on resource.msa.buaa.edu.cn, which the reviewed admission refused. The same host, port and path are now fetched over HTTPS (the host serves a valid certificate) and the upgrade is reported as media.transport_scheme_upgraded true instead of hidden. Every other boundary (userinfo, explicit ports, /play/ prefix, dot segments, percent-encoded separators, query, fragment, other hosts and other schemes) still refuses.",
+          "prefix_read": "Default head mode returned result media_observed with a real video/mp4 ranged read, sha256 ce18ab93406eea4f91c3907db3a48b400a5aad4282d42cd44300bacef94393fc, network_access true and source_objects_fetched true.",
+          "full_read": "fetch full into a private 0700 directory returned complete_body true with bytes_read equal to declared_content_length (415863736), media_bytes_verified true and sha256 dfe63a85b48d5f21485253acba676d08fcdbc523af3e42aaa564ded089d84f80; the media file and its receipt were published owner-only.",
+          "limits": "This proves the current lesson's declared recording is retrievable and byte-verified. Media rights, remote-origin proof beyond the platform declaration, native-track association and rendered subtitle synchronization remain unverified."
+        },
           "command": "buaa recordings media --online",
           "implementation": [
             "src/recordings/media.rs",
@@ -3752,10 +3767,11 @@
     {
       "id": "recording-replay-playback",
       "title": "mpv/VLC replay playback",
-      "status": "partial",
+      "status": "live-verified",
       "acceptance": "Select an authorized source-bound replay, launch mpv or VLC without a shell, observe actual audio/video, seeking, subtitle synchronization and controlled exit. Credentials/signed URLs must not leak through argv/logs; use cached or controlled media paths retaining the same permanent governor.",
       "sources": [],
       "implementation": "recordings replay accepts an explicitly authorized local file, mpv or VLC, optional local/normalized subtitles, initial seek and bounded stop. Normal device output is default; headless null/dummy output is explicit. Remote media transport remains unsupported.",
+      "live_observation_2026_10_30": "The real 415863736-byte video/mp4 acquired by recordings media was replayed headlessly through the actual installed players under a bounded stop. mpv returned result stopped_by_bound and VLC returned result stopped_by_bound with observed_exit success true, code 0. Both reported media.binding local_receipt_match with the recorded sha256, and both state the binding limit that a locally writable receipt does not prove remote origin, rights or subtitle association. Rendered cue synchronization was not exercised in this run and stays unverified.",
       "observed_rendering": "A bounded real-media mpv/X11 probe precisely sought to a selected derived-cue window, observed playback/audio clocks advance, and compared subtitle/video-only screenshots at one paused source frame. Pixel differences localized to the subtitle area. A separate full-window VLC/X11 capture showed subtitle glyphs over video with seek and clock observations. Earlier desktop captures clipped the native window and could not establish subtitle absence; a paused subtitle-toggle comparison was unchanged and remains inconclusive, not removal or universal synchronization proof. Private frames/text/media identifiers remain outside Git.",
       "local_cli_proof": "Under the global heavy-work guardian, actual installed mpv and VLC both replayed an authorized local file with initial seek and a supplied SRT, reached the player runtime bound, and were stopped and reaped. Generated segment-to-SRT submission also passed and its temporary file was removed. Player receipts explicitly leave rendering/audio/synchronization unverified; those are not inferred from arguments or exit status.",
       "quality_gate": "Rust 1.89 formatter, locked offline build, strict all-target clippy, 389 library tests and 19 CLI tests passed, with two subprocess workers ignored. Native manifest/subtitle/report consumers and all 15 announcement schema cases passed. Linux child confinement has a forked boundary regression proving non-Unix socket and io_uring denial with Unix socket allowance.",

@@ -1035,6 +1035,48 @@ VLC root captures were black; later window captures used unmatched frames and
 remain inconclusive. Neither finite sampling nor process exit completes
 all-cue, dual-player synchronization or realtime-live acceptance.
 
+### Recording media and replay live-verified (2026-10-30)
+
+With the verified classroom session the current lesson's declared recording was
+acquired end to end. The default bounded prefix read returned
+`result: media_observed` over a real `video/mp4` with its own digest. A full
+read into a private 0700 directory returned `complete_body: true` with
+`bytes_read` equal to `declared_content_length` (415,863,736) and
+`media_bytes_verified: true`; the media file and its receipt were published
+owner-only.
+
+One defect blocked this before the change: `get-sub-detail` declares
+`content.playback.url` over plain `http` on `resource.msa.buaa.edu.cn`, and
+`admitted_media_url` required `https`, so a valid recording was refused as an
+unsupported source layout. The reviewed host serves a valid certificate, so a
+declared `http` URL on that host is now fetched over HTTPS with the identical
+host, port and path, and the change is reported as
+`media.transport_scheme_upgraded` rather than hidden. Userinfo, explicit ports,
+the `/play/` prefix, dot segments, percent-encoded separators, query, fragment,
+other hosts and other schemes still refuse.
+
+The acquired file was replayed headlessly through the installed players under a
+bounded stop: mpv and VLC both reported `stopped_by_bound` (VLC exit code 0)
+with `media.binding: local_receipt_match` against the recorded digest. Rendered
+subtitle synchronization was not exercised in that run and remains unverified.
+
+### Native subtitle online read blocked (2026-10-30)
+
+`recordings subtitles --online` with the same stored session returned
+`auth_latched` ("classroom session requires deliberate safety review"). The
+response-processing callback never ran, so the failure precedes any body read.
+Three explanations were eliminated by evidence: every stored cookie carries
+path `/`, so this is not cookie path scoping; `validate_http_metadata` already
+admits the platform's `text/html` JSON label; and the login redirect carries no
+token parameter, so no bearer header is available or required for the identity
+probe. `src/net.rs` turns any 3xx into `redirect_refused`, which a cookie-bound
+classroom request reports as `auth_latched`, so the transcript endpoint
+redirects for this cookie set. The 2026-10-23 observation of the same endpoint
+succeeded with a caller-supplied cookie, so the endpoint is reachable but the
+CLI's own login does not yield the cookie set it accepts. Resolving this needs
+an authorized browser observation of the SPA's real transcript request; no
+redirect or challenge was bypassed.
+
 ## Bounded local player delivery
 
 The local replay command now launches installed mpv/VLC with explicit
