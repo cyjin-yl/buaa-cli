@@ -69,7 +69,7 @@ fn unavailable() -> Error {
 fn rejected() -> Error {
     Error::new(
         "auth_latched",
-        "Classroom authentication was rejected or indeterminate; review the attempt receipt, then run the explicit resume before one more attempt.",
+        "Classroom authentication was rejected or indeterminate; review the attempt receipt. Authentication attempts are always admitted, so a corrected attempt may follow without clearing a latch.",
     )
 }
 

@@ -572,39 +572,62 @@ adapters for ihome and department materials.
 
 ## Governed classroom session acquisition
 
-Online acceptance is **not passed**. The retained 2026-10-25 attempt on
-module `2ccfb0dbba267ede0f4b241ec8644494b6fd8c724ef10a7123ee1e0e34e3a10c`
+Online acceptance for the governed session is **passed as of 2026-10-30**; see
+the dated subsection below for the exact observed chain and identity. The
+retained 2026-10-25 attempt on module
+`2ccfb0dbba267ede0f4b241ec8644494b6fd8c724ef10a7123ee1e0e34e3a10c`
 recorded initial SSO HTTP 200, credential POST HTTP 302, then classroom CAS
-callback HTTP 500. No classroom session or positive selected-lesson response
-was established. This supersedes earlier guesses that the attempt stopped
-before password submission; the sanitized attempt trail proves the POST.
+callback HTTP 500, establishing no session. That supersedes earlier guesses
+that the attempt stopped before password submission; the sanitized attempt
+trail proves the POST. Media rights, live playback, subtitle synchronization
+and attendance remain separately unverified.
 
-### Classroom Bearer-token mechanism and yjapi certificate blocker (2026-10-30)
+### Classroom session live-verified (2026-10-30)
 
 The callback HTTP 500 is no longer the blocker: the CLI now follows the CAS
 redirect chain without the request-gap sleep that let the single-use service
 ticket expire (a server-directed redirect is a continuation of the request the
-server already answered). The chain reaches the classroom SPA, but the
-`get-sub-info` identity probe returned `{"code":5002,"未传入token"}`.
+server already answered).
 
 The classroom SPA (`app.js`) authenticates its API calls with
 `Authorization: Bearer <getToken()>`, and the token is delivered as the
 `?token=` query parameter of the yjapi-to-classroom redirect URL — not a
-`Set-Cookie`. The CLI's cookie-jar model therefore can never establish the
-session. The fix extracts `?token=` from the final redirect URL into a
+`Set-Cookie`. A cookie-only model answers `{"code":5002,"未传入token"}` on the
+identity probe. The fix extracts `?token=` from the final redirect URL into a
 zeroizing buffer (bounded length, printable-ASCII filter), sends it as the
 `Authorization` header on the `get-sub-info` probe only, and zeroes it on drop;
 it is never persisted or revealed in a receipt. All other `send` call sites pass
-no authorization. The binary was rebuilt with this fix.
+no authorization.
 
-Live verification is blocked by an environmental change:
-`yjapi.msa.buaa.edu.cn` now serves a Kubernetes ingress placeholder
-certificate ("Kubernetes Ingress Controller Fake Certificate", OpenSSL verify
-code 18, self-signed). The CLI's `https_only` client refuses it per the
-no-TLS-bypass rule, so the CAS chain breaks at the yjapi hop and the login
-returns `unavailable`. `sso.buaa.edu.cn` itself is reachable (HTTP 200). The
-Bearer-token fix is code-complete and built; it is not yet live-verified, and a
-rejected self-signed certificate is not treated as a passed session.
+Two earlier readings were wrong and are withdrawn. First, `yjapi.msa.buaa.edu.cn`
+temporarily served a Kubernetes ingress placeholder certificate (OpenSSL verify
+code 18, self-signed); the `https_only` client correctly refused it, and that
+outage later cleared — it was never a client defect. Second, `auth_latched` is
+only an error-code string emitted by `rejected()` and `challenge()`, not a
+governor latch: commit `5148607` had already removed the durable safety latch,
+and `recordings session --offline` reports `no_latch_required`. The message that
+demanded an explicit resume before another attempt contradicted that design and
+is corrected.
+
+A deliberately authorized attempt on 2026-10-30 then established a real
+session. The chain recorded `sso.buaa.edu.cn/login 200`, credential `POST 302`,
+`yjapi.msa.buaa.edu.cn/casapi/index.php 302` twice, `classroom.msa.buaa.edu.cn/
+200`, and the positive probe `/courseapi/v3/portal-home-setting/get-sub-info
+200` with application code 0. The command reported `result: session_observed`,
+`network_access: true` and twelve cookies stored in a private owner-only file,
+reproduced twice.
+
+The remaining cause of the earlier `application_identity_unverified` rejection
+was an identity mismatch, not a transport or token problem: the supplied
+`verification.course_id` was `12` while the account's selected lesson is
+`course_id 33` with `sub_id 34` and `tenant_code 21`. With the correct identity
+the same flow succeeds. The courseapi response also declares `Content-Type:
+text/html` while carrying JSON; `classroom_json_mime` already admits
+`text/html`, so no MIME change was needed.
+
+Media rights, live playback, subtitle synchronization and attendance or
+completion remain unverified; the authorization block still records
+`account_identity_verified: false` with an `operator_attestation` basis.
 
 The asserted URL-cookie cause was incorrect: the original RFC 6265 octet
 ranges already allow colons and slashes. Synthetic Chromium acceptance of a
