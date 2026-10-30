@@ -229,7 +229,6 @@ impl BoyaClient {
         let mut response=match lease.start_request(||request.send()){
             Ok(Ok(response))=>response,
             Ok(Err(_))=>{lease.finish(Outcome::NetworkFailure).map_err(|_|err("governor_denied","settlement failed"))?;return Err(err("network_error","HTTPS request failed; not retried"));},
-            Err(crate::governor::FollowupError::CachedChallenge)=>{lease.finish(Outcome::SafetyObserved).map_err(|_|err("governor_denied","settlement failed"))?;return Err(err("safety_latched","shared safety observation prevents request"));},
             Err(crate::governor::FollowupError::Governor(_))=>return Err(err("governor_denied","request-start admission unavailable")),
         };
         let status=response.status().as_u16();let retry=response.headers().get("retry-after").and_then(|v|v.to_str().ok()).map(str::to_owned);
@@ -490,11 +489,5 @@ mod numeric_admission_proof {
         let encoded=b"%61%63%63%65%73%73%5F%74%6F%6B%65%6E=opaqueABC123";assert_eq!(raw_evidence(encoded,Some("application/x-www-form-urlencoded"),true)["data"],Value::Null);
         let key=[0u8;16];let wire=STANDARD.encode(aes(br#"{"status":"0","data":{"echo":"abc%2B\u0031\u0032\u0033"}}"#,&key,true).unwrap().as_slice());let decoded=PrivateValue(decode_response(wire.as_bytes(),Some("text/plain"),&key));assert!(value_contains_secret(&decoded,"abc+123"));
         let mut headers=reqwest::header::HeaderMap::new();headers.append("content-type",reqwest::header::HeaderValue::from_static("text/plain"));headers.append("content-type",reqwest::header::HeaderValue::from_static("text/html"));let mime=response_content_type(&headers);assert!(mime.is_none());assert_ne!(crate::html::assess_challenge_body(b"<input name=captcha>",mime.as_deref(),true),crate::html::ChallengeAssessment::Clear);
-    }
-    #[test]fn cached_observation_fences_boya_send(){
-        use std::os::unix::fs::DirBuilderExt;
-        let path=std::env::temp_dir().join(format!("boya-fence-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-        let governor=Governor::isolated_for_test(&path).unwrap();let mut lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();crate::governor::publish_cached_challenge_for_test(&path).unwrap();let mut sent=false;
-        assert!(matches!(lease.start_request(||{sent=true;}),Err(crate::governor::FollowupError::CachedChallenge)));assert!(!sent);lease.finish(Outcome::SafetyObserved).unwrap();let state=governor.status().unwrap();assert!(state.safety_latched);assert_eq!(state.consecutive_network_failures,0);drop(governor);std::fs::remove_dir_all(path).unwrap();
     }
 }

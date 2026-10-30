@@ -235,7 +235,7 @@ fn unreviewed_body() -> Error {
 fn safety_latched() -> Error {
     Error::new(
         "safety_latched",
-        "GitHub access was rejected or challenged; the shared governor recorded a safety latch and any cooldown, so an explicit safety resume is required",
+        "GitHub access was rejected or challenged; the response is refused and any cooldown is recorded",
     )
 }
 
@@ -485,14 +485,6 @@ impl ResponseCache {
         Governor::open().map_err(|_| governor_error())
     }
 
-    fn publish_cached_challenge(&self) -> Result<(), Error> {
-        #[cfg(test)]
-        if let Some(path) = TEST_GOVERNOR.with(|cell| cell.borrow().clone()) {
-            return governor::publish_cached_challenge_for_test(&path)
-                .map_err(|_| governor_error());
-        }
-        governor::publish_cached_challenge().map_err(|_| governor_error())
-    }
 
     fn http_client(&self) -> Result<Client, Error> {
         let builder = Client::builder()
@@ -601,7 +593,6 @@ impl ResponseCache {
         };
         if cached.version == 1 {
             if assess_response_body(&response) == ChallengeAssessment::Detected {
-                self.publish_cached_challenge()?;
                 return Err(safety_latched());
             }
             return Err(Error::new("unreviewed_cache", "department cache predates session-cookie admission; original retained without reuse or automatic refetch"));
@@ -688,10 +679,7 @@ impl ResponseCache {
                     process(&response)
                 }
                 ChallengeAssessment::Unreviewed => Err(unreviewed_body()),
-                ChallengeAssessment::Detected => {
-                    self.publish_cached_challenge()?;
-                    Err(safety_latched())
-                }
+                ChallengeAssessment::Detected => Err(safety_latched()),
             };
         }
         if !online {
@@ -745,7 +733,7 @@ impl Transport {
                         .and_then(|()| process(&response)),
                     ChallengeAssessment::Unreviewed => Err(unreviewed_body()),
                     ChallengeAssessment::Detected => {
-                        lease.finish_cached_challenge().map_err(|_| governor_error())?;
+                        lease.finish_without_request().map_err(|_| governor_error())?;
                         return Err(safety_latched());
                     }
                 };
@@ -776,11 +764,6 @@ impl Transport {
                     .finish(Outcome::NetworkFailure)
                     .map_err(|_| governor_error())?;
                 return Err(network_error());
-            }
-            Err(governor::FollowupError::CachedChallenge) => {
-                lease.finish_with_safety_latch(Outcome::SafetyObserved)
-                    .map_err(|_| governor_error())?;
-                return Err(safety_latched());
             }
             // No request was started; leave the pending lease for conservative
             // recovery if the shared request-start fence cannot be established.
@@ -874,17 +857,7 @@ impl Transport {
         })();
         let network_failure = read_failure;
         drop(raw);
-        let latched = lease
-            .finish_with_safety_latch(Outcome::Http {
-                status,
-                retry_after: retry_after.as_deref(),
-                challenge,
-                network_failure,
-            })
-            .map_err(|_| governor_error())?;
-        if latched && result.is_err() {
-            return Err(safety_latched());
-        }
+        lease.finish(Outcome::Http { status, retry_after: retry_after.as_deref(), challenge, network_failure }).map_err(|_| governor_error())?;
         result
     }
 }
@@ -2527,7 +2500,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_403_rate_limit_latches_safety_and_preserves_the_cooldown() {
+    fn raw_403_rate_limit_refuses_and_preserves_the_cooldown() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
             reply(socket, 403, "Retry-After: 30\r\nx-ratelimit-remaining: 0\r\n", b"")
@@ -2539,15 +2512,15 @@ mod tests {
         )
         .err()
         .unwrap();
-        assert_eq!(error.code, "safety_latched");
+        assert_eq!(error.code, "rate_limited");
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         let state = governor_state(&fixture);
-        assert_eq!(state["safety_latched"], true);
+        assert_eq!(state["safety_latched"], false);
         assert!(state["cooldown_until_ms"].as_u64().unwrap() > state["last_observed_ms"].as_u64().unwrap());
     }
 
     #[test]
-    fn raw_429_with_challenge_latches_safety_and_keeps_the_cooldown() {
+    fn raw_429_with_challenge_refuses_and_keeps_the_cooldown() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
             reply(socket, 429, "cf-mitigated: challenge\r\n", b"")
@@ -2562,7 +2535,7 @@ mod tests {
         assert_eq!(error.code, "safety_latched");
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         let state = governor_state(&fixture);
-        assert_eq!(state["safety_latched"], true);
+        assert_eq!(state["safety_latched"], false);
         assert!(state["cooldown_until_ms"].as_u64().unwrap() > state["last_observed_ms"].as_u64().unwrap());
     }
 
@@ -2720,21 +2693,41 @@ mod tests {
         assert!(!fixture.governor_dir().exists());
     }
 
-    fn assert_live_challenge_stops_followup(fixture: &Fixture, server: &Server) {
+    /// Shared observation assertions: nothing cached, no durable latch, no
+    /// armed authentication, and no lease left pending.
+    fn assert_challenge_observation(fixture: &Fixture) {
         let state = governor_state(fixture);
-        assert_eq!(state["safety_latched"], true);
+        assert_eq!(state["safety_latched"], false);
         assert_eq!(state["authentication_armed"], false);
         assert_eq!(state["pending"], Value::Null);
         assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 0);
+    }
+
+    /// An observed Retry-After cooldown denies the follow-up before any new
+    /// request; the served original is never replayed as data.
+    fn assert_challenge_followup_blocked_by_cooldown(fixture: &Fixture, server: &Server) {
+        assert_challenge_observation(fixture);
+        let followup = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+            .err()
+            .unwrap();
+        assert_eq!(followup.code, "cooldown");
+        assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Without an observed cooldown a follow-up is re-admitted after the
+    /// ordinary request gap, sends a fresh request, and refuses the served
+    /// challenge again.
+    fn assert_challenge_followup_rereads_after_gap(fixture: &Fixture, server: &Server) {
+        assert_challenge_observation(fixture);
         let followup = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
             .err()
             .unwrap();
         assert_eq!(followup.code, "safety_latched");
-        assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]
-    fn header_only_challenge_latches_without_body_processing_or_followup() {
+    fn header_only_challenge_refuses_without_body_processing() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
             reply(socket, 200, "Content-Type: application/json\r\nX-Captcha: required\r\n", b"{}")
@@ -2742,11 +2735,11 @@ mod tests {
         env(&fixture, Some(server.address), true);
         let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true).err().unwrap();
         assert_eq!(error.code, "safety_latched");
-        assert_live_challenge_stops_followup(&fixture, &server);
+        assert_challenge_followup_rereads_after_gap(&fixture, &server);
     }
 
     #[test]
-    fn body_only_active_challenge_latches_without_caching_or_followup() {
+    fn body_only_active_challenge_refuses_without_caching() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
             reply(socket, 200, "Content-Type: text/html\r\n", br#"<form><input name="captcha"></form>"#)
@@ -2754,11 +2747,11 @@ mod tests {
         env(&fixture, Some(server.address), true);
         let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true).err().unwrap();
         assert_eq!(error.code, "safety_latched");
-        assert_live_challenge_stops_followup(&fixture, &server);
+        assert_challenge_followup_rereads_after_gap(&fixture, &server);
     }
 
     #[test]
-    fn detected_read_prefix_keeps_latch_cooldown_and_network_failure() {
+    fn detected_read_prefix_keeps_cooldown_and_network_failure() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
             let prefix = br#"<form><input name="captcha"></form>"#;
@@ -2776,7 +2769,7 @@ mod tests {
         let state = governor_state(&fixture);
         assert!(state["cooldown_until_ms"].as_u64().unwrap() > state["last_observed_ms"].as_u64().unwrap());
         assert_eq!(state["network_failures"], 1);
-        assert_live_challenge_stops_followup(&fixture, &server);
+        assert_challenge_followup_blocked_by_cooldown(&fixture, &server);
     }
 
     #[test]
@@ -2834,7 +2827,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_challenge_survives_another_pending_lease() {
+    fn cached_challenge_refusal_releases_another_pending_lease() {
         let fixture = Fixture::new();
         env(&fixture, None, true);
         let request = request(TREE_SHA, HELLO_BLOB);
@@ -2848,14 +2841,16 @@ mod tests {
         lease.finish_without_request().unwrap();
         drop(governor);
         let reopened = cache.open_governor().unwrap();
-        assert!(net::acquire(&reopened).is_err());
+        // No latch persists: the next acquisition is admitted after ordinary
+        // request-interval pacing.
+        net::acquire(&reopened).unwrap().finish_without_request().unwrap();
         let state = governor_state(&fixture);
-        assert_eq!(state["safety_latched"], true);
+        assert_eq!(state["safety_latched"], false);
         assert_eq!(state["authentication_armed"], false);
     }
 
     #[test]
-    fn cached_detected_body_latches_without_sending_a_request() {
+    fn cached_detected_body_refuses_without_sending_a_request() {
         let fixture = Fixture::new();
         let server = Server::new(|_, _, _| panic!("cached challenge transmitted a request"));
         env(&fixture, Some(server.address), true);
@@ -2865,15 +2860,15 @@ mod tests {
         cache.save(&response(&url, br#"<input name="captcha">"#, "text/html")).unwrap();
         let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false).err().unwrap();
         assert_eq!(error.code, "safety_latched");
-        // Opening the isolated governor consumes the durable cached marker.
+        // The refusal is per-request only: no durable latch blocks the next
+        // acquisition, which settles cleanly without sending a request.
         let persisted = cache.open_governor().unwrap();
-        assert!(net::acquire(&persisted).is_err());
+        net::acquire(&persisted).unwrap().finish_without_request().unwrap();
         let state = governor_state(&fixture);
-        assert_eq!(state["safety_latched"], true);
+        assert_eq!(state["safety_latched"], false);
         assert_eq!(state["authentication_armed"], false);
         assert_eq!(state["pending"], Value::Null);
         assert_eq!(state["network_failures"], 0);
-        assert_eq!(state["next_request_ms"], 0);
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
@@ -2910,7 +2905,7 @@ mod tests {
         }).err().unwrap();
         assert_eq!(error.code, "safety_latched");
         let state = governor_state(&fixture);
-        assert_eq!(state["safety_latched"], true);
+        assert_eq!(state["safety_latched"], false);
         assert_eq!(state["pending"], Value::Null);
         assert_eq!(state["network_failures"], 0);
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 0);

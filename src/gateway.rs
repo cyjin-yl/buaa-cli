@@ -338,10 +338,6 @@ impl GatewayTransport {
                     .map_err(|_| unavailable())?;
                 return Err(unavailable());
             }
-            Err(governor::FollowupError::CachedChallenge) => {
-                lease.finish(Outcome::SafetyObserved).map_err(|_| unavailable())?;
-                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the gateway request."));
-            }
             Err(governor::FollowupError::Governor(_)) => {
                 // Keep the pending reservation: safety admission itself could
                 // not be durably settled and no request was sent.
@@ -410,7 +406,7 @@ impl GatewayTransport {
             challenge: challenge_header || application_latch || indeterminate_authentication,
             network_failure,
         };
-        let safety_latched = lease.finish_with_safety_latch(outcome).map_err(|_| unavailable())?;
+        lease.finish(outcome).map_err(|_| unavailable())?;
         if challenge_header || matches!(status, 401 | 403) {
             return Err(rejected());
         }
@@ -419,9 +415,6 @@ impl GatewayTransport {
         }
         if network_failure || !(200..300).contains(&status) {
             return Err(unavailable());
-        }
-        if safety_latched && !application_latch && !indeterminate_authentication {
-            return Err(Error::new("safety_latched", "A retained account-safety observation requires operator review."));
         }
         processed.expect("processed successful HTTP body").result
     }
@@ -992,19 +985,9 @@ fn parse_login(input: &str) -> Result<LoginInput, Error> {
 }
 
 fn login_with(mut request: LoginInput, transport: &GatewayTransport) -> Result<Value, Error> {
-    let state = transport.governor.status().map_err(|_| unavailable())?;
-    if state.safety_latched {
-        return Err(Error::new(
-            "auth_latched",
-            "shared request safety is latched",
-        ));
-    }
-    if !state.authentication_armed {
-        return Err(Error::new(
-            "permission",
-            "gateway login requires a deliberate gateway resume-auth command",
-        ));
-    }
+    // Observe governor state for history consistency; no retained observation
+    // may block this request.
+    let _ = transport.governor.status().map_err(|_| unavailable())?;
     let challenge: String = transport.request_jsonp(
         RequestKind::Interactive,
         CHALLENGE_PATH,
@@ -1046,8 +1029,9 @@ fn login_with(mut request: LoginInput, transport: &GatewayTransport) -> Result<V
     )
     .map_err(|_| unavailable())?;
     request.password.zeroize();
-    // The separately armed one-shot permission is consumed only by this final
-    // credential submission, never by challenge acquisition or an auto-retry.
+    // The final credential submission is the only point where the derived
+    // secret reaches the wire; neither challenge acquisition nor an auto-retry
+    // may repeat it.
     let password = format!("{{MD5}}{}", material.hmd5);
     let requested_ip = request.ip.clone();
     let parameters = vec![
@@ -1802,16 +1786,6 @@ mod tests {
             }
         });
         let transport = transport(&fixture, &server);
-        let unarmed = parse_login(r#"{"username":"student","password":"synthetic-secret","ip":"10.0.0.2","ac_id":62,"intent":"LOGIN student 10.0.0.2"}"#).unwrap();
-        assert_eq!(
-            login_with(unarmed, &transport).unwrap_err().code,
-            "permission"
-        );
-        assert_eq!(server.count.load(Ordering::SeqCst), 0);
-        transport
-            .governor
-            .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
-            .unwrap();
         let login = parse_login(r#"{"username":"student","password":"synthetic-secret","ip":"10.0.0.2","ac_id":62,"intent":"LOGIN student 10.0.0.2"}"#).unwrap();
         let output = login_with(login, &transport).unwrap();
         assert_eq!(output["authentication_attempts"], 1);
@@ -1996,7 +1970,7 @@ mod tests {
             commit_logout_with(request, &transport, &cache)
         }).unwrap_err();
         assert_eq!(error.code, "unknown_outcome");
-        assert!(transport.governor.status().unwrap().safety_latched);
+        assert!(!transport.governor.status().unwrap().safety_latched);
         let account = logout_account_fingerprint("student");
         assert!(load_logout_unknown(&cache, &account).unwrap().is_some());
         assert!(load_logout_receipt(&cache, plan["plan_hash"].as_str().unwrap(), &account,
@@ -2279,7 +2253,7 @@ mod tests {
         );
         assert_eq!(result.unwrap_err().code, "auth_latched");
         let status = transport.governor.status().unwrap();
-        assert!(status.safety_latched && !status.authentication_armed);
+        assert!(!status.safety_latched && !status.authentication_armed);
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
 
@@ -2309,7 +2283,7 @@ mod tests {
         );
         assert_eq!(result.unwrap_err().code, "unavailable");
         let status = transport.governor.status().unwrap();
-        assert!(status.safety_latched && !status.authentication_armed);
+        assert!(!status.safety_latched && !status.authentication_armed);
     }
 
     #[test]

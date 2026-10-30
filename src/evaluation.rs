@@ -374,7 +374,6 @@ impl Client {
         let response = match lease.start_request(||request.send()) {
             Ok(Ok(response))=>response,
             Ok(Err(_))=>{ lease.finish(Outcome::NetworkFailure).map_err(Error::Local)?; return Err(Error::Invalid("network failure")); }
-            Err(FollowupError::CachedChallenge)=>{ lease.finish(Outcome::SafetyObserved).map_err(Error::Local)?; return Err(Error::Invalid("shared safety latch observed before request; request not sent")); }
             Err(FollowupError::Governor(_))=>return Err(Error::Invalid("governor request-start admission failed; request not sent; pending reservation retained")),
         };
         let status = response.status().as_u16();

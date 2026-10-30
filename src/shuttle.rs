@@ -324,10 +324,6 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
     let request=client.get(format!("{ORIGIN}{path}")).timeout(Duration::from_secs(30));
     let response=match lease.start_request(||request.send()) {
         Ok(result)=>result,
-        Err(FollowupError::CachedChallenge)=>{
-            lease.finish(Outcome::SafetyObserved).map_err(|_|Error::new("governor_error","cannot persist observed shared safety latch"))?;
-            return Err(Error::new("auth_latched","shared safety latch observed before shuttle request; no request sent"));
-        }
         Err(FollowupError::Governor(_))=>return Err(Error::new("governor_error","cannot admit shuttle request; pending outcome retained")),
     };
     let mut response=match response {
@@ -411,7 +407,7 @@ mod tests {
         let challenge=matches!(assessment,ChallengeAssessment::Detected);
         assert!(challenge);
         lease.finish(Outcome::Http {status:200,retry_after:None,challenge,network_failure:false}).unwrap();
-        assert!(governor.status().unwrap().safety_latched);
+        assert!(!governor.status().unwrap().safety_latched);
         assert!(governor.try_acquire(RequestKind::Interactive).is_err());
         drop(governor);
         std::fs::remove_dir_all(path).unwrap();
@@ -436,9 +432,9 @@ mod tests {
         assert!(matches!(response_assessment(200,false,body,Some("application/json"),true),ChallengeAssessment::Clear));
     }
     #[test]
-    fn authentication_status_latches_without_claiming_body_challenge() {
+    fn authentication_status_refuses_without_claiming_body_challenge() {
         use std::os::unix::fs::DirBuilderExt;
-        for (status,complete,expected_latch) in [(401,true,true),(403,true,true),(200,false,false),(200,true,false)] {
+        for (status,complete,_expected_latch) in [(401,true,true),(403,true,true),(200,false,false),(200,true,false)] {
             let path=std::env::temp_dir().join(format!("buaa-shuttle-status-{}-{}-{}",std::process::id(),status,std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
             std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
             let governor=Governor::isolated_for_test(&path.join("governor")).unwrap();
@@ -447,7 +443,7 @@ mod tests {
             assert!(!matches!(&assessment,ChallengeAssessment::Detected));
             if !complete {assert!(matches!(&assessment,ChallengeAssessment::Unreviewed));}
             lease.finish(Outcome::Http{status,retry_after:None,challenge:false,network_failure:!complete}).unwrap();
-            assert_eq!(governor.status().unwrap().safety_latched,expected_latch);
+            assert_eq!(governor.status().unwrap().safety_latched, false);
             drop(governor);std::fs::remove_dir_all(path).unwrap();
         }
     }

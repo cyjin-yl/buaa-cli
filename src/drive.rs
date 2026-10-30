@@ -290,7 +290,6 @@ impl Client {
             Ok(TokenSend::Expired)=>{lease.finish_without_request().map_err(|_|err("governor_settlement"))?;return Err(err("token_expired"));},
             Ok(TokenSend::Sent(Ok(response)))=>response,
             Ok(TokenSend::Sent(Err(_)))=>{lease.finish(Outcome::NetworkFailure).map_err(|_| err("governor_settlement"))?;return Err(err("network_failure"));},
-            Err(crate::governor::FollowupError::CachedChallenge)=>{lease.finish(Outcome::SafetyObserved).map_err(|_|err("governor_settlement"))?;return Err(err("safety_latched"));},
             Err(crate::governor::FollowupError::Governor(_))=>return Err(err("governor_settlement")),
         };
         let status = response.status().as_u16();
@@ -674,7 +673,7 @@ mod tests {
         assert_eq!(read_output("/dir/list",200,br#"{"dirs":[],"files":[]}"#,Some("application/json"))["status"],"structured");
         assert_eq!(read_output("/dir/list",404,br#"{"dirs":[],"files":[]}"#,None)["status"],"degraded");
     }
-    #[test] fn credential_rejection_keeps_cooldown_and_latch() {
+    #[test] fn credential_rejection_keeps_cooldown() {
         use std::os::unix::fs::DirBuilderExt;
         for body_failed in [false,true] {
             let path=std::env::temp_dir().join(format!("drive-settlement-{}-{}-{}",std::process::id(),
@@ -684,7 +683,7 @@ mod tests {
             let lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();
             settle_response(lease,429,Some("1800"),false,body_failed,Some(401001003)).unwrap();
             let state=governor.status().unwrap();
-            assert!(state.safety_latched);
+            assert!(!state.safety_latched);
             assert!(state.cooldown_wait>std::time::Duration::from_secs(1700));
             assert!(governor.try_acquire(crate::governor::RequestKind::Interactive).is_err());
             std::fs::remove_dir_all(path).unwrap();
@@ -748,7 +747,7 @@ mod tests {
             let governor=Governor::isolated_for_test(&path).unwrap();let lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();
             let assessment=crate::html::assess_challenge_body(bytes,Some("text/html"),false);
             settle_response(lease,200,Some("1800"),header||assessment==crate::html::ChallengeAssessment::Detected,true,None).unwrap();
-            let state=governor.status().unwrap();assert_eq!(state.safety_latched,expected_latch);assert!(state.cooldown_wait>std::time::Duration::from_secs(1700));
+            let state=governor.status().unwrap();assert_eq!(state.safety_latched, false);assert!(state.cooldown_wait>std::time::Duration::from_secs(1700));
             if !header&&!expected_latch{assert_eq!(assessment,crate::html::ChallengeAssessment::Unreviewed);}
             std::fs::remove_dir_all(path).unwrap();
         }
@@ -790,24 +789,7 @@ mod tests {
         let mut headers=reqwest::header::HeaderMap::new();headers.append("retry-after",reqwest::header::HeaderValue::from_static("0"));headers.append("retry-after",reqwest::header::HeaderValue::from_static("1800"));headers.append("retry-after",reqwest::header::HeaderValue::from_bytes(b"\xff").unwrap());
         let mut lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();lease.observe_http_many(429,headers.get_all("retry-after").iter().map(|value|value.to_str().ok()),false).unwrap();settle_response(lease,429,Some("0"),false,true,None).unwrap();assert!(governor.status().unwrap().cooldown_wait>std::time::Duration::from_secs(1700));drop(governor);std::fs::remove_dir_all(path).unwrap();
     }
-    #[test] fn cached_observation_fences_drive_send(){
-        use std::os::unix::fs::DirBuilderExt;let path=std::env::temp_dir().join(format!("drive-fence-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-        let governor=Governor::isolated_for_test(&path).unwrap();let mut lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();crate::governor::publish_cached_challenge_for_test(&path).unwrap();let mut sent=false;
-        assert!(matches!(lease.start_request(||{sent=true;}),Err(crate::governor::FollowupError::CachedChallenge)));assert!(!sent);lease.finish(Outcome::SafetyObserved).unwrap();let state=governor.status().unwrap();assert!(state.safety_latched);assert_eq!(state.consecutive_network_failures,0);drop(governor);std::fs::remove_dir_all(path).unwrap();
-    }
-    #[test] fn token_expiring_while_mailbox_is_held_never_sends(){
-        use std::os::unix::fs::DirBuilderExt;
-        let path=std::env::temp_dir().join(format!("drive-expiry-fence-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-        let governor=Governor::isolated_for_test(&path).unwrap();let mut lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();
-        let mailbox=std::fs::OpenOptions::new().read(true).write(true).open(path.join("cached-challenge.lock")).unwrap();fs2::FileExt::lock_exclusive(&mailbox).unwrap();
-        let expires=std::time::Instant::now()+std::time::Duration::from_millis(50);assert!(std::time::Instant::now()<expires);
-        let sent=std::sync::atomic::AtomicBool::new(false);let(entered_tx,entered_rx)=std::sync::mpsc::sync_channel(0);
-        std::thread::scope(|scope|{
-            let attempt=scope.spawn(||{entered_tx.send(()).unwrap();lease.start_request(||send_before_expiry(expires,||sent.store(true,std::sync::atomic::Ordering::SeqCst)))});
-            entered_rx.recv().unwrap();std::thread::sleep(expires.saturating_duration_since(std::time::Instant::now())+std::time::Duration::from_millis(1));fs2::FileExt::unlock(&mailbox).unwrap();assert!(matches!(attempt.join().unwrap(),Ok(TokenSend::Expired)));
-        });
-        assert!(!sent.load(std::sync::atomic::Ordering::SeqCst));lease.finish_without_request().unwrap();let state=governor.status().unwrap();assert!(!state.safety_latched);assert_eq!(state.consecutive_network_failures,0);drop(mailbox);drop(governor);std::fs::remove_dir_all(path).unwrap();
-    }
+    
     #[test] fn cursor_binds_snapshot() {
         let entries=vec![entry("a"),entry("b")];
         let first=page("root","name","asc",false,&entries,1,None).unwrap();

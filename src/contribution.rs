@@ -383,10 +383,6 @@ impl<'g> GithubReader<'g> {
                 let settled = lease.finish(Outcome::NetworkFailure);
                 return Err(fail(if settled.is_ok() { "github_transport_failed" } else { "github_outcome_unrecorded" }));
             }
-            Err(crate::governor::FollowupError::CachedChallenge) => {
-                let settled = lease.finish(Outcome::SafetyObserved);
-                return Err(fail(if settled.is_ok() { "safety_latched" } else { "github_outcome_unrecorded" }));
-            }
             Err(crate::governor::FollowupError::Governor(_)) => {
                 // No request was admitted. Keep the pending reservation for
                 // conservative reconciliation instead of inventing an outcome.
@@ -1534,7 +1530,7 @@ mod tests {
                 network_failure:true }).unwrap();
             let state = governor.status().unwrap();
             assert!(state.cooldown_wait > std::time::Duration::from_secs(1700));
-            assert_eq!(state.safety_latched, challenge);
+            assert_eq!(state.safety_latched, false);
             assert!(governor.try_acquire(crate::governor::RequestKind::Interactive).is_err());
         }
     }

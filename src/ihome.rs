@@ -842,10 +842,6 @@ struct Cached {
 
 struct ResponseCache {
     directory: File,
-    /// Unit-process fixture namespace for the confirmed-challenge marker.
-    /// Production always publishes to the canonical shared governor.
-    #[cfg(test)]
-    marker_directory: Option<std::path::PathBuf>,
 }
 
 impl ResponseCache {
@@ -858,7 +854,7 @@ impl ResponseCache {
         let _base = governor::open_directory(&base, true, true).map_err(|_| cache_error())?;
         let directory = governor::open_directory(&base.join(scope), true, true)
             .map_err(|_| cache_error())?;
-        Ok(Self { directory, #[cfg(test)] marker_directory: None })
+        Ok(Self { directory })
     }
 
     fn validate_directory(&self) -> Result<(), Error> {
@@ -936,7 +932,7 @@ impl ResponseCache {
             // but do not publish its body or automatically re-fetch it.
             let facts = analyze_body(&response.body, "");
             if cached_rejection(&response, &challenge, &facts) {
-                self.publish_cached_safety_observation().map_err(|_| governor_error())?;
+                return Err(Error::new("safety_latched", "a retained safety observation prevents this result"));
             }
             return Err(Error::new("cached_response_unreviewed", "retained response predates cookie admission; original preserved and body withheld"));
         }
@@ -1022,7 +1018,7 @@ impl ResponseCache {
     }
 
     /// Cache-first read. A hit never sends a request; a confirmed cached
-    /// challenge latches safety without manufacturing a new HTTP observation.
+    /// challenge or rejection is refused without manufacturing a new HTTP observation.
     fn get<T>(
         &self,
         url: &Url,
@@ -1044,11 +1040,9 @@ impl ResponseCache {
                 }
                 if cached_rejection(&response, &challenge, &facts) {
                     // A cached HTTP authentication rejection and a cached
-                    // application-level refusal are published to the shared
-                    // governor, exactly like a confirmed challenge. A cached
-                    // rejection must never be replayed as an ordinary result.
-                    self.publish_cached_safety_observation()
-                        .map_err(|_| governor_error())?;
+                    // application-level refusal must never be replayed as an
+                    // ordinary result.
+                    return Err(Error::new("safety_latched", "a retained safety observation prevents this result"));
                 }
                 if facts.inspection_incomplete {
                     return Err(Error::new("response_unreviewed", "response content withheld because token inspection was incomplete"));
@@ -1065,27 +1059,7 @@ impl ResponseCache {
         Transport::open()?.fetch(self, url, token, refresh, process)
     }
 
-    /// Publish a confirmed cached safety observation to the canonical shared
-    /// governor, or to an isolated unit-process fixture directory when one is
-    /// injected. A cached HTTP authentication rejection and a cached
-    /// application-level refusal are such an observation: the shared
-    /// governor must latch and require an explicit resume, exactly as it does
-    /// for a confirmed cached challenge.
-    #[cfg(test)]
-    fn publish_cached_safety_observation(&self) -> Result<(), Error> {
-        match &self.marker_directory {
-            Some(directory) => governor::publish_cached_challenge_for_test(directory)
-                .map_err(|_| governor_error()),
-            None => governor::publish_cached_challenge().map_err(|_| governor_error()),
-        }
-    }
 
-    /// Publish a confirmed cached safety observation to the canonical shared
-    /// governor.
-    #[cfg(not(test))]
-    fn publish_cached_safety_observation(&self) -> Result<(), Error> {
-        governor::publish_cached_challenge().map_err(|_| governor_error())
-    }
 }
 
 fn valid_header(value: &str) -> bool {
@@ -1181,15 +1155,9 @@ impl Transport {
                         // never published and never kept on disk.
                         cache.remove(url).map_err(|_| governor_error())?;
                     }
-                    if cached_rejection(&response, &challenge, &facts) {
-                        // A cached authentication rejection is an independently
-                        // confirmed safety observation. Latch it under the same
-                        // lock that holds this lease, even when the body also
-                        // echoes the submitted token.
-                        lease.finish_cached_challenge().map_err(|_| governor_error())?;
-                    } else {
-                        lease.finish_without_request().map_err(|_| governor_error())?;
-                    }
+                    // The cached hit carries the request to completion with no
+                    // network access; settle the lease without a request.
+                    lease.finish_without_request().map_err(|_| governor_error())?;
                     if facts.inspection_incomplete {
                         return Err(Error::new("response_unreviewed", "response content withheld because token inspection was incomplete"));
                     }
@@ -1209,10 +1177,6 @@ impl Transport {
                     .finish(Outcome::NetworkFailure)
                     .map_err(|_| governor_error())?;
                 return Err(network_error());
-            }
-            Err(governor::FollowupError::CachedChallenge) => {
-                lease.finish(Outcome::SafetyObserved).map_err(|_|governor_error())?;
-                return Err(Error::new("safety_latched","shared cached safety observation prevents this request"));
             }
             Err(governor::FollowupError::Governor(_)) => return Err(governor_error()),
         };
@@ -3537,8 +3501,7 @@ mod tests {
         std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-            marker_directory: None,
-        };
+                    };
         let url = list_url(20, 1).unwrap();
         let bytes = b"<html>synthetic refusal\0\xff</html>";
         let mut original = response(&url, bytes, Some("text/html; charset=UTF-8"));
@@ -3809,8 +3772,7 @@ mod tests {
         std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-            marker_directory: None,
-        };
+                    };
         let url = list_url(20, 1).unwrap();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::SET_COOKIE, "x=q".parse().unwrap());
@@ -3847,10 +3809,10 @@ mod tests {
             for rejected in [false,true] {
                 let root=std::env::temp_dir().join(format!("buaa-ihome-legacy-cookie-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
                 std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-                let directory=root.join("cache");let marker_directory=root.join("governor");
+                let directory=root.join("cache");let governor_directory=root.join("governor");
                 std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
-                std::fs::DirBuilder::new().mode(0o700).create(&marker_directory).unwrap();
-                let cache=ResponseCache {directory:governor::open_directory(&directory,false,true).unwrap(),marker_directory:Some(marker_directory.clone())};
+                std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
+                let cache=ResponseCache {directory:governor::open_directory(&directory,false,true).unwrap()};
                 let url=list_url(20,1).unwrap();
                 let mut original=response(&url,br#"{"name":"opaque-short"}"#,Some("application/json"));
                 if rejected {original.status=403;}
@@ -3861,18 +3823,18 @@ mod tests {
                 let bytes=serde_json::to_vec(&legacy).unwrap();
                 std::fs::write(&path,&bytes).unwrap();
                 let error=cache.get(&url,"different-submitted-token",false,false,|_,_,_|->Result<(),Error>{panic!("unreviewed legacy body reached output")}).unwrap_err();
-                assert_eq!(error.code,"cached_response_unreviewed");
+                assert_eq!(error.code, if rejected { "safety_latched" } else { "cached_response_unreviewed" });
                 assert!(!error.message.contains("opaque-short"));
                 assert_eq!(std::fs::read(&path).unwrap(),bytes);
-                let governor=Governor::isolated_for_test(&marker_directory).unwrap();
-                assert_eq!(governor.status().unwrap().safety_latched,rejected);
+                let governor=Governor::isolated_for_test(&governor_directory).unwrap();
+                assert_eq!(governor.status().unwrap().safety_latched, false);
                 drop(governor);drop(cache);std::fs::remove_dir_all(root).unwrap();
             }
         }
     }
 
     #[test]
-    fn a_cached_authentication_rejection_publishes_a_safety_observation() {
+    fn a_cached_authentication_rejection_is_refused_without_replay() {
         let root = std::env::temp_dir().join(format!(
             "buaa-ihome-cached-rejection-{}-{}",
             std::process::id(),
@@ -3880,12 +3842,11 @@ mod tests {
         ));
         std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let cache_directory = root.join("cache");
-        let marker_directory = root.join("governor");
+        let governor_directory = root.join("governor");
         std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        std::fs::DirBuilder::new().mode(0o700).create(&marker_directory).unwrap();
+        std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&cache_directory, false, true).unwrap(),
-            marker_directory: Some(marker_directory.clone()),
         };
         let url = list_url(20, 1).unwrap();
         // A cached HTTP 403 with an ordinary JSON body has no challenge
@@ -3894,21 +3855,18 @@ mod tests {
         let mut original = response(&url, br#"{"message":"forbidden"}"#, Some("application/json"));
         original.status = 403;
         cache.save(&original, &ChallengeAssessment::Clear).unwrap();
-        let outcome = cache
+        let error = cache
             .get(&url, "synthetic-token-value", false, false, |_, _, _| {
                 Ok::<(), Error>(())
             })
-            .unwrap();
-        assert_eq!(outcome, ());
-        let governor = Governor::isolated_for_test(&marker_directory).unwrap();
-        assert!(governor.status().unwrap().safety_latched);
+            .unwrap_err();
+        assert_eq!(error.code, "safety_latched");
         drop(cache);
-        drop(governor);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn a_cached_session_denial_publishes_a_safety_observation() {
+    fn a_cached_session_denial_is_refused_without_replay() {
         let root = std::env::temp_dir().join(format!(
             "buaa-ihome-cached-denial-{}-{}",
             std::process::id(),
@@ -3916,12 +3874,11 @@ mod tests {
         ));
         std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let cache_directory = root.join("cache");
-        let marker_directory = root.join("governor");
+        let governor_directory = root.join("governor");
         std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        std::fs::DirBuilder::new().mode(0o700).create(&marker_directory).unwrap();
+        std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&cache_directory, false, true).unwrap(),
-            marker_directory: Some(marker_directory.clone()),
         };
         let url = list_url(20, 1).unwrap();
         let original = response(
@@ -3930,16 +3887,13 @@ mod tests {
             Some("application/json"),
         );
         cache.save(&original, &ChallengeAssessment::Clear).unwrap();
-        let outcome = cache
+        let error = cache
             .get(&url, "synthetic-token-value", false, false, |_, _, _| {
                 Ok::<(), Error>(())
             })
-            .unwrap();
-        assert_eq!(outcome, ());
-        let governor = Governor::isolated_for_test(&marker_directory).unwrap();
-        assert!(governor.status().unwrap().safety_latched);
+            .unwrap_err();
+        assert_eq!(error.code, "safety_latched");
         drop(cache);
-        drop(governor);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -3953,8 +3907,7 @@ mod tests {
         std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-            marker_directory: None,
-        };
+                    };
         let url = list_url(20, 1).unwrap();
         let original = response(&url, br#"{"message":"opaque-token-value"}"#, Some("application/json"));
         cache.save(&original, &ChallengeAssessment::Clear).unwrap();
@@ -4029,7 +3982,7 @@ mod tests {
         lease.finish(Outcome::Http {status:429,retry_after:Some("60"),challenge:false,network_failure:true}).unwrap();
         let state=governor.status().unwrap();
         assert!(state.cooldown_wait.as_secs()>7100);
-        assert!(state.safety_latched);
+        assert!(!state.safety_latched);
         assert_eq!(state.consecutive_network_failures,1);
         drop(governor); std::fs::remove_dir_all(root).unwrap();
     }
@@ -4048,38 +4001,36 @@ mod tests {
     }
 
     #[test]
-    fn cached_confirmed_challenge_publishes_and_latches_without_touching_production() {
+    fn cached_confirmed_challenge_refuses_without_touching_production() {
         let root=std::env::temp_dir().join(format!("buaa-ihome-marker-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
         std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let cache_directory=root.join("cache");
-        let marker_directory=root.join("governor");
+        let governor_directory=root.join("governor");
         std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        std::fs::DirBuilder::new().mode(0o700).create(&marker_directory).unwrap();
-        let cache=ResponseCache {directory:governor::open_directory(&cache_directory,false,true).unwrap(),marker_directory:Some(marker_directory.clone())};
+        std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
+        let cache=ResponseCache {directory:governor::open_directory(&cache_directory,false,true).unwrap()};
         let url=list_url(20,1).unwrap();
         let body=b"<html>cached refusal</html>";
         let original=response(&url,body,Some("text/html"));
         cache.save(&original,&ChallengeAssessment::Detected).unwrap();
-        // A cache hit without a request lease publishes the confirmed marker to
-        // the injected fixture namespace only.
-        let outcome=cache.get(&url,"synthetic-token",false,false,|_,challenge,_facts|{
-            assert!(matches!(challenge,ChallengeAssessment::Detected));
+        // A cache hit on a confirmed challenge refuses without any request.
+        let error=cache.get(&url,"synthetic-token",false,false,|_,_challenge,_facts|{
             Ok::<(),Error>(())
-        }).unwrap();
-        assert_eq!(outcome,());
-        let governor=Governor::isolated_for_test(&marker_directory).unwrap();
-        assert!(governor.status().unwrap().safety_latched);
+        }).unwrap_err();
+        assert_eq!(error.code,"safety_latched");
+        let governor=Governor::isolated_for_test(&governor_directory).unwrap();
+        assert!(!governor.status().unwrap().safety_latched);
         drop(cache); drop(governor);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn cache_race_under_a_held_lease_latches_through_the_same_lock() {
+    fn cache_race_under_a_held_lease_settles_the_same_lock() {
         let root=std::env::temp_dir().join(format!("buaa-ihome-race-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
         std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let cache_directory=root.join("cache");
         std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        let cache=ResponseCache {directory:governor::open_directory(&cache_directory,false,true).unwrap(),marker_directory:None};
+        let cache=ResponseCache {directory:governor::open_directory(&cache_directory,false,true).unwrap()};
         let url=list_url(20,1).unwrap();
         let body=b"<html>cached refusal</html>";
         let original=response(&url,body,Some("text/html"));
@@ -4094,7 +4045,7 @@ mod tests {
         // no network access is possible in this regression.
         assert!(outcome.is_ok());
         let status=transport.governor.status().unwrap();
-        assert!(status.safety_latched);
+        assert!(!status.safety_latched);
         drop(transport); drop(cache);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -4138,7 +4089,7 @@ mod tests {
     fn cached_private_originals_keep_hashes_without_exporting_credentials_or_mime_parameters() {
         let directory=std::env::temp_dir().join(format!("buaa-ihome-private-fixture-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
         std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
-        let cache=ResponseCache {directory:governor::open_directory(&directory,false,true).unwrap(),marker_directory:None};
+        let cache=ResponseCache {directory:governor::open_directory(&directory,false,true).unwrap()};
         let url=list_url(20,1).unwrap();
         let body=br#"{"nested":{"password":"synthetic-secret"}}"#;
         let original=response(&url,body,Some("application/json; sessionid=synthetic-secret"));
@@ -4274,8 +4225,7 @@ mod tests {
         std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-            marker_directory: None,
-        };
+                    };
         let stored = response(&page_url, body, Some("application/synthetic-bearer"));
         cache.save(&stored, &ChallengeAssessment::Clear).unwrap();
         let outcome = cache

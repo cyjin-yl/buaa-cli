@@ -167,10 +167,6 @@ pub fn read_stdin(input: &str, online: bool) -> Result<Value, Error> {
     let request=client.get(url).header(reqwest::header::COOKIE,header).timeout(std::time::Duration::from_secs(30));
     let response=match lease.start_request(||request.send()) {
         Ok(result)=>result,
-        Err(FollowupError::CachedChallenge)=>{
-            lease.finish(Outcome::SafetyObserved).map_err(|_|Error::new("governor_error","cannot persist observed shared safety latch"))?;
-            return Err(Error::new("auth_latched","shared safety latch observed before OS lab request; no request sent"));
-        }
         Err(FollowupError::Governor(_))=>return Err(Error::new("governor_error","cannot admit OS lab request; pending outcome retained")),
     };
     let mut response = match response {

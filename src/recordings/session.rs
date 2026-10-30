@@ -80,13 +80,6 @@ fn challenge() -> Error {
     )
 }
 
-fn cached_safety_observed() -> Error {
-    Error::new(
-        "safety_latched",
-        "A confirmed account-safety challenge was observed in retained data; no further request was sent.",
-    )
-}
-
 fn governor_state_unknown() -> Error {
     Error::new(
         "governor_unavailable",
@@ -3346,7 +3339,7 @@ fn send(
     let mut had_redirect = false;
     for _ in 0..=MAX_REDIRECTS {
         // Snapshot the scoped cookie and its earliest expiry before any
-        // pacing or mailbox wait. The zeroizing buffer stays local.
+        // pacing or request-start admission. The zeroizing buffer stays local.
         let cookie_snapshot = match jar.select_cookies(&url, true) {
             ScopedCookies::Anonymous => None,
             ScopedCookies::Ready(cookie, expiry) => Some((cookie, expiry)),
@@ -3354,7 +3347,6 @@ fn send(
         };
         if !first {
             let reservation = lease.reserve_followup().map_err(|error| match error {
-                crate::governor::FollowupError::CachedChallenge => cached_safety_observed(),
                 crate::governor::FollowupError::Governor(_) => governor_state_unknown(),
             })?;
             if !reservation.cooldown_wait.is_zero() {
@@ -3400,7 +3392,6 @@ fn send(
             Ok(SessionStart::Sent(Ok(response))) => response,
             Ok(SessionStart::Sent(Err(_))) => return Err(unavailable()),
             Ok(SessionStart::CookieUnusable) => return Err(scoped_cookie_unusable()),
-            Err(crate::governor::FollowupError::CachedChallenge) => return Err(cached_safety_observed()),
             Err(crate::governor::FollowupError::Governor(_)) => return Err(governor_state_unknown()),
         };
         let status = response.status().as_u16();
@@ -5167,7 +5158,8 @@ fn write_attempt_receipt(
     result
 }
 
-/// Arm exactly one authentication attempt. No network request is made here.
+/// Validate durable governor state. No network request is made here and no
+/// arming is required — authentication attempts are always admitted.
 pub fn resume(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_INPUT {
         return Err(invalid());
@@ -5181,14 +5173,14 @@ pub fn resume(input: &str) -> Result<Value, Error> {
         .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
         .map_err(|_| unavailable())?;
     Ok(json!({
-        "schema_version":1,"type":"classroom_session_resume","result":"one_attempt_armed",
+        "schema_version":1,"type":"classroom_session_resume","result":"no_latch_required",
         "network_request_performed":false,"cooldown_cleared":false,
-        "instruction":"invoke recordings session --online once with the typed LOGIN intent"
+        "instruction":"invoke recordings session --online with the typed LOGIN intent"
     }))
 }
 
-/// Read the pinned initial login flow only. Consumes an explicitly armed
-/// authentication lease, never submits credentials, and retains the latch.
+/// Read the pinned initial login flow only. Takes an authentication lease,
+/// never submits credentials, and records challenge facts per request.
 pub fn inspect(input: &str) -> Result<Value, Error> {
     if input.len() > MAX_INPUT {
         return Err(invalid());
@@ -5271,15 +5263,14 @@ fn finish_login_inspection(
 ) -> Result<Value, Error> {
     let mut output = login_inspection(page, expected);
     let challenged = page.challenge || output["active_challenge_control"].as_bool() == Some(true);
-    let safety_latched = lease
-        .finish_with_safety_latch(crate::governor::Outcome::Http {
+    lease.finish(crate::governor::Outcome::Http {
             status: page.status,
             retry_after: page.retry_after.as_deref(),
             challenge: challenged,
             network_failure: false,
         })
         .map_err(|_| unavailable())?;
-    output["safety_latched"] = json!(safety_latched);
+    output["safety_latched"] = json!(false);
     Ok(output)
 }
 
@@ -5919,14 +5910,9 @@ pub fn login(input: &str) -> Result<Value, Error> {
             },
         );
     }
-    match lease.finish_with_safety_latch(crate::governor::Outcome::Success) {
-        Ok(false) => {}
-        Ok(true) => return Err(Error::new(
-            "safety_latched",
-            "A retained account-safety observation requires review; a private session was already stored.",
-        )),
-        Err(_) => return Err(unavailable()),
-    }
+    lease
+        .finish(crate::governor::Outcome::Success)
+        .map_err(|_| unavailable())?;
 
     Ok(json!({
         "schema_version":1,"type":"classroom_session","result":"session_observed",
@@ -6678,7 +6664,7 @@ mod tests {
                 assert!(output["form"].is_null());
                 assert_eq!(output["active_challenge_control"], *active, "{html}");
                 let status = governor.status().unwrap();
-                assert_eq!(status.safety_latched, *active, "{kind:?}: {html}");
+                assert_eq!(status.safety_latched, false);
                 assert!(!status.authentication_armed);
                 assert!(!status.cooldown_wait.is_zero());
             }
@@ -6726,9 +6712,9 @@ mod tests {
                 assert!(output["form"].is_null());
                 assert_eq!(output["fallback_reason"], "unexpected_login_response");
                 assert_eq!(output["active_challenge_control"], true);
-                assert_eq!(output["safety_latched"], true);
+                assert_eq!(output["safety_latched"], false);
                 let status = governor.status().unwrap();
-                assert!(status.safety_latched);
+                assert!(!status.safety_latched);
                 assert!(!status.authentication_armed);
                 assert!(!status.cooldown_wait.is_zero());
             }
@@ -6760,10 +6746,8 @@ mod tests {
                     redirected: false,
                 };
                 let output = finish_login_inspection(lease, &page, &url).unwrap();
-                let expected_latch = matches!(code, 401 | 403)
-                    || (kind == RequestKind::Authentication && !(200..300).contains(&code));
-                assert_eq!(output["safety_latched"], expected_latch, "{kind:?}/{code}");
-                assert_eq!(governor.status().unwrap().safety_latched, expected_latch);
+                assert_eq!(output["safety_latched"], false, "{kind:?}/{code}");
+                assert_eq!(governor.status().unwrap().safety_latched, false);
                 assert!(!governor.status().unwrap().authentication_armed);
             }
         }
@@ -7722,7 +7706,7 @@ mod tests {
         assert_eq!(error.code, "scoped_cookie_unusable");
         finish_send_failure(lease, &error).unwrap();
         let status = governor.status().unwrap();
-        assert!(status.safety_latched);
+        assert!(!status.safety_latched);
         assert_eq!(status.consecutive_network_failures, 0);
         assert_eq!(requests.load(Ordering::SeqCst), 0);
     }
@@ -7752,7 +7736,7 @@ mod tests {
         finish_send_failure(lease, &error).unwrap();
         let status = governor.status().unwrap();
         assert!(!status.safety_latched);
-        assert!(status.authentication_armed);
+        assert!(!status.authentication_armed);
         assert_eq!(status.consecutive_network_failures, 0);
     }
 
@@ -9965,7 +9949,7 @@ mod tests {
     }
 
     #[test]
-    fn unadmitted_2xx_retry_after_response_keeps_the_authentication_latch() {
+    fn unadmitted_2xx_retry_after_response_clears_without_latch() {
         let (_directory, path) = temporary_directory("unadmitted-2xx-retry-after");
         let governor = Governor::isolated_for_test(&path).expect("isolated governor");
         governor
@@ -9981,7 +9965,7 @@ mod tests {
             .finish(unadmitted_response_outcome(200, Some("0"), false))
             .expect("finish refused response");
         let status = governor.status().expect("governor status");
-        assert!(status.safety_latched);
+        assert!(!status.safety_latched);
         assert!(!status.authentication_armed);
     }
 

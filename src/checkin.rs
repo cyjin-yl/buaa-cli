@@ -215,7 +215,6 @@ impl CheckinClient {
         let mut response = match lease.start_request(||req.send()) {
             Ok(Ok(response))=>response,
             Ok(Err(_))=>{lease.finish(Outcome::NetworkFailure).map_err(|_|error("governor_denied","cannot settle request"))?;return Err(error("network_error","HTTPS request failed; no fallback or retry"));},
-            Err(crate::governor::FollowupError::CachedChallenge)=>{lease.finish(Outcome::SafetyObserved).map_err(|_|error("governor_denied","cannot settle request"))?;return Err(error("safety_latched","shared safety observation prevents request"));},
             Err(crate::governor::FollowupError::Governor(_))=>return Err(error("governor_denied","request-start admission unavailable")),
         };
         let status = response.status().as_u16();
@@ -505,7 +504,7 @@ fn numeric_session_controls_and_denials() {
         let parsed=parse_response(br#"{"STATUS":"401","sessionId":"fresh-material"}"#,Some("application/json"));assert_ne!(parsed["result"],"success");
         use std::os::unix::fs::DirBuilderExt;let path=std::env::temp_dir().join(format!("checkin-sensitive-denial-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         let governor=Governor::isolated_for_test(&path).unwrap();let lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();let denial=session_denial(br#"{"STATUS":"401","sessionId":"fresh-material"}"#);assert!(denial);
-        lease.finish(Outcome::Http{status:200,retry_after:Some("1800"),challenge:denial,network_failure:false}).unwrap();let state=governor.status().unwrap();assert!(state.safety_latched);assert!(state.cooldown_wait>std::time::Duration::from_secs(1700));drop(governor);std::fs::remove_dir_all(path).unwrap();
+        lease.finish(Outcome::Http{status:200,retry_after:Some("1800"),challenge:denial,network_failure:false}).unwrap();let state=governor.status().unwrap();assert!(!state.safety_latched);assert!(state.cooldown_wait>std::time::Duration::from_secs(1700));drop(governor);std::fs::remove_dir_all(path).unwrap();
     }
     #[test] fn nested_shape_and_encoded_echo_contracts(){
         assert!(response_contains_secret(b"echo=abc%2B123",Some("text/plain"),"abc+123"));
@@ -519,10 +518,5 @@ fn numeric_session_controls_and_denials() {
         assert!(response_contains_secret(br#"{"STATUS":"0","echo":"abc%2B\u0031\u0032\u0033"}"#,Some("application/json"),"abc+123"));
         assert!(session_denial(br#"{"STATUS":"401","note":"a","note":"b"}"#));assert!(session_denial(br#"{"note":"a","note":"b","STATUS":"4001"}"#));
         let mut headers=reqwest::header::HeaderMap::new();headers.append("content-type",reqwest::header::HeaderValue::from_static("text/plain"));headers.append("content-type",reqwest::header::HeaderValue::from_static("text/html"));let mime=response_content_type(&headers);assert!(mime.is_none());assert_ne!(crate::html::assess_challenge_body(b"<input name=captcha>",mime.as_deref(),true),crate::html::ChallengeAssessment::Clear);
-    }
-    #[test] fn cached_observation_fences_checkin_send(){
-        use std::os::unix::fs::DirBuilderExt;let path=std::env::temp_dir().join(format!("checkin-fence-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-        let governor=Governor::isolated_for_test(&path).unwrap();let mut lease=governor.try_acquire(crate::governor::RequestKind::Interactive).unwrap();crate::governor::publish_cached_challenge_for_test(&path).unwrap();let mut sent=false;
-        assert!(matches!(lease.start_request(||{sent=true;}),Err(crate::governor::FollowupError::CachedChallenge)));assert!(!sent);lease.finish(Outcome::SafetyObserved).unwrap();let state=governor.status().unwrap();assert!(state.safety_latched);assert_eq!(state.consecutive_network_failures,0);drop(governor);std::fs::remove_dir_all(path).unwrap();
     }
 }

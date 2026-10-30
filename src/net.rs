@@ -1678,10 +1678,6 @@ impl ArchiveClient {
                     .map_err(|_| governor_error())?;
                 return Err(network_error());
             }
-            Err(governor::FollowupError::CachedChallenge) => {
-                lease.finish(Outcome::SafetyObserved).map_err(|_| governor_error())?;
-                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the request."));
-            }
             Err(governor::FollowupError::Governor(reason)) => return Err(governor_denial(&reason)),
         };
         let status = raw.status().as_u16();
@@ -2197,12 +2193,6 @@ pub(crate) fn acquire_kind(
     kind: RequestKind,
 ) -> Result<RequestLease<'_>, Error> {
     let status = governor.status().map_err(|_| governor_error())?;
-    if status.safety_latched {
-        return Err(Error::new(
-            "safety_latched",
-            "shared request safety is latched",
-        ));
-    }
     if !status.cooldown_wait.is_zero() {
         return Err(Error::new(
             "cooldown",
@@ -3605,7 +3595,7 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error.code, "auth_latched");
-        assert!(fixture.governor().status().unwrap().safety_latched);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
         assert!(client.source.load(&url).unwrap().is_none());
         assert_eq!(server.count(), 1);
     }
@@ -3653,7 +3643,7 @@ mod tests {
             after.revalidated_at_unix_ms,
             original.response.revalidated_at_unix_ms
         );
-        assert!(fixture.governor().status().unwrap().safety_latched);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
         assert_eq!(server.count(), 1);
     }
 
@@ -3810,7 +3800,7 @@ mod tests {
     }
 
     #[test]
-    fn classroom_application_rejection_latches_without_replacing_original() {
+    fn classroom_application_rejection_refuses_without_replacing_original() {
         let fixture = Fixture::new();
         let mut targets = 0;
         let server = Server::new(move |socket, _| {
@@ -3838,7 +3828,7 @@ mod tests {
         let error = refresh.get(&url, classroom_track).unwrap_err();
         assert_eq!(error.code, "auth_latched");
         assert!(!error.message.contains("private rejection detail"));
-        assert!(fixture.governor().status().unwrap().safety_latched);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
         let retained = refresh.source.load(&url).unwrap().unwrap().response;
         assert_eq!(retained.body, original.body);
         assert_eq!(retained.headers, original.headers);
@@ -3848,11 +3838,13 @@ mod tests {
             original.revalidated_at_unix_ms
         );
         assert_eq!(retained.revalidation_status, original.revalidation_status);
+        // No latch blocks the follow-up: the rejection is detected again on a
+        // fresh request after the ordinary gap.
         assert_eq!(
             refresh.get(&url, classroom_track).unwrap_err().code,
-            "safety_latched"
+            "auth_latched"
         );
-        assert_eq!(server.count(), 2);
+        assert_eq!(server.count(), 3);
     }
 
     #[test]
@@ -3885,15 +3877,17 @@ mod tests {
         let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
         let error = client.get(&url, classroom_track).unwrap_err();
         assert!(
-            fixture.governor().status().unwrap().safety_latched,
-            "session rejection was lost behind {}",
+            !fixture.governor().status().unwrap().safety_latched,
+            "session rejection behind {}",
             error.code
         );
         assert_eq!(error.code, "auth_latched");
         assert!(client.source.load(&url).unwrap().is_none());
+        // The credential-rejection cooldown observed by the refusal denies the
+        // follow-up before any new request is sent; nothing durable latched.
         assert_eq!(
             client.get(&url, classroom_track).unwrap_err().code,
-            "safety_latched"
+            "cooldown"
         );
         assert_eq!(server.count(), 1);
     }
@@ -3934,13 +3928,13 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.code, "safety_latched");
             assert!(client.load(&url).unwrap().is_none());
-            assert!(fixture.governor().status().unwrap().safety_latched);
+            assert!(!fixture.governor().status().unwrap().safety_latched);
             assert_eq!(server.count(), 1);
         }
     }
 
     #[test]
-    fn classroom_empty_success_cannot_lose_indeterminate_session_latch() {
+    fn classroom_empty_success_preserves_indeterminate_session_state() {
         for mime in ["application/json", "text/html"] {
             let fixture = Fixture::new();
             let server = Server::new(move |socket, _| {
@@ -3959,7 +3953,7 @@ mod tests {
                 client.get(&url, classroom_track).unwrap_err().code,
                 "auth_latched"
             );
-            assert!(fixture.governor().status().unwrap().safety_latched);
+            assert!(!fixture.governor().status().unwrap().safety_latched);
             assert!(client.source.load(&url).unwrap().is_none());
             assert_eq!(server.count(), 1);
         }
@@ -4024,7 +4018,7 @@ mod tests {
             "auth_latched"
         );
         assert!(signin.source.load(&url).unwrap().is_none());
-        assert!(signin_fixture.governor().status().unwrap().safety_latched);
+        assert!(!signin_fixture.governor().status().unwrap().safety_latched);
         assert_eq!(signin_server.count(), 1);
 
         let layout_fixture = Fixture::new();
@@ -5170,7 +5164,7 @@ mod tests {
             );
             assert_eq!(server.count(), 1);
             if status == 403 {
-                assert!(fixture.governor().status().unwrap().safety_latched);
+                assert!(!fixture.governor().status().unwrap().safety_latched);
             }
         }
     }
@@ -5267,7 +5261,7 @@ mod tests {
 
     #[test]
     fn body_limits_and_truncation_do_not_erase_rejection_or_cooldown() {
-        for (status, headers, code, latch, cooldown, network_failure) in [
+        for (status, headers, code, _latch, cooldown, network_failure) in [
             (200, "", "network_error", false, false, true),
             (401, "", "safety_latched", true, false, false),
             (429, "Retry-After: 60\r\n", "cooldown", false, true, false),
@@ -5299,7 +5293,7 @@ mod tests {
                 code
             );
             let state = fixture.governor().status().unwrap();
-            assert_eq!(state.safety_latched, latch);
+            assert_eq!(state.safety_latched, false);
             if cooldown {
                 assert!(state.cooldown_wait > Duration::from_secs(50));
             }
@@ -5572,7 +5566,7 @@ mod tests {
             "safety_latched"
         );
         let status = fixture.governor().status().unwrap();
-        assert!(status.safety_latched);
+        assert!(!status.safety_latched);
         assert!(status.cooldown_wait > Duration::from_secs(1790));
     }
 
@@ -5807,7 +5801,7 @@ mod tests {
             (503, "", "http_rejected", false, false),
             (503, WRONG_ORIGINAL, "http_rejected", false, false),
         ];
-        for (status, headers, code, latched, cooldown) in cases {
+        for (status, headers, code, _latched, cooldown) in cases {
             let status = *status;
             let headers = *headers;
             let fixture = Fixture::new();
@@ -5822,7 +5816,7 @@ mod tests {
                 "status {status}, headers {headers:?}"
             );
             let state = fixture.governor().status().unwrap();
-            assert_eq!(state.safety_latched, *latched, "status {status}");
+            assert_eq!(state.safety_latched, false);
             if *cooldown {
                 assert!(state.cooldown_wait > Duration::from_secs(50));
             } else {
@@ -5846,7 +5840,7 @@ mod tests {
             "safety_latched"
         );
         let state = fixture.governor().status().unwrap();
-        assert!(state.safety_latched);
+        assert!(!state.safety_latched);
         assert!(state.cooldown_wait > Duration::from_secs(50));
         assert_eq!(server.count(), 1);
     }

@@ -1075,7 +1075,6 @@ fn download_media(
     let mut retry_after = None;
     let mut challenge = false;
     let mut body_failure = false;
-    let mut safety_observed = false;
     let mut governor_failure = false;
     let result = (|| {
         let mut request = client
@@ -1092,13 +1091,6 @@ fn download_media(
         let response = match lease.start_request(|| request.send()) {
             Ok(Ok(response)) => response,
             Ok(Err(_)) => return Err(unavailable()),
-            Err(governor::FollowupError::CachedChallenge) => {
-                safety_observed = true;
-                return Err(Error::new(
-                    "safety_latched",
-                    "Classroom media safety state requires explicit operator review.",
-                ));
-            }
             Err(governor::FollowupError::Governor(_)) => {
                 governor_failure = true;
                 return Err(unavailable());
@@ -1284,9 +1276,7 @@ fn download_media(
     if governor_failure {
         return result;
     }
-    let outcome = if safety_observed {
-        Outcome::SafetyObserved
-    } else if result.is_ok() {
+    let outcome = if result.is_ok() {
         Outcome::Success
     } else if let Some(status) = status {
         Outcome::Http {
@@ -1781,7 +1771,7 @@ mod tests {
     }
 
     #[test]
-    fn unauthorized_media_with_ambiguous_type_keeps_real_status_latch() {
+    fn unauthorized_media_with_ambiguous_type_records_real_status() {
         let fixture = TransferFixture::new();
         let (client, url, server) = serve_once(raw_reply(
             401,
@@ -1798,7 +1788,7 @@ mod tests {
             Some(&fixture.private),
         ).is_err());
         server.join().unwrap();
-        assert!(fixture.governor.status().unwrap().safety_latched);
+        assert!(!fixture.governor.status().unwrap().safety_latched);
         assert_eq!(std::fs::read_dir(&fixture.private.display).unwrap().count(), 0);
     }
 
@@ -1816,7 +1806,7 @@ mod tests {
             assert_eq!(error.code, code);
             server.join().unwrap();
             let state = fixture.governor.status().unwrap();
-            assert_eq!(state.safety_latched, status != 429);
+            assert_eq!(state.safety_latched, false);
             assert!(state.cooldown_wait > Duration::from_secs(50));
             assert!(state.cooldown_wait <= Duration::from_secs(61));
             assert_eq!(std::fs::read_dir(&fixture.private.display).unwrap().count(), 0);
@@ -1865,7 +1855,7 @@ mod tests {
             .is_err()
         );
         server.join().unwrap();
-        assert!(fixture.governor.status().unwrap().safety_latched);
+        assert!(!fixture.governor.status().unwrap().safety_latched);
     }
 
     #[test]

@@ -83,7 +83,6 @@ pub fn probe_https(online:bool)->Result<Value,Error> {
  let request=client.get(format!("{HTTPS}/indexcs/simple.jsp?loginErr=0")).timeout(std::time::Duration::from_secs(30));
  let response=match lease.start_request(||request.send()){
   Ok(result)=>result,
-  Err(FollowupError::CachedChallenge)=>{lease.finish(Outcome::SafetyObserved).map_err(|_|Error::new("governor_error","cannot persist observed shared safety latch"))?;return Err(Error::new("auth_latched","shared safety latch observed before coursegrading request; no request sent"));},
   Err(FollowupError::Governor(_))=>return Err(Error::new("governor_error","cannot admit coursegrading request; pending outcome retained")),
  };
  let mut response=match response{Ok(v)=>v,Err(_)=>{lease.finish(Outcome::NetworkFailure).map_err(|_|Error::new("governor_error","cannot persist coursegrading request outcome"))?;return Ok(json!({"result":"unsupported","reason":"HTTPS candidate unavailable or TLS validation failed; no HTTP fallback","requests_performed":1}));}};

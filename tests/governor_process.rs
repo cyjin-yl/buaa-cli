@@ -240,7 +240,7 @@ macro_rules! governor_process_regressions {
         }
 
         #[test]
-        fn process_lock_real_five_second_gap_and_auth_consumption_survive_restart() {
+        fn process_lock_real_five_second_gap_survives_restart() {
             let fixture = Fixture::new();
             let mut held = HeldProcess::start(&fixture.state_dir(), "hold-auth");
             // Exceed the on-acquisition reservation while actual I/O remains
@@ -255,10 +255,12 @@ macro_rules! governor_process_regressions {
             // A new process after completion must still observe the shared gap.
             assert!(!attempt(&fixture.state_dir(), "try-interactive"));
             std::thread::sleep(Duration::from_millis(5_100));
-            // The gap has expired but the consumed authentication token has not
-            // reappeared after a successful login or a process restart.
-            assert!(!attempt(&fixture.state_dir(), "try-auth"));
+            // The gap has expired; authentication attempts are always admitted
+            // again since the one-shot consumption gate was removed. The gap is
+            // shared across request kinds, so each attempt waits its own.
             assert!(attempt(&fixture.state_dir(), "try-interactive"));
+            std::thread::sleep(Duration::from_millis(5_100));
+            assert!(attempt(&fixture.state_dir(), "try-auth"));
             assert!(completed.elapsed() >= Duration::from_secs(5));
             assert!(!fixture.open().status().unwrap().authentication_armed);
         }
@@ -282,7 +284,7 @@ macro_rules! governor_process_regressions {
         }
 
         #[test]
-        fn rejection_captcha_and_account_lock_require_deliberate_resume() {
+        fn rejection_captcha_and_account_lock_do_not_latch_the_account() {
             for outcome in [
                 Outcome::CredentialRejected,
                 Outcome::CaptchaRequired,
@@ -302,10 +304,6 @@ macro_rules! governor_process_regressions {
             ] {
                 let fixture = Fixture::new();
                 let governor = fixture.open();
-                assert!(governor.try_acquire(RequestKind::Authentication).is_err());
-                governor
-                    .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
-                    .unwrap();
                 governor
                     .try_acquire(RequestKind::Authentication)
                     .unwrap()
@@ -313,19 +311,15 @@ macro_rules! governor_process_regressions {
                     .unwrap();
                 let reopened = fixture.open();
                 let denied = reopened.status().unwrap();
-                assert!(denied.safety_latched);
-                assert!(!denied.authentication_armed);
-                assert!(reopened.try_acquire(RequestKind::Interactive).is_err());
+                // Rejection-family outcomes no longer latch durable state: the
+                // only remaining barrier is the ordinary scheduling gap.
+                assert!(!denied.safety_latched);
+                expire_deadlines(&fixture);
                 reopened
-                    .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+                    .try_acquire(RequestKind::Interactive)
+                    .unwrap()
+                    .finish(Outcome::Success)
                     .unwrap();
-                let resumed = reopened.status().unwrap();
-                assert!(resumed.authentication_armed);
-                assert!(!resumed.safety_latched);
-                assert_eq!(
-                    resumed.next_request_boottime_ms,
-                    denied.next_request_boottime_ms
-                );
             }
         }
 
@@ -383,6 +377,7 @@ macro_rules! governor_process_regressions {
                     governor.status().unwrap().cooldown_until_boottime_ms,
                     before_resume.cooldown_until_boottime_ms
                 );
+                // Denied by the live cooldown, not by any auth latch.
                 assert!(governor.try_acquire(RequestKind::Authentication).is_err());
             }
         }
@@ -454,8 +449,7 @@ macro_rules! governor_process_regressions {
             lease.finish(Outcome::CredentialRejected).unwrap();
             let reopened = fixture.open();
             let status = reopened.status().unwrap();
-            assert!(status.safety_latched);
-            assert!(!status.authentication_armed);
+            assert!(!status.safety_latched);
             assert!(status.next_request_boottime_ms > before_finish + 5_000);
             assert!(reopened.try_acquire(RequestKind::Interactive).is_err());
             assert!(reopened.load().unwrap().pending.is_none());
@@ -566,7 +560,7 @@ macro_rules! governor_process_regressions {
             }
 
             // A challenge on an attributed status is not success: the streak
-            // survives and the safety latch engages.
+            // survives, but no durable safety latch is engaged anymore.
             let fixture = Fixture::new();
             let governor = fixture.open();
             let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
@@ -578,7 +572,7 @@ macro_rules! governor_process_regressions {
                 .finish_attributed_archive_status(403, true, false)
                 .unwrap();
             let state = fixture.open().status().unwrap();
-            assert!(state.safety_latched);
+            assert!(!state.safety_latched);
             assert_eq!(state.consecutive_network_failures, 1);
         }
 

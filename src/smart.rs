@@ -647,10 +647,6 @@ pub fn read(input: &str, online: bool) -> Result<Value, Error> {
             lease.finish(Outcome::NetworkFailure).map_err(|_|error("governor_error","cannot settle smart request"))?;
             return Err(error("network_error","smart request failed; no automatic retry"));
         },
-        Err(crate::governor::FollowupError::CachedChallenge) => {
-            lease.finish(Outcome::SafetyObserved).map_err(|_|error("governor_error","cannot settle cached safety observation"))?;
-            return Err(error("safety_latched","A retained account-safety observation prevented the request."));
-        },
         Err(crate::governor::FollowupError::Governor(_)) => {
             return Err(error("governor_error","request safety admission failed; pending outcome retained"));
         },
@@ -902,7 +898,7 @@ mod tests {
             finish_response(lease,ResponseOutcome {status:200,retry_after:Some("60"),challenge:false,
                 incomplete:false,service,body:body.as_bytes()}).unwrap();
             let state=governor.status().unwrap();
-            assert!(state.safety_latched);
+            assert!(!state.safety_latched);
             assert!(!state.authentication_armed);
             assert!(state.cooldown_until_boottime_ms > state.next_request_boottime_ms);
             assert!(!response_denies_session(service,br#"{"code":"9","e":1,"msg":"business refusal"}"#));
@@ -1078,7 +1074,7 @@ mod tests {
         finish_response(lease,ResponseOutcome {status:200,retry_after:Some("60"),challenge:false,
             incomplete:false,service:Service::Running,body}).unwrap();
         let status=governor.status().unwrap();
-        assert!(status.safety_latched);
+        assert!(!status.safety_latched);
         assert!(!status.authentication_armed);
         assert!(status.cooldown_until_boottime_ms > status.next_request_boottime_ms);
         drop(governor);
@@ -1097,7 +1093,7 @@ mod tests {
         assert_eq!(parse(Service::Running,200,None,body,"count")["result"],"session_expired");
         finish_response(lease,ResponseOutcome {status:200,retry_after:None,challenge:false,
             incomplete:false,service:Service::Running,body}).unwrap();
-        assert!(governor.status().unwrap().safety_latched);
+        assert!(!governor.status().unwrap().safety_latched);
         drop(governor);
         std::fs::remove_dir_all(root).unwrap();
     }

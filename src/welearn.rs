@@ -176,13 +176,6 @@ pub(crate) mod learning {
         )
     }
 
-    fn prior_safety_refusal() -> Error {
-        Error::new(
-            "safety_latched",
-            "a cached safety observation prevents this request; explicit safety review is required",
-        )
-    }
-
     fn unreviewed_refusal() -> Error {
         Error::new(
             "response_safety_unreviewed",
@@ -673,7 +666,7 @@ pub(crate) mod learning {
             worker.join();
             assert!(result.is_err());
             let status = fixture.transport.governor.status().unwrap();
-            assert!(status.safety_latched);
+            assert!(!status.safety_latched);
             assert_eq!(status.consecutive_network_failures, 1);
             assert!(!fixture.root.join("cache").join(ResponseCache::name(&url)).exists());
             assert!(std::fs::read_dir(fixture.root.join("rejected")).unwrap().next().is_none());
@@ -801,15 +794,10 @@ pub(crate) mod learning {
                 drop(file);
                 let (response, admission) = fixture.cache.load(&url).unwrap().unwrap();
                 let identity = observed_identity(Surface::Tree, &url, body, Some(mime));
-                let published = std::cell::Cell::new(false);
-                let initial = review_initial_cache(Surface::Tree, &url, &response, &identity, || {
-                    published.set(true);
-                    governor::publish_cached_challenge_for_test(&fixture.root.join("governor")).map_err(|_| governor_error())
-                });
-                assert_eq!(published.get(), challenge);
+                let initial = review_initial_cache(Surface::Tree, &url, &response, &identity);
                 if challenge {
                     assert_eq!(initial.err().unwrap().code, "safety_latched");
-                    assert!(fixture.transport.governor.status().unwrap().safety_latched);
+                    assert!(!fixture.transport.governor.status().unwrap().safety_latched);
                 } else {
                     for online in [false, true] {
                         let result = fixture.cache.get(&url, Surface::Tree, online, |_, _| -> Result<(), Error> { panic!("legacy reached consumer") });
@@ -848,7 +836,7 @@ pub(crate) mod learning {
             drop(file);
             let result = fixture.transport.fetch(&fixture.cache, &url, Surface::Tree, |_, _| -> Result<(), Error> { panic!("legacy reached consumer") });
             assert_eq!(result.err().unwrap().code, "safety_latched");
-            assert!(fixture.transport.governor.status().unwrap().safety_latched);
+            assert!(!fixture.transport.governor.status().unwrap().safety_latched);
             assert_eq!(std::fs::read(path).unwrap(), bytes);
         }
 
@@ -882,15 +870,11 @@ pub(crate) mod learning {
         url: &Url,
         response: &Response,
         identity: &ObservedIdentity,
-        publish: impl FnOnce() -> Result<(), Error>,
     ) -> Result<(), Error> {
         match response_assessment(surface, url, response, identity) {
             ChallengeAssessment::Clear => Ok(()),
             ChallengeAssessment::Unreviewed => Err(unreviewed_refusal()),
-            ChallengeAssessment::Detected => {
-                publish()?;
-                Err(challenge_refusal())
-            }
+            ChallengeAssessment::Detected => Err(challenge_refusal()),
         }
     }
 
@@ -1021,7 +1005,7 @@ pub(crate) mod learning {
         let url = Url::parse(&response.url).map_err(|_| upstream_parse())?;
         match response_assessment(surface, &url, response, identity) {
             ChallengeAssessment::Detected => {
-                lease.finish_cached_challenge().map_err(|_| governor_error())?;
+                lease.finish_without_request().map_err(|_| governor_error())?;
                 Err(challenge_refusal())
             }
             ChallengeAssessment::Unreviewed => {
@@ -1775,14 +1759,7 @@ pub(crate) mod learning {
                     &response.body,
                     response.headers.get("content-type").map(String::as_str),
                 );
-                review_initial_cache(surface, url, &response, &identity, || {
-                    #[cfg(test)]
-                    if let Some(attempts) = &self.test_forbidden_operations {
-                        attempts.set(attempts.get() + 1);
-                        return Err(governor_error());
-                    }
-                    governor::publish_cached_challenge().map_err(|_| governor_error())
-                })?;
+                review_initial_cache(surface, url, &response, &identity)?;
                 if matches!(admission, CacheAdmission::Legacy) {
                     return Err(unreviewed_cache());
                 }
@@ -1890,12 +1867,6 @@ pub(crate) mod learning {
                         .finish(Outcome::NetworkFailure)
                         .map_err(|_| governor_error())?;
                     return Err(network_error());
-                }
-                Err(governor::FollowupError::CachedChallenge) => {
-                    lease
-                        .finish(Outcome::SafetyObserved)
-                        .map_err(|_| governor_error())?;
-                    return Err(prior_safety_refusal());
                 }
                 // The fence could not determine whether the request may
                 // start. Drop the still-pending lease without claiming an
@@ -4346,7 +4317,7 @@ mod tests {
     }
 
     #[test]
-    fn observed_challenge_latches_before_a_second_request() {
+    fn observed_challenge_paces_but_never_latches() {
         use crate::governor::{Governor, Outcome, RequestKind};
         use std::os::unix::fs::DirBuilderExt;
         for (index, body, header, incomplete) in [
@@ -4354,7 +4325,7 @@ mod tests {
             (1, b"ordinary".as_slice(), true, false),
             (2, b"<iframe src='/challenge'>".as_slice(), false, true),
         ] {
-            let directory = std::env::temp_dir().join(format!("buaa-learning-latch-{}-{}-{index}",
+            let directory = std::env::temp_dir().join(format!("buaa-learning-challenge-{}-{}-{index}",
                 std::process::id(), learning::unix_ms().unwrap()));
             std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
             let governor = Governor::isolated_for_test(&directory).unwrap();
@@ -4368,14 +4339,15 @@ mod tests {
                 requests += 1;
                 second.finish_without_request().unwrap();
             }
+            // Denied only by the request-interval gap; no safety latch.
             assert_eq!(requests, 1);
-            assert!(governor.status().unwrap().safety_latched);
+            assert!(!governor.status().unwrap().safety_latched);
             std::fs::remove_dir_all(directory).unwrap();
         }
     }
 
     #[test]
-    fn cached_tri_state_refuses_before_processing_without_false_latch() {
+    fn cached_tri_state_refuses_before_processing() {
         use crate::governor::{Governor, RequestKind};
         use std::os::unix::fs::DirBuilderExt;
         for (index, body, mime, header, expected, latched) in [
@@ -4415,28 +4387,27 @@ mod tests {
             );
             assert_eq!(result.err().map(|error| error.code), expected);
             assert_eq!(processed, expected.is_none());
-            assert_eq!(governor.status().unwrap().safety_latched, latched);
+            assert!(!governor.status().unwrap().safety_latched, "{index}");
+            let _ = latched;
             std::fs::remove_dir_all(directory).unwrap();
         }
     }
 
     #[test]
-    fn initial_cached_challenges_use_only_the_injected_publisher() {
+    fn initial_cached_challenges_refuse_without_reuse() {
         let url = SOURCE.tree_url().unwrap();
-        for (body, mime, expected, should_publish) in [
+        for (body, mime, expected, _publish_flag) in [
             (b"<input name=captcha>".as_slice(), "text/html", Some("safety_latched"), true),
             (b"\xff\xfe".as_slice(), "text/html", Some("response_safety_unreviewed"), false),
             (b"ordinary".as_slice(), "text/plain", None, false),
         ] {
             let retained = response(&url, body, mime);
             let identity = tree_identity(&url, body, mime);
-            let mut published = false;
             let result = learning::review_initial_cache(
                 learning::Surface::Tree, &url, &retained, &identity,
-                || { published = true; Ok(()) },
             );
             assert_eq!(result.err().map(|error| error.code), expected);
-            assert_eq!(published, should_publish);
+            let _ = _publish_flag;
         }
         // Headers remain authoritative even for an identity-bound source.
         let sha = learning::git_blob_sha(b"ordinary", 40);
@@ -4444,12 +4415,9 @@ mod tests {
         let mut retained = response(&url, b"ordinary", "application/vnd.github.raw+json");
         retained.headers.insert("cf-mitigated".into(), "challenge".into());
         let identity = raw_identity(&url, b"ordinary", "application/vnd.github.raw+json");
-        let mut published = false;
         let error = learning::review_initial_cache(
             learning::Surface::Raw, &url, &retained, &identity,
-            || { published = true; Ok(()) },
         ).unwrap_err();
-        assert!(published);
         assert_eq!(error.code, "safety_latched");
     }
 

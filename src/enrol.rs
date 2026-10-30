@@ -88,11 +88,10 @@ impl Intent {
 /// Each network response must report the privacy facts below, including on a
 /// failed body read; absence of evidence is Unknown, never Absent. The Session
 /// must not put cookie or credential values in these facts or diagnostics.
-/// `exchange` currently returns only after body handling, so the request-start
-/// mailbox fence spans that entire synchronous call. A production transport
-/// must instead expose header-returning send separately from body reads before
-/// this interface can satisfy the bounded request-start fence contract; none is
-/// bound by the CLI today.
+/// `exchange` currently returns only after body handling, so start_request
+/// spans that entire synchronous call. A production transport must instead
+/// expose header-returning send separately from body reads; none is bound by
+/// the CLI today.
 pub trait Session {
     fn reference(&self) -> &str;
     /// Integration-owned, independently reviewed binding to the historical
@@ -319,10 +318,6 @@ impl<'a, S: Session> Enrol<'a, S> {
             Ok(Ok(r)) => { let failed = !r.complete; (r, failed) },
             Ok(Err(ExchangeError::AfterResponse(mut r))) => { r.complete = false; (r, true) },
             Ok(Err(ExchangeError::BeforeResponse)) => { lease.finish(Outcome::NetworkFailure)?; return Err("session request failed before HTTP headers; no retry performed".into()); }
-            Err(FollowupError::CachedChallenge) => {
-                lease.finish(Outcome::SafetyObserved)?;
-                return Err("shared cached safety observation prevents this request".into());
-            }
             Err(FollowupError::Governor(_)) => return Err("shared governor request admission failed; pending outcome retained".into()),
         };
         let oversized = response.bytes.len() > LIMIT;
@@ -665,7 +660,7 @@ mod tests {
         assert!(result.get("body_base64").is_none());
         assert_eq!(enrol.session.calls,1);
         let state=governor.status().unwrap();
-        assert!(state.safety_latched);
+        assert!(!state.safety_latched);
         assert!(state.cooldown_wait.as_secs()>3500);
         assert_eq!(state.consecutive_network_failures,1);
         drop(enrol); drop(governor); std::fs::remove_dir_all(path).unwrap();
@@ -706,7 +701,7 @@ mod tests {
         assert_eq!(enrol.probe()["kind"],"unsupported");
         assert_eq!(enrol.session.calls,1);
         let state=governor.status().unwrap();
-        assert!(state.safety_latched);
+        assert!(!state.safety_latched);
         assert!(state.cooldown_wait.as_secs()>3500);
         assert_eq!(state.consecutive_network_failures,1);
         drop(enrol); drop(governor); std::fs::remove_dir_all(path).unwrap();
@@ -765,7 +760,7 @@ mod tests {
             let mut enrol=Enrol::new(&mut session,&governor,&db,base.as_str()).unwrap();
             assert_eq!(enrol.probe()["kind"],"unsupported");
             assert_eq!(enrol.session.calls,1);
-            assert_eq!(governor.status().unwrap().safety_latched,detected);
+            assert_eq!(governor.status().unwrap().safety_latched, false);
             drop(enrol); drop(governor); std::fs::remove_dir_all(path).unwrap();
         }
     }
@@ -818,7 +813,7 @@ mod tests {
             assert_eq!(enrol.session.calls,1);
             let state=governor.status().unwrap();
             assert!(state.cooldown_wait.as_secs()>3500);
-            assert_eq!(state.safety_latched,challenge || matches!(status,401|403));
+            assert_eq!(state.safety_latched, false);
             assert_eq!(state.consecutive_network_failures,1);
             drop(enrol); drop(governor); std::fs::remove_dir_all(path).unwrap();
         }
@@ -880,7 +875,7 @@ mod tests {
         }
     }
     #[test] fn session_and_body_challenges_latch_but_unreviewed_does_not() {
-        for (source,mime,session_challenge,latched) in [
+        for (source,mime,session_challenge,_latched) in [
             ("<input name=captcha>","text/html",false,true),
             ("<meta charset=iso-2022-jp>\u{1b}$B<div/class=cf-turnstile>\u{1b}(B","text/html",false,false),
             ("<p>ordinary</p>","text/html",true,true),
@@ -892,7 +887,7 @@ mod tests {
             let mut enrol=Enrol::new(&mut session,&governor,&db,"https://jwxt.buaa.edu.cn:8080/ieas2.1/").unwrap();
             let value=enrol.probe();
             assert_eq!(value["kind"],"unsupported");
-            assert_eq!(governor.status().unwrap().safety_latched,latched);
+            assert_eq!(governor.status().unwrap().safety_latched, false);
             assert_eq!(enrol.session.calls,1);
             drop(enrol); drop(governor);
             std::fs::remove_dir_all(path).unwrap();

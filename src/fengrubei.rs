@@ -352,10 +352,6 @@ impl<'a> Downloader<'a> {
             .timeout(Duration::from_secs(90));
         let mut response = match lease.start_request(|| request.send()) {
             Ok(Ok(response)) => response,
-            Err(governor::FollowupError::CachedChallenge) => {
-                lease.finish(Outcome::SafetyObserved).map_err(|_| unavailable())?;
-                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the request."));
-            }
             Err(governor::FollowupError::Governor(_)) => return Err(unavailable()),
             Ok(Err(_)) => {
                 lease
@@ -484,10 +480,6 @@ impl<'a> Downloader<'a> {
             .header("Accept-Encoding", "identity");
         let mut response = match lease.start_request(|| request.send()) {
             Ok(Ok(response)) => response,
-            Err(governor::FollowupError::CachedChallenge) => {
-                lease.finish(Outcome::SafetyObserved).map_err(|_| unavailable())?;
-                return Err(Error::new("safety_latched", "A retained account-safety observation prevented the request."));
-            }
             Err(governor::FollowupError::Governor(_)) => return Err(unavailable()),
             Ok(Err(_)) => {
                 lease
