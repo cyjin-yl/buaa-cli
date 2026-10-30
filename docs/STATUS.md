@@ -1077,6 +1077,40 @@ CLI's own login does not yield the cookie set it accepts. Resolving this needs
 an authorized browser observation of the SPA's real transcript request; no
 redirect or challenge was bypassed.
 
+## Offline capability sweep (2026-10-31)
+
+Every documented command form was invoked once offline with a minimal input on
+the release binary, and the observed result recorded. A refusal here is the
+published contract, not a defect: a command that needs a cache, a session or an
+explicit `--online` opt-in must say so instead of fabricating data.
+
+| Capability | Offline observation |
+|---|---|
+| timed-input, archive lookup, departments inventory, contribution scan, timetable-pg parse, smart, shuttle, electricity, os-lab read, physics-experiment | `invalid_input` (exit 2): input contract enforced before any I/O |
+| organizations list, welearn materials, aerospace materials | `unavailable` (exit 7): no retained cache and no opt-in |
+| ihome list | `authorization_required` (exit 4): explicit operator authorization missing |
+| enrol, checkin, boya | `blocked` (exit 0): typed result with a stated reason |
+| evaluation, drive | `blocked`/`status` object (exit 0) |
+| coursegrading unsupported | `unsupported` (exit 0): HTTP-only upstream, no fallback |
+| announcements list, fengrubei info, gateway usage, spoc surface root | cached snapshot served offline (exit 0) |
+| gateway logout-plan | `planned` (exit 0) |
+| recordings session --offline, gateway resume-auth | `no_latch_required` (exit 0) |
+| recordings search/replay/subtitles export, marks gpa, drift check, timetable ics, physics pendulum, credits calculate, announcements article/history | `invalid_input` (exit 2) |
+| marks baseline show, publication, life | `unsupported` (exit 3): subcommand form required |
+
+The sweep also exposed a stale published contract: both the classroom resume
+schema and the gateway `resume-auth` output still advertised
+`result: one_attempt_armed` and told the operator to arm an attempt, while
+`Governor::resume_authentication` had been state validation only since commit
+5148607 and the classroom command already returned `no_latch_required`. Both
+now report `no_latch_required`, and the whole `buaa schema` payload no longer
+contains the retired constant.
+
+This sweep is an offline contract check. It is not online acceptance for any
+capability that requires a campus session, and the blockers recorded above
+(transcript endpoint redirect, IPv6-only exam host, operator-supplied service
+cookies, campus VLAN for SRun) still stand.
+
 ## Bounded local player delivery
 
 The local replay command now launches installed mpv/VLC with explicit
