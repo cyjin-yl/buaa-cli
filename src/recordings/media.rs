@@ -398,6 +398,7 @@ struct MediaDeclaration {
     declared_url: String,
     url: Url,
     duration_seconds: u64,
+    scheme_upgraded: bool,
 }
 
 fn playback_facts(value: &Value, selection: &Selection<'_>) -> Result<MediaDeclaration, Error> {
@@ -439,7 +440,7 @@ fn playback_facts(value: &Value, selection: &Selection<'_>) -> Result<MediaDecla
         .ok_or_else(source_layout)?;
     // URL admission deliberately happens in this source callback, before the
     // source response is retained and before any media request is possible.
-    let url = admitted_media_url(declared_url).map_err(|_| source_layout())?;
+    let (url, scheme_upgraded) = admitted_media_url(declared_url).map_err(|_| source_layout())?;
     let duration_seconds = positive_value(
         content
             .get("save_playback")
@@ -451,12 +452,17 @@ fn playback_facts(value: &Value, selection: &Selection<'_>) -> Result<MediaDecla
         declared_url: declared_url.to_string(),
         url,
         duration_seconds,
+        scheme_upgraded,
     })
 }
 
 /// The media URL is admitted only when it is the exact URL the platform
-/// declared, over HTTPS, on the reviewed recording-resource host.
-fn admitted_media_url(declared: &str) -> Result<Url, Error> {
+/// declared, on the reviewed recording-resource host.
+///
+/// The platform currently declares `http://` playback URLs on that host. The
+/// bytes are fetched over HTTPS on the same host, port and path, and the
+/// upgrade is reported rather than hidden. Any other scheme is refused.
+fn admitted_media_url(declared: &str) -> Result<(Url, bool), Error> {
     if declared.is_empty()
         || declared.len() > MAX_URL
         || declared.contains('\0')
@@ -477,8 +483,21 @@ fn admitted_media_url(declared: &str) -> Result<Url, Error> {
     {
         return Err(invalid());
     }
-    if url.scheme() != "https"
-        || !url.username().is_empty()
+    let (url, scheme_upgraded) = match url.scheme() {
+        "https" => (url, false),
+        "http" => {
+            // Only the scheme prefix may differ from the declaration.
+            let tail = declared.strip_prefix("http://").ok_or_else(invalid)?;
+            let upgraded_text = format!("https://{tail}");
+            let upgraded = Url::parse(&upgraded_text).map_err(|_| invalid())?;
+            if upgraded.as_str() != upgraded_text {
+                return Err(invalid());
+            }
+            (upgraded, true)
+        }
+        _ => return Err(invalid()),
+    };
+    if !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
         || url.host_str() != Some(MEDIA_HOST)
@@ -505,7 +524,7 @@ fn admitted_media_url(declared: &str) -> Result<Url, Error> {
     if path_tail == 0 {
         return Err(invalid());
     }
-    Ok(url)
+    Ok((url, scheme_upgraded))
 }
 
 fn path_date(url: &Url) -> Option<String> {
@@ -772,7 +791,7 @@ pub(crate) fn verify_replay_receipt(
 ) -> Result<(), Error> {
     let file = open_existing(directory, receipt_name)?.ok_or_else(unavailable)?;
     let receipt = read_receipt(file)?;
-    let url = admitted_media_url(&receipt.url).map_err(|_| unavailable())?;
+    let (url, _) = admitted_media_url(&receipt.url).map_err(|_| unavailable())?;
     validate_receipt(&receipt, &url, budget)?;
     let (expected_media, expected_receipt) = storage_names(&url);
     if media_name != expected_media
@@ -1389,7 +1408,7 @@ pub fn online(input: &str) -> Result<Value, Error> {
         "selection":{"course_id":selection.course_id,"sub_id":selection.sub_id,"tenant_code":tenant},
         "lesson":lesson,
         "source_retrieval":{"lesson":lesson_retrieval,"recording":detail_retrieval},
-        "media":{"url":declaration.declared_url,"host":MEDIA_HOST,"duration_seconds":declaration.duration_seconds,"path_date":media_day,"complete_body":media_bytes_verified,"bytes":media},
+        "media":{"url":declaration.declared_url,"host":MEDIA_HOST,"duration_seconds":declaration.duration_seconds,"path_date":media_day,"complete_body":media_bytes_verified,"transport_scheme_upgraded":declaration.scheme_upgraded,"bytes":media},
         "native_track":native.map(|track| json!({
             "segments":track.segments,"last_end_ms":track.last_end_ms,
             "derived_sha256":track.derived_sha256,
@@ -1861,8 +1880,21 @@ mod tests {
     #[test]
     fn only_the_reviewed_recording_host_and_path_are_admitted() {
         assert!(admitted_media_url(DECLARED).is_ok());
+        // The platform declares plain-http playback URLs on the reviewed host.
+        // Those are fetched over HTTPS on the same host, port and path, and the
+        // upgrade is reported instead of hidden.
+        let (upgraded, scheme_upgraded) =
+            admitted_media_url("http://resource.msa.buaa.edu.cn/play/1/a.mp4")
+                .expect("declared plain-http URL on the reviewed host");
+        assert_eq!(upgraded.as_str(), "https://resource.msa.buaa.edu.cn/play/1/a.mp4");
+        assert!(scheme_upgraded);
+        let (_, not_upgraded) = admitted_media_url(DECLARED).expect("declared URL");
+        assert!(!not_upgraded);
         for candidate in [
-            "http://resource.msa.buaa.edu.cn/play/1/a.mp4",
+            "ftp://resource.msa.buaa.edu.cn/play/1/a.mp4",
+            "http://evil.example/play/1/a.mp4",
+            "http://resource.msa.buaa.edu.cn/other/1/a.mp4",
+            "http://user@resource.msa.buaa.edu.cn/play/1/a.mp4",
             "https://evil.example/play/1/a.mp4",
             "https://resource.msa.buaa.edu.cn.evil.example/play/1/a.mp4",
             "https://user@resource.msa.buaa.edu.cn/play/1/a.mp4",
@@ -1919,9 +1951,9 @@ mod tests {
 
     #[test]
     fn path_dates_require_a_real_calendar_date() {
-        let url = admitted_media_url(DECLARED).expect("declared URL");
+        let (url, _) = admitted_media_url(DECLARED).expect("declared URL");
         assert_eq!(path_date(&url).as_deref(), Some("2026-01-02"));
-        let invalid = admitted_media_url(
+        let (invalid, _) = admitted_media_url(
             "https://resource.msa.buaa.edu.cn/play/1/fixture/2026-02-31/sample.mp4",
         )
         .expect("path remains an admitted URL");
