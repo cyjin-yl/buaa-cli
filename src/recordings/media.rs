@@ -1474,10 +1474,10 @@ pub fn schema() -> Value {
         "output":{"type":"object","properties":{
             "schema_version":{"const":1},"type":{"const":"recording_media"},"result":{"const":"media_observed"},
             "authorization":{"type":"object","properties":{"media_rights_verified":{"const":false}}},
-            "media":{"type":"object","properties":{"complete_body":{"type":"boolean"},"bytes":{"type":"object","properties":{"complete_body":{"type":"boolean"},"media_bytes_verified":{"type":"boolean"}}}}},
+            "media":{"type":"object","properties":{"complete_body":{"type":"boolean"},"transport_scheme_upgraded":{"type":"boolean","description":"True when the platform declared a plain-http playback URL on the reviewed media host and the identical host, port and path were fetched over HTTPS."},"bytes":{"type":"object","properties":{"complete_body":{"type":"boolean"},"media_bytes_verified":{"type":"boolean"}}}}},
             "binding":{"type":"object","properties":{"media_bytes_verified":{"type":"boolean"},"decoder_verified":{"const":false},"media_rights_verified":{"const":false}}}
         }},
-        "description":"Governed classroom recording-media acquisition. Fixed classroom source APIs admit the selected course/sub/tenant identity and the exact HTTPS recording URL before the cookie-free media read. Prefix reads use a strict zero-based Content-Range; full reads require positive consistent framing, identity encoding, an MP4 ftyp box, exact EOF and a complete owner-only file plus receipt. Native-track fields remain operator assertions; byte integrity, decoder capability and media rights are separate claims."
+        "description":"Governed classroom recording-media acquisition. Fixed classroom source APIs admit the selected course/sub/tenant identity and the platform-declared recording URL before the cookie-free media read. The reviewed media host is fetched over HTTPS: a declared plain-http URL on that host is upgraded with the identical host, port and path and reported as transport_scheme_upgraded, while every other scheme, host, port, path shape, query or fragment is refused. Prefix reads use a strict zero-based Content-Range; full reads require positive consistent framing, identity encoding, an MP4 ftyp box, exact EOF and a complete owner-only file plus receipt. Native-track fields remain operator assertions; byte integrity, decoder capability and media rights are separate claims."
     })
 }
 
