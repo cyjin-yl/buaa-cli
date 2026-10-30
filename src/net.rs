@@ -1102,6 +1102,37 @@ pub enum CacheStatus {
     Revalidated,
 }
 
+/// Whether a response's provenance establishes that the transport observed a
+/// complete fresh HTTP 200 that issued no session cookie. Only the fixed
+/// official directory target establishes this today; every other profile
+/// carries `Unknown`, which its unchanged plain callbacks discard.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CookieAdmission {
+    /// The body came from a cookie-free fresh capture or an entry written
+    /// under that gate.
+    CookieFree,
+    /// A legacy entry captured before cookie issuance was recorded; unknown
+    /// provenance is never treated as cookie-free.
+    Unknown,
+}
+
+/// Bounded field-token variant of the shared security vocabulary. Each
+/// maximal identifier run, plus every hyphen-separated part, is screened in
+/// addition to the whole string, so a `name=value` marker inside JSON,
+/// script, comment or header text is still recognized while
+/// `authenticity_token`/`passwd`-style equality needles are not lost in
+/// surrounding text. Known markers only; not a secrecy proof.
+pub(crate) fn sensitive_text_marker(value: &str) -> bool {
+    let marked = |token: &str| {
+        crate::announcements::security_token(token)
+            || token.split('-').any(crate::announcements::security_token)
+    };
+    marked(value)
+        || value
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .any(marked)
+}
+
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 pub struct Response {
@@ -1138,6 +1169,7 @@ struct Cached {
 
 struct Entry {
     response: Response,
+    admission: CookieAdmission,
     immutable: bool,
     etag: Option<String>,
     last_modified: Option<String>,
@@ -1147,9 +1179,9 @@ pub struct ArchiveClient {
     mode: CacheMode,
     profile: SourceProfile,
     directory: File,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "directory-admission-proof"))]
     test_route: Option<std::net::SocketAddr>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "directory-admission-proof"))]
     test_governor: Option<std::path::PathBuf>,
 }
 
@@ -1216,9 +1248,9 @@ impl ClassroomClient {
                 mode,
                 profile: SourceProfile::Classroom,
                 directory,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "directory-admission-proof"))]
                 test_route: None,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "directory-admission-proof"))]
                 test_governor: None,
             },
             cookie: RequestCookie {
@@ -1237,7 +1269,9 @@ impl ClassroomClient {
             return Err(invalid_url());
         }
         self.source
-            .get_with_cookie(url, true, Some(&self.cookie), |_, _| false, process)
+            .get_with_cookie(url, true, Some(&self.cookie), |_, _| false, move |r, _| {
+                process(r)
+            })
     }
 
     /// Cache-first, session-isolated reads of the two reviewed lesson-source
@@ -1252,7 +1286,9 @@ impl ClassroomClient {
             return Err(invalid_url());
         }
         self.source
-            .get_with_cookie(url, false, Some(&self.cookie), |_, _| false, process)
+            .get_with_cookie(url, false, Some(&self.cookie), |_, _| false, move |r, _| {
+                process(r)
+            })
     }
 }
 
@@ -1408,9 +1444,9 @@ impl ArchiveClient {
             mode,
             directory,
             profile,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "directory-admission-proof"))]
             test_route: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "directory-admission-proof"))]
             test_governor: None,
         })
     }
@@ -1450,7 +1486,22 @@ impl ArchiveClient {
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        self.get_with_cookie(url, immutable, None, is_attributed_archive_status, process)
+        self.get_with_cookie(url, immutable, None, is_attributed_archive_status, move |r, _| {
+            process(r)
+        })
+    }
+
+    /// Same read as `get`, additionally reporting whether the response's
+    /// provenance establishes a cookie-free fresh capture. Only the fixed
+    /// official directory target distinguishes `Unknown` today; other callers
+    /// keep the plain wrappers, which discard the fact.
+    pub(crate) fn get_with_admission<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.get_with_cookie(url, immutable, None, |_, _| false, process)
     }
 
     fn get_with_cookie<T>(
@@ -1459,7 +1510,7 @@ impl ArchiveClient {
         immutable: bool,
         cookie: Option<&RequestCookie>,
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
-        process: impl FnOnce(&Response) -> Result<T, Error>,
+        process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.profile.validate_url(url)?;
         if cookie.is_some()
@@ -1474,7 +1525,7 @@ impl ArchiveClient {
         let cached = self.load(url)?;
         if self.mode != CacheMode::Revalidate {
             if let Some(entry) = cached {
-                return process(&entry.response);
+                return process(&entry.response, entry.admission);
             }
             if self.mode == CacheMode::Offline {
                 return Err(Error::new(
@@ -1510,9 +1561,13 @@ impl ArchiveClient {
     }
 
     fn open_governor(&self) -> Result<Governor, Error> {
-        #[cfg(test)]
-        if let Some(path) = &self.test_governor {
-            return Governor::isolated_for_test(path).map_err(|_| governor_error());
+        #[cfg(any(test, feature = "directory-admission-proof"))]
+        match (&self.test_governor, self.test_route) {
+            (Some(path), Some(address)) if address.ip().is_loopback() => {
+                return Governor::isolated_for_test(path).map_err(|_| governor_error());
+            }
+            (None, None) => {}
+            _ => return Err(governor_error()),
         }
         Governor::open().map_err(|_| governor_error())
     }
@@ -1532,9 +1587,9 @@ impl ArchiveClient {
             .pool_max_idle_per_host(0)
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10));
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "directory-admission-proof")))]
         let builder = builder.https_only(true);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "directory-admission-proof"))]
         let builder = builder.https_only(self.test_route.is_none());
         builder.build().map_err(|_| {
             Error::new(
@@ -1598,7 +1653,7 @@ impl ArchiveClient {
             governor,
             RequestSession { http, cookie: None },
             |_, _| false,
-            process,
+            move |r, _| process(r),
         )
     }
 
@@ -1609,7 +1664,7 @@ impl ArchiveClient {
         governor: &Governor,
         session: RequestSession<'_>,
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
-        process: impl FnOnce(&Response) -> Result<T, Error>,
+        process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let mut lease = acquire(governor)?;
         let cached = match self.load(url) {
@@ -1631,7 +1686,13 @@ impl ArchiveClient {
                 .header(reqwest::header::COOKIE, &cookie.header)
                 .header(reqwest::header::ACCEPT, "application/json");
         }
-        if let Some(entry) = &cached {
+        // An entry whose cookie admission is unknown cannot supply validators:
+        // revalidation must observe a complete fresh 200, so a legacy entry
+        // is never re-promoted by a conditional 304.
+        if let Some(entry) = cached
+            .as_ref()
+            .filter(|entry| !organizations_target(self, url) || entry.admission != CookieAdmission::Unknown)
+        {
             if let Some(etag) = &entry.etag {
                 request = request.header("If-None-Match", etag);
             }
@@ -1693,7 +1754,10 @@ impl ArchiveClient {
             .headers()
             .iter()
             .any(|(name, value)| challenge_header(name.as_str(), value.as_bytes()));
+        let directory_cookie_issued =
+            organizations_target(self, url) && issues_session_cookie(raw.headers());
         let mut attributed_archive_status = false;
+        let mut directory_metadata_marked = false;
         let mut observation_failed = false;
         let mut body_complete = false;
         let body_budget =
@@ -1739,6 +1803,38 @@ impl ArchiveClient {
                 return Err(Error::new(
                     "http_rejected",
                     "public source returned an unsupported HTTP status",
+                ));
+            }
+            // The fixed official directory target must never retain a
+            // cookie-issuing response; collect_headers drops Set-Cookie, so the
+            // raw headers are the only place issuance can still be observed.
+            // Issuance is refused before process and save, and is not a
+            // challenge or retry.
+            if directory_cookie_issued {
+                return Err(Error::new(
+                    "unavailable",
+                    "official organization directory unexpectedly issued a session cookie",
+                ));
+            }
+            // Retained metadata (MIME parameters, validators) is projected
+            // into output and persisted for this target; screen known field
+            // markers in names and values before any merge or save. Screen
+            // the raw header list rather than the retained whitelist: a
+            // marker-bearing header the directory never keeps (for example
+            // X-CSRF-Token) is still sensitive response metadata.
+            if organizations_target(self, url)
+                && raw.headers().iter().any(|(name, value)| {
+                    sensitive_text_marker(name.as_str())
+                        || value
+                            .to_str()
+                            .map(sensitive_text_marker)
+                            .unwrap_or(true)
+                })
+            {
+                directory_metadata_marked = true;
+                return Err(Error::new(
+                    "unavailable",
+                    "official organization directory returned sensitive response metadata",
                 ));
             }
             for encoding in raw.headers().get_all("content-encoding") {
@@ -1797,6 +1893,12 @@ impl ArchiveClient {
                         "public source returned not-modified without a valid cached response",
                     )
                 })?;
+                if organizations_target(self, url) && entry.admission == CookieAdmission::Unknown {
+                    return Err(Error::new(
+                        "invalid_304",
+                        "public source returned not-modified without a verifiable cached response",
+                    ));
+                }
                 entry.immutable |= immutable;
                 entry.response.revalidated_at_unix_ms = Some(now);
                 entry.response.revalidation_status = Some(status);
@@ -1805,7 +1907,7 @@ impl ArchiveClient {
             } else {
                 let hash = hash(&body);
                 match cached {
-                    Some(mut entry) if immutable || entry.immutable => {
+                    Some(mut entry) if !organizations_target(self, url) && (immutable || entry.immutable) => {
                         if entry.response.sha256 != hash
                             || entry.response.body != body
                             || entry.response.status != status
@@ -1829,6 +1931,14 @@ impl ArchiveClient {
                         etag: headers.get("etag").cloned(),
                         last_modified: headers.get("last-modified").cloned(),
                         immutable,
+                        // Fresh bytes reached here after the directory gate
+                        // above refused Set-Cookie for the one distinguished
+                        // target; every other target does not distinguish.
+                        admission: if organizations_target(self, url) {
+                            CookieAdmission::CookieFree
+                        } else {
+                            CookieAdmission::Unknown
+                        },
                         response: Response {
                             url: url.as_str().to_owned(),
                             status,
@@ -1836,7 +1946,16 @@ impl ArchiveClient {
                             body,
                             sha256: hash,
                             fetched_at_unix_ms: now,
-                            cache_status: if previous.is_some() {
+                            // A legacy entry whose admission is unknown cannot
+                            // revalidate for the directory target: the fresh
+                            // response is a new capture, not a revalidation of
+                            // inadmissible provenance.
+                            cache_status: if previous.is_some()
+                                && (!organizations_target(self, url)
+                                    || previous
+                                        .as_ref()
+                                        .is_some_and(|entry| entry.admission != CookieAdmission::Unknown))
+                            {
                                 CacheStatus::Revalidated
                             } else {
                                 CacheStatus::Miss
@@ -1851,7 +1970,7 @@ impl ArchiveClient {
                 entry.response.cache_status = CacheStatus::Revalidated;
             }
             let response = &entry.response;
-            let processed = process(response)?;
+            let processed = process(response, entry.admission)?;
             // An unattributed replay 404/410 is an archive gap, not immutable
             // captured content. Return its facts without persisting the gap.
             if self.profile.cacheable(url, response) {
@@ -1861,7 +1980,8 @@ impl ArchiveClient {
         })();
         let network_failure = result.as_ref().is_err_and(|error|
             matches!(error.code, "network_error" | "body_limit"))
-            || (status == 200 && !body_complete && !challenge);
+            || (status == 200 && !body_complete && !challenge && !directory_cookie_issued
+                && !directory_metadata_marked);
         // A session is rejected by what the response actually is, not by the
         // transport's content label: the classroom platform serves its native
         // transcript envelope with an HTML content type, and an HTML sign-in
@@ -1909,7 +2029,7 @@ impl ArchiveClient {
     }
 
     fn request_url(&self, url: &Url) -> Url {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "directory-admission-proof"))]
         if let Some(address) = self.test_route {
             let mut routed = url.clone();
             routed.set_scheme("http").expect("test HTTP scheme");
@@ -1937,8 +2057,31 @@ impl ArchiveClient {
     }
 
     fn load(&self, url: &Url) -> Result<Option<Entry>, Error> {
+        if organizations_target(self, url) {
+            // A current entry's presence is authoritative even when corrupt;
+            // never hide its failure by silently falling back to a legacy one.
+            if let Some(entry) = self.load_file(
+                url,
+                &admission_cache_name(url),
+                2,
+                CookieAdmission::CookieFree,
+            )? {
+                return Ok(Some(entry));
+            }
+            return self.load_file(url, &cache_name(url), 1, CookieAdmission::Unknown);
+        }
+        self.load_file(url, &cache_name(url), 1, CookieAdmission::Unknown)
+    }
+
+    fn load_file(
+        &self,
+        url: &Url,
+        name: &str,
+        expected_version: u8,
+        admission: CookieAdmission,
+    ) -> Result<Option<Entry>, Error> {
         self.validate_directory()?;
-        let file = match governor::open_child(&self.directory, &cache_name(url), libc::O_RDONLY) {
+        let file = match governor::open_child(&self.directory, name, libc::O_RDONLY) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(cache_error()),
@@ -1952,7 +2095,7 @@ impl ArchiveClient {
             return Err(corrupt_cache());
         }
         let cached: Cached = serde_json::from_slice(&bytes).map_err(|_| corrupt_cache())?;
-        if cached.version != 1
+        if cached.version != expected_version
             || cached.url != url.as_str()
             || !self.profile.valid_cached(url, &cached)
             || cached.body_base64.len() > MAX_BODY.div_ceil(3) * 4
@@ -1995,6 +2138,7 @@ impl ArchiveClient {
             immutable: cached.immutable,
             etag: cached.etag,
             last_modified: cached.last_modified,
+            admission,
             response: Response {
                 url: cached.url,
                 status: cached.status,
@@ -2104,7 +2248,16 @@ impl ArchiveClient {
     fn save(&self, entry: &Entry) -> Result<(), Error> {
         self.validate_directory()?;
         let url = Url::parse(&entry.response.url).map_err(|_| invalid_url())?;
-        let name = cache_name(&url);
+        // The new directory capture never overwrites its legacy file.
+        let qualified = organizations_target(self, &url);
+        if qualified && entry.admission != CookieAdmission::CookieFree {
+            return Err(cache_error());
+        }
+        let name = if qualified {
+            admission_cache_name(&url)
+        } else {
+            cache_name(&url)
+        };
         match governor::open_child(&self.directory, &name, libc::O_RDONLY) {
             Ok(existing) => {
                 governor::validate_private_file(&existing).map_err(|_| cache_error())?
@@ -2130,7 +2283,7 @@ impl ArchiveClient {
         }
         let response = &entry.response;
         let cached = Stored {
-            version: 1,
+            version: if qualified { 2 } else { 1 },
             url: &response.url,
             status: response.status,
             headers: &response.headers,
@@ -2460,6 +2613,16 @@ fn hash(bytes: &[u8]) -> String {
 fn cache_name(url: &Url) -> String {
     format!("{}.json", hash(url.as_str().as_bytes()))
 }
+
+/// Only the fixed official directory document has cookie-qualified cache
+/// provenance. Robots and every other SourceProfile retain their v1 behavior.
+fn organizations_target(client: &ArchiveClient, url: &Url) -> bool {
+    client.profile == SourceProfile::Organizations && url.as_str() == ORGANIZATIONS_URL
+}
+
+fn admission_cache_name(url: &Url) -> String {
+    format!("{}.v2.json", hash(url.as_str().as_bytes()))
+}
 fn cache_error() -> Error {
     Error::new(
         "cache_unavailable",
@@ -2492,6 +2655,189 @@ fn invalid_url() -> Error {
         "egress_denied",
         "only approved HTTPS public-source routes are supported",
     )
+}
+
+/// Temporary native-library proof interface. Absent from default builds.
+/// No parsing/admission alternatives: these wrappers only select isolated
+/// resources or forward to the actual directory and attribution code.
+#[cfg(feature = "directory-admission-proof")]
+pub mod directory_proof {
+    use super::*;
+    use serde_json::Value;
+    use std::os::unix::fs::DirBuilderExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Owns one newly created private root. No HOME/XDG/passwd-home lookup.
+    pub struct ProofFixture(PathBuf);
+
+    impl ProofFixture {
+        pub fn new() -> Self {
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+            for _ in 0..32 {
+                let path = PathBuf::from("/tmp").join(format!(
+                    "buaa-directory-proof-{}-{}",
+                    std::process::id(),
+                    SEQUENCE.fetch_add(1, Ordering::Relaxed)
+                ));
+                match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => panic!("cannot create private directory proof root: {error}"),
+                }
+            }
+            panic!("cannot allocate a fresh directory proof root");
+        }
+
+        pub fn root(&self) -> &Path {
+            &self.0
+        }
+
+        pub fn cache_directory(&self) -> PathBuf {
+            self.0.join("organizations-cache")
+        }
+
+        pub fn governor_lock_path(&self) -> PathBuf {
+            self.0.join("governor/governor.lock")
+        }
+
+        /// Matches Fixture::organization_client: both overrides are mandatory,
+        /// the cache is private and the route is loopback with a nonzero port.
+        pub fn organizations_client(
+            &self,
+            mode: CacheMode,
+            address: std::net::SocketAddr,
+        ) -> Result<ArchiveClient, Error> {
+            if !address.ip().is_loopback() || address.port() == 0 || !self.0.is_absolute() {
+                return Err(Error::new("invalid_input", "invalid isolated directory fixture"));
+            }
+            let _root = governor::open_directory(&self.0, false, true)
+                .map_err(|_| cache_error())?;
+            Ok(ArchiveClient {
+                mode,
+                profile: SourceProfile::Organizations,
+                directory: governor::open_directory(&self.cache_directory(), true, true)
+                    .map_err(|_| cache_error())?,
+                test_route: Some(address),
+                test_governor: Some(self.0.join("governor")),
+            })
+        }
+
+        /// Uses the existing safety defaults, never shortened policy.
+        pub fn isolated_governor(&self) -> Result<Governor, Error> {
+            Governor::isolated_for_test(&self.0.join("governor"))
+                .map_err(|_| governor_error())
+        }
+    }
+
+    impl Drop for ProofFixture {
+        fn drop(&mut self) {
+            if let Err(error) = std::fs::remove_dir_all(&self.0) {
+                if std::thread::panicking() {
+                    eprintln!("directory proof cleanup failed: {error}");
+                } else {
+                    panic!("directory proof cleanup failed: {error}");
+                }
+            }
+        }
+    }
+
+    /// Only robots is seeded via the real save(). Never seed the target body
+    /// for transport/persistence proof. Legacy target records are written by
+    /// the external consumer in their literal version-1 representation.
+    pub fn seed_robots(client: &ArchiveClient, body: &[u8]) -> Result<(), Error> {
+        require_isolated(client)?;
+        client.save(&Entry {
+            #[cfg(feature = "directory-admission-proof-candidate")]
+            admission: CookieAdmission::Unknown,
+            response: Response {
+                url: ORGANIZATIONS_ROBOTS_URL.to_owned(),
+                status: 200,
+                headers: BTreeMap::new(),
+                body: body.to_vec(),
+                sha256: hash(body),
+                fetched_at_unix_ms: unix_ms()?,
+                cache_status: CacheStatus::Miss,
+                revalidated_at_unix_ms: None,
+                revalidation_status: None,
+            },
+            immutable: false,
+            etag: None,
+            last_modified: None,
+        })
+    }
+
+    pub fn directory_url() -> Result<Url, Error> {
+        Url::parse(ORGANIZATIONS_URL).map_err(|_| invalid_url())
+    }
+
+    fn require_isolated(client: &ArchiveClient) -> Result<(), Error> {
+        if client.profile != SourceProfile::Organizations
+            || !client.test_route.is_some_and(|address| {
+                address.ip().is_loopback() && address.port() != 0
+            })
+            || !client.test_governor.as_ref().is_some_and(|path| path.is_absolute())
+        {
+            return Err(Error::new("invalid_input", "not an isolated directory fixture"));
+        }
+        Ok(())
+    }
+
+    pub fn list(client: &ArchiveClient) -> Result<Value, Error> {
+        require_isolated(client)?;
+        crate::organizations::list_with_client(client)
+    }
+
+    // Opaque proof-only carrier prevents exposing the production crate-private
+    // CookieAdmission enum. RED has no such production fact; GREEN wraps the
+    // actual value supplied by get_with_admission without inventing one.
+    #[cfg(not(feature = "directory-admission-proof-candidate"))]
+    pub struct Admission;
+    #[cfg(feature = "directory-admission-proof-candidate")]
+    pub struct Admission(CookieAdmission);
+
+    #[cfg(not(feature = "directory-admission-proof-candidate"))]
+    pub fn normalize_response(response: &Response, _admission: Admission) -> Result<Value, Error> {
+        crate::organizations::normalize_for_proof(response)
+    }
+
+    #[cfg(feature = "directory-admission-proof-candidate")]
+    pub fn normalize_response(response: &Response, admission: Admission) -> Result<Value, Error> {
+        crate::organizations::normalize_for_proof(response, admission.0)
+    }
+
+    #[cfg(not(feature = "directory-admission-proof-candidate"))]
+    pub fn get_for_proof<T>(
+        client: &ArchiveClient,
+        url: &Url,
+        process: impl FnOnce(&Response, Admission) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        require_isolated(client)?;
+        client.get(url, false, move |response| process(response, Admission))
+    }
+
+    #[cfg(feature = "directory-admission-proof-candidate")]
+    pub fn get_for_proof<T>(
+        client: &ArchiveClient,
+        url: &Url,
+        process: impl FnOnce(&Response, Admission) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        require_isolated(client)?;
+        client.get_with_admission(url, false, move |response, admission| {
+            process(response, Admission(admission))
+        })
+    }
+
+    pub fn attribute(
+        directory: &Value,
+        name: &str,
+        listed_root: &str,
+        resolved_root: &str,
+    ) -> Result<Value, Error> {
+        crate::announcements::college_directory_attribution_for_proof(
+            directory, name, listed_root, resolved_root,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -2757,6 +3103,11 @@ mod tests {
     fn seed(client: &ArchiveClient, url: &str, body: &[u8], immutable: bool) {
         client
             .save(&Entry {
+                admission: if organizations_target(client, &Url::parse(url).unwrap()) {
+                    CookieAdmission::CookieFree
+                } else {
+                    CookieAdmission::Unknown
+                },
                 response: Response {
                     url: url.to_owned(),
                     status: 200,

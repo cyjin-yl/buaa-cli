@@ -315,6 +315,43 @@ UID's passwd home to be `/home/ezra` before checking the canonical mounted
 lock. This matches `scripts/cargo-locked`, which derives its lock from passwd
 rather than `HOME`. No successful internal CI run is claimed.
 
+## Offline history and directory admission (2026-10-30)
+
+The `announcements history` offline contract now also admits two retained
+operator-asserted sources transferred from the reviewed online-acceptance
+worktree, byte-faithful to their originals:
+
+- Math: literal `http://math.buaa.edu.cn/` root only, with `root_view` limited
+  to `news` (xwdt/xw panel) or omission/null (学院公告 notices); no protocol,
+  port, path or host alias is admitted. Dates come only from unique own-leaf
+  `div.date`/`div.date_t`/`div.date_b` or `div.time`/`span.date` elements;
+  duplicates, nested, invalid or missing dates stay null.
+- Materials (mse) GBK legacy: literal `http://mse.buaa.edu.cn/` or `:80/` as a
+  listing and `call_board_detail.php?call_board_id=<1-10 digits>` as an
+  article, only under explicit `encoding: "gb2312"` with WHATWG GBK decoding
+  (no replacement or BOM sniffing). Decoded UTF-8 is reported as derived
+  content under `interpretation`; `retrieval` still binds the original
+  supplied bytes by SHA-256. A now-redundant `encoding_rs` dependency is
+  pinned at `=0.8.35` and locked.
+
+Native offline smokes against the real binary pass all MSE checks
+(8 accepts, 33 rejections) and all Math checks (29 named cases), including
+rejections for HTTPS/port aliases, board bodies, foreign hosts, wrong `kind`,
+`root_view` on non-math sources, and utf8 default on legacy sources.
+
+Organizations directory admission hardened: fresh responses for the single
+distinguished target screen sensitive markers in **all** raw response header
+names and values (not only the ten retained header fields), refuse
+marker-bearing 304s before validator mutation, and stamp a fresh 200 that
+recovers over an Unknown-admission legacy entry as a new capture
+(`cache_status: miss`) rather than a revalidation of inadmissible provenance.
+`decode_numeric_entities` now preserves malformed and invalid-scalar
+references literally instead of duplicating the preceding text. The
+temporary synthetic proof suite (`directory_admission_proof`, feature-gated)
+reports all 6 cases / 57 subcases green against an isolated governor and
+loopback fixture; it exercises transport, persistence, admission, robots and
+governor behavior and is not a live-service observation.
+
 ## Gitea primary restoration (2026-10-30)
 
 The development primary is the private, native

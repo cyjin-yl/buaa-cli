@@ -1,15 +1,15 @@
 //! 数学科学学院: exact-directory-bound current notice board.
 use super::{
-    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, active_element_text,
-    article_paragraphs, bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
-    inert_element, invalid_article, invalid_list, is_document_href, is_http,
+    ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_PARAGRAPH, MAX_TEXT,
+    active_element_text, article_paragraphs, bind_college_board, college_directory_attribution,
+    college_html, describe_college_surface, element_text, entry_in_scope, failed_contract,
+    html_fallback, inert_element, invalid_article, invalid_list, is_document_href, is_http,
     is_safe_public_fallback, parse_iso_date, retrieval, source_tables, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, MATH_NOTICES_URL, MATH_ROOT_URL, math_path_allowed,
 };
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -25,6 +25,331 @@ fn plain_url(url: &Url) -> bool {
         && url.query().is_none()
         && url.fragment().is_none()
         && math_path_allowed(url.path())
+}
+
+pub(super) fn root_listing_source(raw: &str) -> bool {
+    raw == LISTED_ROOT_URL
+}
+
+fn unique_owned<'a>(parent: ElementRef<'a>, selector: &Selector) -> Result<ElementRef<'a>, Error> {
+    let mut nodes = parent.select(selector).filter(|node| !inert_element(*node));
+    nodes
+        .next()
+        .filter(|_| nodes.next().is_none())
+        .ok_or_else(unavailable)
+}
+
+/// Only the supplied root's source-selected 学院公告 view, not a board body.
+pub(super) fn parse_root_listing(document: &Html, base: &Url) -> Result<Value, Error> {
+    let titles = Selector::parse("head > title").map_err(|_| unavailable())?;
+    let mut titles = document
+        .select(&titles)
+        .filter(|node| !inert_element(*node));
+    let title = titles
+        .next()
+        .filter(|_| titles.next().is_none())
+        .map(element_text)
+        .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
+        .ok_or_else(unavailable)?;
+    let headers =
+        Selector::parse("div.wrapgg > div.w_top > li.hover").map_err(|_| unavailable())?;
+    let mut headers = document
+        .select(&headers)
+        .filter(|node| !inert_element(*node) && element_text(*node) == "学院公告");
+    let selected = headers
+        .next()
+        .filter(|_| headers.next().is_none())
+        .ok_or_else(unavailable)?;
+    let header = selected
+        .parent()
+        .and_then(ElementRef::wrap)
+        .ok_or_else(unavailable)?;
+    let primary = header
+        .parent()
+        .and_then(ElementRef::wrap)
+        .ok_or_else(unavailable)?;
+    let labels = Selector::parse(":scope > li:not(.more)").map_err(|_| unavailable())?;
+    let active = Selector::parse(":scope > li.hover").map_err(|_| unavailable())?;
+    let mut active = header.select(&active).filter(|node| !inert_element(*node));
+    if header
+        .select(&labels)
+        .find(|node| !inert_element(*node))
+        .is_none_or(|first| first.id() != selected.id())
+        || active.next().is_none_or(|node| node.id() != selected.id())
+        || active.next().is_some()
+    {
+        return Err(unavailable());
+    }
+    // The observed first label/body and first More declaration belong together.
+    // Source markers are not evaluated CSS or verified runtime visibility.
+    let more = Selector::parse(":scope > li.more > a").map_err(|_| unavailable())?;
+    let more = header
+        .select(&more)
+        .find(|node| !inert_element(*node))
+        .ok_or_else(unavailable)?;
+    let board_href = more.value().attr("href").ok_or_else(unavailable)?;
+    if board_href.len() > MAX_HREF || board_href.chars().any(char::is_control) {
+        return Err(unavailable());
+    }
+    let (board_url, board_link_kind) = match base.join(board_href) {
+        Ok(url) if is_http(&url) => (Some(url.to_string()), "http"),
+        Ok(_) => (None, "non_http"),
+        Err(_) => (None, "invalid"),
+    };
+    let views = Selector::parse(":scope > div.hover").map_err(|_| unavailable())?;
+    let mut views = primary.select(&views).filter(|node| !inert_element(*node));
+    let view = views
+        .next()
+        .filter(|_| views.next().is_none())
+        .ok_or_else(unavailable)?;
+    let lists = Selector::parse(":scope > ul").map_err(|_| unavailable())?;
+    let mut lists = view.select(&lists).filter(|node| !inert_element(*node));
+    let list = lists
+        .next()
+        .filter(|_| lists.next().is_none())
+        .ok_or_else(unavailable)?;
+    let rows = Selector::parse(":scope > li").map_err(|_| unavailable())?;
+    let links = Selector::parse(":scope > a").map_err(|_| unavailable())?;
+    let headings = Selector::parse(":scope > p").map_err(|_| unavailable())?;
+    let dates = Selector::parse(":scope > div.date").map_err(|_| unavailable())?;
+    let days = Selector::parse(":scope > div.date_t").map_err(|_| unavailable())?;
+    let months = Selector::parse(":scope > div.date_b").map_err(|_| unavailable())?;
+    let mut entries = Vec::new();
+    for row in list.select(&rows).filter(|node| !inert_element(*node)) {
+        if entries.len() == MAX_ENTRIES {
+            return Err(unavailable());
+        }
+        let mut anchors = row.select(&links).filter(|node| !inert_element(*node));
+        let anchor = anchors
+            .next()
+            .filter(|_| anchors.next().is_none())
+            .ok_or_else(unavailable)?;
+        let mut row_headings = anchor
+            .select(&headings)
+            .filter(|node| !inert_element(*node));
+        let heading = row_headings
+            .next()
+            .filter(|_| row_headings.next().is_none())
+            .map(element_text)
+            .filter(|text| !text.is_empty() && text.len() <= MAX_TEXT)
+            .ok_or_else(unavailable)?;
+        let date = (|| {
+            let mut date_nodes = anchor.select(&dates).filter(|node| !inert_element(*node));
+            let date = date_nodes.next().filter(|_| date_nodes.next().is_none())?;
+            let mut day_nodes = date.select(&days).filter(|node| !inert_element(*node));
+            let day = day_nodes
+                .next()
+                .filter(|_| day_nodes.next().is_none())
+                .map(element_text)?;
+            let mut month_nodes = date.select(&months).filter(|node| !inert_element(*node));
+            let month = month_nodes
+                .next()
+                .filter(|_| month_nodes.next().is_none())
+                .map(element_text)?;
+            if !(1..=2).contains(&day.len())
+                || !day.bytes().all(|byte| byte.is_ascii_digit())
+                || month.len() != 7
+            {
+                return None;
+            }
+            let mut iso = *b"0000-00-00";
+            iso[..7].copy_from_slice(month.as_bytes());
+            iso[10 - day.len()..].copy_from_slice(day.as_bytes());
+            parse_iso_date(std::str::from_utf8(&iso).ok()?)
+        })();
+        let listed_href = anchor.value().attr("href");
+        if listed_href
+            .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
+        {
+            return Err(unavailable());
+        }
+        let (resolved_http_url, link_kind) = match listed_href {
+            None => (None, "missing"),
+            Some(raw) => match base.join(raw) {
+                Ok(url) if is_http(&url) => (Some(url.to_string()), "http"),
+                Ok(_) => (None, "non_http"),
+                Err(_) => (None, "invalid"),
+            },
+        };
+        entries.push(ListingEntry {
+            source_order: entries.len() + 1,
+            title: heading,
+            date,
+            category_label: Some("学院公告".into()),
+            summary: None,
+            listed_href: listed_href.map(str::to_owned),
+            resolved_http_url,
+            link_kind,
+        });
+    }
+    if entries.is_empty() {
+        return Err(unavailable());
+    }
+    Ok(json!({
+        "schema_version":1,"type":"announcements_history","result":"listing_snapshot",
+        "publisher":null,"college":"math","listing_label":"学院公告（根页历史预览）",
+        "document_title":title,"entries":entries,
+        "source_board_declaration":{
+            "listed_href":board_href,"resolved_http_url":board_url,"link_kind":board_link_kind,
+        },
+        "completeness":{
+            "scope":"single_supplied_archive_root_notice_view","pagination":"not_applicable",
+            "freshness":"archived_bytes","complete_history":false,
+            "source_layout":"observed root wrapgg first source-selected 学院公告 label/body; not evaluated CSS or verified runtime visibility; historical applicability is operator_asserted, not verified",
+            "dates":"each row's own explicit YYYY-MM and day; missing, invalid or ambiguous stays null; never capture-derived",
+            "source_board":"declaration only; board body not supplied or fetched",
+            "other_root_views":"not_covered",
+        },
+    }))
+}
+
+/// The supplied historical root's separate image-declared text view, not its board.
+pub(super) fn parse_root_news_listing(document: &Html, base: &Url) -> Result<Value, Error> {
+    let selector = |raw| Selector::parse(raw).map_err(|_| unavailable());
+    let title = element_text(unique_owned(
+        document.root_element(),
+        &selector("head > title")?,
+    )?);
+    if title.is_empty() || title.len() > MAX_TEXT {
+        return Err(unavailable());
+    }
+    let declarations = selector("div.xwdt > div.xw > div.lm > a")?;
+    let mut declarations = document.select(&declarations).filter(|node| {
+        !inert_element(*node) && node.value().attr("href") == Some("index/xydt.htm")
+    });
+    let declaration = declarations
+        .next()
+        .filter(|_| declarations.next().is_none())
+        .ok_or_else(unavailable)?;
+    let header = declaration
+        .parent()
+        .and_then(ElementRef::wrap)
+        .ok_or_else(unavailable)?;
+    let owner = header
+        .parent()
+        .and_then(ElementRef::wrap)
+        .ok_or_else(unavailable)?;
+    let links = selector(":scope > a")?;
+    if unique_owned(owner, &selector(":scope > div.lm")?)?.id() != header.id()
+        || unique_owned(header, &links)?.id() != declaration.id()
+        || !element_text(declaration).is_empty()
+    {
+        return Err(unavailable());
+    }
+    unique_owned(declaration, &selector(":scope > img")?)?;
+    let body = unique_owned(owner, &selector(":scope > ul")?)?;
+    let rows = selector(":scope > li")?;
+    let contents = selector(":scope > div.ftxt")?;
+    let heading_links = selector(":scope > a:not(.more)")?;
+    let headings = selector(":scope > h3")?;
+    let summaries = selector(":scope > p")?;
+    let images = selector(":scope > div.fimg > a")?;
+    let details = selector(":scope > a.more")?;
+    let featured_dates = selector(":scope > div.time")?;
+    let ordinary_dates = selector(":scope > span.date")?;
+    let mut entries = Vec::new();
+    let mut featured_seen = false;
+    for row in body.select(&rows).filter(|node| !inert_element(*node)) {
+        if entries.len() == MAX_ENTRIES {
+            return Err(unavailable());
+        }
+        let featured = row
+            .value()
+            .has_class("first", scraper::CaseSensitivity::CaseSensitive);
+        let (anchor, heading, summary, date_owner, date_selector) = if featured {
+            if featured_seen || !entries.is_empty() {
+                return Err(unavailable());
+            }
+            featured_seen = true;
+            let content = unique_owned(row, &contents)?;
+            let anchor = unique_owned(content, &heading_links)?;
+            let href = anchor.value().attr("href").ok_or_else(unavailable)?;
+            if unique_owned(row, &images)?.value().attr("href") != Some(href)
+                || unique_owned(content, &details)?.value().attr("href") != Some(href)
+            {
+                return Err(unavailable());
+            }
+            let heading = element_text(unique_owned(anchor, &headings)?);
+            let summary = element_text(unique_owned(content, &summaries)?);
+            if summary.len() > MAX_PARAGRAPH {
+                return Err(unavailable());
+            }
+            (
+                anchor,
+                heading,
+                Some(summary).filter(|text| !text.is_empty()),
+                content,
+                &featured_dates,
+            )
+        } else {
+            let anchor = unique_owned(row, &links)?;
+            (anchor, element_text(anchor), None, row, &ordinary_dates)
+        };
+        if heading.is_empty() || heading.len() > MAX_TEXT {
+            return Err(unavailable());
+        }
+        let date = if let Ok(node) = unique_owned(date_owner, date_selector) {
+            if node
+                .children()
+                .any(|child| child.value().as_element().is_some())
+            {
+                None
+            } else {
+                let text = element_text(node);
+                if text.len() > MAX_TEXT {
+                    return Err(unavailable());
+                }
+                parse_iso_date(&text)
+            }
+        } else {
+            None
+        };
+        let listed_href = anchor.value().attr("href");
+        if listed_href
+            .is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
+        {
+            return Err(unavailable());
+        }
+        let (resolved_http_url, link_kind) = match listed_href {
+            None => (None, "missing"),
+            Some(raw) => match base.join(raw) {
+                Ok(url) if is_http(&url) => (Some(url.to_string()), "http"),
+                Ok(_) => (None, "non_http"),
+                Err(_) => (None, "invalid"),
+            },
+        };
+        entries.push(ListingEntry {
+            source_order: entries.len() + 1,
+            title: heading,
+            date,
+            category_label: None,
+            summary,
+            listed_href: listed_href.map(str::to_owned),
+            resolved_http_url,
+            link_kind,
+        });
+    }
+    if !featured_seen {
+        return Err(unavailable());
+    }
+    Ok(json!({
+        "schema_version":1,"type":"announcements_history","result":"listing_snapshot",
+        "publisher":null,"college":"math","listing_label":"根页新闻区（离线预览）",
+        "document_title":title,"source_view_caption":null,"entries":entries,
+        "source_board_declaration":{
+            "listed_href":"index/xydt.htm","resolved_http_url":base.join("index/xydt.htm").map_err(|_| unavailable())?.to_string(),"link_kind":"http",
+        },
+        "completeness":{
+            "scope":"single_supplied_archive_root_news_view","pagination":"not_applicable",
+            "freshness":"archived_bytes","complete_history":false,
+            "source_layout":"observed xwdt/xw owner with its own lm/a image-only index/xydt.htm declaration and direct ul/li text records; first/ftxt heading and full excerpt precede ordinary rows; not evaluated scripts, CSS or runtime visibility; historical applicability is operator_asserted, not verified",
+            "dates":"each unique own leaf div.time or span.date must contain a complete calendar-valid YYYY-MM-DD; missing, invalid, nested or ambiguous stays null, never heading, href, neighbor or capture-derived",
+            "summaries":"complete featured ftxt/p source text up to 8 KiB; ordinary records have no supplied excerpt and stay null",
+            "caption":"image-only control supplies no active source caption or category; image is not fetched or interpreted",
+            "source_board":"declaration only; board body not supplied or fetched; navigation xyzj/xydt.htm is distinct, not an alias",
+            "other_root_views":"not_covered",
+        },
+    }))
 }
 
 fn bound_client(mode: CacheMode) -> Result<(ArchiveClient, Value), Error> {

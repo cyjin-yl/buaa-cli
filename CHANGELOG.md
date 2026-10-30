@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Admit two retained operator-asserted offline history sources in
+  `announcements history`: the literal Math HTTP root with an optional
+  `news`/`notices` root view, and the GBK-decoded legacy Materials root
+  listing and `call_board_detail` article under explicit `encoding: gb2312`.
+  Both keep original/derived bytes distinct and bind retrieval by SHA-256 of
+  the supplied bytes; a pinned `encoding_rs =0.8.35` is added for the GBK
+  decode. Admission stays literal-only: no protocol, port, path or host
+  aliases, and `root_view`/`encoding` fields are rejected for sources they do
+  not describe. No live fetch is added.
+- Harden organizations directory admission: screen sensitive markers in all
+  raw response header names and values (not only retained fields), refuse
+  marker-bearing 304s before validator mutation, and classify a fresh 200
+  that recovers over an Unknown-admission legacy entry as a new capture, not
+  a revalidation. `decode_numeric_entities` now preserves malformed and
+  invalid-scalar references literally. A temporary feature-gated synthetic
+  proof suite covering transport, persistence, admission, robots and
+  governor behavior passes 6 cases / 57 subcases offline.
+
 - Add source-bound original-PDF retrieval for Chemistry's current
   `/xwzx/xyxw.htm` board and `/info/1013/` article contract, without reviving
   the older undergraduate-teaching routes. Resolve only an active owned

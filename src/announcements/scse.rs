@@ -381,8 +381,8 @@ pub(super) fn document(mode: CacheMode, article_url: &str) -> Result<Value, Erro
     })
 }
 
-#[cfg(test)]
-fn normalize_article(response: &Response) -> Result<Value, Error> {
+#[cfg(any(test, feature = "viewer-admission-proof"))]
+pub(super) fn normalize_article(response: &Response) -> Result<Value, Error> {
     normalize_article_document(response, &college_html(response)?)
 }
 

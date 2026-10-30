@@ -873,7 +873,7 @@ fn effectively_disabled(
 
 /// Split only at top-level declaration delimiters. Unsupported or malformed
 /// CSS syntax cannot establish a candidate's visibility.
-fn split_declarations(style: &str) -> Result<Vec<(&str, &str)>, ()> {
+pub(crate) fn split_declarations(style: &str) -> Result<Vec<(&str, &str)>, ()> {
     let bytes = style.as_bytes();
     let mut declarations = Vec::new();
     let mut blocks = Vec::new();
@@ -978,13 +978,13 @@ fn css_whitespace(ch: char) -> bool {
     matches!(ch, '\t' | '\n' | '\u{000c}' | '\r' | ' ')
 }
 
-fn css_trim(value: &str) -> &str {
+pub(crate) fn css_trim(value: &str) -> &str {
     value.trim_matches(css_whitespace)
 }
 
 /// Remove CSS comments that are not inside a quoted string. An unterminated
 /// comment leaves the value unresolved.
-fn strip_css_comments(value: &str) -> Option<std::borrow::Cow<'_, str>> {
+pub(crate) fn strip_css_comments(value: &str) -> Option<std::borrow::Cow<'_, str>> {
     if !value.contains("/*") {
         return Some(std::borrow::Cow::Borrowed(value));
     }
@@ -1028,7 +1028,7 @@ fn strip_css_comments(value: &str) -> Option<std::borrow::Cow<'_, str>> {
 }
 
 /// Split a trailing `!important` marker from a declaration value.
-fn split_important(value: &str) -> (&str, bool) {
+pub(crate) fn split_important(value: &str) -> (&str, bool) {
     let trimmed = value.trim_end_matches(css_whitespace);
     let Some(marker_start) = trimmed.len().checked_sub("important".len()) else {
         return (trimmed, false);

@@ -467,7 +467,7 @@ impl Governor {
         Ok(governor)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "directory-admission-proof"))]
     pub(crate) fn isolated_for_test(path: &Path) -> Result<Self, String> {
         Self::open_at(path, Limits::default())
     }

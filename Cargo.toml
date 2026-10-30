@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+encoding_rs = "=0.8.35"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 robotstxt = "0.3"
 sha2 = "0.10"
@@ -30,6 +31,21 @@ scraper = "0.24"
 
 [lib]
 name = "buaa_cli"
+
+[features]
+# Temporary native-library proof only; remove both features and the example
+# after RED/GREEN. RED enables the first feature, GREEN enables both.
+directory-admission-proof = []
+directory-admission-proof-candidate = ["directory-admission-proof"]
+viewer-admission-proof = []
+
+[[example]]
+name = "directory_admission_proof"
+required-features = ["directory-admission-proof"]
+
+[[example]]
+name = "viewer_admission_proof"
+required-features = ["viewer-admission-proof"]
 
 [[bin]]
 name = "buaa"
