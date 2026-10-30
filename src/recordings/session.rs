@@ -205,8 +205,8 @@ struct Cookie {
     #[serde(default)]
     path_explicit: bool,
     /// The canonical declared domain for cookie identity when a domain
-    /// attribute outside the reviewed platform family was narrowed to the
-    /// setter for delivery. Absent for host-only and platform-family
+    /// attribute outside the reviewed shared service family was narrowed
+    /// to the setter for delivery. Absent for host-only and shared-family
     /// cookies, whose identity is the delivery scope's domain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     declared_domain: Option<String>,
@@ -224,8 +224,9 @@ impl Cookie {
 }
 
 /// Domain- and path-scoped cookies. A cookie reaches only the hosts and paths
-/// its own declaration allows, and the single sign-on credential never leaves
-/// the sign-on host.
+/// its own declaration allows inside the allowlisted service hosts; the
+/// sign-on credential is never persisted, only delivered the way a browser
+/// delivers it during the login exchange.
 #[derive(Default)]
 struct Jar {
     cookies: Vec<Cookie>,
@@ -301,14 +302,24 @@ fn classroom_scope(scope: &Scope) -> bool {
     match scope {
         Scope::Host(host) => host == CLASSROOM_HOST,
         Scope::Platform(domain) => {
-            within_platform_family(domain) && domain_matches(domain, CLASSROOM_HOST)
+            within_session_family(domain) && domain_matches(domain, CLASSROOM_HOST)
         }
     }
 }
 
-/// The reviewed platform family whose session cookies are shared between the
-/// forwarding service and the classroom platform.
-const PLATFORM_FAMILY: &str = "msa.buaa.edu.cn";
+/// The reviewed delivery family covering every allowlisted service host:
+/// the campus single sign-on host, the ticket exchange endpoint and the
+/// classroom platform. A `Domain=buaa.edu.cn` cookie set by the sign-on
+/// host must reach `yjapi.msa.buaa.edu.cn` for ticket exchange, the same
+/// way a browser delivers it; narrowing it to the setter made the CAS
+/// callback fail with HTTP 500.
+const SHARED_FAMILY: &str = "buaa.edu.cn";
+
+/// The session family whose cookies may be persisted: only cookies that
+/// reach the classroom platform are stored, so the sign-on credential
+/// remains an in-memory delivery cookie and never enters the private
+/// session snapshot.
+const SESSION_FAMILY: &str = "msa.buaa.edu.cn";
 
 fn domain_matches(domain: &str, host: &str) -> bool {
     let domain = domain.trim_start_matches('.').to_ascii_lowercase();
@@ -316,12 +327,21 @@ fn domain_matches(domain: &str, host: &str) -> bool {
     host == domain || host.ends_with(&format!(".{domain}"))
 }
 
-/// A cookie may only be shared inside the reviewed platform family: its
-/// domain must be that family or one of its subdomains. A broader domain, such
-/// as the whole university domain, never widens a cookie's reach.
-fn within_platform_family(domain: &str) -> bool {
+/// A cookie may only be shared inside the reviewed delivery family: its
+/// declared domain must be that family or one of its subdomains. Any other
+/// declared domain (for example a bare public suffix such as `edu.cn`) is
+/// narrowed to the setter for delivery while its canonical declaration
+/// remains the cookie identity.
+fn within_shared_family(domain: &str) -> bool {
     let domain = domain.trim_start_matches('.').to_ascii_lowercase();
-    domain == PLATFORM_FAMILY || domain.ends_with(&format!(".{PLATFORM_FAMILY}"))
+    domain == SHARED_FAMILY || domain.ends_with(&format!(".{SHARED_FAMILY}"))
+}
+
+/// Only cookies inside the session family may be persisted in the private
+/// classroom session snapshot.
+fn within_session_family(domain: &str) -> bool {
+    let domain = domain.trim_start_matches('.').to_ascii_lowercase();
+    domain == SESSION_FAMILY || domain.ends_with(&format!(".{SESSION_FAMILY}"))
 }
 
 fn valid_cookie_name(value: &str) -> bool {
@@ -696,14 +716,14 @@ impl Jar {
                 continue;
             }
             // A declared domain must match the setter. Only the reviewed
-            // platform family may share a cookie across hosts; every other
-            // cookie, including the sign-on ticket, stays with its setter.
-            // A family-foreign declared domain is narrowed to the setter for
-            // delivery while its canonical declaration remains the identity.
+            // shared service family may carry a cookie across hosts; every
+            // other declaration (a bare public suffix, for example) is
+            // narrowed to the setter for delivery while its canonical
+            // declaration remains the identity.
             let host_only = domain.is_none();
             let (scope, declared_domain) = match domain {
                 Some(domain)
-                    if domain_matches(&domain, host) && within_platform_family(&domain) =>
+                    if domain_matches(&domain, host) && within_shared_family(&domain) =>
                 {
                     (
                         Scope::Platform(domain.trim_start_matches('.').to_ascii_lowercase()),
@@ -3352,7 +3372,13 @@ fn send(
             if !reservation.cooldown_wait.is_zero() {
                 return Err(unavailable());
             }
-            if !reservation.request_wait.is_zero() {
+            // The shared request gap bounds deliberately initiated requests.
+            // A server-directed redirect is a continuation of the request the
+            // server already answered: an ST service ticket expires in
+            // seconds, so sleeping the gap here makes the CAS ticket exchange
+            // fail deterministically. The reservation still books the slot,
+            // keeping global pacing honest for later acquisitions.
+            if !reservation.request_wait.is_zero() && !had_redirect {
                 std::thread::sleep(reservation.request_wait);
             }
         }
@@ -5981,7 +6007,7 @@ fn stored_session_in(directory: &File, fingerprint: &str) -> Result<Jar, Error> 
                             || declared.chars().any(char::is_control)
                             || declared.starts_with('.')
                             || declared.bytes().any(|byte| byte.is_ascii_uppercase())
-                            || within_platform_family(declared)
+                            || within_shared_family(declared)
                             || !domain_matches(declared, cookie.scope.domain())
                     })
                 || !cookie.path.starts_with('/')
@@ -8936,7 +8962,7 @@ mod tests {
     }
 
     #[test]
-    fn cookie_identity_keeps_distinct_host_and_parent_domain_through_narrowed_delivery() {
+    fn cookie_identity_keeps_distinct_host_and_suffix_domain_through_narrowed_delivery() {
         let origin = Url::parse(CLASSROOM_ORIGIN).unwrap();
         let set = |jar: &mut Jar, value: &str| {
             let mut headers = HeaderMap::new();
@@ -8944,14 +8970,14 @@ mod tests {
             jar.absorb(&origin, &headers).unwrap();
         };
 
-        // A host-only cookie and a foreign-family parent-domain cookie stay
-        // distinct identities even though the parent domain is narrowed to
+        // A host-only cookie and a family-foreign suffix-domain cookie stay
+        // distinct identities even though the suffix domain is narrowed to
         // the setter for delivery; replacing one never touches the other.
         let mut jar = Jar::default();
         set(&mut jar, "sid=host; Path=/; Max-Age=3600");
         set(
             &mut jar,
-            "sid=parent; Path=/; Domain=buaa.edu.cn; Max-Age=3600",
+            "sid=parent; Path=/; Domain=edu.cn; Max-Age=3600",
         );
         assert_eq!(jar.cookies.len(), 2);
         assert_eq!(jar.cookies[0].value, "host");
@@ -8970,7 +8996,7 @@ mod tests {
 
         // Deleting the parent-domain identity never deletes the host cookie,
         // which still reaches actual requests afterwards.
-        set(&mut jar, "sid=; Path=/; Domain=buaa.edu.cn; Max-Age=0");
+        set(&mut jar, "sid=; Path=/; Domain=edu.cn; Max-Age=0");
         assert_eq!(jar.cookies.len(), 1);
         assert_eq!(jar.cookies[0].value, "host2");
         assert_eq!(jar.header(&origin).unwrap().to_str().unwrap(), "sid=host2");
@@ -8987,13 +9013,27 @@ mod tests {
         assert!(jar.cookies.is_empty());
         assert!(jar.header(&origin).is_none());
 
-        // Private storage preserves both distinct identities and their
-        // narrowed delivery through a reload.
+        // A shared-family cookie reaches the ticket exchange endpoint but
+        // is not classroom-scoped, so private storage never keeps it.
         let mut jar = Jar::default();
         set(&mut jar, "sid=host; Path=/; Max-Age=3600");
         set(
             &mut jar,
-            "sid=parent; Path=/; Domain=buaa.edu.cn; Max-Age=3600",
+            "sid=shared; Path=/; Domain=buaa.edu.cn; Max-Age=3600",
+        );
+        let yjapi = Url::parse("https://yjapi.msa.buaa.edu.cn/").unwrap();
+        assert_eq!(
+            jar.header(&yjapi).unwrap().to_str().unwrap(),
+            "sid=shared"
+        );
+        assert_eq!(jar.cookies.len(), 2);
+        assert_eq!(jar.cookies[1].identity_domain(), "buaa.edu.cn");
+
+        // Private storage preserves a narrowed suffix-domain cookie's
+        // identity and its narrowed delivery through a reload.
+        set(
+            &mut jar,
+            "sid=parent; Path=/; Domain=edu.cn; Max-Age=3600",
         );
         let (directory, _) = temporary_directory("narrowed-parent-domain-identity");
         let fingerprint = account_fingerprint("student");
@@ -9009,8 +9049,7 @@ mod tests {
         );
 
         // A narrowed cookie keeps its narrowed delivery after reload: its
-        // declared parent domain never widens delivery to a sibling host.
-        let yjapi = Url::parse("https://yjapi.msa.buaa.edu.cn/").unwrap();
+        // declared suffix domain never widens delivery to a sibling host.
         assert!(loaded.header(&yjapi).is_none());
 
         // Reload fails closed on anything the setter could not have produced:
@@ -9031,7 +9070,7 @@ mod tests {
         };
         write_snapshot(2, &[jar.cookies[0].clone()]);
         assert!(stored_session_in(&directory, &fingerprint).is_err());
-        let narrowed = jar.cookies[1].clone();
+        let narrowed = jar.cookies[2].clone();
         for declared in [
             Some(String::new()),
             Some(".buaa.edu.cn".to_owned()),
@@ -9400,12 +9439,17 @@ mod tests {
         jar.absorb(&sso, &headers).expect("sso cookie");
 
         let classroom = Url::parse("https://classroom.msa.buaa.edu.cn/livingroom").expect("url");
-        // The sign-on credential never reaches another host.
-        assert!(jar.header(&classroom).is_none());
+        // The sign-on credential is delivered inside the shared service
+        // family exactly the way a browser delivers it: the ticket exchange
+        // endpoint and the classroom platform both receive it.
+        let yjapi_value = jar.header(&yjapi).expect("yjapi cookie header");
+        assert_eq!(yjapi_value.to_str().expect("text"), "CASTGC=cas-ticket");
+        assert!(jar.header(&classroom).is_some());
         let sso_value = jar.header(&sso).expect("sso cookie header");
         assert_eq!(sso_value.to_str().expect("text"), "CASTGC=cas-ticket");
 
-        // A platform-family domain cookie is shared with the classroom host.
+        // A session-family domain cookie is shared across the msa services
+        // but never reaches the sign-on host.
         let mut platform_headers = HeaderMap::new();
         platform_headers.append(
             SET_COOKIE,
@@ -9419,7 +9463,7 @@ mod tests {
         let classroom_value = jar.header(&classroom).expect("classroom header");
         assert_eq!(
             classroom_value.to_str().expect("text"),
-            "PHPSESSID=platform"
+            "CASTGC=cas-ticket; PHPSESSID=platform"
         );
 
         // A host-only cookie stays with the host that set it.
@@ -9435,22 +9479,45 @@ mod tests {
     }
 
     #[test]
-    fn a_broader_domain_never_widens_a_cookie() {
+    fn a_family_foreign_domain_never_widens_a_cookie() {
         let mut jar = Jar::default();
         let sso = Url::parse("https://sso.buaa.edu.cn/login").expect("sso url");
+        let yjapi = Url::parse("https://yjapi.msa.buaa.edu.cn/casapi/index.php").expect("url");
         let classroom = Url::parse("https://classroom.msa.buaa.edu.cn/").expect("url");
         let mut headers = HeaderMap::new();
         headers.append(
             SET_COOKIE,
-            HeaderValue::from_static("CAS=wide; Domain=.buaa.edu.cn"),
+            // A bare public suffix matches the setter but is outside the
+            // shared service family: delivery narrows to the setter only.
+            HeaderValue::from_static("CAS=wide; Domain=.edu.cn"),
         );
         jar.absorb(&sso, &headers).expect("wide cookie");
         assert!(jar.header(&classroom).is_none());
-        assert!(jar.header(&sso).is_some());
+        assert!(jar.header(&yjapi).is_none());
+        assert_eq!(jar.header(&sso).unwrap().to_str().unwrap(), "CAS=wide");
     }
 
     #[test]
-    fn sso_domain_cookie_remains_confined_and_overlong_replacement_is_rejected() {
+    fn a_shared_family_domain_reaches_the_ticket_exchange() {
+        let mut jar = Jar::default();
+        let sso = Url::parse("https://sso.buaa.edu.cn/login").expect("sso url");
+        let yjapi = Url::parse("https://yjapi.msa.buaa.edu.cn/casapi/index.php").expect("url");
+        let mut headers = HeaderMap::new();
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("CASTGC=cas-ticket; Domain=.buaa.edu.cn"),
+        );
+        jar.absorb(&sso, &headers).expect("CASTGC cookie");
+        // Browser parity: the sign-on ticket grant must reach the ticket
+        // exchange endpoint; narrowing it produced the observed HTTP 500.
+        assert_eq!(
+            jar.header(&yjapi).unwrap().to_str().unwrap(),
+            "CASTGC=cas-ticket"
+        );
+    }
+
+    #[test]
+    fn sso_domain_cookie_shares_inside_family_and_overlong_replacement_is_rejected() {
         let sso = Url::parse("https://sso.buaa.edu.cn/login").unwrap();
         let callback = Url::parse("https://yjapi.msa.buaa.edu.cn/casapi/index.php").unwrap();
         let mut jar = Jar::default();
@@ -9461,7 +9528,8 @@ mod tests {
         );
         jar.absorb(&sso, &headers).unwrap();
         assert_eq!(jar.header(&sso).unwrap(), "opaque_session=old");
-        assert!(jar.header(&callback).is_none());
+        // A shared-family domain reaches the ticket exchange endpoint.
+        assert_eq!(jar.header(&callback).unwrap(), "opaque_session=old");
 
         let mut overlong = HeaderMap::new();
         overlong.append(
@@ -9472,7 +9540,7 @@ mod tests {
         );
         jar.absorb(&sso, &overlong).unwrap();
         assert_eq!(jar.header(&sso).unwrap(), "opaque_session=old");
-        assert!(jar.header(&callback).is_none());
+        assert_eq!(jar.header(&callback).unwrap(), "opaque_session=old");
     }
 
 
