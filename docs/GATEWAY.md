@@ -45,7 +45,7 @@ The literal example values are placeholders, not a working account or discovered
 
 Challenge acquisition is one governed interactive request. Credential submission is a second request after the global completion gap and uses `RequestKind::Authentication`, consuming the one-shot permission. There is no retry/fallback loop. A final send failure, indeterminate 2xx body, credential rejection, 401/403, reliable challenge or lock signal leaves authentication latched until another deliberate `resume-auth`. The CLI zeroizes the original login stdin buffer when the command returns, and the parsed password field zeroizes on every drop path; challenge-bound derived fields live only for the bounded request and are never stored or returned.
 
-The original Rust XEncode mixer uses the pinned-reference grouping `A + (B ^ C) + D` with wrapping `u32` additions. Source revisions, license boundaries and the formula are documented in [REFERENCES](REFERENCES.md#gateway-xencode-formula-review). These are community protocol references, not an official or live compatibility guarantee; no real login has been attempted.
+The original Rust XEncode mixer uses the pinned-reference grouping `A + (B ^ C) + D` with wrapping `u32` additions. The `acid` field in the xencoded info JSON is a string (matching the reference), not a numeric `u32`. Source revisions, license boundaries and the formula are documented in [REFERENCES](REFERENCES.md#gateway-xencode-formula-review). The primary protocol reference is [fontlos/buaa-api](https://github.com/fontlos/buaa-api) (MIT). These are community protocol references, not an official or live compatibility guarantee; no real login has been attempted.
 
 ## Logout plan and commit
 
