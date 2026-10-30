@@ -6088,7 +6088,7 @@ pub fn schema() -> Value {
             }},
             "output":{"type":"object","properties":{
                 "schema_version":{"const":1},"type":{"const":"classroom_session_resume"},
-                "result":{"const":"one_attempt_armed"},"network_request_performed":{"const":false},
+                "result":{"const":"no_latch_required"},"network_request_performed":{"const":false},
                 "cooldown_cleared":{"const":false}
             }}
         },

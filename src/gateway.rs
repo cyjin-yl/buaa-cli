@@ -962,9 +962,9 @@ pub fn resume_auth(input: &str) -> Result<Value, Error> {
         .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
         .map_err(|_| unavailable())?;
     Ok(json!({
-        "schema_version":1,"type":"gateway_auth_resume","result":"one_attempt_armed",
+        "schema_version":1,"type":"gateway_auth_resume","result":"no_latch_required",
         "network_request_performed":false,"cooldown_cleared":false,
-        "instruction":"invoke gateway login --online once with typed LOGIN intent"
+        "instruction":"no latch or arming gate exists; invoke gateway login --online once with typed LOGIN intent when authorized"
     }))
 }
 
@@ -1418,7 +1418,7 @@ pub fn schema() -> Value {
     json!({
         "resume-auth":{
             "input":{"type":"object","additionalProperties":false,"required":["intent"],"x-maxInputBytes":16384,"properties":{"intent":{"const":"RESUME GATEWAY AUTH"}}},
-            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","network_request_performed","cooldown_cleared","instruction"],"properties":{"schema_version":{"const":1},"type":{"const":"gateway_auth_resume"},"result":{"const":"one_attempt_armed"},"network_request_performed":{"const":false},"cooldown_cleared":{"const":false},"instruction":{"type":"string"}}}
+            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","network_request_performed","cooldown_cleared","instruction"],"properties":{"schema_version":{"const":1},"type":{"const":"gateway_auth_resume"},"result":{"const":"no_latch_required"},"network_request_performed":{"const":false},"cooldown_cleared":{"const":false},"instruction":{"type":"string"}}}
         },
         "usage":{
             "input":{"type":"null"},"options":{"--online":"cache miss read","--refresh":"explicit live read"},
