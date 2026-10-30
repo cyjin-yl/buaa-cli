@@ -20,7 +20,7 @@ struct Info<'a> {
     username: &'a str,
     password: &'a str,
     ip: &'a str,
-    acid: u32,
+    acid: String,
     enc_ver: &'static str,
 }
 
@@ -75,7 +75,7 @@ pub(crate) fn derive(
             username,
             password,
             ip,
-            acid,
+            acid: acid.to_string(),
             enc_ver: "srun_bx1",
         })
         .map_err(|_| ())?,
@@ -119,11 +119,11 @@ mod tests {
         assert_eq!(material.hmd5, "dba5ccebf5a5bf85ddee428f833a2b92");
         assert_eq!(
             material.checksum,
-            "3753ba43ea193b985bd23026ec4e192b0aa0b5f1"
+            "2942c95d6eff8065d8357428a5cb88f98edc1fbc"
         );
         assert_eq!(
             material.info,
-            "{SRBX1}WmXBedGI9fZn6RbCTUtUVlZjGctc0VpGVP8MeGw9E5jEpX5BM9KBULtcKBL1s9qZuIWJc7NgB5cuufzz8+tLyGGvRINX7rB8LMdGDXI9ka2HiD+E6LGialDx+ObG0ax9DQw7w8xTDEL="
+            "{SRBX1}JWPc5ieYQgQAis66mdcidjDciuv9uU0iuf65wYb5PqxREwHKENRmyBT3mNVf5Rb4c1PorosIJIm8giaxcFzeD/HTUhtvttnXYBkf0iLMSi8/XKzGT3z/5JMaGHRmxIQrsog6ZtTCHPFqfydU"
         );
     }
 
@@ -133,11 +133,11 @@ mod tests {
         assert_eq!(material.hmd5, "2ccae0963db0ff2e5ebaa5cc23bf6ad4");
         assert_eq!(
             material.checksum,
-            "913a790cb6621b0d872ecef7c041bbb38b46eeb6"
+            "0fc17716f7d60ef06654005403eaaf3cec230bbf"
         );
         assert_eq!(
             material.info,
-            "{SRBX1}1wJ8x+9pQgmGIbvCdAmHcCGVj/JkDaeOE0IcIHWjd5R1njtVJ2zVgPEMNa/Ozrcr8WWdZ3HOry9DmGhtFozX1Y83g6dWwi8e3QB9jFIFKSLlhgcHIEQ2L0ISL/CAM4fo9L4wSv3jE5asnHVcFgozsv=="
+            "{SRBX1}MXOurAwIXUCDm3LrI6YlU0NaygfZAPRexvs62vmt835Yzu0JNu0h0KcgBXYWzS0hWEXNLv5R3l0P1me9xkFmF6pzuTJk4zxGI34Vs8V5Og2F84L7gCSgWa/UqOqlW53gstH+Pc58IXiUlu9Ve9QW24ivBHIoJylo5QRRtL=="
         );
     }
 }

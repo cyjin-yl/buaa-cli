@@ -29,8 +29,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MIN_INTERVAL_MS: u64 = 5_000;
-const MIN_BACKGROUND_MS: u64 = 15 * 60 * 1_000;
+const MIN_INTERVAL_MS: u64 = 1_000;
+const MIN_BACKGROUND_MS: u64 = 3_000;
 const MISSING_RETRY_AFTER_MS: u64 = 30 * 60 * 1_000;
 const MAX_STATE_BYTES: u64 = 16 * 1_024;
 const LOCK_NAME: &str = "governor.lock";

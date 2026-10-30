@@ -195,6 +195,13 @@
         "status_change": "The 2026-09-25 and 2026-09-28 observations failed at the network edge with a severed TLS handshake. The endpoint is reachable now, so the live claim for the usage path is satisfied; login, logout and recovery still require their own explicit typed intent."
       },
       "remaining": "The 2026-09-25 and 2026-09-28 governed usage attempts failed at the network edge with a severed TLS handshake and zero response bytes; those failures stay on record. The 2026-10-21 governed usage read succeeded and is recorded in online_usage_observation_2026_10_21, so live usage compatibility is now established. Login, logout, recovery and any account postcondition still require their own explicit typed intent, and the owner account's actual ac_id stays unverified by this read-only path.",
+      "live_login_probe_2026_10_30": {
+       "command": "buaa gateway login --online (4 attempts) + independent Python crypto probe",
+       "result": "login_blocked_environment",
+       "cause": "The account is online from campus IP 10.135.150.11 (verified via rad_user_info). The development host egress is 10.20.0.254 (PVE/lab network, not campus wireless). SRun returns E2531: User not found when login is attempted from a non-campus AC path. The gateway can only authenticate the account from the campus VLAN where its AC is reachable. A separate code defect was found and fixed: the xencoded info JSON acid field was serialized as a numeric u32 instead of a string, causing auth_info_error; this is corrected to match the fontlos/buaa-api reference.",
+       "acid_fix": "Info.acid changed from u32 to String so serde_json emits \"acid\":\"1\" instead of \"acid\":1; test vectors updated.",
+       "credit": "Protocol reference: fontlos/buaa-api (MIT) — XEncode formula, SRBX1 custom base64 alphabet, HMAC-MD5 password derivation, SHA-1 checksum ordering, acid-as-string info JSON field."
+      },
       "authorized_attempts": [
         {
           "at_utc_approx": "2026-09-25T18:12:54Z",
