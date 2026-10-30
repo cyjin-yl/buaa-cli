@@ -589,15 +589,18 @@ redirect chain without the request-gap sleep that let the single-use service
 ticket expire (a server-directed redirect is a continuation of the request the
 server already answered).
 
-The classroom SPA (`app.js`) authenticates its API calls with
-`Authorization: Bearer <getToken()>`, and the token is delivered as the
-`?token=` query parameter of the yjapi-to-classroom redirect URL — not a
-`Set-Cookie`. A cookie-only model answers `{"code":5002,"未传入token"}` on the
-identity probe. The fix extracts `?token=` from the final redirect URL into a
-zeroizing buffer (bounded length, printable-ASCII filter), sends it as the
-`Authorization` header on the `get-sub-info` probe only, and zeroes it on drop;
-it is never persisted or revealed in a receipt. All other `send` call sites pass
-no authorization.
+An earlier reading held that the classroom SPA authenticates every call with
+`Authorization: Bearer <getToken()>` and that the token arrives as a `?token=`
+query parameter of the yjapi-to-classroom redirect. That is **withdrawn as
+unproven for this CLI flow**: the observed production redirect carries no
+`token` parameter, the stored session captured an empty token, and the
+`get-sub-info` probe returned application code 0 with the expected lesson
+identity on cookies alone. A conditional extractor remains in `login()` — it
+sends an `Authorization` header only when such a parameter is present, keeps it
+in a zeroizing buffer and never persists or reveals it — but nothing in the
+verified session depends on it. The earlier `{"code":5002,"未传入token"}`
+observation is not reproducible now and must not be attributed to a missing
+header.
 
 Two earlier readings were wrong and are withdrawn. First, `yjapi.msa.buaa.edu.cn`
 temporarily served a Kubernetes ingress placeholder certificate (OpenSSL verify

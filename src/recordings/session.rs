@@ -5765,10 +5765,11 @@ pub fn login(input: &str) -> Result<Value, Error> {
         }
     };
     let final_url = posted.url.clone();
-    // The classroom SPA authenticates with a Bearer token delivered in the
-    // yjapi->classroom redirect URL query, not a cookie. Extract it and send
-    // it as the Authorization header on the identity probe. It is a
-    // credential: zeroized on drop, never persisted or revealed.
+    // If the yjapi->classroom redirect carries a token query parameter, send
+    // it as an Authorization header on the identity probe. The observed
+    // production redirect does not carry one and the probe validated on
+    // cookies alone, so this stays conditional and unproven for that flow. It
+    // is a credential: zeroized on drop, never persisted or revealed.
     let classroom_token = final_url
         .query_pairs()
         .find(|(key, _)| key == "token")
@@ -10389,4 +10390,5 @@ mod tests {
             assert!(!bytes.contains(marker), "receipt leaked {marker}");
         }
     }
+
 }
