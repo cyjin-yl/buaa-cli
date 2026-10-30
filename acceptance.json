@@ -8,7 +8,7 @@
       "id": "governor",
       "title": "Shared cross-process request safety",
       "status": "implemented-offline",
-      "acceptance": "Single private identity across CLI/provider/worktrees, one in-flight, >=5-second separation, >=15-minute background interval, durable cooldown and one-shot auth latch; offline multi-process proof.",
+      "acceptance": "Single private identity across CLI/provider/worktrees, one in-flight, at least the configured request separation (1-second floor) and background separation (3-second floor); a directory remembers the greatest limits ever requested, so a durable raised value (the live state carries 5 seconds and 15 minutes) is never lowered on reopen. Durable cooldown applies; authentication attempts are always admitted because the durable safety latch was removed in 5148607; offline multi-process proof.",
       "sources": [
         "https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7"
       ],

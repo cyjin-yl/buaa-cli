@@ -450,7 +450,7 @@ macro_rules! governor_process_regressions {
             let reopened = fixture.open();
             let status = reopened.status().unwrap();
             assert!(!status.safety_latched);
-            assert!(status.next_request_boottime_ms > before_finish + 5_000);
+            assert!(status.next_request_boottime_ms > before_finish + crate::governor::MIN_INTERVAL_MS);
             assert!(reopened.try_acquire(RequestKind::Interactive).is_err());
             assert!(reopened.load().unwrap().pending.is_none());
             drop(inherited);
@@ -578,8 +578,20 @@ macro_rules! governor_process_regressions {
 
         #[test]
         fn polling_and_raised_policy_cannot_be_lowered_on_reopen() {
-            assert!(Limits::new(Duration::from_millis(4_999), Duration::from_secs(900)).is_err());
-            assert!(Limits::new(Duration::from_secs(5), Duration::from_secs(899)).is_err());
+            assert!(
+                Limits::new(
+                    Duration::from_millis(crate::governor::MIN_INTERVAL_MS - 1),
+                    Duration::from_secs(900)
+                )
+                .is_err()
+            );
+            assert!(
+                Limits::new(
+                    Duration::from_millis(crate::governor::MIN_INTERVAL_MS),
+                    Duration::from_millis(crate::governor::MIN_BACKGROUND_MS - 1)
+                )
+                .is_err()
+            );
             let fixture = Fixture::new();
             let limits = Limits::new(Duration::from_secs(10), Duration::from_secs(1_800)).unwrap();
             let governor = Governor::open_at(fixture.state_dir(), limits).unwrap();

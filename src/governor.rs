@@ -29,8 +29,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MIN_INTERVAL_MS: u64 = 1_000;
-const MIN_BACKGROUND_MS: u64 = 3_000;
+pub(crate) const MIN_INTERVAL_MS: u64 = 1_000;
+pub(crate) const MIN_BACKGROUND_MS: u64 = 3_000;
 const MISSING_RETRY_AFTER_MS: u64 = 30 * 60 * 1_000;
 const MAX_STATE_BYTES: u64 = 16 * 1_024;
 const LOCK_NAME: &str = "governor.lock";
@@ -55,7 +55,8 @@ impl Default for Limits {
 }
 
 impl Limits {
-    /// Raise the five-second request gap and fifteen-minute background gap.
+    /// Raise the request and background gaps. Neither may go below the safety
+    /// minimums (`MIN_INTERVAL_MS` and `MIN_BACKGROUND_MS`).
     pub fn new(request_interval: Duration, background_interval: Duration) -> Result<Self, String> {
         if request_interval < Duration::from_millis(MIN_INTERVAL_MS)
             || background_interval < Duration::from_millis(MIN_BACKGROUND_MS)

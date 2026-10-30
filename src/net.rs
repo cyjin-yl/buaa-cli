@@ -3891,13 +3891,16 @@ mod tests {
             .unwrap()
             .finish(Outcome::Success)
             .unwrap();
-        client.cookie.expires = Some(SystemTime::now() + Duration::from_secs(1));
+        // The credential must expire during the governor wait, so its lifetime
+        // is half the configured request gap rather than a fixed second.
+        let half_gap = Duration::from_millis(crate::governor::MIN_INTERVAL_MS / 2);
+        client.cookie.expires = Some(SystemTime::now() + half_gap);
         let started = Instant::now();
         let error = client
             .get(&Url::parse(CLASSROOM_TEST_URL).unwrap(), classroom_track)
             .unwrap_err();
         assert_eq!(error.code, "unavailable");
-        assert!(started.elapsed() >= Duration::from_secs(4));
+        assert!(started.elapsed() >= half_gap);
         assert_eq!(server.count(), 0);
         let status = governor.status().unwrap();
         assert!(!status.safety_latched);
@@ -4103,7 +4106,7 @@ mod tests {
         );
         let (robots_at, _) = server.requests.recv().unwrap();
         let (target_at, _) = server.requests.recv().unwrap();
-        assert!(target_at.duration_since(robots_at) >= Duration::from_secs(5));
+        assert!(target_at.duration_since(robots_at) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
         let before = fs::read(fixture.0.join("governor/state.json")).unwrap();
         let cached = client.get(&url, classroom_track).unwrap().unwrap();
         assert_eq!(cached["segments"], first["segments"]);
@@ -5434,7 +5437,7 @@ mod tests {
         assert_eq!(again.fetched_at_unix_ms, first.fetched_at_unix_ms);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_secs(5));
+        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
     }
 
     #[test]
@@ -5467,7 +5470,7 @@ mod tests {
         assert_eq!(count, 1);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_secs(5));
+        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
         assert_eq!(
             client.snapshot(&url, false).unwrap().cache_status,
             CacheStatus::Hit
