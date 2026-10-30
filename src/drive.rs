@@ -619,6 +619,19 @@ mod numeric_read_regression {
         assert_eq!(error.message, "drive contract refused; no automatic retry");
     }
 
+    #[test]
+    pub(super) fn issued_session_cookie_is_refused_before_projection() {
+        // This reader keeps no cookie jar, so a Set-Cookie response carries a
+        // credential the caller never submitted and cannot revoke.
+        let error = admit_read_body(libraries_path(), 200, SAFE_BODY, MIME, "unrelated-secret", true)
+            .err()
+            .expect("a response that issued a session cookie must not be projected");
+        assert_eq!(error.code, "session_cookie_refused");
+        // The same body without cookie issuance is admitted, so the refusal is
+        // caused by issuance alone.
+        assert!(admit_read_body(libraries_path(), 200, SAFE_BODY, MIME, "unrelated-secret", false).is_ok());
+    }
+
     fn assert_structured(body: &[u8], secret: &str, number: Value) {
         let result = admit_read_body(libraries_path(), 200, body, MIME, secret, false).unwrap();
         // read_output's network flag describes its production caller. This is
