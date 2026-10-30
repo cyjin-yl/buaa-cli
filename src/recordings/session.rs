@@ -36,7 +36,7 @@ const ALLOWED_HOSTS: [&str; 3] = [
     "yjapi.msa.buaa.edu.cn",
     "classroom.msa.buaa.edu.cn",
 ];
-const MAX_REDIRECTS: usize = 6;
+const MAX_REDIRECTS: usize = 8;
 const MAX_BODY: usize = 512 * 1024;
 const MAX_INPUT: usize = 32 * 1024;
 const MAX_COOKIE_BYTES: usize = 16 * 1024;
@@ -3344,6 +3344,7 @@ fn send(
     form: Option<(&[(&str, &str)], &Url)>,
     trail: &mut Trail,
     initial: bool,
+    authorization: Option<&str>,
 ) -> Result<Hop, Error> {
     if form.is_some() && !pinned_login_route(start) {
         return Err(invalid());
@@ -3401,6 +3402,12 @@ fn send(
                 };
                 header.set_sensitive(true);
                 request = request.header(reqwest::header::COOKIE, header);
+            }
+            if let Some(authorization) = authorization
+                && let Ok(mut header) = HeaderValue::from_str(authorization)
+            {
+                header.set_sensitive(true);
+                request = request.header(reqwest::header::AUTHORIZATION, header);
             }
             if let Some((_, referer)) = form {
                 request = request.header(reqwest::header::REFERER, referer.as_str());
@@ -5227,7 +5234,7 @@ pub fn inspect(input: &str) -> Result<Value, Error> {
     let mut jar = Jar::default();
     let mut lease = acquire_kind(&governor, RequestKind::Authentication)?;
     let mut trail = Trail::new();
-    let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true) {
+    let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true, None) {
         Ok(page) => page,
         Err(error) => {
             if error.code == "governor_unavailable" { return Err(error); }
@@ -5266,7 +5273,7 @@ pub fn diagnose(input: &str) -> Result<Value, Error> {
     let mut jar = Jar::default();
     let mut lease = acquire_kind(&governor, RequestKind::Interactive)?;
     let mut trail = Trail::new();
-    let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true) {
+    let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true, None) {
         Ok(page) => page,
         Err(error) => {
             if error.code == "governor_unavailable" { return Err(error); }
@@ -5573,7 +5580,7 @@ pub fn login(input: &str) -> Result<Value, Error> {
     let mut trail = Trail::new();
 
     let page = send(
-        &mut lease, &client, &mut jar, &login_url, None, &mut trail, true,
+        &mut lease, &client, &mut jar, &login_url, None, &mut trail, true, None,
     );
     let page = match page {
         Ok(page) => page,
@@ -5741,6 +5748,7 @@ pub fn login(input: &str) -> Result<Value, Error> {
         Some((&form, &page.url)),
         &mut trail,
         false,
+        None,
     );
     let posted = match posted {
         Ok(posted) => posted,
@@ -5757,6 +5765,21 @@ pub fn login(input: &str) -> Result<Value, Error> {
         }
     };
     let final_url = posted.url.clone();
+    // The classroom SPA authenticates with a Bearer token delivered in the
+    // yjapi->classroom redirect URL query, not a cookie. Extract it and send
+    // it as the Authorization header on the identity probe. It is a
+    // credential: zeroized on drop, never persisted or revealed.
+    let classroom_token = final_url
+        .query_pairs()
+        .find(|(key, _)| key == "token")
+        .map(|(_, value)| value.into_owned());
+    let bearer = classroom_token
+        .filter(|token| {
+            !token.is_empty()
+                && token.len() <= 512
+                && token.bytes().all(|byte| (0x20..0x7f).contains(&byte))
+        })
+        .map(|token| Zeroizing::new(format!("Bearer {token}")));
     let final_host = final_url.host_str().unwrap_or("").to_string();
     let final_fields = match final_response_fields(&posted) {
         Ok(fields) => fields,
@@ -5824,6 +5847,7 @@ pub fn login(input: &str) -> Result<Value, Error> {
     // never establish a session or imply account identity/rights.
     let probe = send(
         &mut lease, &client, &mut jar, &probe_url, None, &mut trail, false,
+        bearer.as_ref().map(|b| b.as_str()),
     );
     let probe = match probe {
         Ok(probe) => probe,
@@ -7725,7 +7749,7 @@ mod tests {
         let client = Client::builder().https_only(true).proxy(proxy).build().unwrap();
         let fields = [("username", "synthetic"), ("password", "synthetic")];
         let mut trail = Trail::new();
-        let result = send(&mut lease, &client, &mut jar, &url, Some((&fields, &url)), &mut trail, false);
+        let result = send(&mut lease, &client, &mut jar, &url, Some((&fields, &url)), &mut trail, false, None);
         stopped.store(true, Ordering::SeqCst);
         worker.join().unwrap();
         let error = result.err().expect("expired cookie must refuse the next request");
@@ -7756,7 +7780,7 @@ mod tests {
         let proxy = reqwest::Proxy::all("http://127.0.0.1:1").unwrap();
         let client = Client::builder().https_only(true).proxy(proxy).build().unwrap();
         let mut trail = Trail::new();
-        let error = send(&mut lease, &client, &mut jar, &url, None, &mut trail, true)
+        let error = send(&mut lease, &client, &mut jar, &url, None, &mut trail, true, None)
             .err().expect("an expired applicable cookie must refuse the request");
         assert_eq!(error.code, "scoped_cookie_unusable");
         finish_send_failure(lease, &error).unwrap();

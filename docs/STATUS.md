@@ -579,6 +579,33 @@ callback HTTP 500. No classroom session or positive selected-lesson response
 was established. This supersedes earlier guesses that the attempt stopped
 before password submission; the sanitized attempt trail proves the POST.
 
+### Classroom Bearer-token mechanism and yjapi certificate blocker (2026-10-30)
+
+The callback HTTP 500 is no longer the blocker: the CLI now follows the CAS
+redirect chain without the request-gap sleep that let the single-use service
+ticket expire (a server-directed redirect is a continuation of the request the
+server already answered). The chain reaches the classroom SPA, but the
+`get-sub-info` identity probe returned `{"code":5002,"未传入token"}`.
+
+The classroom SPA (`app.js`) authenticates its API calls with
+`Authorization: Bearer <getToken()>`, and the token is delivered as the
+`?token=` query parameter of the yjapi-to-classroom redirect URL — not a
+`Set-Cookie`. The CLI's cookie-jar model therefore can never establish the
+session. The fix extracts `?token=` from the final redirect URL into a
+zeroizing buffer (bounded length, printable-ASCII filter), sends it as the
+`Authorization` header on the `get-sub-info` probe only, and zeroes it on drop;
+it is never persisted or revealed in a receipt. All other `send` call sites pass
+no authorization. The binary was rebuilt with this fix.
+
+Live verification is blocked by an environmental change:
+`yjapi.msa.buaa.edu.cn` now serves a Kubernetes ingress placeholder
+certificate ("Kubernetes Ingress Controller Fake Certificate", OpenSSL verify
+code 18, self-signed). The CLI's `https_only` client refuses it per the
+no-TLS-bypass rule, so the CAS chain breaks at the yjapi hop and the login
+returns `unavailable`. `sso.buaa.edu.cn` itself is reachable (HTTP 200). The
+Bearer-token fix is code-complete and built; it is not yet live-verified, and a
+rejected self-signed certificate is not treated as a passed session.
+
 The asserted URL-cookie cause was incorrect: the original RFC 6265 octet
 ranges already allow colons and slashes. Synthetic Chromium acceptance of a
 URL-shaped value does not prove the CLI dropped it, nor explain callback 500.
