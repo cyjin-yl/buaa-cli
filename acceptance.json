@@ -13,6 +13,11 @@
         "https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7"
       ],
       "evidence": {
+        "resume_and_legacy_state_2026_10_31": {
+          "resume_contract": "Governor::resume_authentication is state validation only since 5148607. Both the classroom resume schema and the gateway resume-auth output had still declared result one_attempt_armed and told the operator to arm an attempt; both now report no_latch_required, and the whole `buaa schema` payload no longer contains the retired constant. Verified at runtime for both commands.",
+          "legacy_state": "A state file written by the latched build can still carry safety_latched and authentication_armed as true. It is read, validated and reported verbatim as history, and no gate consults it: a new regression seeds both true, reopens the governor and asserts an interactive request is admitted. An attempted normalisation to false was reverted because it broke the documented verbatim-retention contract.",
+          "pacing_tests": "Six pacing assertions that still encoded the retired five-second contract now derive from MIN_INTERVAL_MS and MIN_BACKGROUND_MS, including the stored-cookie expiry test whose credential lifetime is half the configured gap."
+        },
         "implementation": "Linux shared UID governor library, not HTTP transport",
         "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention. Earlier offline suite: 118 passed across five suites (one ignored). Final merged-source gate: 197 library + 18 CLI passed, two ignored; locked offline build, strict all-target clippy and formatter check passed. The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
