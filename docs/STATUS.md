@@ -1,5 +1,67 @@
 ## Development status
 
+## 2026-11-01: bounded Smart session implementation, offline proof only
+
+`smart session [--online]` now implements one explicit CAS login followed by
+one selected classrooms/library read. It is not full Smart service acceptance.
+Authorization, the exact `LOGIN <username> smart <service>` intent, object-only
+input and local query validation precede client/account-state construction.
+Disabled reads remain local. The original cookie/token `smart` interface remains;
+caller-supplied library CAS login is no longer an accepted read operation.
+
+The relying-party contracts were reviewed from MIT-licensed
+[`BUAASubnet/UBAA@e8a397fc`](https://github.com/BUAASubnet/UBAA/tree/e8a397fcb35a68147eee65a94c66ffb84e2f09fe):
+[`ClassroomClient.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/server/src/main/kotlin/cn/edu/ubaa/classroom/ClassroomClient.kt)
+and [`LibBookClient.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/server/src/main/kotlin/cn/edu/ubaa/libbook/LibBookClient.kt).
+This is source evidence, not proof of the current campus deployment. The CLI
+does not adopt the reference client's best-effort error handling or auto-refresh.
+
+One existing Authentication lease spans the CAS flow, a single library
+`login/user` exchange if selected, and exactly one business read. Each profile
+has its own pinned HTTPS origins and service declaration. The library's
+query/fragment CAS is consumed once in memory; its credential URL is not fetched.
+There is no new governor/account key, session persistence, automatic refresh,
+retry, seat reservation or attendance operation. Challenges and deferrals stop
+the attempt. A server/protocol failure is not a rejected-password verdict, and
+safety-state persistence failure leaves the pending outcome intact.
+
+The final output guard retains the original password, issued token/CAS,
+transmitted cookie header and all current/retired cookie values, including
+path-excluded, expired and replaced values. Exhausting the private cookie
+history bound stops before the business read rather than evicting secrets.
+Independent source review identified and closed pending-outcome, whole-cookie
+encoding, cookie-history and positional-array admission defects. These reviews
+do not approve a future Git head or a campus account-safety policy change.
+
+Guarded offline verification passed 49 Smart library cases, including 25
+CAS profile/flow cases, and 13 native CLI cases. The TLS stand-in uses
+an ephemeral CA trusted only by its client, actual HTTPS requests to loopback,
+and isolated account state; certificate verification is never disabled.
+It exercised one credential POST, the actual final response projection,
+host-only SSO cookie confinement, one-time library exchange, 307/308 refusal,
+late body challenge, missing/invalid handoffs, deferral and credential echoes.
+Nine separate native command observations exercised disabled/refusal/legacy
+paths and emitted schema; JSON Schema validation agreed with the actual
+session input/output. These are synthetic observations, not campus requests.
+
+The complete locked offline suite then passed 1109 library tests (three
+existing ignored workers) and all 93 integration/CLI tests. That includes the
+existing classroom session, parser/privacy and account-state regressions; no
+campus access was used to turn these checks green.
+
+The subsequent locked release build passed. Its actual `help`, `schema`,
+disabled session and `capabilities` commands ran; the entire 51-capability
+manifest equalled the current source JSON with duplicate keys rejected, not
+just a selected capability or an old executable.
+
+Online acceptance is still blocked: retained preflight reached no successful
+TLS/HTTP response from the required campus applications. The separate authorized
+Campus VPN restoration was not consumed because its preflight failed; this
+feature work made no VPN, route, account-configuration or campus mutation.
+Exams, study-room and running authentication/discovery, cache behavior, rights
+and all-feature online verification remain open. Do not read this entry as a
+successful current-account login or a completed Smart acceptance item.
+
 ## 2026-11-01: immutable learning-source binding and bounded online proof
 
 The all-feature online objective is still open. The observations below cover

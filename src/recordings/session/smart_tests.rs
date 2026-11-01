@@ -1,0 +1,1801 @@
+//! Inter-profile CAS boundary cases and full Smart session flows.
+//!
+//! Each relying party admits only its reviewed origins, a password form may
+//! target only the selected service declaration, and a library CAS value may
+//! leave the URL only on the library origin. The flows below drive one real
+//! in-memory CAS login plus exactly one business read against a loopback
+//! stand-in whose certificate authority is pinned to the test client alone.
+//! Every input here is synthetic; no campus network, credential store or campus
+//! source is touched.
+#![cfg(test)]
+
+use super::*;
+use std::collections::BTreeMap;
+
+const SSO_LOGIN: &str = "https://sso.buaa.edu.cn/login";
+const BOOKING_ORIGIN: &str = "https://booking.lib.buaa.edu.cn";
+/// Synthetic sign-on material shared by every flow in this file.
+const SESSION_USERNAME: &str = "synthetic-student";
+const SESSION_PASSWORD: &str = "synthetic-pass";
+/// The terminal CAS value the library relying party hands over.
+const SMART_CAS_VALUE: &str = "ST-terminal-synthetic";
+/// The bearer token the library exchange issues.
+const LIBRARY_TOKEN: &str = "synthetic-library-token-7h3k";
+/// Scoped application cookies; neither is a sign-on credential.
+const SMART_APP_COOKIE: &str = "smart_session=synthetic-app-session";
+const LIBRARY_APP_COOKIE: &str = "lib_session=synthetic-library-session";
+const ALL_SERVICES: [CasService; 3] = [
+    CasService::Classroom,
+    CasService::SmartClassrooms,
+    CasService::Library,
+];
+
+fn url(input: &str) -> Url {
+    Url::parse(input).expect("synthetic url")
+}
+
+fn pinned(service: CasService) -> Url {
+    pinned_login_url(service).expect("pinned login url")
+}
+
+/// The decoded `service=` value the pinned login page carries for a profile.
+fn pinned_service_value(service: CasService) -> String {
+    pinned(service)
+        .query_pairs()
+        .find(|(name, _)| name.as_ref() == "service")
+        .map(|(_, value)| value.into_owned())
+        .expect("pinned login carries a service pair")
+}
+
+fn login_with_query(pairs: &[(&str, &str)]) -> Url {
+    let mut url = url(SSO_LOGIN);
+    {
+        let mut query = url.query_pairs_mut();
+        for &(name, value) in pairs {
+            query.append_pair(name, value);
+        }
+    }
+    url
+}
+
+fn credential(service: CasService, input: &str) -> Result<Option<Zeroizing<String>>, Error> {
+    terminal_service_credential(service, &url(input))
+}
+
+#[test]
+fn each_profile_admits_only_its_reviewed_origins() {
+    for service in ALL_SERVICES {
+        assert!(allowed(&url(SSO_LOGIN), service));
+        assert!(allowed(&url("https://sso.buaa.edu.cn"), service));
+    }
+    // The classroom callback and platform stay confined to the Classroom
+    // profile; neither smart relying party may reach them.
+    for host in ["yjapi.msa.buaa.edu.cn", "classroom.msa.buaa.edu.cn"] {
+        let candidate = url(&format!("https://{host}/"));
+        assert!(allowed(&candidate, CasService::Classroom), "{host}");
+        assert!(!allowed(&candidate, CasService::SmartClassrooms), "{host}");
+        assert!(!allowed(&candidate, CasService::Library), "{host}");
+    }
+    let app = url("https://app.buaa.edu.cn/a_buaa/api/cas/index");
+    assert!(allowed(&app, CasService::SmartClassrooms));
+    assert!(!allowed(&app, CasService::Classroom));
+    assert!(!allowed(&app, CasService::Library));
+    let booking = url("https://booking.lib.buaa.edu.cn/v4/login/cas");
+    assert!(allowed(&booking, CasService::Library));
+    assert!(!allowed(&booking, CasService::Classroom));
+    assert!(!allowed(&booking, CasService::SmartClassrooms));
+    // Origin admission is host-scoped: arbitrary paths and queries on a
+    // reviewed host remain admitted, so a foreign path cannot harden a host.
+    assert!(allowed(
+        &url("https://app.buaa.edu.cn/site/classRoomQuery/index?x=1"),
+        CasService::SmartClassrooms
+    ));
+    assert!(allowed(
+        &url("https://classroom.msa.buaa.edu.cn/arbitrary/path?q=v"),
+        CasService::Classroom
+    ));
+}
+
+#[test]
+fn allowed_refuses_shaped_origins_and_lookalike_hosts() {
+    for service in ALL_SERVICES {
+        for candidate in [
+            "http://sso.buaa.edu.cn/login", // plaintext scheme
+            "https://operator@sso.buaa.edu.cn/login",
+            "https://operator:secret@sso.buaa.edu.cn/login",
+            "https://sso.buaa.edu.cn:4443/login", // nondefault port
+            "https://sso.buaa.edu.cn/login#fragment",
+            "https://sso.buaa.edu.cn./login",                 // trailing-dot host
+            "https://sso.buaa.edu.cn.attacker.example/login", // suffix lookalike
+            "http://app.buaa.edu.cn/",
+            "http://booking.lib.buaa.edu.cn/",
+            "https://app.buaa.edu.cn.attacker.example/",
+            "https://booking.lib.buaa.edu.cn.attacker.example/",
+            "https://evil.booking.lib.buaa.edu.cn/",
+            "https://lib.buaa.edu.cn/",
+            "https://ihome.buaa.edu.cn/",
+            "https://gw.buaa.edu.cn/",
+        ] {
+            assert!(!allowed(&url(candidate), service), "{candidate}");
+        }
+    }
+}
+
+#[test]
+fn pinned_login_route_accepts_only_the_selected_service() {
+    for service in ALL_SERVICES {
+        // No query and the exact selected declaration are valid form targets.
+        assert!(pinned_login_route(&url(SSO_LOGIN), service));
+        let selected = pinned_service_value(service);
+        assert!(pinned_login_route(
+            &login_with_query(&[("service", selected.as_str())]),
+            service
+        ));
+        // A form carrying another relying party's declaration never matches:
+        // the classroom pin is not a smart or library target and vice versa.
+        for other in ALL_SERVICES {
+            if other == service {
+                continue;
+            }
+            assert!(!pinned_login_route(&pinned(other), service));
+            let foreign = pinned_service_value(other);
+            assert!(!pinned_login_route(
+                &login_with_query(&[("service", foreign.as_str())]),
+                service
+            ));
+        }
+    }
+}
+
+#[test]
+fn smart_route_declares_no_auto_redirect_and_no_other_extra_pair() {
+    let selected = pinned_service_value(CasService::SmartClassrooms);
+    // The source-declared flag is accepted next to the service pair.
+    assert!(pinned_login_route(
+        &login_with_query(&[("service", &selected), ("noAutoRedirect", "1")]),
+        CasService::SmartClassrooms
+    ));
+    // The flag alone is not a credential route, and only the literal reviewed
+    // value binds; tampered or duplicated flags refuse.
+    assert!(!pinned_login_route(
+        &login_with_query(&[("noAutoRedirect", "1")]),
+        CasService::SmartClassrooms
+    ));
+    for tampered in ["0", "2", "true"] {
+        assert!(!pinned_login_route(
+            &login_with_query(&[("service", &selected), ("noAutoRedirect", tampered)]),
+            CasService::SmartClassrooms
+        ));
+    }
+    assert!(!pinned_login_route(
+        &login_with_query(&[
+            ("service", &selected),
+            ("noAutoRedirect", "1"),
+            ("noAutoRedirect", "1"),
+        ]),
+        CasService::SmartClassrooms
+    ));
+    // Other profiles never accept the smart-only flag on their forms.
+    for service in [CasService::Classroom, CasService::Library] {
+        let value = pinned_service_value(service);
+        assert!(!pinned_login_route(
+            &login_with_query(&[("service", &value), ("noAutoRedirect", "1")]),
+            service
+        ));
+    }
+}
+
+#[test]
+fn pinned_login_route_refuses_query_widening() {
+    for service in ALL_SERVICES {
+        let selected = pinned_service_value(service);
+        let selected = selected.as_str();
+        for pairs in [
+            vec![("service", selected), ("service", selected)],
+            vec![("service", selected), ("service", "https://attacker.example/cas")],
+            vec![("service", selected), ("from", "operator")],
+            vec![("from", "operator"), ("service", selected)],
+            vec![("ticket", "ST-synthetic"), ("service", selected)],
+            vec![("service", "")],
+            vec![("service", "https://attacker.example/cas")],
+            vec![("service", "https://sso.buaa.edu.cn/login")],
+            vec![("SERVICE", selected)],
+            vec![("service", "https://app.buaa.edu.cn/a_buaa/api/cas/index")],
+        ] {
+            let target = login_with_query(&pairs);
+            assert!(!pinned_login_route(&target, service), "{}", target.as_str());
+        }
+    }
+}
+
+#[test]
+fn pinned_login_route_refuses_exfiltration_shaping() {
+    for service in ALL_SERVICES {
+        for action in [
+            "http://sso.buaa.edu.cn/login",
+            "https://operator@sso.buaa.edu.cn/login",
+            "https://operator:secret@sso.buaa.edu.cn/login",
+            "https://sso.buaa.edu.cn:4443/login",
+            "https://sso.buaa.edu.cn/login#fragment",
+            "https://sso.buaa.edu.cn/login/extra",
+            "https://sso.buaa.edu.cn/login/",
+            "https://sso.buaa.edu.cn/",
+            "https://sso.buaa.edu.cn./login",
+            "https://sso.buaa.edu.cn.attacker.example/login",
+            "https://yjapi.msa.buaa.edu.cn/login",
+            "https://app.buaa.edu.cn/login",
+            "https://booking.lib.buaa.edu.cn/login",
+        ] {
+            assert!(!pinned_login_route(&url(action), service), "{action}");
+        }
+    }
+}
+
+#[test]
+fn library_terminal_credential_is_extracted_only_on_booking_origin() {
+    let extracted = credential(
+        CasService::Library,
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=ST-library-synthetic",
+    )
+    .expect("valid cas query")
+    .expect("credential present");
+    assert_eq!(extracted.as_str(), "ST-library-synthetic");
+
+    // The upstream selector binds `cas` from the fragment as well as the
+    // query. Extraction happens in memory on the terminal redirect URL; it is
+    // never fetched, so a terminal fragment is admissible here even though
+    // allowed() refuses fragments on request URLs.
+    for (input, expected) in [
+        (
+            "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-fragment",
+            "ST-fragment",
+        ),
+        (
+            "https://booking.lib.buaa.edu.cn/#/route?cas=ST-routed-fragment",
+            "ST-routed-fragment",
+        ),
+        (
+            "https://booking.lib.buaa.edu.cn/#%63as=ST-encoded-name",
+            "ST-encoded-name",
+        ),
+        (
+            "https://booking.lib.buaa.edu.cn/?cas=ST-query#route/segment",
+            "ST-query",
+        ),
+        (
+            "https://booking.lib.buaa.edu.cn/?cas=%46%46%46#/route",
+            "FFF",
+        ),
+    ] {
+        let value = credential(CasService::Library, input)
+            .expect("admissible fragment credential")
+            .expect("credential present");
+        assert_eq!(value.as_str(), expected, "{input}");
+    }
+
+    // A fragment is admitted for extraction but supplies no credential by
+    // itself; neither does a bare hash route.
+    for input in [
+        "https://booking.lib.buaa.edu.cn/#/route",
+        "https://booking.lib.buaa.edu.cn/#from=wap",
+        "https://booking.lib.buaa.edu.cn/?from=wap#/seat-map",
+    ] {
+        assert!(
+            credential(CasService::Library, input)
+                .expect("admissible url")
+                .is_none(),
+            "{input}"
+        );
+    }
+
+    // No `cas` pair means no credential: other names, a name-case variant and
+    // a prefix lookalike never stand in for it.
+    for input in [
+        "https://booking.lib.buaa.edu.cn/v4/login/cas",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?ticket=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?from=wap",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?CAS=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?xcas=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn/",
+        "https://sso.buaa.edu.cn/login",
+    ] {
+        assert!(
+            credential(CasService::Library, input)
+                .expect("admissible url")
+                .is_none(),
+            "{input}"
+        );
+    }
+
+    // Non-cas parameters may travel with the credential without widening it.
+    let with_extra = credential(
+        CasService::Library,
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=abc&from=wap&ticket=ST-synthetic",
+    )
+    .expect("extra params")
+    .expect("credential");
+    assert_eq!(with_extra.as_str(), "abc");
+
+    // Percent-decoding applies to the name and value before binding.
+    let decoded = credential(CasService::Library, "https://booking.lib.buaa.edu.cn/?%63as=a%20b")
+        .expect("encoded pair")
+        .expect("credential");
+    assert_eq!(decoded.as_str(), "a b");
+
+    // The bound is inclusive; one byte past it refuses.
+    let bounded = url(&format!("{BOOKING_ORIGIN}/v4/login/cas?cas={}", "a".repeat(4096)));
+    let bounded = terminal_service_credential(CasService::Library, &bounded)
+        .expect("bounded value")
+        .expect("credential");
+    assert_eq!(bounded.as_str().len(), 4096);
+    let over = url(&format!("{BOOKING_ORIGIN}/v4/login/cas?cas={}", "a".repeat(4097)));
+    assert!(terminal_service_credential(CasService::Library, &over).is_err());
+    let over_fragment =
+        url(&format!("{BOOKING_ORIGIN}/v4/login/cas#cas={}", "a".repeat(4097)));
+    assert!(terminal_service_credential(CasService::Library, &over_fragment).is_err());
+}
+
+#[test]
+fn library_terminal_credential_refuses_malformed_or_duplicated_values() {
+    for input in [
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a&cas=b",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a&cas=a",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=&cas=",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a&%63as=b",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a%0Ab",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a%09b",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=%00a",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=%7Fa",
+        // Blank, duplicated or control-bearing values refuse identically in
+        // the fragment, and a duplicate across query and fragment refuses.
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=a&cas=b",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=a&cas=a",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=a&%63as=b",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=a%0Ab",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a#cas=b",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a#cas=a",
+        "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=a#/route?cas=b",
+    ] {
+        assert!(credential(CasService::Library, input).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn library_terminal_credential_refuses_foreign_or_shaped_origins() {
+    for input in [
+        // Admitted-but-wrong origin: sso is in the library policy yet the
+        // credential may only leave on the booking origin.
+        "https://sso.buaa.edu.cn/login?cas=ST-synthetic",
+        // Foreign relying parties are not admitted for the library profile.
+        "https://app.buaa.edu.cn/?cas=ST-synthetic",
+        "https://yjapi.msa.buaa.edu.cn/casapi/index.php?cas=ST-synthetic",
+        "https://classroom.msa.buaa.edu.cn/?cas=ST-synthetic",
+        // Shaped booking origins refuse before any extraction happens.
+        "http://booking.lib.buaa.edu.cn/?cas=ST-synthetic",
+        "https://operator@booking.lib.buaa.edu.cn/?cas=ST-synthetic",
+        "https://operator:secret@booking.lib.buaa.edu.cn/?cas=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn:4443/?cas=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn./?cas=ST-synthetic",
+        "https://sub.booking.lib.buaa.edu.cn/?cas=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn.evil.example/?cas=ST-synthetic",
+        // A fragment credential on a foreign or shaped origin refuses too:
+        // admission of the fragment never widens the origin predicate.
+        "https://sso.buaa.edu.cn/login#cas=ST-synthetic",
+        "https://app.buaa.edu.cn/#cas=ST-synthetic",
+        "https://classroom.msa.buaa.edu.cn/#cas=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn.evil.example/#cas=ST-synthetic",
+        "https://operator@booking.lib.buaa.edu.cn/#cas=ST-synthetic",
+        "https://booking.lib.buaa.edu.cn:4443/#cas=ST-synthetic",
+        "http://booking.lib.buaa.edu.cn/#cas=ST-synthetic",
+    ] {
+        assert!(credential(CasService::Library, input).is_err(), "{input}");
+    }
+
+    // The terminal fragment is an extraction carrier only: the same URL is
+    // still inadmissible as a request target in every profile.
+    let fragmented = url("https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-synthetic");
+    for service in ALL_SERVICES {
+        assert!(!allowed(&fragmented, service));
+    }
+}
+
+#[test]
+fn non_library_profiles_never_release_the_library_credential() {
+    // A `cas` pair on a profile's own admitted origin yields no credential.
+    for (service, input) in [
+        (CasService::Classroom, "https://sso.buaa.edu.cn/login?cas=ST-synthetic"),
+        (
+            CasService::Classroom,
+            "https://yjapi.msa.buaa.edu.cn/casapi/index.php?cas=ST-synthetic",
+        ),
+        (
+            CasService::Classroom,
+            "https://classroom.msa.buaa.edu.cn/?cas=ST-synthetic",
+        ),
+        (
+            CasService::SmartClassrooms,
+            "https://sso.buaa.edu.cn/login?cas=ST-synthetic",
+        ),
+        (
+            CasService::SmartClassrooms,
+            "https://app.buaa.edu.cn/a_buaa/api/cas/index?cas=ST-synthetic",
+        ),
+    ] {
+        assert!(matches!(credential(service, input), Ok(None)), "{input}");
+    }
+    // The booking origin is refused outright outside the library profile; a
+    // well-formed library credential URL never leaks across profiles.
+    let booking = "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=ST-synthetic";
+    for service in [CasService::Classroom, CasService::SmartClassrooms] {
+        assert!(credential(service, booking).is_err());
+    }
+    let booking_fragment =
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-synthetic";
+    for service in [CasService::Classroom, CasService::SmartClassrooms] {
+        assert!(credential(service, booking_fragment).is_err());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Strict-TLS local CAS flows. An ephemeral CA signs one leaf covering the
+// three synthetic relying-party SANs; the client pins only that CA and
+// resolves each host to its own loopback listener. Nothing is relaxed: no
+// invalid-certificate acceptance, no production trust or environment change.
+// ---------------------------------------------------------------------------
+
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::os::unix::fs::DirBuilderExt;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use openssl::asn1::Asn1Time;
+use openssl::bn::{BigNum, MsbOption};
+use openssl::hash::MessageDigest;
+use openssl::pkey::PKey;
+use openssl::rsa::Rsa;
+use openssl::ssl::{SslAcceptor, SslMethod};
+use openssl::x509::X509;
+use openssl::x509::extension::{BasicConstraints, KeyUsage, SubjectAlternativeName};
+
+/// One observed request never exceeds this many bytes, headers included.
+const MAX_REQUEST_BYTES: usize = 256 * 1024;
+
+/// A synthetic CAS sign-on page. The form posts to the selected relying
+/// party's pinned route and carries only reviewed fields.
+fn smart_login_page(service: CasService) -> String {
+    let action = pinned(service)
+        .as_str()
+        .replace('&', "&amp;");
+    format!(
+        r#"<html><body>
+<form method="post" id="loginForm" action="{action}">
+<input name="username" type="text">
+<input name="password" type="password">
+<input name="submit" type="submit" value="LOGIN">
+<input name="type" type="hidden" value="username_password">
+<input name="execution" type="hidden" value="synthetic-execution-token">
+<input name="_eventId" type="hidden" value="submit">
+</form>
+</body></html>"#
+    )
+}
+
+struct TestPki {
+    ca_pem: Vec<u8>,
+    leaf_pem: Vec<u8>,
+    key_pem: Vec<u8>,
+}
+
+fn test_pki() -> TestPki {
+    let rsa = Rsa::generate(2048).expect("rsa key");
+    let key = PKey::from_rsa(rsa).expect("pkey");
+    let serial = || {
+        let mut serial = BigNum::new().expect("bignum");
+        serial.rand(64, MsbOption::MAYBE_ZERO, false).expect("serial");
+        serial.to_asn1_integer().expect("asn1 serial")
+    };
+    let mut name = openssl::x509::X509NameBuilder::new().expect("name");
+    name.append_entry_by_text("CN", "buaa-cli synthetic test CA")
+        .expect("ca name");
+    let name = name.build();
+    let mut ca_builder = X509::builder().expect("ca builder");
+    ca_builder.set_version(2).expect("version");
+    ca_builder.set_serial_number(&serial()).expect("serial");
+    ca_builder.set_subject_name(&name).expect("ca subject");
+    ca_builder.set_issuer_name(&name).expect("ca issuer");
+    ca_builder.set_pubkey(&key).expect("ca pubkey");
+    let not_before = Asn1Time::days_from_now(0).expect("not before");
+    ca_builder.set_not_before(&not_before).expect("not before");
+    let not_after = Asn1Time::days_from_now(1).expect("not after");
+    ca_builder.set_not_after(&not_after).expect("not after");
+    ca_builder
+        .append_extension(BasicConstraints::new().critical().ca().build().expect("bc"))
+        .expect("ca constraints");
+    ca_builder
+        .append_extension(
+            KeyUsage::new()
+                .critical()
+                .key_cert_sign()
+                .crl_sign()
+                .build()
+                .expect("ca key usage"),
+        )
+        .expect("ca usage");
+    ca_builder.sign(&key, MessageDigest::sha256()).expect("ca sign");
+    let ca = ca_builder.build();
+
+    let mut leaf_name = openssl::x509::X509NameBuilder::new().expect("leaf name");
+    leaf_name
+        .append_entry_by_text("CN", "sso.buaa.edu.cn")
+        .expect("leaf cn");
+    let leaf_name = leaf_name.build();
+    let mut leaf = X509::builder().expect("leaf builder");
+    leaf.set_version(2).expect("version");
+    leaf.set_serial_number(&serial()).expect("serial");
+    leaf.set_subject_name(&leaf_name).expect("leaf subject");
+    leaf.set_issuer_name(ca.subject_name()).expect("leaf issuer");
+    leaf.set_pubkey(&key).expect("leaf pubkey");
+    leaf.set_not_before(&not_before).expect("not before");
+    leaf.set_not_after(&not_after).expect("not after");
+    let san = SubjectAlternativeName::new()
+        .dns("sso.buaa.edu.cn")
+        .dns("app.buaa.edu.cn")
+        .dns("booking.lib.buaa.edu.cn")
+        .build(&leaf.x509v3_context(Some(&ca), None))
+        .expect("san");
+    leaf.append_extension(san).expect("leaf san");
+    leaf.append_extension(
+        BasicConstraints::new().critical().build().expect("leaf bc"),
+    )
+    .expect("leaf constraints");
+    leaf.sign(&key, MessageDigest::sha256()).expect("leaf sign");
+    let leaf = leaf.build();
+    TestPki {
+        ca_pem: ca.to_pem().expect("ca pem"),
+        leaf_pem: leaf.to_pem().expect("leaf pem"),
+        key_pem: key.private_key_to_pem_pkcs8().expect("key pem"),
+    }
+}
+
+#[derive(Debug)]
+struct ObservedRequest {
+    method: String,
+    target: String,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+impl ObservedRequest {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+fn read_http_request(stream: &mut openssl::ssl::SslStream<TcpStream>) -> Option<ObservedRequest> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let header_end = loop {
+        if let Some(end) = bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+        {
+            break end + 4;
+        }
+        if bytes.len() > MAX_REQUEST_BYTES {
+            return None;
+        }
+        let read = std::io::Read::read(stream, &mut chunk).ok()?;
+        if read == 0 {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    };
+    let head = String::from_utf8_lossy(&bytes[..header_end]);
+    let mut lines = head.split("\r\n");
+    let request_line = lines.next()?;
+    let mut parts = request_line.split(' ');
+    let method = parts.next()?.to_owned();
+    let target = parts.next()?.to_owned();
+    let mut headers = Vec::new();
+    let mut content_length = 0usize;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let (name, value) = line.split_once(':')?;
+        let name = name.trim().to_owned();
+        let value = value.trim().to_owned();
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = value.parse().unwrap_or(0);
+        }
+        headers.push((name, value));
+    }
+    // A declared length is a claim, not a limit: an oversized body is
+    // refused instead of buffered.
+    if content_length > MAX_REQUEST_BYTES {
+        return None;
+    }
+    while bytes.len() - header_end < content_length {
+        let read = std::io::Read::read(stream, &mut chunk).ok()?;
+        if read == 0 {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    let body = String::from_utf8_lossy(&bytes[header_end..header_end + content_length]).into_owned();
+    Some(ObservedRequest {
+        method,
+        target,
+        headers,
+        body,
+    })
+}
+
+fn http_response(status: &str, headers: &[(&str, &str)], body: &str) -> Vec<u8> {
+    let mut response = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
+    for (name, value) in headers {
+        response.push_str(name);
+        response.push_str(": ");
+        response.push_str(value);
+        response.push_str("\r\n");
+    }
+    response.push_str("Connection: close\r\n\r\n");
+    response.push_str(body);
+    response.into_bytes()
+}
+
+/// One loopback TLS endpoint standing in for one synthetic campus host. The
+/// worker is bounded: the listener polls a stop flag and each connection is
+/// served once with read timeouts, so a failed test never strands a thread.
+struct CasEndpoint {
+    address: SocketAddr,
+    requests: Arc<Mutex<Vec<ObservedRequest>>>,
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl CasEndpoint {
+    fn start(
+        acceptor: Arc<SslAcceptor>,
+        responder: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        listener.set_nonblocking(true).expect("nonblocking listener");
+        let address = listener.local_addr().expect("listener address");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (worker_requests, worker_stop) = (Arc::clone(&requests), Arc::clone(&stop));
+        let worker = std::thread::spawn(move || {
+            while !worker_stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                        let mut tls = match acceptor.accept(stream) {
+                            Ok(tls) => tls,
+                            Err(_) => continue,
+                        };
+                        let Some(request) = read_http_request(&mut tls) else {
+                            continue;
+                        };
+                        let response = responder(&request);
+                        worker_requests
+                            .lock()
+                            .expect("request log")
+                            .push(request);
+                        let _ = std::io::Write::write_all(&mut tls, &response);
+                        let _ = tls.shutdown();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            address,
+            requests,
+            stop,
+            worker: Some(worker),
+        }
+    }
+
+    fn observed(&self) -> Vec<ObservedRequest> {
+        self.requests
+            .lock()
+            .expect("request log")
+            .iter()
+            .map(|request| ObservedRequest {
+                method: request.method.clone(),
+                target: request.target.clone(),
+                headers: request.headers.clone(),
+                body: request.body.clone(),
+            })
+            .collect()
+    }
+}
+
+impl Drop for CasEndpoint {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn tls_acceptor(pki: &TestPki) -> Arc<SslAcceptor> {
+    let mut builder =
+        SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).expect("tls acceptor");
+    builder
+        .set_private_key(&PKey::private_key_from_pem(&pki.key_pem).expect("key"))
+        .expect("acceptor key");
+    builder
+        .set_certificate(&X509::from_pem(&pki.leaf_pem).expect("leaf"))
+        .expect("acceptor cert");
+    builder
+        .add_extra_chain_cert(X509::from_pem(&pki.ca_pem).expect("ca"))
+        .expect("chain");
+    builder.check_private_key().expect("key pair");
+    Arc::new(builder.build())
+}
+
+fn strict_client(pki: &TestPki, endpoints: &[(&str, SocketAddr)]) -> Client {
+    let mut builder = Client::builder()
+        .user_agent("buaa-cli/0.1")
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .referer(false)
+        .no_proxy()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .http1_only()
+        .pool_max_idle_per_host(0)
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .https_only(true)
+        .add_root_certificate(
+            reqwest::Certificate::from_pem(&pki.ca_pem).expect("pinned ca"),
+        );
+    for (host, address) in endpoints {
+        builder = builder.resolve(host, *address);
+    }
+    builder.build().expect("strict test client")
+}
+
+/// Unique suffixes for the private governor directories of this test binary.
+static GOVERNOR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// A private governor directory that is removed when the test ends. The
+/// directory is always created new: no pre-existing content is ever
+/// deleted, and the guard is released only after the governor and its lease
+/// descriptors are gone.
+struct GovernorDir {
+    path: std::path::PathBuf,
+    _directory: File,
+}
+
+impl Drop for GovernorDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn smart_test_governor(name: &str) -> (GovernorDir, Governor) {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "buaa-cli-smart-test-{}-{name}-{}",
+        std::process::id(),
+        GOVERNOR_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&path)
+        .expect("private governor directory");
+    let directory =
+        crate::governor::open_directory(&path, true, true).expect("pinned directory");
+    let governor = Governor::isolated_for_test(&path).expect("isolated governor");
+    (GovernorDir { path, _directory: directory }, governor)
+}
+
+fn finish_lease(lease: RequestLease<'_>, error: Option<&Error>) {
+    let outcome = match error {
+        None => crate::governor::Outcome::Http {
+            status: 200,
+            retry_after: None,
+            challenge: false,
+            network_failure: false,
+        },
+        Some(error) if error.code == "auth_latched" => crate::governor::Outcome::CredentialRejected,
+        Some(_) => crate::governor::Outcome::NetworkFailure,
+    };
+    lease.finish(outcome).expect("durable lease finish");
+}
+
+struct CasHarness {
+    // Dropped first so no in-flight client connection can strand a worker
+    // read when the endpoints are stopped and joined.
+    client: Client,
+    sso: CasEndpoint,
+    app: CasEndpoint,
+    booking: CasEndpoint,
+}
+
+impl CasHarness {
+    /// Serve the pinned sign-on page, redirect the credential POST to
+    /// `cas_landing`, and expose per-host request logs for assertions.
+    fn new(service: CasService, cas_landing: &str) -> Self {
+        Self::with_responders(
+            sso_responder(service, cas_landing, &[]),
+            |_| {
+                http_response(
+                    "200 OK",
+                    &[
+                        ("Content-Type", "text/html"),
+                        (
+                            "Set-Cookie",
+                            "smart_session=synthetic-app-session; Domain=app.buaa.edu.cn; Path=/; Secure; HttpOnly",
+                        ),
+                    ],
+                    "<html><body>landing</body></html>",
+                )
+            },
+            |_| http_response("200 OK", &[("Content-Type", "text/plain")], "unexpected"),
+        )
+    }
+
+    /// Serve the pinned sign-on page and let each host answer with its own
+    /// responder, so a flow can drive the exact hops it expects.
+    fn with_responders(
+        sso: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        app: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
+        let pki = test_pki();
+        let acceptor = tls_acceptor(&pki);
+        let sso = CasEndpoint::start(Arc::clone(&acceptor), sso);
+        let app = CasEndpoint::start(Arc::clone(&acceptor), app);
+        let booking = CasEndpoint::start(acceptor, booking);
+        let client = strict_client(
+            &pki,
+            &[
+                ("sso.buaa.edu.cn", sso.address),
+                ("app.buaa.edu.cn", app.address),
+                ("booking.lib.buaa.edu.cn", booking.address),
+            ],
+        );
+        Self {
+            client,
+            sso,
+            app,
+            booking,
+        }
+    }
+}
+
+/// Serve the synthetic sign-on page and answer the credential POST with a
+/// redirect to the reviewed relying party. `post_headers` adds response
+/// headers to that redirect, so a deferred sign-on can be reproduced.
+fn sso_responder(
+    service: CasService,
+    cas_landing: &str,
+    post_headers: &[(&str, &str)],
+) -> impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static {
+    let page = smart_login_page(service);
+    let landing = cas_landing.to_owned();
+    let extra: Vec<(String, String)> = post_headers
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    move |request| {
+        if request.method == "GET" && request.target.starts_with("/login") {
+            return http_response(
+                "200 OK",
+                &[
+                    ("Content-Type", "text/html"),
+                    ("Set-Cookie", "CASTGC=host-only-credential; Path=/; Secure; HttpOnly"),
+                ],
+                &page,
+            );
+        }
+        if request.method == "POST" && request.target.starts_with("/login") {
+            let mut headers: Vec<(&str, &str)> = vec![("Location", landing.as_str())];
+            headers.extend(extra.iter().map(|(name, value)| (name.as_str(), value.as_str())));
+            return http_response("302 Found", &headers, "");
+        }
+        http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+    }
+}
+
+/// The decoded query pairs of an observed target.
+fn query_map(target: &Url) -> BTreeMap<String, String> {
+    target
+        .query_pairs()
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect()
+}
+
+/// The absolute URL of an observed request on its synthetic campus host.
+fn observed_url(host: &str, request: &ObservedRequest) -> Url {
+    url(&format!("https://{host}{}", request.target))
+}
+
+/// The sign-on exchange submits the credential exactly once, to the pinned
+/// route of the selected relying party, with the reviewed form fields and
+/// nothing else.
+fn assert_one_credential_post(harness: &CasHarness, service: CasService) {
+    let requests = harness.sso.observed();
+    assert_eq!(requests.len(), 2, "GET form + one credential POST");
+    let pinned = pinned(service);
+    let expected_route = query_map(&pinned);
+    let form = &requests[0];
+    assert_eq!(form.method, "GET");
+    let form_url = observed_url("sso.buaa.edu.cn", form);
+    assert_eq!(form_url.path(), pinned.path());
+    assert_eq!(
+        query_map(&form_url),
+        expected_route,
+        "the sign-on route must name the selected relying party"
+    );
+    let post = &requests[1];
+    assert_eq!(post.method, "POST");
+    let post_url = observed_url("sso.buaa.edu.cn", post);
+    assert_eq!(post_url.path(), pinned.path());
+    assert_eq!(
+        query_map(&post_url),
+        expected_route,
+        "the credential must post to the same route"
+    );
+    assert_eq!(post.header("referer"), Some(pinned.as_str()));
+    assert_eq!(
+        post.header("content-type"),
+        Some("application/x-www-form-urlencoded")
+    );
+    // Exactly one credential submission, with the reviewed fields only.
+    let fields: BTreeMap<String, String> = ::url::form_urlencoded::parse(post.body.as_bytes())
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect();
+    let expected_fields = BTreeMap::from([
+        ("username".to_string(), SESSION_USERNAME.to_string()),
+        ("password".to_string(), SESSION_PASSWORD.to_string()),
+        ("submit".to_string(), "LOGIN".to_string()),
+        ("type".to_string(), "username_password".to_string()),
+        ("execution".to_string(), "synthetic-execution-token".to_string()),
+        ("_eventId".to_string(), "submit".to_string()),
+    ]);
+    assert_eq!(fields, expected_fields, "unexpected credential POST body");
+    assert_eq!(post.body.matches("username=").count(), 1);
+    assert_eq!(post.body.matches("password=").count(), 1);
+}
+
+#[test]
+fn smart_classroom_flow_leaves_scoped_cookie_without_leaking_sso_credential() {
+    let harness = CasHarness::new(
+        CasService::SmartClassrooms,
+        "https://app.buaa.edu.cn/site/classRoomQuery/index",
+    );
+    let (_guard, governor) = smart_test_governor("smart-flow");
+    let mut lease = governor
+        .try_acquire(RequestKind::Authentication)
+        .expect("authentication lease");
+    let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+        .expect("synthetic credentials");
+    let result = authenticate_smart(
+        &mut lease,
+        &harness.client,
+        CasService::SmartClassrooms,
+        credentials,
+    );
+    finish_lease(lease, result.as_ref().err());
+    let mut session = result.expect("smart CAS flow");
+
+    assert_one_credential_post(&harness, CasService::SmartClassrooms);
+
+    // The relying-party callback and landing never see the sign-on cookie:
+    // CASTGC is host-only for sso.buaa.edu.cn.
+    let app_requests = harness.app.observed();
+    assert_eq!(app_requests.len(), 1);
+    assert_eq!(app_requests[0].method, "GET");
+    assert_eq!(
+        app_requests[0].header("host"),
+        Some("app.buaa.edu.cn")
+    );
+    let app_cookie = app_requests[0].header("cookie").unwrap_or("");
+    assert!(!app_cookie.contains("CASTGC"), "{app_cookie}");
+
+    // The terminal handoff exposes only the app-scoped session cookie.
+    let probe = url("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1");
+    let (cookie, _expiry) = session.cookie_header(&probe).expect("scoped cookie view");
+    let cookie = cookie.expect("app cookie present");
+    assert!(
+        cookie.contains(SMART_APP_COOKIE),
+        "{}",
+        cookie.as_str()
+    );
+    assert!(!cookie.contains("CASTGC"), "{}", cookie.as_str());
+
+    // Nothing reached the library origin and no library credential exists.
+    assert!(harness.booking.observed().is_empty());
+    assert!(session
+        .cookie_header(&url("https://booking.lib.buaa.edu.cn/"))
+        .is_err());
+    assert!(session.take_library_cas().is_err());
+}
+
+#[test]
+fn library_flow_consumes_terminal_fragment_cas_without_requesting_it() {
+    let harness = CasHarness::new(
+        CasService::Library,
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
+    );
+    let (_guard, governor) = smart_test_governor("library-flow");
+    let mut lease = governor
+        .try_acquire(RequestKind::Authentication)
+        .expect("authentication lease");
+    let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+        .expect("synthetic credentials");
+    let result = authenticate_smart(
+        &mut lease,
+        &harness.client,
+        CasService::Library,
+        credentials,
+    );
+    finish_lease(lease, result.as_ref().err());
+    let mut session = result.expect("library CAS flow");
+
+    assert_one_credential_post(&harness, CasService::Library);
+
+    // The fragment CAS is a terminal in-memory handoff: it is never fetched.
+    assert!(
+        harness.booking.observed().is_empty(),
+        "the terminal credential URL must never be requested"
+    );
+    assert!(harness.app.observed().is_empty());
+
+    let cas = session.take_library_cas().expect("terminal cas");
+    assert_eq!(cas.as_str(), SMART_CAS_VALUE);
+    // The credential is consumed exactly once; no retry materializes one.
+    assert!(session.take_library_cas().is_err());
+
+    // The library origin gained no cookie and the host-only sign-on
+    // credential never appears through the scoped view.
+    let (cookie, _expiry) = session
+        .cookie_header(&url("https://booking.lib.buaa.edu.cn/"))
+        .expect("library scoped view");
+    assert!(cookie.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Smart session flows: one in-memory CAS login plus exactly one business
+// read. The same strict-TLS loopback stand-in serves every hop, the
+// governor is an isolated private one, and the network factory is the only
+// route to the network, so a flow that must stay local can prove it never
+// consulted it.
+// ---------------------------------------------------------------------------
+
+/// The typed one-shot session envelope. The read carries no authentication
+/// material: the session derives its own credential from the sign-on.
+fn session_input(service: &str, read: Value) -> String {
+    json!({
+        "authorized": true,
+        "username": SESSION_USERNAME,
+        "password": SESSION_PASSWORD,
+        "intent": format!("LOGIN {SESSION_USERNAME} smart {service}"),
+        "read": read,
+    })
+    .to_string()
+}
+
+fn classrooms_read() -> Value {
+    json!({"service": "classrooms", "enabled": true, "campus_id": 3, "date": "2031-04-12"})
+}
+
+fn library_read() -> Value {
+    json!({"service": "library", "enabled": true,
+           "query": {"operation": "premises", "day": "2031-04-12"}})
+}
+
+/// Run one session flow against the loopback stand-in with an isolated
+/// governor. The flag records whether the network factory was consulted.
+fn run_session(
+    harness: &CasHarness,
+    input: &str,
+    name: &str,
+) -> (Result<Value, Error>, bool) {
+    let (guard, governor) = smart_test_governor(name);
+    let client = harness.client.clone();
+    let mut factory_used = false;
+    let result = crate::smart::session_with_network(input, true, || {
+        factory_used = true;
+        Ok((client, governor))
+    });
+    // The governor is released inside the call; the private directory guard
+    // is dropped only afterwards.
+    drop(guard);
+    (result, factory_used)
+}
+
+/// Run a session flow that must never reach the network. The factory would
+/// fail loudly if it were consulted.
+fn run_offline_session(input: &str, online: bool) -> (Result<Value, Error>, bool) {
+    let mut factory_used = false;
+    let result = crate::smart::session_with_network(input, online, || {
+        factory_used = true;
+        Err(Error::new(
+            "network_factory_consulted",
+            "the network factory was consulted",
+        ))
+    });
+    (result, factory_used)
+}
+
+/// Serve the classroom landing and the one business read it authorizes.
+fn classroom_app_responder(
+    search: &'static str,
+) -> impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static {
+    move |request| {
+        let path = request.target.split('?').next().unwrap_or("");
+        match path {
+            "/site/classRoomQuery/index" => http_response(
+                "200 OK",
+                &[
+                    ("Content-Type", "text/html"),
+                    (
+                        "Set-Cookie",
+                        "smart_session=synthetic-app-session; Domain=app.buaa.edu.cn; Path=/; Secure; HttpOnly",
+                    ),
+                ],
+                "<html><body>landing</body></html>",
+            ),
+            "/buaafreeclass/wap/default/search1" => {
+                http_response("200 OK", &[("Content-Type", "application/json")], search)
+            }
+            _ => http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        }
+    }
+}
+
+/// Serve the one CAS exchange and the one business read it authorizes.
+fn library_responder(
+    login: &'static str,
+    read: &'static str,
+) -> impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static {
+    library_responder_with_cookies(login, read, &LIBRARY_COOKIES)
+}
+
+/// The cookies the library exchange issues: a path-scoped sign-on cookie that
+/// never reaches the business read, and the scoped session cookie it does.
+const LIBRARY_COOKIES: [&str; 2] = [
+    "login_sid=auth-private; Path=/v4/login; Secure; HttpOnly",
+    "lib_session=synthetic-library-session; Domain=booking.lib.buaa.edu.cn; Path=/; Secure; HttpOnly",
+];
+
+/// A sign-on cookie that is issued twice: the second issuance replaces the
+/// first value.
+const REPLACED_LIBRARY_COOKIES: [&str; 2] = [
+    "login_sid=auth-private-alpha; Path=/v4/login; Secure; HttpOnly",
+    "login_sid=auth-private-beta; Path=/v4/login; Secure; HttpOnly",
+];
+
+/// Serve the one CAS exchange and the one business read it authorizes, with
+/// the exact cookie issuances the flow under test needs.
+fn library_responder_with_cookies(
+    login: &'static str,
+    read: &'static str,
+    cookies: &'static [&'static str],
+) -> impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static {
+    move |request| {
+        let path = request.target.split('?').next().unwrap_or("");
+        match path {
+            "/v4/login/user" => {
+                let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
+                for cookie in cookies {
+                    headers.push(("Set-Cookie", *cookie));
+                }
+                http_response("200 OK", &headers, login)
+            }
+            "/v4/space/pcTopFor" => {
+                http_response("200 OK", &[("Content-Type", "application/json")], read)
+            }
+            _ => http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        }
+    }
+}
+
+#[test]
+fn smart_session_classrooms_logs_in_once_and_projects_the_real_search_result() {
+    let search = r#"{"e":0,"d":{"list":{"BuildingA":[{"kxsds":"1,2,3","roomName":"101"}]}}}"#;
+    let harness = CasHarness::with_responders(
+        sso_responder(
+            CasService::SmartClassrooms,
+            "https://app.buaa.edu.cn/site/classRoomQuery/index",
+            &[],
+        ),
+        classroom_app_responder(search),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+    );
+    let (result, factory_used) = run_session(
+        &harness,
+        &session_input("classrooms", classrooms_read()),
+        "session-classrooms",
+    );
+    assert!(factory_used, "an online session consults the network factory");
+    let output = result.expect("smart session result");
+    assert_eq!(output["service"], "classrooms");
+    assert_eq!(output["result"], "ok");
+    assert_eq!(output["source"], "network");
+    assert_eq!(output["network_performed"], true);
+    assert_eq!(output["write_operations_performed"], false);
+    let rows = output["data"].as_array().expect("projected room rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["building"], "BuildingA");
+    assert_eq!(rows[0]["free_periods"], json!([1, 2, 3]));
+    assert_eq!(rows[0]["roomName"], "101");
+    // No credential material reaches the projection.
+    let projected = output.to_string();
+    for secret in [
+        SESSION_USERNAME,
+        SESSION_PASSWORD,
+        "CASTGC",
+        "host-only-credential",
+    ] {
+        assert!(
+            !projected.contains(secret),
+            "{secret} leaked into the Smart projection"
+        );
+    }
+
+    assert_one_credential_post(&harness, CasService::SmartClassrooms);
+    let app_requests = harness.app.observed();
+    assert_eq!(app_requests.len(), 2, "one landing and one business read");
+    let landing = &app_requests[0];
+    assert_eq!(landing.method, "GET");
+    assert_eq!(
+        observed_url("app.buaa.edu.cn", landing).path(),
+        "/site/classRoomQuery/index"
+    );
+    assert!(
+        landing.header("cookie").is_none(),
+        "the host-only sign-on cookie never leaves its host"
+    );
+    let read = &app_requests[1];
+    assert_eq!(read.method, "GET");
+    let target = observed_url("app.buaa.edu.cn", read);
+    assert_eq!(target.path(), "/buaafreeclass/wap/default/search1");
+    let query = query_map(&target);
+    assert_eq!(query.get("xqid").map(String::as_str), Some("3"));
+    assert_eq!(query.get("date").map(String::as_str), Some("2031-04-12"));
+    assert_eq!(query.get("floorid").map(String::as_str), Some(""));
+    assert_eq!(query.len(), 3, "only the reviewed query fields");
+    let cookie = read.header("cookie").unwrap_or("");
+    assert!(cookie.contains(SMART_APP_COOKIE), "{cookie}");
+    assert!(!cookie.contains("CASTGC"), "{cookie}");
+    assert_eq!(
+        read.header("referer"),
+        Some("https://app.buaa.edu.cn/site/classRoomQuery/index")
+    );
+    // A classroom session never touches the library origin.
+    assert!(harness.booking.observed().is_empty());
+}
+
+#[test]
+fn smart_session_library_exchanges_the_cas_once_and_reads_with_the_issued_token() {
+    let harness = CasHarness::with_responders(
+        sso_responder(
+            CasService::Library,
+            "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
+            &[],
+        ),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        library_responder(
+            r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+            r#"{"code":0,"data":{"list":[{"id":"area-1","name":"Area One"}]}}"#,
+        ),
+    );
+    let (result, factory_used) = run_session(
+        &harness,
+        &session_input("library", library_read()),
+        "session-library",
+    );
+    assert!(factory_used, "an online session consults the network factory");
+    let output = result.expect("smart session result");
+    assert_eq!(output["service"], "library");
+    assert_eq!(output["result"], "ok");
+    assert_eq!(output["source"], "network");
+    assert_eq!(output["network_performed"], true);
+    assert_eq!(
+        output["data"],
+        json!([{"id": "area-1", "name": "Area One"}])
+    );
+    // Neither the sign-on credential, the exchanged CAS value, the issued
+    // token nor the scoped cookie is released.
+    let projected = output.to_string();
+    for secret in [
+        SESSION_USERNAME,
+        SESSION_PASSWORD,
+        SMART_CAS_VALUE,
+        LIBRARY_TOKEN,
+        "CASTGC",
+        "host-only-credential",
+        "lib_session",
+    ] {
+        assert!(
+            !projected.contains(secret),
+            "{secret} leaked into the Smart projection"
+        );
+    }
+
+    assert_one_credential_post(&harness, CasService::Library);
+    let requests = harness.booking.observed();
+    assert_eq!(requests.len(), 2, "one CAS exchange and one business read");
+    let exchange = &requests[0];
+    assert_eq!(exchange.method, "POST");
+    assert_eq!(exchange.target, "/v4/login/user");
+    assert_eq!(exchange.header("content-type"), Some("application/json"));
+    let exchange_body: Value = serde_json::from_str(&exchange.body).expect("exchange body");
+    assert_eq!(exchange_body, json!({"cas": SMART_CAS_VALUE}));
+    assert!(
+        exchange.header("authorization").is_none(),
+        "the exchange carries no bearer token"
+    );
+    assert!(
+        exchange.header("cookie").is_none(),
+        "the exchange carries no scoped cookie yet"
+    );
+    let read = &requests[1];
+    assert_eq!(read.method, "POST");
+    assert_eq!(read.target, "/v4/space/pcTopFor");
+    let authorization = format!("bearer{LIBRARY_TOKEN}");
+    assert_eq!(read.header("authorization"), Some(authorization.as_str()));
+    let cookie = read.header("cookie").unwrap_or("");
+    assert!(cookie.contains(LIBRARY_APP_COOKIE), "{cookie}");
+    assert!(!cookie.contains("CASTGC"), "{cookie}");
+    assert!(
+        !cookie.contains("login_sid"),
+        "the path-scoped sign-on cookie never reaches the business read: {cookie}"
+    );
+    assert_eq!(read.header("content-type"), Some("application/json"));
+    let read_body: Value = serde_json::from_str(&read.body).expect("read body");
+    assert_eq!(read_body, json!({"day": "2031-04-12"}));
+    // A library session never touches the classroom origin.
+    assert!(harness.app.observed().is_empty());
+}
+
+#[test]
+fn smart_session_library_stops_when_the_issued_token_is_missing_or_rejected() {
+    for (name, status, login) in [
+        (
+            "empty-token",
+            "200 OK",
+            r#"{"code":0,"data":{"member":{"token":""}}}"#,
+        ),
+        ("missing-member", "200 OK", r#"{"code":0,"data":{}}"#),
+        (
+            "rejected-code",
+            "200 OK",
+            r#"{"code":500,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+        ),
+        (
+            "null-code",
+            "200 OK",
+            r#"{"code":null,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+        ),
+        (
+            "unauthorized",
+            "401 Unauthorized",
+            r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+        ),
+    ] {
+        let harness = CasHarness::with_responders(
+            sso_responder(
+                CasService::Library,
+                "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
+                &[],
+            ),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            move |request| {
+                let path = request.target.split('?').next().unwrap_or("");
+                match path {
+                    "/v4/login/user" => {
+                        http_response(status, &[("Content-Type", "application/json")], login)
+                    }
+                    _ => http_response(
+                        "200 OK",
+                        &[("Content-Type", "application/json")],
+                        r#"{"code":0,"data":{"list":[]}}"#,
+                    ),
+                }
+            },
+        );
+        let (result, _) = run_session(
+            &harness,
+            &session_input("library", library_read()),
+            &format!("session-library-{name}"),
+        );
+        let error = result.expect_err("a rejected exchange must not read");
+        let expected = if status.starts_with("401") { "auth_latched" } else { "authentication_unconfirmed" };
+        assert_eq!(error.code, expected, "{name}: {}", error.message);
+        // The business read is never sent and the exchange is never repeated.
+        let requests = harness.booking.observed();
+        assert_eq!(requests.len(), 1, "{name}: only the CAS exchange may be sent");
+        assert_eq!(requests[0].target, "/v4/login/user");
+    }
+}
+
+#[test]
+fn smart_session_stops_on_a_challenged_or_deferred_sign_on() {
+    // A challenge on the sign-on page never reaches the credential
+    // submission.
+    let challenged = CasHarness::with_responders(
+        |request| {
+            if request.method == "GET" {
+                http_response(
+                    "200 OK",
+                    &[("Content-Type", "text/html"), ("cf-mitigated", "challenge")],
+                    "<html><body>landing</body></html>",
+                )
+            } else {
+                http_response(
+                    "302 Found",
+                    &[("Location", "https://app.buaa.edu.cn/site/classRoomQuery/index")],
+                    "",
+                )
+            }
+        },
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+    );
+    let (result, _) = run_session(
+        &challenged,
+        &session_input("classrooms", classrooms_read()),
+        "session-challenge",
+    );
+    let error = result.expect_err("a challenged sign-on must not read");
+    assert_eq!(error.code, "challenge_requires_human");
+    // Only the sign-on page was fetched: no credential was submitted and no
+    // business request was sent.
+    assert_eq!(challenged.sso.observed().len(), 1);
+    assert!(challenged.app.observed().is_empty());
+    assert!(challenged.booking.observed().is_empty());
+
+    // A deferred redirect is a durable cooldown: it is never followed and
+    // never retried.
+    let deferred = CasHarness::with_responders(
+        sso_responder(
+            CasService::SmartClassrooms,
+            "https://app.buaa.edu.cn/site/classRoomQuery/index",
+            &[("Retry-After", "60")],
+        ),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+    );
+    let (result, _) = run_session(
+        &deferred,
+        &session_input("classrooms", classrooms_read()),
+        "session-deferred",
+    );
+    let error = result.expect_err("a deferred sign-on must not read");
+    assert_eq!(error.code, "cooldown", "{}", error.message);
+    assert_one_credential_post(&deferred, CasService::SmartClassrooms);
+    assert!(
+        deferred.app.observed().is_empty(),
+        "the deferred redirect is never followed"
+    );
+    assert!(deferred.booking.observed().is_empty());
+}
+
+#[test]
+fn smart_session_withholds_a_response_that_echoes_credential_material() {
+    for (name, echoed, read) in [
+        (
+            "cas-value",
+            SMART_CAS_VALUE,
+            r#"{"code":0,"data":{"list":[{"note":"ST-terminal-synthetic"}]}}"#,
+        ),
+        (
+            "issued-token",
+            LIBRARY_TOKEN,
+            r#"{"code":0,"data":{"list":[{"note":"synthetic-library-token-7h3k"}]}}"#,
+        ),
+        (
+            "password",
+            SESSION_PASSWORD,
+            r#"{"code":0,"data":{"list":[{"note":"synthetic-pass"}]}}"#,
+        ),
+    ] {
+        let harness = CasHarness::with_responders(
+            sso_responder(
+                CasService::Library,
+                "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
+                &[],
+            ),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            library_responder_with_cookies(
+                r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+                read,
+                &LIBRARY_COOKIES,
+            ),
+        );
+        let (result, _) = run_session(
+            &harness,
+            &session_input("library", library_read()),
+            &format!("session-echo-{name}"),
+        );
+        let output = result.expect("the business read still settles");
+        assert_eq!(output["service"], "library", "{name}");
+        assert_eq!(output["result"], "sensitive_response_withheld", "{name}");
+        assert_eq!(output["fallback_reason"], "credential_echo", "{name}");
+        assert_eq!(output["raw_evidence_withheld"], true, "{name}");
+        assert!(
+            output.get("data").is_none(),
+            "{name}: no business data survives a credential echo"
+        );
+        assert!(
+            !output.to_string().contains(echoed),
+            "{name}: the echoed credential was released"
+        );
+    }
+}
+
+#[test]
+fn smart_session_never_replays_or_downgrades_a_credential_preserving_redirect() {
+    for service in [CasService::SmartClassrooms,CasService::Library] {
+        for status in ["307 Temporary Redirect","308 Permanent Redirect"] {
+            let (name,landing,read) = match service {
+                CasService::SmartClassrooms => ("classrooms","https://app.buaa.edu.cn/site/classRoomQuery/index",classrooms_read()),
+                CasService::Library => ("library","https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",library_read()),
+                CasService::Classroom => unreachable!(),
+            };
+            let original = sso_responder(service,landing,&[]);
+            let harness = CasHarness::with_responders(
+                move |request| if request.method == "POST" {
+                    http_response(status,&[("Location",landing)],"")
+                } else { original(request) },
+                |_| http_response("200 OK",&[("Content-Type","text/html")],"<html><body>landing</body></html>"),
+                library_responder(r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,r#"{"code":0,"data":{"list":[]}}"#),
+            );
+            let (result,_) = run_session(&harness,&session_input(name,read),&format!("post-redirect-{name}-{status}"));
+            assert!(result.is_err(),"credential-preserving redirects cannot become a new authentication send");
+            assert_one_credential_post(&harness,service);
+            assert!(harness.app.observed().is_empty());
+            assert!(harness.booking.observed().is_empty());
+        }
+    }
+}
+
+#[test]
+fn smart_session_refuses_a_challenge_discovered_in_the_landing_body() {
+    let harness = CasHarness::with_responders(
+        sso_responder(CasService::SmartClassrooms,"https://app.buaa.edu.cn/site/classRoomQuery/index",&[]),
+        |_| http_response("200 OK",&[("Content-Type","text/html"),("Set-Cookie","smart_session=synthetic-app-session; Path=/; Secure")],
+            "<html><body><form><label>验证码<input name=\"captcha\"></label></form></body></html>"),
+        |_| http_response("404 Not Found",&[],"unexpected"),
+    );
+    let (result,_) = run_session(&harness,&session_input("classrooms",classrooms_read()),"landing-challenge");
+    assert_eq!(result.unwrap_err().code,"challenge_requires_human");
+    assert_one_credential_post(&harness,CasService::SmartClassrooms);
+    let app = harness.app.observed();
+    assert_eq!(app.len(),1,"the challenge prevents the business read");
+    assert_eq!(app[0].target,"/site/classRoomQuery/index");
+    assert!(harness.booking.observed().is_empty());
+}
+
+#[test]
+fn smart_session_does_not_invent_a_missing_library_cas_credential() {
+    let harness = CasHarness::with_responders(
+        sso_responder(CasService::Library,"https://booking.lib.buaa.edu.cn/v4/login/cas",&[]),
+        |_| http_response("404 Not Found",&[],"unexpected"),
+        |_| http_response("200 OK",&[("Content-Type","text/html")],"<html><body>landing</body></html>"),
+    );
+    let (result,_) = run_session(&harness,&session_input("library",library_read()),"missing-library-cas");
+    assert_eq!(result.unwrap_err().code,"authentication_unconfirmed");
+    assert_one_credential_post(&harness,CasService::Library);
+    let booking = harness.booking.observed();
+    assert_eq!(booking.len(),1,"only the credential-less landing can be fetched");
+    assert_eq!(booking[0].method,"GET");
+    assert_eq!(booking[0].target,"/v4/login/cas");
+    assert!(booking[0].header("cookie").is_none());
+    assert!(harness.app.observed().is_empty());
+}
+
+#[test]
+fn smart_session_stops_instead_of_forgetting_retired_cookie_credentials() {
+    let cookies: Vec<String> = (0..MAX_RETIRED_CREDENTIALS+2)
+        .map(|index|format!("login_sid=retired-private-{index}; Path=/v4/login; Secure; HttpOnly")).collect();
+    let harness = CasHarness::with_responders(
+        sso_responder(CasService::Library,"https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",&[]),
+        |_| http_response("404 Not Found",&[],"unexpected"),
+        move |request| if request.target == "/v4/login/user" {
+            let mut headers = vec![("Content-Type","application/json")];
+            headers.extend(cookies.iter().map(|value|("Set-Cookie",value.as_str())));
+            http_response("200 OK",&headers,r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#)
+        } else {
+            http_response("200 OK",&[("Content-Type","application/json")],r#"{"code":0,"data":{"list":[{"name":"retired-private-0"}]}}"#)
+        },
+    );
+    let (result,_) = run_session(&harness,&session_input("library",library_read()),"cookie-guard-exhaustion");
+    assert_eq!(result.unwrap_err().code,"body_limit");
+    let booking = harness.booking.observed();
+    assert_eq!(booking.len(),1,"no business request after losing a credential guard");
+    assert_eq!(booking[0].target,"/v4/login/user");
+}
+
+#[test]
+fn smart_session_withholds_encoded_complete_cookie_headers() {
+    use base64::Engine as _;
+    for (service,name,landing,read,cookie) in [
+        (CasService::SmartClassrooms,"classrooms","https://app.buaa.edu.cn/site/classRoomQuery/index",classrooms_read(),SMART_APP_COOKIE),
+        (CasService::Library,"library","https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",library_read(),LIBRARY_APP_COOKIE),
+    ] {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(cookie);
+        let class_body = json!({"e":0,"d":{"list":{"B":[{"kxsds":"1","roomName":encoded}]}}}).to_string();
+        let library_body = json!({"code":0,"data":{"list":[{"note":encoded}]}}).to_string();
+        let app = classroom_app_responder("{}");
+        let library = library_responder(r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,"{}");
+        let harness = CasHarness::with_responders(
+            sso_responder(service,landing,&[]),
+            move |request| if request.target.starts_with("/buaafreeclass/wap/default/search1?") {
+                http_response("200 OK",&[("Content-Type","application/json")],&class_body)
+            } else { app(request) },
+            move |request| if request.target == "/v4/space/pcTopFor" {
+                http_response("200 OK",&[("Content-Type","application/json")],&library_body)
+            } else { library(request) },
+        );
+        let (result,_) = run_session(&harness,&session_input(name,read),&format!("encoded-cookie-{name}"));
+        let output = result.unwrap();
+        assert_eq!(output["result"],"sensitive_response_withheld");
+        assert_eq!(output["fallback_reason"],"credential_echo");
+        assert!(output.get("data").is_none());
+        assert!(!output.to_string().contains(&encoded));
+    }
+}
+
+/// The library exchange issues a path-scoped sign-on cookie that never
+/// reaches the business read. A business response that echoes its value is
+/// still a credential echo and is withheld.
+#[test]
+fn smart_session_withholds_a_response_that_echoes_the_auth_cookie_value() {
+    let harness = CasHarness::with_responders(
+        sso_responder(
+            CasService::Library,
+            "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
+            &[],
+        ),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        library_responder_with_cookies(
+            r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+            r#"{"code":0,"data":{"list":[{"name":"auth-private"}]}}"#,
+            &LIBRARY_COOKIES,
+        ),
+    );
+    let (result, _) = run_session(
+        &harness,
+        &session_input("library", library_read()),
+        "session-cookie-echo",
+    );
+    let output = result.expect("the business read still settles");
+    assert_eq!(output["service"], "library");
+    assert_eq!(output["result"], "sensitive_response_withheld");
+    assert_eq!(output["fallback_reason"], "credential_echo");
+    assert_eq!(output["raw_evidence_withheld"], true);
+    assert!(
+        !output.to_string().contains("auth-private"),
+        "the echoed sign-on cookie value was released"
+    );
+    // The path-scoped sign-on cookie is never delivered to the business read.
+    let requests = harness.booking.observed();
+    assert_eq!(requests.len(), 2, "one CAS exchange and one business read");
+    let read = &requests[1];
+    let cookie = read.header("cookie").unwrap_or("");
+    assert!(!cookie.contains("login_sid"), "{cookie}");
+}
+
+/// A sign-on cookie value that was replaced still belongs to the session: an
+/// echo of the replaced value is withheld as well.
+#[test]
+fn smart_session_withholds_a_response_that_echoes_a_replaced_auth_cookie_value() {
+    let harness = CasHarness::with_responders(
+        sso_responder(
+            CasService::Library,
+            "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
+            &[],
+        ),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        library_responder_with_cookies(
+            r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+            r#"{"code":0,"data":{"list":[{"name":"auth-private-alpha"}]}}"#,
+            &REPLACED_LIBRARY_COOKIES,
+        ),
+    );
+    let (result, _) = run_session(
+        &harness,
+        &session_input("library", library_read()),
+        "session-replaced-cookie-echo",
+    );
+    let output = result.expect("the business read still settles");
+    assert_eq!(output["result"], "sensitive_response_withheld");
+    assert_eq!(output["fallback_reason"], "credential_echo");
+    assert!(
+        !output.to_string().contains("auth-private-alpha"),
+        "the echoed replaced sign-on cookie value was released"
+    );
+}
+
+#[test]
+fn smart_session_local_refusals_never_consult_the_network_factory() {
+    let base = json!({
+        "authorized": true,
+        "username": SESSION_USERNAME,
+        "password": SESSION_PASSWORD,
+        "intent": format!("LOGIN {SESSION_USERNAME} smart classrooms"),
+        "read": classrooms_read(),
+    });
+    let mut unauthorized = base.clone();
+    unauthorized["authorized"] = json!(false);
+    let mut wrong_intent = base.clone();
+    wrong_intent["intent"] = json!(format!("LOGIN {SESSION_USERNAME} smart library"));
+    let mut extra_field = base.clone();
+    extra_field["caller_field"] = json!("surprise");
+    let mut caller_token = base.clone();
+    caller_token["read"] = json!({"service": "library", "enabled": true,
+        "token": "synthetic-caller-token", "query": {"operation": "premises", "day": "2031-04-12"}});
+    let mut bad_date = base.clone();
+    bad_date["read"] = json!({"service": "classrooms", "enabled": true, "campus_id": 3, "date": "2031-13-40"});
+    let mut caller_login = base.clone();
+    caller_login["read"] = json!({"service": "library", "enabled": true,
+        "query": {"operation": "login", "cas": "synthetic-caller-cas"}});
+    let mut unsupported = base.clone();
+    unsupported["read"] = json!({"service": "exams", "enabled": true, "cookie": "synthetic-caller-cookie=9f4e"});
+
+    // A refusal never reproduces the supplied credentials.
+    for (name, payload) in [
+        ("unauthorized", unauthorized),
+        ("wrong-intent", wrong_intent),
+        ("invalid-date", bad_date),
+        ("caller-login", caller_login),
+        ("unsupported-service", unsupported),
+    ] {
+        let (result, factory_used) = run_offline_session(&payload.to_string(), true);
+        let error = result.expect_err(name);
+        assert!(!factory_used, "{name}: the network factory must stay untouched");
+        assert!(!error.message.contains(SESSION_PASSWORD), "{name}");
+        assert!(!error.message.contains(SESSION_USERNAME), "{name}");
+    }
+    // Input-schema violations report the input contract itself.
+    for (name, payload) in [
+        ("unknown-field", extra_field.to_string()),
+        ("caller-token", caller_token.to_string()),
+        ("malformed-bytes", "not json at all".to_string()),
+    ] {
+        let (result, factory_used) = run_offline_session(&payload, true);
+        let error = result.expect_err(name);
+        assert_eq!(error.code, "invalid_input", "{name}: {}", error.message);
+        assert!(!factory_used, "{name}: the network factory must stay untouched");
+    }
+    // A disabled read is not an error and never opens the network.
+    let mut disabled = classrooms_read();
+    disabled["enabled"] = json!(false);
+    for online in [true, false] {
+        let (result, factory_used) =
+            run_offline_session(&session_input("classrooms", disabled.clone()), online);
+        let output = result.expect("a disabled read is not a refusal");
+        assert_eq!(output["result"], "disabled");
+        assert_eq!(output["source"], "disabled");
+        assert_eq!(output["network_performed"], false);
+        assert!(!factory_used);
+    }
+    // An enabled read without explicit online permission is refused before
+    // any authentication attempt.
+    let (result, factory_used) =
+        run_offline_session(&session_input("classrooms", classrooms_read()), false);
+    let error = result.expect_err("an offline session must be refused");
+    assert_eq!(error.code, "online_required");
+    assert!(!factory_used);
+}

@@ -77,11 +77,34 @@ cargo build --locked --offline
 | Directory | `organizations list [--online\|--refresh]` | Reads one fixed official teaching/research directory; it does not crawl linked colleges. See [`docs/ORGANIZATIONS.md`](docs/ORGANIZATIONS.md). |
 | Announcements | `announcements list\|article\|document\|history`; `announcements college-source <college> [root\|notices\|public-notices]` | Selected source-bound pages and documents only; broader adapters, attachments, and history remain partial. |
 | Public SPOC | `spoc surface [root\|entry]`; `spoc script` | Sanitized public-surface metadata only; this is not authenticated course/material access. See [`docs/SPOC.md`](docs/SPOC.md). |
+| Smart reads | `smart [--online]`; `smart session [--online]` | Existing cookie/token reads, or one explicit in-memory CAS login followed by one classrooms/library read. Strict-TLS loopback and local CLI proof only; no live campus acceptance, persistence, automatic refresh or attendance mutation. |
 | Gateway and governor | `gateway usage` and explicit operation flows; `governor boot-review-plan\|boot-review-commit --offline` | Cache-first gateway usage and local safety flows; no live account operation is claimed. See [`docs/GATEWAY.md`](docs/GATEWAY.md). |
 | Defect reporting | `report` | Explicitly writes a GitHub Issue from operator-sanitized input through an installed, authenticated `gh`; authentication failures and uncertain writer outcomes remain explicit. The command does not redact private content: never attach credentials or raw private responses. |
 
 For exact argument shapes, supported college values, output fields, and bounds,
 use `./target/debug/buaa schema` rather than relying on a summary table.
+
+### Explicit Smart session
+
+`smart session --online` accepts JSON only through protected stdin: `authorized`,
+`username`, `password`, `intent` and `read`. The intent must be exactly
+`LOGIN <username> smart <service>`, where the service is `classrooms` or `library`.
+The object-only `read` selects an enabled flag and either classrooms'
+`campus_id`/`date`, or a library `premises`, `areas`, `times` or `seats` query.
+The complete contracts are `commands.smart.session.input` and `.output` in
+`buaa schema`. Caller-supplied cookies, tokens, CAS values and write operations
+are not accepted in this session read. The original `smart` cookie/token
+contract remains separate; its obsolete caller-supplied library login is removed.
+
+A disabled read performs no network or account-state I/O. An enabled read
+requires explicit authorization, the exact intent, a valid local query and
+`--online` before transport is opened. One existing Authentication lease spans
+the selected CAS flow, the library's one-time exchange when selected, and the
+single business read. Cookies and tokens remain private to the invocation;
+there is no stored-session reuse, automatic login refresh or retry. Challenges,
+deferrals and unconfirmed authentication stop the flow. A complete HTTP failure
+is not presented as a password verdict. Authentication responses are never raw
+read evidence; credential echoes in the final response are withheld.
 
 ## Examples
 

@@ -1,7 +1,8 @@
 //! Independent, read-only Smart BUAA services. Secrets are stdin-only inputs;
 //! they are never persisted. Returned raw evidence is private caller-owned data.
-//! CAS/browser authentication is deliberately not reconstructed here.
-use crate::{governor::{Governor, Outcome}, net::{self, Error}};
+//! Explicit CAS sessions are in-memory, one-attempt flows, never automatic refresh.
+use crate::{governor::{Governor, Outcome, RequestKind, RequestLease}, net::{self, Error}};
+use crate::recordings::session::{self as cas, CasService, SmartSession, SsoCredentials};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use md5::Md5;
 use reqwest::blocking::Client;
@@ -42,8 +43,14 @@ impl Read for SecretBody {
 #[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Exams { enabled: bool, cookie: Secret, term_code: String },
-    Classrooms { enabled: bool, cookie: Secret, campus_id: i64, date: String },
-    Library { enabled: bool, token: Secret, query: LibraryQuery },
+    Classrooms { enabled: bool, cookie: Secret, campus_id: i64, date: String,
+        #[serde(skip)] authentication_password: Option<Secret>,
+        #[serde(skip)] authentication_session: Option<SmartSession> },
+    Library { enabled: bool, token: Secret, query: LibraryQuery,
+        #[serde(skip)] authentication_cookie: Option<Secret>,
+        #[serde(skip)] authentication_password: Option<Secret>,
+        #[serde(skip)] authentication_cas: Option<Secret>,
+        #[serde(skip)] authentication_session: Option<SmartSession> },
     Cgyy { enabled: bool, app_key: String, access_token: Secret, query: CgyyQuery },
     Running { enabled: bool, uid: Secret, token: Secret, query: RunningQuery },
 }
@@ -72,8 +79,15 @@ impl Request {
             contains(bytes,&encoded)
         }
         match self {
-            Self::Exams{cookie,..}|Self::Classrooms{cookie,..} => contains_cookie(bytes,cookie),
-            Self::Library{token,..} => contains(bytes,token),
+            Self::Exams{cookie,..} => contains_cookie(bytes,cookie),
+            Self::Classrooms{cookie,authentication_password,authentication_session,..} => authentication_session.as_ref()
+                .map_or_else(||contains_cookie(bytes,cookie),|session|contains(bytes,cookie)||session.contains_secret_bytes(bytes))
+                || authentication_password.as_ref().is_some_and(|password|contains(bytes,password)),
+            Self::Library{token,authentication_cookie,authentication_session,authentication_password,authentication_cas,..} => contains(bytes,token)
+                || authentication_cookie.as_ref().is_some_and(|cookie|contains(bytes,cookie))
+                || authentication_session.as_ref().is_some_and(|session|session.contains_secret_bytes(bytes))
+                || authentication_password.as_ref().is_some_and(|password|contains(bytes,password))
+                || authentication_cas.as_ref().is_some_and(|credential|contains(bytes,credential)),
             Self::Cgyy{access_token,..} => contains(bytes,access_token),
             Self::Running{uid,token,..} => contains_form_value(bytes,uid)||contains_form_value(bytes,token),
         }
@@ -119,7 +133,6 @@ impl Request {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum LibraryQuery {
-    Login { cas: Secret },
     Premises { day: String },
     Areas { premises_ids: Vec<String>, date: String },
     Times { id: String },
@@ -158,6 +171,258 @@ fn secret(s: &str) -> Result<(), Error> {
     if s.is_empty() || s.len() > 16384 || s.chars().any(char::is_control) { Err(invalid()) } else { Ok(()) }
 }
 fn date(s: &str) -> Result<(), Error> { if valid_date(s) { Ok(()) } else { Err(invalid()) } }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionInput {
+    authorized: bool,
+    username: Secret,
+    password: Secret,
+    intent: Secret,
+    #[serde(deserialize_with = "deserialize_object")]
+    read: SessionRead,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
+enum SessionRead {
+    Classrooms { enabled: bool, campus_id: i64, date: String },
+    Library { enabled: bool, #[serde(deserialize_with = "deserialize_object")] query: LibraryQuery },
+}
+
+// Serde's struct/tagged-enum derives also accept positional sequences. This
+// boundary admits JSON objects only, without a credential-bearing Value tree.
+fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T,D::Error>
+where D: serde::Deserializer<'de>, T: Deserialize<'de> {
+    struct Object<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T,A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Object(std::marker::PhantomData))
+}
+
+struct LibraryRead {
+    path: &'static str,
+    kind: &'static str,
+    body: Value,
+}
+
+fn prepare_library_read(query: &LibraryQuery) -> Result<LibraryRead, Error> {
+    let (path, kind, body) = match query {
+        LibraryQuery::Premises { day } => {
+            date(day)?;
+            ("space/pcTopFor", "premises", json!({"day":day}))
+        },
+        LibraryQuery::Areas { premises_ids, date: day } => {
+            date(day)?;
+            if premises_ids.is_empty() || premises_ids.iter().any(|id|id.is_empty()) { return Err(invalid()); }
+            ("space/pick", "areas", json!({"premisesIds":premises_ids,"categoryIds":[],"storeyIds":[],"boutiqueIds":[],"date":day}))
+        },
+        LibraryQuery::Times { id } => {
+            secret(id)?;
+            ("Space/map", "times", json!({"id":id}))
+        },
+        LibraryQuery::Seats { id, day, start_time, end_time } => {
+            secret(id)?; date(day)?; secret(start_time)?; secret(end_time)?;
+            ("Space/seat", "seats", json!({"id":id,"day":day,"label_id":[],"start_time":start_time,"end_time":end_time,"begdate":"","enddate":""}))
+        },
+    };
+    Ok(LibraryRead { path, kind, body })
+}
+
+fn classroom_request(client: &Client, cookie: &str, campus_id: i64, day: &str) -> reqwest::blocking::RequestBuilder {
+    client.get("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1")
+        .query(&[("xqid",campus_id.to_string().as_str()),("floorid",""),("date",day)])
+        .header("Cookie",cookie).header("User-Agent",MOBILE).header("X-Requested-With","XMLHttpRequest")
+        .header("Referer","https://app.buaa.edu.cn/site/classRoomQuery/index")
+}
+
+fn library_request(client: &Client, token: &str, cookie: Option<&str>, read: &LibraryRead) -> reqwest::blocking::RequestBuilder {
+    let mut authorization = Zeroizing::new(String::from("bearer"));
+    authorization.push_str(token);
+    let mut builder = client.post(format!("https://booking.lib.buaa.edu.cn/v4/{}",read.path))
+        .header("Authorization",authorization.as_str()).json(&read.body);
+    if let Some(cookie) = cookie { builder = builder.header("Cookie",cookie); }
+    builder
+}
+
+fn build_read(builder: reqwest::blocking::RequestBuilder) -> Result<reqwest::blocking::Request, Error> {
+    let mut request = builder.timeout(std::time::Duration::from_secs(45))
+        .header("Accept-Encoding","identity").build().map_err(|_|invalid())?;
+    for name in ["cookie","authorization","cgauthorization"] {
+        if let Some(value) = request.headers_mut().get_mut(name) { value.set_sensitive(true); }
+    }
+    Ok(request)
+}
+
+fn next_request(lease: &mut RequestLease<'_>) -> Result<(), Error> {
+    let reservation = lease.reserve_followup().map_err(|_|error("governor_error","cannot admit Smart follow-up"))?;
+    if !reservation.cooldown_wait.is_zero() {
+        return Err(error("cooldown","Smart authentication was deferred; no follow-up or retry was sent"));
+    }
+    if !reservation.request_wait.is_zero() { std::thread::sleep(reservation.request_wait); }
+    Ok(())
+}
+
+/// Exchange the source-issued library CAS credential once. Neither the raw
+/// authentication response nor its token enters a generic JSON value/output.
+fn library_login(client: &Client, lease: &mut RequestLease<'_>, session: &mut SmartSession) -> Result<(Secret,Secret), Error> {
+    let url = url::Url::parse("https://booking.lib.buaa.edu.cn/v4/login/user").map_err(|_|invalid())?;
+    let credential = session.take_library_cas()?;
+    #[derive(serde::Serialize)]
+    struct CasBody<'a> { cas: &'a str }
+    let body = Zeroizing::new(serde_json::to_vec(&CasBody { cas: &credential }).map_err(|_|invalid())?);
+    let length = body.len();
+    let body = reqwest::blocking::Body::sized(SecretBody { bytes: body, offset: 0 },length as u64);
+    let (cookie, expiry) = session.cookie_header(&url)?;
+    let mut builder = client.post(url.clone()).header("Content-Type","application/json")
+        .header("Accept","application/json").header("Accept-Encoding","identity").body(body);
+    if let Some(cookie) = &cookie { builder = builder.header("Cookie",cookie.as_str()); }
+    let mut request = builder.build().map_err(|_|invalid())?;
+    if let Some(value) = request.headers_mut().get_mut("cookie") { value.set_sensitive(true); }
+    next_request(lease)?;
+    let mut response = match lease.start_request(|| {
+        if expiry.is_some_and(|expiry|std::time::SystemTime::now() >= expiry) { None }
+        else { Some(client.execute(request)) }
+    }).map_err(|_|error("governor_error","cannot start library exchange"))? {
+        None => return Err(error("scoped_cookie_unusable","the library cookie expired before transmission")),
+        Some(Err(_)) => return Err(error("network_error","library exchange failed; no automatic retry")),
+        Some(Ok(response)) => response,
+    };
+    let status = response.status().as_u16();
+    let challenged = response.headers().iter().any(|(key,value)|net::challenge_header(key.as_str(),value.as_bytes()));
+    lease.observe_http_many(status,response.headers().get_all("retry-after").iter().map(|value|value.to_str().ok()),challenged)
+        .map_err(|_|error("governor_error","cannot persist library exchange headers"))?;
+    session.absorb_library_headers(&url,response.headers())?;
+    let deferred = response.headers().contains_key("retry-after");
+    let mut types = response.headers().get_all("content-type").iter();
+    let content_type = match (types.next(),types.next()) {
+        (Some(value),None) => value.to_str().ok().map(str::to_owned),
+        _ => None,
+    };
+    let mut bytes = Zeroizing::new(Vec::new());
+    let read = response.by_ref().take(LIMIT+1).read_to_end(&mut bytes);
+    if read.is_err() { return Err(error("network_error","library exchange body was incomplete; no retry")); }
+    if bytes.len() as u64 > LIMIT { return Err(error("body_limit","library exchange response exceeds bounded body limit")); }
+    let assessment = crate::html::assess_challenge_body(&bytes,content_type.as_deref(),true);
+    if challenged || assessment == crate::html::ChallengeAssessment::Detected {
+        lease.observe_http(status,None,true).map_err(|_|error("governor_error","cannot persist library challenge"))?;
+        return Err(error("challenge_requires_human","library authentication requires a human challenge; no bypass or retry"));
+    }
+    if deferred || status == 429 {
+        return Err(error("cooldown","library authentication was deferred; no retry or read was sent"));
+    }
+    if matches!(status,401|403) || response_denies_session(Service::Library,&bytes) {
+        return Err(error("auth_latched","library authentication was denied; no retry or read was sent"));
+    }
+    if !(200..300).contains(&status) || assessment != crate::html::ChallengeAssessment::Clear
+        || !content_type.as_deref().is_some_and(|value|value.split(';').next().is_some_and(|essence|essence.trim().eq_ignore_ascii_case("application/json")))
+    {
+        return Err(error("authentication_unconfirmed","library authentication was not confirmed; no retry or read was sent"));
+    }
+    fn login_code<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<i64>,D::Error> {
+        i64::deserialize(deserializer).map(Some)
+    }
+    #[derive(Deserialize)]
+    struct Envelope {
+        #[serde(default, deserialize_with = "login_code")]
+        code: Option<i64>,
+        data: Data,
+    }
+    #[derive(Deserialize)]
+    struct Data { member: Member }
+    #[derive(Deserialize)]
+    struct Member { token: Secret }
+    let envelope: Envelope = serde_json::from_slice(&bytes)
+        .map_err(|_|error("authentication_unconfirmed","library authentication did not provide a valid token; no retry or read was sent"))?;
+    if envelope.code.is_some_and(|code|!matches!(code,0|1)) || secret(&envelope.data.member.token).is_err() {
+        return Err(error("authentication_unconfirmed","library authentication did not provide an admitted token; no retry or read was sent"));
+    }
+    Ok((envelope.data.member.token,Secret(credential)))
+}
+
+/// One explicit in-memory CAS login followed by exactly one selected read.
+/// Tokens/cookies never leave this invocation; subsequent commands do not
+/// refresh or reuse the resulting authentication state.
+pub fn session(input: &str, online: bool) -> Result<Value, Error> {
+    session_with_network(input,online,||Ok((cas::http_client()?,Governor::open()
+        .map_err(|_|error("governor_error","shared request admission unavailable"))?)))
+}
+
+pub(crate) fn session_with_network(
+    input: &str,
+    online: bool,
+    network: impl FnOnce() -> Result<(Client,Governor),Error>,
+) -> Result<Value, Error> {
+    if input.len() > 65536 { return Err(invalid()); }
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let input: SessionInput = deserialize_object(&mut deserializer).map_err(|_|invalid())?;
+    deserializer.end().map_err(|_|invalid())?;
+    let (enabled,service,profile) = match &input.read {
+        SessionRead::Classrooms { enabled, .. } => (*enabled,Service::Classrooms,CasService::SmartClassrooms),
+        SessionRead::Library { enabled, .. } => (*enabled,Service::Library,CasService::Library),
+    };
+    if !enabled { return Ok(with_source(json!({"result":"disabled","write_operations_performed":false}),Source::Disabled)); }
+    if !input.authorized { return Err(error("permission","explicit authorization for one Smart authentication attempt is required")); }
+    let credentials = SsoCredentials::new(&input.username,&input.password)?;
+    if *input.intent != format!("LOGIN {} smart {}",&*input.username,service.name()) { return Err(invalid()); }
+    let prepared_library = match &input.read {
+        SessionRead::Classrooms { date: day, .. } => { date(day)?; None },
+        SessionRead::Library { query, .. } => Some(prepare_library_read(query)?),
+    };
+    if !online { return Err(error("online_required","Smart sessions require explicit online permission; no authentication was attempted")); }
+    let (client,governor) = network()?;
+    let mut lease = net::acquire_kind(&governor,RequestKind::Authentication)?;
+    let authenticated = cas::authenticate_smart(&mut lease,&client,profile,credentials);
+    let prepared = authenticated.and_then(|mut session| {
+        let (request,kind,builder,expiry) = match input.read {
+            SessionRead::Classrooms { enabled, campus_id, date } => {
+                let url = url::Url::parse("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1").map_err(|_|invalid())?;
+                let (cookie,expiry) = session.cookie_header(&url)?;
+                let cookie = Secret(cookie.ok_or_else(||error("auth_latched","classroom-query cookie is missing; no read was sent"))?);
+                let builder = classroom_request(&client,&cookie,campus_id,&date);
+                (Request::Classrooms { enabled,cookie,campus_id,date,authentication_password:Some(input.password),authentication_session:Some(session) },"rooms",builder,expiry)
+            },
+            SessionRead::Library { enabled, query } => {
+                let (token,credential) = library_login(&client,&mut lease,&mut session)?;
+                let read = prepared_library.ok_or_else(invalid)?;
+                let url = url::Url::parse(&format!("https://booking.lib.buaa.edu.cn/v4/{}",read.path)).map_err(|_|invalid())?;
+                let (cookie,expiry) = session.cookie_header(&url)?;
+                let cookie = cookie.map(Secret);
+                let builder = library_request(&client,&token,cookie.as_deref(),&read);
+                (Request::Library { enabled,token,query,authentication_cookie:cookie,authentication_password:Some(input.password),authentication_cas:Some(credential),authentication_session:Some(session) },read.kind,builder,expiry)
+            },
+        };
+        let http_request = build_read(builder)?;
+        next_request(&mut lease)?;
+        Ok((request,kind,http_request,expiry))
+    });
+    let (request,kind,http_request,cookie_expiry) = match prepared {
+        Ok(prepared) => prepared,
+        Err(failure) => {
+            if matches!(failure.code,"governor_error"|"governor_unavailable") {
+                // Persistence failure after a send is not a local refusal.
+                // Drop without finishing: retain the pending outcome for review.
+                return Err(failure);
+            }
+            let settled = match failure.code {
+                "auth_latched" => lease.finish(Outcome::CredentialRejected),
+                "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "network_error"|"body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ => lease.finish_without_request(),
+            };
+            settled.map_err(|_|error("governor_error","cannot settle Smart authentication attempt"))?;
+            return Err(failure);
+        },
+    };
+    perform_read(&client,ReadExecution { request:&request,service,kind,http_request,cookie_expiry },lease)
+}
 
 /// Upstream CgyySigner.kt: slash-prefixed API path (without server base),
 /// sorted raw key+value pairs without separators, UTF-8; empty/nonprimitive
@@ -384,7 +649,7 @@ fn parse(service: Service, status: u16, content_type: Option<&str>, bytes: &[u8]
     // Even offline auth bodies can contain tickets/tokens. Never turn them into
     // generic Values or raw diagnostic evidence.
     if matches!(kind,"login"|"manage_login") {
-        return json!({"service":service.name(),"result":"unsupported","reason":"authentication exchange disabled pending Authentication-lease, deliberate-resume and known-outcome proof","write_operations_performed":false});
+        return json!({"service":service.name(),"result":"unsupported","reason":"authentication bodies are not read evidence and cannot be exported or imported as sessions","write_operations_performed":false});
     }
     if !(200..300).contains(&status) {
         return withheld(service,status,content_type,bytes,"http_status_unsafe_response");
@@ -479,8 +744,7 @@ pub fn read(input: &str, online: bool) -> Result<Value, Error> {
         Request::Cgyy{enabled,..}|Request::Running{enabled,..} => *enabled,
     };
     if !enabled { return Ok(with_source(json!({"result":"disabled","write_operations_performed":false}),Source::Disabled)); }
-    if matches!(&request,Request::Library{query:LibraryQuery::Login{..},..}
-        |Request::Cgyy{query:CgyyQuery::Login{..}|CgyyQuery::ManageLogin{..},..}) {
+    if matches!(&request,Request::Cgyy{query:CgyyQuery::Login{..}|CgyyQuery::ManageLogin{..},..}) {
         return Err(error("authentication_exchange_blocked","authentication exchanges require proven Authentication lease, deliberate resume, credential rejection and unknown-outcome settlement; no request sent"));
     }
     if !online { return Err(error("online_required","smart reads require explicit online permission; no cache is claimed")); }
@@ -498,33 +762,12 @@ pub fn read(input: &str, online: bool) -> Result<Value, Error> {
         },
         Request::Classrooms{cookie,campus_id,date:day,..} => {
             secret(cookie)?; date(day)?;
-            (Service::Classrooms,"rooms",client.get("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1")
-                .query(&[("xqid",campus_id.to_string()),("floorid",String::new()),("date",day.clone())])
-                .header("Cookie",&**cookie).header("User-Agent",MOBILE).header("X-Requested-With","XMLHttpRequest")
-                .header("Referer","https://app.buaa.edu.cn/site/classRoomQuery/index"))
+            (Service::Classrooms,"rooms",classroom_request(&client,cookie,*campus_id,day))
         },
         Request::Library{token,query,..} => {
-            if !matches!(query,LibraryQuery::Login{..}) { secret(token)?; }
-            let (path,kind,body) = match query {
-                LibraryQuery::Login{cas} => { let _ = &**cas; return Err(error("authentication_exchange_blocked","CAS exchange disabled; no request sent")); },
-                LibraryQuery::Premises{day} => { date(day)?; ("space/pcTopFor","premises",json!({"day":day})) },
-                LibraryQuery::Areas{premises_ids,date:day} => {
-                    date(day)?; if premises_ids.is_empty() || premises_ids.iter().any(|x|x.is_empty()) { return Err(invalid()); }
-                    ("space/pick","areas",json!({"premisesIds":premises_ids,"categoryIds":[],"storeyIds":[],"boutiqueIds":[],"date":day}))
-                },
-                LibraryQuery::Times{id} => { secret(id)?; ("Space/map","times",json!({"id":id})) },
-                LibraryQuery::Seats{id,day,start_time,end_time} => {
-                    secret(id)?; date(day)?; secret(start_time)?; secret(end_time)?;
-                    ("Space/seat","seats",json!({"id":id,"day":day,"label_id":[],"start_time":start_time,"end_time":end_time,"begdate":"","enddate":""}))
-                },
-            };
-            let mut builder = client.post(format!("https://booking.lib.buaa.edu.cn/v4/{path}"));
-            if kind != "login" {
-                let mut authorization = Zeroizing::new(String::from("bearer"));
-                authorization.push_str(token);
-                builder = builder.header("Authorization",authorization.as_str());
-            }
-            (Service::Library,kind,builder.header("Content-Type","application/json").body(body.to_string()))
+            secret(token)?;
+            let read = prepare_library_read(query)?;
+            (Service::Library,read.kind,library_request(&client,token,None,&read))
         },
         Request::Running{uid,token,query,..} => {
             secret(uid)?; secret(token)?;
@@ -604,13 +847,26 @@ pub fn read(input: &str, online: bool) -> Result<Value, Error> {
         },
     };
     // Build before admission so malformed credential headers never consume a request.
-    let mut http_request = builder.timeout(std::time::Duration::from_secs(45))
-        .header("Accept-Encoding","identity").build().map_err(|_|invalid())?;
-    for name in ["cookie","authorization","cgauthorization"] {
-        if let Some(value) = http_request.headers_mut().get_mut(name) { value.set_sensitive(true); }
-    }
+    let http_request = build_read(builder)?;
     let governor = Governor::open().map_err(|_|error("governor_error","shared governor unavailable"))?;
-    let mut lease = net::acquire(&governor)?;
+    let lease = net::acquire(&governor)?;
+    perform_read(&client, ReadExecution { request: &request, service, kind, http_request, cookie_expiry: None }, lease)
+}
+
+struct ReadExecution<'a> {
+    request: &'a Request,
+    service: Service,
+    kind: &'static str,
+    http_request: reqwest::blocking::Request,
+    cookie_expiry: Option<std::time::SystemTime>,
+}
+
+fn perform_read(
+    client: &Client,
+    execution: ReadExecution<'_>,
+    mut lease: crate::governor::RequestLease<'_>,
+) -> Result<Value, Error> {
+    let ReadExecution { request, service, kind, mut http_request, cookie_expiry } = execution;
     // Admission may wait for the shared cooldown. Sign only after that wait,
     // otherwise the timestamp can be stale before the request is transmitted.
     if matches!(service,Service::Cgyy) && kind != "manage_login" {
@@ -641,11 +897,21 @@ pub fn read(input: &str, online: bool) -> Result<Value, Error> {
             },
         }
     }
-    let mut response = match lease.start_request(|| client.execute(http_request)) {
-        Ok(Ok(r)) => r,
-        Ok(Err(_)) => {
+    let mut response = match lease.start_request(|| {
+        if cookie_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+            None
+        } else {
+            Some(client.execute(http_request))
+        }
+    }) {
+        Ok(Some(Ok(r))) => r,
+        Ok(Some(Err(_))) => {
             lease.finish(Outcome::NetworkFailure).map_err(|_|error("governor_error","cannot settle smart request"))?;
             return Err(error("network_error","smart request failed; no automatic retry"));
+        },
+        Ok(None) => {
+            lease.finish_without_request().map_err(|_|error("governor_error","cannot release smart request"))?;
+            return Err(error("scoped_cookie_unusable","the Smart cookie expired before transmission; no further request was sent"));
         },
         Err(crate::governor::FollowupError::Governor(_)) => {
             return Err(error("governor_error","request safety admission failed; pending outcome retained"));
@@ -728,7 +994,6 @@ pub fn schema() -> Value {
         fields.extend([("service",json!({"const":name})),("enabled",json!({"type":"boolean"}))]); object(fields)
     }
     let library = json!({"oneOf":[
-        op("login",vec![("cas",string())]),
         op("premises",vec![("day",string())]),
         op("areas",vec![("premises_ids",json!({"type":"array","items":{"type":"string"}})),("date",string())]),
         op("times",vec![("id",string())]),
@@ -736,7 +1001,10 @@ pub fn schema() -> Value {
     let running = json!({"oneOf":[op("categories",vec![]),op("items",vec![("classify_id",string())]),
         op("count",vec![("classify_id",string()),("user_id",string())]),
         op("records",vec![("classify_id",string()),("user_id",string()),("page",json!({"type":"integer","minimum":0,"maximum":4294967295u64})),("limit",json!({"type":"integer","minimum":0,"maximum":4294967295u64}))])]});
-    json!({"input":{"oneOf":[
+    let session_read = json!({"oneOf":[
+        service("classrooms",vec![("campus_id",json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),("date",string())]),
+        service("library",vec![("query",library.clone())])]});
+    let mut schema = json!({"input":{"oneOf":[
         service("exams",vec![("cookie",string()),("term_code",string())]),
         service("classrooms",vec![("cookie",string()),("campus_id",json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),("date",string())]),
         service("library",vec![("token",string()),("query",library)]),
@@ -753,11 +1021,18 @@ pub fn schema() -> Value {
             {"properties":{"source":{"const":"disabled"},"network_performed":{"const":false}}}],
             "properties":{"result":{"enum":["ok","disabled","unsupported","unstructured","business_error","session_expired","sensitive_response_withheld"]},"source":{"enum":["network","operator_supplied","disabled"]},"network_performed":{"type":"boolean"},"service":{"enum":["exams","classrooms","library","cgyy","running"]},"data":{},"raw_evidence_withheld":{"const":true},"raw_evidence":{"type":"object","required":["encoding","data","content_type","byte_length","sha256"],"properties":{"encoding":{"const":"base64"},"data":{"type":"string"},"content_type":{"type":["string","null"]},"byte_length":{"type":"integer"},"sha256":{"type":"string"}}}}},
         "provenance":"network means an actual request completed in this invocation; reread always operator_supplied, including caller-supplied HTTP status and MIME; no cache implementation or cache provenance is claimed",
-        "authentication":"stdin-only established cookie or token; library CAS exchange and CGYY manage/business exchanges are blocked before transport pending Authentication lease, deliberate resume and known-outcome proof; existing authenticated reads only",
+        "authentication":"default read uses stdin-only established cookie/token. session accepts one explicit authorized CAS login for classrooms or library and exactly one selected read, under one Authentication lease, without persistence, refresh or retry. Caller-supplied library CAS and CGYY exchanges are not supported",
         "writes":"unsupported; never uploads or fabricates attendance photographs",
         "cgyy_app_key":"8fceb735082b5a529312040b58ea780b",
         "unknown":["campus id enumeration"],
-        "validation":"enabled requests require nonempty control-free credentials; strict YYYY-MM-DD dates; records page >= 1 and limit 1..1000; no null fields"})
+        "validation":"enabled requests require nonempty control-free credentials; strict YYYY-MM-DD dates; records page >= 1 and limit 1..1000; no null fields"});
+    schema["session"] = json!({
+        "input":object(vec![("authorized",json!({"type":"boolean"})),("username",string()),("password",string()),("intent",string()),("read",session_read)]),
+        "output":schema["output"].clone(),
+        "intent":"LOGIN <username> smart <service>; service is classrooms or library; JSON must arrive through protected stdin",
+        "validation":"disabled read performs no I/O; enabled read requires authorized=true, exact intent, locally valid query and --online before opening transport or admission; no authentication material may be supplied inside read"
+    });
+    schema
 }
 
 // These fixed synthetic scenarios stop before transport and governor work.
@@ -949,7 +1224,6 @@ mod tests {
     }
     #[test] fn authentication_is_blocked_before_transport_even_offline() {
         for input in [
-            r#"{"service":"library","enabled":true,"token":"","query":{"operation":"login","cas":"private-ticket"}}"#,
             r#"{"service":"cgyy","enabled":true,"app_key":"public","access_token":"","query":{"operation":"login","sso_token":"private-ticket"}}"#,
             r#"{"service":"cgyy","enabled":true,"app_key":"public","access_token":"","query":{"operation":"manage_login","cookie":"private-cookie"}}"#,
         ] {

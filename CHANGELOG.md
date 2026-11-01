@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add `smart session [--online]`: one explicitly authorized, in-memory CAS
+  login for classrooms or library followed by one selected read, under the
+  existing Authentication lease. Validate intent/query before opening I/O;
+  never persist, refresh or retry authentication. Remove the obsolete
+  caller-supplied library CAS login while retaining ordinary cookie/token reads.
+- Confine each CAS profile to its reviewed origins and password target;
+  consume the library's terminal CAS once without requesting its credential URL.
+  Refuse 307/308 credential replay, stop on header/body challenges or deferral,
+  and distinguish unconfirmed protocol responses from credential rejection.
+  Retain pending outcomes when safety-state persistence fails.
+- Screen final Smart output against the password, issued token/CAS, complete
+  transmitted cookie header, and current/retired cookies of every scope.
+  Cookie-history exhaustion stops the flow instead of forgetting a credential.
+  Enforce object-only session input at envelope/read/query boundaries. Strict-TLS
+  loopback and native CLI proof passed; campus compatibility remains unverified.
 - Resolve each learning-material branch through its commit's tree declaration,
   then request and verify the immutable recursive tree. Preserve strict root
   and subtree Git-object checks, reject a different valid tree substituted for
