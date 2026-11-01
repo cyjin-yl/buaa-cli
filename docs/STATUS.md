@@ -1,5 +1,49 @@
 ## Development status
 
+## 2026-11-01: bounded iHome session, offline proof only
+
+`ihome session [--online]` implements one explicit CAS login and one selected
+list page or detail. Object-only typed input, exact `LOGIN <username> ihome`
+intent, authorization and read bounds are checked before client/account-state
+construction. Valid disabled reads remain local. Legacy caller-token reads
+retain their cache and traversal behavior; the new session never caches,
+persists credentials, paginates automatically, refreshes or retries.
+
+The pinned MIT public
+[`IhomeUpstreamClient.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeUpstreamClient.kt)
+binds the literal HTTP CAS service declaration, exact `/api/authLogin` callback
+and `/web/` fragment handoff. Actual requests remain HTTPS-only with certificate
+verification. Only the exact default-port HTTP callback is upgraded; arbitrary
+platform business paths cannot be followed during authentication. A regression
+first observed an unwanted same-origin business GET, then passed after this
+restriction. Terminal URLs are consumed in memory and never fetched. The
+reference client's broad HTTPS rewrite and automatic retry are not adopted.
+
+One existing Authentication lease spans CAS and one business GET. Authentication
+responses are not exported. Final body/MIME admission guards the username,
+password, issued token, complete transmitted cookie headers and current/retired
+cookie values. A credential echo degrades with safe status/length/hash facts,
+not raw bytes or an invented empty result. Application-level positive admission
+and the existing record/pagination rules remain required. A token or successful
+public listing alone does not establish account identity or complete rights.
+
+The focused suite passed 78 cases, including strict-TLS loopback login/read,
+one-POST/one-read/no-terminal-fetch boundaries, challenge/deferral/redirect
+refusals and credential echoes. Fourteen CLI boundary cases passed. Separate
+actual-binary runs validated both disabled read types, disabled empty credential
+values, offline/permission/injected-token refusals and the emitted input/output
+JSON Schemas, including the generic run output. CLI errors retain the existing
+mapping: offline `online_required` becomes `unavailable` (exit 7); missing
+operator permission is `permission` (exit 5).
+
+Current DNS-resolved IPv4 targets for SSO and iHome refused TCP 443; their IPv6
+targets had no route. These were bounded transport-only probes, not HTTP or
+password verdicts. No real credentials were submitted, no authentication
+attempt or VPN recovery was performed, and no route/account key/limiter was
+created. Live authentication, current source/history, full text, nonempty
+attachments and token lifetime remain unverified. The acceptance item remains
+pending; synthetic TLS flows do not establish current campus compatibility.
+
 ## 2026-11-01: source-faithful iHome records and bounded pagination
 
 The iHome reader no longer requires or invents an appeal title. A supplied
@@ -42,7 +86,8 @@ live-service proof.
 
 No real credentials, campus request, token acquisition, new account key,
 governor scheduling state, automatic retry or attachment fetch was used.
-This CLI still does not implement iHome login. The pinned third-party report's
+That record/parser-only revision did not implement iHome login; the bounded
+session implementation is recorded above. The pinned third-party report's
 fragment router-query/frontend-cookie description is not a CLI-produced
 session or current server lifetime. Current idle-window output is explicitly
 unknown, and legacy `php-ihome` social-platform routes do not establish modern

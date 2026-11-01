@@ -1,9 +1,10 @@
-//! Inter-profile CAS boundary cases and full Smart session flows.
+//! Inter-profile CAS boundary cases and full service session flows.
 //!
 //! Each relying party admits only its reviewed origins, a password form may
 //! target only the selected service declaration, and a library CAS value may
-//! leave the URL only on the library origin. The flows below drive one real
-//! in-memory CAS login plus exactly one business read against a loopback
+//! leave the URL only on the library origin, while an iHome fragment token
+//! binds only on the reviewed platform web prefix. The flows below drive one
+//! real in-memory CAS login plus exactly one business read against a loopback
 //! stand-in whose certificate authority is pinned to the test client alone.
 //! Every input here is synthetic; no campus network, credential store or campus
 //! source is touched.
@@ -24,10 +25,11 @@ const LIBRARY_TOKEN: &str = "synthetic-library-token-7h3k";
 /// Scoped application cookies; neither is a sign-on credential.
 const SMART_APP_COOKIE: &str = "smart_session=synthetic-app-session";
 const LIBRARY_APP_COOKIE: &str = "lib_session=synthetic-library-session";
-const ALL_SERVICES: [CasService; 3] = [
+const ALL_SERVICES: [CasService; 4] = [
     CasService::Classroom,
     CasService::SmartClassrooms,
     CasService::Library,
+    CasService::Ihome,
 ];
 
 fn url(input: &str) -> Url {
@@ -75,15 +77,27 @@ fn each_profile_admits_only_its_reviewed_origins() {
         assert!(allowed(&candidate, CasService::Classroom), "{host}");
         assert!(!allowed(&candidate, CasService::SmartClassrooms), "{host}");
         assert!(!allowed(&candidate, CasService::Library), "{host}");
+        assert!(!allowed(&candidate, CasService::Ihome), "{host}");
     }
     let app = url("https://app.buaa.edu.cn/a_buaa/api/cas/index");
     assert!(allowed(&app, CasService::SmartClassrooms));
     assert!(!allowed(&app, CasService::Classroom));
     assert!(!allowed(&app, CasService::Library));
+    assert!(!allowed(&app, CasService::Ihome));
     let booking = url("https://booking.lib.buaa.edu.cn/v4/login/cas");
     assert!(allowed(&booking, CasService::Library));
     assert!(!allowed(&booking, CasService::Classroom));
     assert!(!allowed(&booking, CasService::SmartClassrooms));
+    assert!(!allowed(&booking, CasService::Ihome));
+    // The iHome profile admits the sign-on host and the platform host only;
+    // the plaintext callback is normalized to HTTPS before admission, so the
+    // raw http spelling is not an admissible request target.
+    let ihome_callback = url("https://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic");
+    assert!(allowed(&ihome_callback, CasService::Ihome));
+    assert!(!allowed(&ihome_callback, CasService::Classroom));
+    assert!(!allowed(&ihome_callback, CasService::SmartClassrooms));
+    assert!(!allowed(&ihome_callback, CasService::Library));
+    assert!(!allowed(&url("http://i.buaa.edu.cn/api/authLogin"), CasService::Ihome));
     // Origin admission is host-scoped: arbitrary paths and queries on a
     // reviewed host remain admitted, so a foreign path cannot harden a host.
     assert!(allowed(
@@ -115,6 +129,13 @@ fn allowed_refuses_shaped_origins_and_lookalike_hosts() {
             "https://lib.buaa.edu.cn/",
             "https://ihome.buaa.edu.cn/",
             "https://gw.buaa.edu.cn/",
+            "http://i.buaa.edu.cn/api/authLogin",
+            "http://i.buaa.edu.cn/web/",
+            "https://operator@i.buaa.edu.cn/api/authLogin",
+            "https://i.buaa.edu.cn:4443/api/authLogin",
+            "https://i.buaa.edu.cn./api/authLogin",
+            "https://i.buaa.edu.cn.attacker.example/api/authLogin",
+            "https://sub.i.buaa.edu.cn/api/authLogin",
         ] {
             assert!(!allowed(&url(candidate), service), "{candidate}");
         }
@@ -176,7 +197,7 @@ fn smart_route_declares_no_auto_redirect_and_no_other_extra_pair() {
         CasService::SmartClassrooms
     ));
     // Other profiles never accept the smart-only flag on their forms.
-    for service in [CasService::Classroom, CasService::Library] {
+    for service in [CasService::Classroom, CasService::Library, CasService::Ihome] {
         let value = pinned_service_value(service);
         assert!(!pinned_login_route(
             &login_with_query(&[("service", &value), ("noAutoRedirect", "1")]),
@@ -422,19 +443,232 @@ fn non_library_profiles_never_release_the_library_credential() {
             CasService::SmartClassrooms,
             "https://app.buaa.edu.cn/a_buaa/api/cas/index?cas=ST-synthetic",
         ),
+        (
+            CasService::Ihome,
+            "https://sso.buaa.edu.cn/login?cas=ST-synthetic",
+        ),
+        (
+            CasService::Ihome,
+            "https://i.buaa.edu.cn/api/authLogin?cas=ST-synthetic",
+        ),
     ] {
         assert!(matches!(credential(service, input), Ok(None)), "{input}");
     }
     // The booking origin is refused outright outside the library profile; a
     // well-formed library credential URL never leaks across profiles.
     let booking = "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=ST-synthetic";
-    for service in [CasService::Classroom, CasService::SmartClassrooms] {
+    for service in [CasService::Classroom, CasService::SmartClassrooms, CasService::Ihome] {
         assert!(credential(service, booking).is_err());
     }
     let booking_fragment =
         "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-synthetic";
-    for service in [CasService::Classroom, CasService::SmartClassrooms] {
+    for service in [CasService::Classroom, CasService::SmartClassrooms, CasService::Ihome] {
         assert!(credential(service, booking_fragment).is_err());
+    }
+}
+
+#[test]
+fn ihome_terminal_credential_binds_only_the_web_fragment_token() {
+    // The reviewed terminal shape: http or https platform URL on the exact
+    // /web/ prefix whose fragment carries a unique type=0 and one nonempty
+    // token. The router prefix before the fragment parameters is the
+    // source's own detail and is not required.
+    for (input, expected) in [
+        (
+            "http://i.buaa.edu.cn/web/#/login?type=0&token=synthetic-ihome-token",
+            "synthetic-ihome-token",
+        ),
+        (
+            "https://i.buaa.edu.cn/web/#/login?type=0&token=synthetic-ihome-token",
+            "synthetic-ihome-token",
+        ),
+        ("http://i.buaa.edu.cn/web/#?type=0&token=abc", "abc"),
+        (
+            "http://i.buaa.edu.cn/web/#/login?token=abc&type=0",
+            "abc",
+        ),
+        (
+            "http://i.buaa.edu.cn/web/#/login?type=0&token=a%20b",
+            "a b",
+        ),
+        (
+            "http://i.buaa.edu.cn/web/#/login?type=0&token=t&from=wap",
+            "t",
+        ),
+        (
+            "http://i.buaa.edu.cn/web/#/login?%74ype=0&%74oken=enc",
+            "enc",
+        ),
+        (
+            "https://i.buaa.edu.cn/web/?from=wap#/login?type=0&token=routed",
+            "routed",
+        ),
+    ] {
+        let value = credential(CasService::Ihome, input)
+            .expect("admissible terminal")
+            .expect("credential present");
+        assert_eq!(value.as_str(), expected, "{input}");
+    }
+
+    // Non-credential URLs on the platform host and foreign hosts bind no
+    // iHome token; the ordinary origin predicate decides their fate.
+    for input in [
+        "https://i.buaa.edu.cn/",
+        "https://i.buaa.edu.cn/api/authLogin",
+        "https://i.buaa.edu.cn/other/#/route?type=0&token=t",
+        "https://i.buaa.edu.cn/web/",
+        "https://sso.buaa.edu.cn/login#/route?type=0&token=t",
+        "https://app.buaa.edu.cn/#/login?type=0&token=t",
+    ] {
+        assert!(
+            credential(CasService::Ihome, input)
+                .expect("admissible url")
+                .is_none(),
+            "{input}"
+        );
+    }
+
+    // The bound is inclusive; one byte past it refuses.
+    let bounded = url(&format!(
+        "http://i.buaa.edu.cn/web/#/login?type=0&token={}",
+        "a".repeat(4096)
+    ));
+    let bounded = terminal_service_credential(CasService::Ihome, &bounded)
+        .expect("bounded value")
+        .expect("credential");
+    assert_eq!(bounded.as_str().len(), 4096);
+    let over = url(&format!(
+        "http://i.buaa.edu.cn/web/#/login?type=0&token={}",
+        "a".repeat(4097)
+    ));
+    assert!(terminal_service_credential(CasService::Ihome, &over).is_err());
+}
+
+#[test]
+fn ihome_terminal_credential_refuses_malformed_or_ambiguous_fragments() {
+    for input in [
+        // A fragment without terminal parameters is never a credential.
+        "http://i.buaa.edu.cn/web/#/login",
+        "http://i.buaa.edu.cn/web/#from=wap",
+        // Exactly one type=0 and one nonempty token are both required.
+        "http://i.buaa.edu.cn/web/#/login?type=0",
+        "http://i.buaa.edu.cn/web/#/login?token=t",
+        "http://i.buaa.edu.cn/web/#/login?type=0&token=",
+        "http://i.buaa.edu.cn/web/#/login?type=&token=t",
+        "http://i.buaa.edu.cn/web/#/login?type=1&token=t",
+        "http://i.buaa.edu.cn/web/#/login?type=00&token=t",
+        // Duplicated names refuse, including across percent spellings.
+        "http://i.buaa.edu.cn/web/#/login?type=0&token=a&token=b",
+        "http://i.buaa.edu.cn/web/#/login?type=0&token=a&%74oken=b",
+        "http://i.buaa.edu.cn/web/#/login?type=0&type=0&token=t",
+        // Control-bearing values refuse.
+        "http://i.buaa.edu.cn/web/#/login?type=0&token=a%0Ab",
+        "http://i.buaa.edu.cn/web/#/login?type=0&token=a%09b",
+        "http://i.buaa.edu.cn/web/#/login?type=0&token=%00a",
+        "http://i.buaa.edu.cn/web/#/login?type=0&token=%7Fa",
+        // Credential names outside the fragment are ambiguous with the
+        // reviewed contract and refuse, even beside a valid fragment.
+        "http://i.buaa.edu.cn/web/?type=0&token=t",
+        "http://i.buaa.edu.cn/web/?token=t#/login?type=0&token=t",
+        "http://i.buaa.edu.cn/web/?type=0#/login?type=0&token=t",
+    ] {
+        assert!(credential(CasService::Ihome, input).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn ihome_terminal_credential_refuses_shaped_platform_origins() {
+    // A matching platform host with a shaped origin refuses before any
+    // extraction happens.
+    for input in [
+        "http://operator@i.buaa.edu.cn/web/#/login?type=0&token=t",
+        "http://operator:secret@i.buaa.edu.cn/web/#/login?type=0&token=t",
+        "https://i.buaa.edu.cn:4443/web/#/login?type=0&token=t",
+        "ftp://i.buaa.edu.cn/web/#/login?type=0&token=t",
+    ] {
+        assert!(credential(CasService::Ihome, input).is_err(), "{input}");
+    }
+    // Lookalike hosts are simply not the platform host: no token binds and
+    // the origin predicate refuses the follow.
+    for input in [
+        "http://i.buaa.edu.cn./web/#/login?type=0&token=t",
+        "http://sub.i.buaa.edu.cn/web/#/login?type=0&token=t",
+        "http://i.buaa.edu.cn.evil.example/web/#/login?type=0&token=t",
+        "http://ihome.buaa.edu.cn/web/#/login?type=0&token=t",
+    ] {
+        assert!(
+            credential(CasService::Ihome, input)
+                .expect("admissible url")
+                .is_none(),
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn non_ihome_profiles_never_release_the_terminal_token() {
+    let terminal = "https://i.buaa.edu.cn/web/#/login?type=0&token=t";
+    // The platform origin is refused outright outside the iHome profile; a
+    // well-formed terminal token never leaks across profiles.
+    for service in [CasService::Classroom, CasService::SmartClassrooms, CasService::Library] {
+        assert!(credential(service, terminal).is_err());
+    }
+    // Other parties' terminal shapes never bind for the iHome profile.
+    assert!(!matches!(credential(
+        CasService::Ihome,
+        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-synthetic"
+    ), Ok(Some(_))));
+    assert!(matches!(
+        credential(CasService::Ihome, "https://app.buaa.edu.cn/web/#/login?type=0&token=t"),
+        Ok(None)
+    ));
+}
+
+#[test]
+fn ihome_plaintext_callback_upgrades_only_the_exact_reviewed_shape() {
+    let upgraded = |input: &str| upgraded_service_callback(CasService::Ihome, &url(input));
+
+    // The declared plaintext callback is upgraded to its HTTPS spelling with
+    // every other component preserved; the ticket travels encrypted.
+    let candidate = upgraded("http://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic")
+        .expect("the reviewed callback upgrades");
+    assert_eq!(
+        candidate.as_str(),
+        "https://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic"
+    );
+    assert_eq!(
+        upgraded("http://i.buaa.edu.cn/api/authLogin")
+            .expect("upgrade without query")
+            .as_str(),
+        "https://i.buaa.edu.cn/api/authLogin"
+    );
+
+    // Every shaping refuses the upgrade and keeps the plaintext scheme, so
+    // the origin predicate refuses the follow.
+    for input in [
+        "http://i.buaa.edu.cn/api/authLogin/",
+        "http://i.buaa.edu.cn/api/authLogin/extra",
+        "http://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic#fragment",
+        "http://i.buaa.edu.cn:8080/api/authLogin?ticket=ST-synthetic",
+        "http://operator@i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic",
+        "http://operator:secret@i.buaa.edu.cn/api/authLogin",
+        "http://i.buaa.edu.cn./api/authLogin",
+        "http://i.buaa.edu.cn.evil.example/api/authLogin",
+        "http://ihome.buaa.edu.cn/api/authLogin",
+        "http://i.buaa.edu.cn/web/",
+        "http://i.buaa.edu.cn/",
+        // Already-HTTPS and non-iHome URLs are never rewritten.
+        "https://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic",
+        "http://app.buaa.edu.cn/api/authLogin",
+        "http://booking.lib.buaa.edu.cn/api/authLogin",
+    ] {
+        assert!(upgraded(input).is_none(), "{input}");
+    }
+    for service in [CasService::Classroom, CasService::SmartClassrooms, CasService::Library] {
+        assert!(
+            upgraded_service_callback(service, &url("http://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic")).is_none(),
+            "another service must never adopt the iHome callback"
+        );
     }
 }
 
@@ -463,7 +697,7 @@ const MAX_REQUEST_BYTES: usize = 256 * 1024;
 
 /// A synthetic CAS sign-on page. The form posts to the selected relying
 /// party's pinned route and carries only reviewed fields.
-fn smart_login_page(service: CasService) -> String {
+fn service_login_page(service: CasService) -> String {
     let action = pinned(service)
         .as_str()
         .replace('&', "&amp;");
@@ -542,6 +776,7 @@ fn test_pki() -> TestPki {
         .dns("sso.buaa.edu.cn")
         .dns("app.buaa.edu.cn")
         .dns("booking.lib.buaa.edu.cn")
+        .dns("i.buaa.edu.cn")
         .build(&leaf.x509v3_context(Some(&ca), None))
         .expect("san");
     leaf.append_extension(san).expect("leaf san");
@@ -788,7 +1023,7 @@ impl Drop for GovernorDir {
     }
 }
 
-fn smart_test_governor(name: &str) -> (GovernorDir, Governor) {
+fn service_test_governor(name: &str) -> (GovernorDir, Governor) {
     let mut path = std::env::temp_dir();
     path.push(format!(
         "buaa-cli-smart-test-{}-{name}-{}",
@@ -826,6 +1061,7 @@ struct CasHarness {
     sso: CasEndpoint,
     app: CasEndpoint,
     booking: CasEndpoint,
+    ihome: CasEndpoint,
 }
 
 impl CasHarness {
@@ -858,17 +1094,35 @@ impl CasHarness {
         app: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
         booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
     ) -> Self {
+        Self::with_service_responders(
+            sso,
+            app,
+            booking,
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        )
+    }
+
+    /// The full four-host stand-in including the platform endpoint, so an
+    /// iHome flow can serve its CAS callback and its one business read.
+    fn with_service_responders(
+        sso: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        app: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        ihome: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
         let pki = test_pki();
         let acceptor = tls_acceptor(&pki);
         let sso = CasEndpoint::start(Arc::clone(&acceptor), sso);
         let app = CasEndpoint::start(Arc::clone(&acceptor), app);
-        let booking = CasEndpoint::start(acceptor, booking);
+        let booking = CasEndpoint::start(Arc::clone(&acceptor), booking);
+        let ihome = CasEndpoint::start(acceptor, ihome);
         let client = strict_client(
             &pki,
             &[
                 ("sso.buaa.edu.cn", sso.address),
                 ("app.buaa.edu.cn", app.address),
                 ("booking.lib.buaa.edu.cn", booking.address),
+                ("i.buaa.edu.cn", ihome.address),
             ],
         );
         Self {
@@ -876,6 +1130,7 @@ impl CasHarness {
             sso,
             app,
             booking,
+            ihome,
         }
     }
 }
@@ -888,7 +1143,7 @@ fn sso_responder(
     cas_landing: &str,
     post_headers: &[(&str, &str)],
 ) -> impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static {
-    let page = smart_login_page(service);
+    let page = service_login_page(service);
     let landing = cas_landing.to_owned();
     let extra: Vec<(String, String)> = post_headers
         .iter()
@@ -981,13 +1236,13 @@ fn smart_classroom_flow_leaves_scoped_cookie_without_leaking_sso_credential() {
         CasService::SmartClassrooms,
         "https://app.buaa.edu.cn/site/classRoomQuery/index",
     );
-    let (_guard, governor) = smart_test_governor("smart-flow");
+    let (_guard, governor) = service_test_governor("smart-flow");
     let mut lease = governor
         .try_acquire(RequestKind::Authentication)
         .expect("authentication lease");
     let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
         .expect("synthetic credentials");
-    let result = authenticate_smart(
+    let result = authenticate_service(
         &mut lease,
         &harness.client,
         CasService::SmartClassrooms,
@@ -1026,7 +1281,7 @@ fn smart_classroom_flow_leaves_scoped_cookie_without_leaking_sso_credential() {
     assert!(session
         .cookie_header(&url("https://booking.lib.buaa.edu.cn/"))
         .is_err());
-    assert!(session.take_library_cas().is_err());
+    assert!(session.take_service_credential().is_err());
 }
 
 #[test]
@@ -1035,13 +1290,13 @@ fn library_flow_consumes_terminal_fragment_cas_without_requesting_it() {
         CasService::Library,
         "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
     );
-    let (_guard, governor) = smart_test_governor("library-flow");
+    let (_guard, governor) = service_test_governor("library-flow");
     let mut lease = governor
         .try_acquire(RequestKind::Authentication)
         .expect("authentication lease");
     let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
         .expect("synthetic credentials");
-    let result = authenticate_smart(
+    let result = authenticate_service(
         &mut lease,
         &harness.client,
         CasService::Library,
@@ -1059,10 +1314,10 @@ fn library_flow_consumes_terminal_fragment_cas_without_requesting_it() {
     );
     assert!(harness.app.observed().is_empty());
 
-    let cas = session.take_library_cas().expect("terminal cas");
+    let cas = session.take_service_credential().expect("terminal cas");
     assert_eq!(cas.as_str(), SMART_CAS_VALUE);
     // The credential is consumed exactly once; no retry materializes one.
-    assert!(session.take_library_cas().is_err());
+    assert!(session.take_service_credential().is_err());
 
     // The library origin gained no cookie and the host-only sign-on
     // credential never appears through the scoped view.
@@ -1109,7 +1364,7 @@ fn run_session(
     input: &str,
     name: &str,
 ) -> (Result<Value, Error>, bool) {
-    let (guard, governor) = smart_test_governor(name);
+    let (guard, governor) = service_test_governor(name);
     let client = harness.client.clone();
     let mut factory_used = false;
     let result = crate::smart::session_with_network(input, true, || {
@@ -1551,7 +1806,7 @@ fn smart_session_never_replays_or_downgrades_a_credential_preserving_redirect() 
             let (name,landing,read) = match service {
                 CasService::SmartClassrooms => ("classrooms","https://app.buaa.edu.cn/site/classRoomQuery/index",classrooms_read()),
                 CasService::Library => ("library","https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",library_read()),
-                CasService::Classroom => unreachable!(),
+                CasService::Classroom | CasService::Ihome => unreachable!(),
             };
             let original = sso_responder(service,landing,&[]);
             let harness = CasHarness::with_responders(
@@ -1798,4 +2053,796 @@ fn smart_session_local_refusals_never_consult_the_network_factory() {
     let error = result.expect_err("an offline session must be refused");
     assert_eq!(error.code, "online_required");
     assert!(!factory_used);
+}
+
+// ---------------------------------------------------------------------------
+// iHome session flows: one in-memory CAS login plus exactly one business
+// read. The reviewed plaintext CAS callback is upgraded to HTTPS for the
+// only platform fetch; the terminal fragment token is consumed in memory
+// and never requested. Local preflight refusals (disabled, unauthorized,
+// offline, invalid selector) are covered by the ihome module's own unit
+// regression, so the flows here exercise transport and response safety.
+// ---------------------------------------------------------------------------
+
+/// The terminal fragment token the synthetic platform hands over.
+const IHOME_TOKEN: &str = "synthetic-ihome-token";
+/// The exact terminal fragment URL; it must never be requested.
+const IHOME_TERMINAL: &str =
+    "http://i.buaa.edu.cn/web/#/login?type=0&token=synthetic-ihome-token";
+/// The plaintext callback the sign-on POST names; it is fetched as HTTPS.
+const IHOME_CALLBACK_TICKET: &str = "http://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic-ihome";
+/// A synthetic listing page in the reviewed business envelope.
+const IHOME_LIST_BODY: &str = r#"{"code":20000,"success":true,"data":{"current_page":1,"last_page":1,"total":1,"data":[{"id":41,"title":"synthetic appeal title","content":"synthetic appeal content","created_at":"2031-04-12 10:00:00","publish_status_text":"synthetic-status","departments":[{"id":7,"name":"Synthetic Department"}],"appeal_reply":[{"id":9,"department":{"id":7,"name":"Synthetic Department"},"content":"synthetic reply","created_at":"2031-04-12 12:00:00"}]}]}}"#;
+/// A synthetic detail page in the reviewed business envelope.
+const IHOME_DETAIL_BODY: &str = r#"{"code":20000,"success":true,"data":{"data":{"id":41,"title":"synthetic appeal title","content":"synthetic appeal content","created_at":"2031-04-12 10:00:00","publish_status_text":"synthetic-status","departments":[{"id":7,"name":"Synthetic Department"}],"appeal_reply":[{"id":9,"department":{"id":7,"name":"Synthetic Department"},"content":"synthetic reply","created_at":"2031-04-12 12:00:00"}]}}}"#;
+
+/// The typed one-shot iHome session envelope. The read carries no
+/// authentication material: the session derives its own token from the
+/// sign-on terminal fragment.
+fn ihome_session_input(read: Value) -> String {
+    json!({
+        "operation": "session",
+        "authorized": true,
+        "username": SESSION_USERNAME,
+        "password": SESSION_PASSWORD,
+        "intent": format!("LOGIN {SESSION_USERNAME} ihome"),
+        "read": read,
+    })
+    .to_string()
+}
+
+fn ihome_list_read() -> Value {
+    json!({"operation": "list", "enabled": true, "limit": 20, "page": 1})
+}
+
+fn ihome_detail_read() -> Value {
+    json!({"operation": "detail", "enabled": true, "id": 41})
+}
+
+/// Run one iHome session flow against the loopback stand-in with an isolated
+/// governor. The flag records whether the network factory was consulted.
+fn run_ihome_session(
+    harness: &CasHarness,
+    input: &str,
+    name: &str,
+) -> (Result<Value, Error>, bool) {
+    let (guard, governor) = service_test_governor(name);
+    let client = harness.client.clone();
+    let mut factory_used = false;
+    let result = crate::ihome::session_with_network(input, true, || {
+        factory_used = true;
+        Ok((client, governor))
+    });
+    drop(guard);
+    (result, factory_used)
+}
+
+/// Serve the reviewed CAS callback and the one business read it authorizes.
+/// Every callback GET answers with a 302 to `terminal`; the business routes
+/// answer with the reviewed JSON body.
+fn ihome_responder(
+    terminal: &'static str,
+    read: impl Into<String> + Send + 'static,
+) -> impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static {
+    let read = read.into();
+    move |request| {
+        let path = request.target.split('?').next().unwrap_or("");
+        if path == "/api/authLogin" {
+            return http_response("302 Found", &[("Location", terminal)], "");
+        }
+        if path == "/api/appeal" || path.starts_with("/api/appeal/") {
+            return http_response("200 OK", &[("Content-Type", "application/json")], &read);
+        }
+        http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+    }
+}
+
+/// No observed platform request may ever target the terminal web prefix:
+/// the fragment token is consumed in memory, never fetched.
+fn assert_terminal_never_fetched(harness: &CasHarness) {
+    for request in harness.ihome.observed() {
+        assert!(
+            !request.target.starts_with("/web/"),
+            "the terminal URL must never be requested: {}",
+            request.target
+        );
+    }
+}
+
+#[test]
+fn ihome_session_list_consumes_the_fragment_token_and_projects_the_listing() {
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+    );
+    let (result, factory_used) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-session-list",
+    );
+    assert!(factory_used, "an online session consults the network factory");
+    let output = result.expect("ihome session result");
+    assert_eq!(output["schema_version"], 1);
+    assert_eq!(output["type"], "ihome_appeal_list");
+    assert_eq!(output["result"], "entries");
+    assert_eq!(output["credential_source"], "redirect_fragment_token");
+    assert_eq!(output["entry_count"], 1);
+    let entries = output["entries"].as_array().expect("projected entries");
+    assert_eq!(entries[0]["id"], 41);
+    assert_eq!(entries[0]["title"], "synthetic appeal title");
+    assert_eq!(entries[0]["content"], "synthetic appeal content");
+    assert_eq!(entries[0]["status"], "synthetic-status");
+    assert_eq!(entries[0]["reply_count"], 1);
+    assert_eq!(
+        entries[0]["replies"][0]["department"]["name"],
+        "Synthetic Department"
+    );
+    assert_eq!(entries[0]["departments"][0]["id"], 7);
+    assert_eq!(output["next_cursor"]["max_id"], 41);
+    assert_eq!(output["next_cursor"]["has_more"], false);
+    assert_eq!(output["upstream"]["complete"], true);
+    assert_eq!(output["upstream"]["incomplete"], false);
+    assert!(output["upstream_evidence"].is_null());
+    // No credential material reaches the projection.
+    let projected = output.to_string();
+    for secret in [
+        SESSION_USERNAME,
+        SESSION_PASSWORD,
+        "CASTGC",
+        "host-only-credential",
+        IHOME_TOKEN,
+    ] {
+        assert!(!projected.contains(secret), "{secret} leaked into the ihome projection");
+    }
+
+    // One deliberate sign-on: the form GET and exactly one credential POST,
+    // both naming the iHome service declaration.
+    assert_one_credential_post(&harness, CasService::Ihome);
+
+    // Exactly one platform callback fetch, performed over HTTPS because the
+    // plaintext callback spelling was upgraded, and exactly one business
+    // GET under one authentication lease.
+    let ihome_requests = harness.ihome.observed();
+    assert_eq!(ihome_requests.len(), 2, "one callback and one business read");
+    let callback = &ihome_requests[0];
+    assert_eq!(callback.method, "GET");
+    let callback_url = observed_url("i.buaa.edu.cn", callback);
+    assert_eq!(callback_url.scheme(), "https");
+    assert_eq!(callback_url.path(), "/api/authLogin");
+    assert_eq!(
+        query_map(&callback_url).get("ticket").map(String::as_str),
+        Some("ST-synthetic-ihome")
+    );
+    let read = &ihome_requests[1];
+    assert_eq!(read.method, "GET");
+    let target = observed_url("i.buaa.edu.cn", read);
+    assert_eq!(target.path(), "/api/appeal");
+    assert_eq!(query_map(&target).get("limit").map(String::as_str), Some("20"));
+    assert_eq!(query_map(&target).get("page").map(String::as_str), Some("1"));
+    assert_eq!(
+        read.header("authorization"),
+        Some(format!("Bearer {IHOME_TOKEN}").as_str())
+    );
+    assert_terminal_never_fetched(&harness);
+    // Nothing reached the other relying parties.
+    assert!(harness.app.observed().is_empty());
+    assert!(harness.booking.observed().is_empty());
+}
+
+#[test]
+fn ihome_session_detail_consumes_the_fragment_token_and_projects_the_appeal() {
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, IHOME_DETAIL_BODY),
+    );
+    let (result, factory_used) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_detail_read()),
+        "ihome-session-detail",
+    );
+    assert!(factory_used, "an online session consults the network factory");
+    let output = result.expect("ihome session result");
+    assert_eq!(output["type"], "ihome_appeal_detail");
+    assert_eq!(output["result"], "appeal");
+    assert_eq!(output["credential_source"], "redirect_fragment_token");
+    assert_eq!(output["upstream"]["id"], 41);
+    let entry = &output["entry"];
+    assert_eq!(entry["id"], 41);
+    assert_eq!(entry["title"], "synthetic appeal title");
+    assert_eq!(entry["content"], "synthetic appeal content");
+    assert_eq!(entry["reply_count"], 1);
+    assert!(output["upstream_evidence"].is_null());
+    let projected = output.to_string();
+    for secret in [SESSION_PASSWORD, "host-only-credential", IHOME_TOKEN] {
+        assert!(!projected.contains(secret), "{secret} leaked into the ihome projection");
+    }
+
+    assert_one_credential_post(&harness, CasService::Ihome);
+    let ihome_requests = harness.ihome.observed();
+    assert_eq!(ihome_requests.len(), 2, "one callback and one business read");
+    let read = &ihome_requests[1];
+    assert_eq!(read.method, "GET");
+    assert_eq!(
+        observed_url("i.buaa.edu.cn", read).path(),
+        "/api/appeal/41"
+    );
+    assert_eq!(
+        read.header("authorization"),
+        Some(format!("Bearer {IHOME_TOKEN}").as_str())
+    );
+    assert_terminal_never_fetched(&harness);
+    assert!(harness.app.observed().is_empty());
+    assert!(harness.booking.observed().is_empty());
+}
+
+#[test]
+fn ihome_session_performs_one_lease_read_without_cache_or_credential_reuse() {
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+    );
+    // The first run uses explicit selectors; the second relies on the
+    // reviewed defaults and must still authenticate and fetch, proving no
+    // response cache, stored session or token reuse short-circuits the
+    // one-lease contract.
+    let (first, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-session-reuse-first",
+    );
+    assert_eq!(first.expect("first run")["result"], "entries");
+    let (second, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(json!({"operation": "list", "enabled": true})),
+        "ihome-session-reuse-second",
+    );
+    let output = second.expect("second run");
+    assert_eq!(output["result"], "entries");
+    assert_eq!(output["credential_source"], "redirect_fragment_token");
+
+    assert_eq!(
+        harness.sso.observed().len(),
+        4,
+        "two form GETs and two credential POSTs, one sign-on per run"
+    );
+    assert_eq!(
+        harness.ihome.observed().len(),
+        4,
+        "two callbacks and two business reads, one lease per run"
+    );
+    assert_terminal_never_fetched(&harness);
+}
+
+#[test]
+fn ihome_session_terminal_redirect_body_keeps_the_sign_ons_own_classification() {
+    // An empty redirect body is the normal terminal answer; a reviewed
+    // redirect document is admissible too.
+    for (name, body, content_type, expected) in [
+        ("empty", "", "text/html", "entries"),
+        (
+            "clear-redirect-document",
+            "<html><body>redirecting</body></html>",
+            "text/html",
+            "entries",
+        ),
+    ] {
+        let harness = CasHarness::with_service_responders(
+            sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            move |request| {
+                let path = request.target.split('?').next().unwrap_or("");
+                if path == "/api/authLogin" {
+                    return http_response(
+                        "302 Found",
+                        &[("Location", IHOME_TERMINAL), ("Content-Type", content_type)],
+                        body,
+                    );
+                }
+                if path == "/api/appeal" {
+                    return http_response(
+                        "200 OK",
+                        &[("Content-Type", "application/json")],
+                        IHOME_LIST_BODY,
+                    );
+                }
+                http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+            },
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            &format!("ihome-terminal-body-{name}"),
+        );
+        let output = result.expect(name);
+        assert_eq!(output["result"], expected, "{name}");
+        assert_eq!(output["credential_source"], "redirect_fragment_token", "{name}");
+        assert_eq!(harness.ihome.observed().len(), 2, "{name}");
+    }
+
+    // A terminal redirect carrying a challenge form never proves login by
+    // token alone: the attempt stops and no business read is sent.
+    let challenged = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        move |request| {
+            let path = request.target.split('?').next().unwrap_or("");
+            if path == "/api/authLogin" {
+                return http_response(
+                    "302 Found",
+                    &[
+                        ("Location", IHOME_TERMINAL),
+                        ("Content-Type", "text/html"),
+                    ],
+                    "<html><body><form><label>验证码<input name=\"captcha\"></label></form></body></html>",
+                );
+            }
+            http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+        },
+    );
+    let (result, _) = run_ihome_session(
+        &challenged,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-terminal-body-challenge",
+    );
+    assert_eq!(result.unwrap_err().code, "challenge_requires_human");
+    assert_one_credential_post(&challenged, CasService::Ihome);
+    assert_eq!(
+        challenged.ihome.observed().len(),
+        1,
+        "the challenge stops the flow before the business read"
+    );
+
+    // An unreadable nonempty terminal page preserves the source uncertainty
+    // instead of accepting the token.
+    let unreadable = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        move |request| {
+            let path = request.target.split('?').next().unwrap_or("");
+            if path == "/api/authLogin" {
+                return http_response(
+                    "302 Found",
+                    &[
+                        ("Location", IHOME_TERMINAL),
+                        ("Content-Type", "application/xhtml+xml"),
+                    ],
+                    "<html><body>unreadable</body></html>",
+                );
+            }
+            http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+        },
+    );
+    let (result, _) = run_ihome_session(
+        &unreadable,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-terminal-body-unreadable",
+    );
+    assert_eq!(result.unwrap_err().code, "authentication_unconfirmed");
+    assert_eq!(unreadable.ihome.observed().len(), 1);
+}
+
+#[test]
+fn ihome_session_stops_on_a_challenged_or_deferred_sign_on() {
+    // A challenge on the platform callback never reaches the business read.
+    let challenged = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |request| {
+            if request.target.starts_with("/api/authLogin") {
+                http_response(
+                    "200 OK",
+                    &[("Content-Type", "text/html"), ("cf-mitigated", "challenge")],
+                    "<html><body>challenge</body></html>",
+                )
+            } else {
+                http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+            }
+        },
+    );
+    let (result, _) = run_ihome_session(
+        &challenged,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-callback-challenge",
+    );
+    assert_eq!(result.unwrap_err().code, "challenge_requires_human");
+    assert_one_credential_post(&challenged, CasService::Ihome);
+    assert_eq!(
+        challenged.ihome.observed().len(),
+        1,
+        "only the challenged callback was fetched"
+    );
+
+    // A deferred credential POST is a durable cooldown: the redirect is
+    // never followed and no platform request is made.
+    let deferred = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[("Retry-After", "60")]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+    );
+    let (result, _) = run_ihome_session(
+        &deferred,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-post-deferred",
+    );
+    assert_eq!(result.unwrap_err().code, "cooldown");
+    assert_one_credential_post(&deferred, CasService::Ihome);
+    assert!(deferred.ihome.observed().is_empty(), "the deferred redirect is never followed");
+
+    // A cooldown on the terminal redirect is respected before the token is
+    // accepted: no business read follows it.
+    let callback_deferred = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |request| {
+            if request.target.starts_with("/api/authLogin") {
+                http_response(
+                    "302 Found",
+                    &[("Location", IHOME_TERMINAL), ("Retry-After", "60")],
+                    "",
+                )
+            } else {
+                http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+            }
+        },
+    );
+    let (result, _) = run_ihome_session(
+        &callback_deferred,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-terminal-deferred",
+    );
+    assert_eq!(result.unwrap_err().code, "cooldown");
+    assert_eq!(
+        callback_deferred.ihome.observed().len(),
+        1,
+        "the cooldown stops the flow before the business read"
+    );
+    assert_terminal_never_fetched(&callback_deferred);
+}
+
+#[test]
+fn ihome_session_refuses_shaped_callbacks_and_plaintext_downgrades() {
+    // A credential POST redirected at a shaped or non-reviewed plaintext
+    // target is refused before any platform request is made.
+    for (name, landing) in [
+        (
+            "userinfo",
+            "http://operator@i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic-ihome",
+        ),
+        (
+            "explicit-port",
+            "http://i.buaa.edu.cn:8080/api/authLogin?ticket=ST-synthetic-ihome",
+        ),
+        (
+            "path-widening",
+            "http://i.buaa.edu.cn/api/authLogin/extra?ticket=ST-synthetic-ihome",
+        ),
+        (
+            "foreign-host",
+            "http://ihome.buaa.edu.cn/api/authLogin?ticket=ST-synthetic-ihome",
+        ),
+        (
+            "https-business-path",
+            "https://i.buaa.edu.cn/api/appeal?limit=20&page=1",
+        ),
+    ] {
+        let harness = CasHarness::with_service_responders(
+            sso_responder(CasService::Ihome, landing, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            &format!("ihome-shaped-callback-{name}"),
+        );
+        assert_eq!(result.unwrap_err().code, "authentication_unconfirmed", "{name}");
+        assert_one_credential_post(&harness, CasService::Ihome);
+        assert!(
+            harness.ihome.observed().is_empty(),
+            "{name}: no platform request may follow a refused callback"
+        );
+    }
+
+    // A plaintext redirect at a non-callback platform path is a downgrade
+    // and refuses: the callback itself was fetched over HTTPS, but the
+    // follow is never performed.
+    let downgrade = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |request| {
+            if request.target.starts_with("/api/authLogin") {
+                http_response(
+                    "302 Found",
+                    &[("Location", "http://i.buaa.edu.cn/api/appeal?limit=20")],
+                    "",
+                )
+            } else {
+                http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+            }
+        },
+    );
+    let (result, _) = run_ihome_session(
+        &downgrade,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-plaintext-downgrade",
+    );
+    assert_eq!(result.unwrap_err().code, "authentication_unconfirmed");
+    assert_eq!(
+        downgrade.ihome.observed().len(),
+        1,
+        "only the HTTPS callback was fetched; the plaintext follow was refused"
+    );
+}
+
+#[test]
+fn ihome_session_refuses_a_malformed_or_nonterminal_terminal_fragment() {
+    for (name, terminal) in [
+        ("nonterminal-fragment", "http://i.buaa.edu.cn/web/#/login"),
+        ("missing-token", "http://i.buaa.edu.cn/web/#/login?type=0"),
+        ("missing-type", "http://i.buaa.edu.cn/web/#/login?token=synthetic-ihome-token"),
+        ("wrong-type", "http://i.buaa.edu.cn/web/#/login?type=1&token=synthetic-ihome-token"),
+        ("empty-token", "http://i.buaa.edu.cn/web/#/login?type=0&token="),
+        (
+            "duplicated-token",
+            "http://i.buaa.edu.cn/web/#/login?type=0&token=a&token=b",
+        ),
+        (
+            "query-carried-token",
+            "http://i.buaa.edu.cn/web/?type=0&token=synthetic-ihome-token",
+        ),
+    ] {
+        let harness = CasHarness::with_service_responders(
+            sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            ihome_responder(terminal, IHOME_LIST_BODY),
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            &format!("ihome-terminal-{name}"),
+        );
+        assert_eq!(result.unwrap_err().code, "authentication_unconfirmed", "{name}");
+        assert_one_credential_post(&harness, CasService::Ihome);
+        assert_eq!(
+            harness.ihome.observed().len(),
+            1,
+            "{name}: only the callback may be fetched"
+        );
+        assert_terminal_never_fetched(&harness);
+    }
+}
+
+#[test]
+fn ihome_session_never_replays_a_credential_preserving_redirect() {
+    for status in ["307 Temporary Redirect", "308 Permanent Redirect"] {
+        let original = sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]);
+        let harness = CasHarness::with_service_responders(
+            move |request| {
+                if request.method == "POST" {
+                    http_response(status, &[("Location", IHOME_CALLBACK_TICKET)], "")
+                } else {
+                    original(request)
+                }
+            },
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            &format!("ihome-post-redirect-{status}"),
+        );
+        assert!(result.is_err(), "credential-preserving redirects cannot become a new authentication send");
+        assert_eq!(result.unwrap_err().code, "auth_latched");
+        assert_one_credential_post(&harness, CasService::Ihome);
+        assert!(
+            harness.ihome.observed().is_empty(),
+            "the method-preserving redirect target is never requested"
+        );
+    }
+}
+
+#[test]
+fn ihome_session_degrades_a_listing_that_echoes_credential_material() {
+    use base64::Engine as _;
+    let encoded_token = base64::engine::general_purpose::STANDARD.encode(IHOME_TOKEN);
+    let escaped_token = "synthetic\\u002dihome\\u002dtoken";
+    for (name, secret, body) in [
+        (
+            "terminal-token",
+            IHOME_TOKEN,
+            IHOME_LIST_BODY.replace("synthetic appeal content", IHOME_TOKEN),
+        ),
+        (
+            "password",
+            SESSION_PASSWORD,
+            IHOME_LIST_BODY.replace("synthetic appeal content", SESSION_PASSWORD),
+        ),
+        (
+            "username",
+            SESSION_USERNAME,
+            IHOME_LIST_BODY.replace("synthetic appeal content", SESSION_USERNAME),
+        ),
+        (
+            "current-sign-on-cookie",
+            "host-only-credential",
+            IHOME_LIST_BODY.replace("synthetic appeal content", "host-only-credential"),
+        ),
+        (
+            "encoded-token",
+            encoded_token.as_str(),
+            IHOME_LIST_BODY.replace("synthetic appeal content", encoded_token.as_str()),
+        ),
+        (
+            "decoded-token",
+            IHOME_TOKEN,
+            IHOME_LIST_BODY.replace("synthetic appeal content", escaped_token),
+        ),
+    ] {
+        let harness = CasHarness::with_service_responders(
+            sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            ihome_responder(IHOME_TERMINAL, body),
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            &format!("ihome-echo-{name}"),
+        );
+        let output = result.expect("an echo degrades gracefully, it does not error");
+        assert_eq!(output["type"], "ihome_appeal_list", "{name}");
+        assert_eq!(output["result"], "degraded", "{name}");
+        assert_eq!(output["entry_count"], 0, "{name}");
+        assert!(output["next_cursor"].is_null(), "{name}");
+        let evidence = &output["upstream_evidence"];
+        assert_eq!(evidence["fallback_reason"], "credential_echo", "{name}");
+        assert_eq!(evidence["evidence_kind"], "upstream_http_metadata", "{name}");
+        assert_eq!(evidence["http_status"], 200, "{name}");
+        assert!(
+            !output.to_string().contains(secret),
+            "{name}: the echoed credential was released"
+        );
+        // The business read happened exactly once and settled; the flow did
+        // not retry after the echo.
+        assert_eq!(harness.ihome.observed().len(), 2, "{name}");
+        assert_terminal_never_fetched(&harness);
+    }
+}
+
+#[test]
+fn ihome_session_degrades_a_numeric_token_echo() {
+    // A token spelling the platform could return as a JSON number is still
+    // the credential: the numeric projection of the body is screened.
+    let terminal = "http://i.buaa.edu.cn/web/#/login?type=0&token=7008133700";
+    let body = r#"{"code":20000,"success":true,"data":{"current_page":1,"last_page":1,"total":7008133700,"data":[]}}"#;
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(terminal, body),
+    );
+    let (result, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-numeric-echo",
+    );
+    let output = result.expect("a numeric echo degrades gracefully");
+    assert_eq!(output["result"], "degraded");
+    assert_eq!(output["upstream_evidence"]["fallback_reason"], "credential_echo");
+    assert!(!output.to_string().contains("7008133700"));
+}
+
+#[test]
+fn ihome_session_degrades_a_detail_that_echoes_a_retired_cookie_value() {
+    // The callback replaces its platform session cookie; the replaced value
+    // stays inside the attempt's privacy guard and an echo of it is
+    // withheld like any live credential.
+    let body = IHOME_DETAIL_BODY.replace("synthetic appeal content", "retired-private-alpha");
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        move |request| {
+            let path = request.target.split('?').next().unwrap_or("");
+            if path == "/api/authLogin" {
+                return http_response(
+                    "302 Found",
+                    &[
+                        ("Location", IHOME_TERMINAL),
+                        ("Set-Cookie", "ihome_sid=retired-private-alpha; Path=/; Secure; HttpOnly"),
+                        ("Set-Cookie", "ihome_sid=retired-private-beta; Path=/; Secure; HttpOnly"),
+                    ],
+                    "",
+                );
+            }
+            if path.starts_with("/api/appeal/") {
+                return http_response(
+                    "200 OK",
+                    &[("Content-Type", "application/json")],
+                    &body,
+                );
+            }
+            http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+        },
+    );
+    let (result, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_detail_read()),
+        "ihome-retired-cookie-echo",
+    );
+    let output = result.expect("a retired-cookie echo degrades gracefully");
+    assert_eq!(output["type"], "ihome_appeal_detail");
+    assert_eq!(output["result"], "degraded");
+    assert!(output["entry"].is_null());
+    assert_eq!(
+        output["upstream_evidence"]["fallback_reason"],
+        "credential_echo"
+    );
+    assert!(
+        !output.to_string().contains("retired-private-alpha"),
+        "the echoed retired cookie value was released"
+    );
+    assert_eq!(harness.ihome.observed().len(), 2);
+}
+
+#[test]
+fn ihome_session_degrades_a_mime_echo_without_leaking_the_content_type() {
+    use sha2::Digest as _;
+    // A token echoed inside the retained content type header is a
+    // credential echo: the body is never projected, the MIME value is
+    // nulled and its parameters are withheld, and the degrading evidence
+    // keeps only the safe status, length and hash facts.
+    for secret in [IHOME_TOKEN, SESSION_PASSWORD, "host-only-credential"] {
+        let body = IHOME_LIST_BODY;
+        let mime = format!("application/json; profile=\"{secret}\"");
+        let harness = CasHarness::with_service_responders(
+            sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            move |request| {
+                let path = request.target.split('?').next().unwrap_or("");
+                if path == "/api/authLogin" {
+                    return http_response("302 Found", &[("Location", IHOME_TERMINAL)], "");
+                }
+                if path == "/api/appeal" {
+                    return http_response("200 OK", &[("Content-Type", mime.as_str())], body);
+                }
+                http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+            },
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            "ihome-mime-echo",
+        );
+        let output = result.expect("a MIME echo degrades gracefully");
+        assert_eq!(output["result"], "degraded");
+        let evidence = &output["upstream_evidence"];
+        assert_eq!(evidence["fallback_reason"], "credential_echo");
+        assert!(evidence["content_type"].is_null());
+        assert_eq!(evidence["content_type_parameters_withheld"], true);
+        assert_eq!(evidence["http_status"], 200);
+        assert_eq!(evidence["byte_length"], body.len());
+        let digest = format!("{:x}", sha2::Sha256::digest(body.as_bytes()));
+        assert_eq!(evidence["sha256"], digest);
+        assert!(!output.to_string().contains(secret));
+        assert_eq!(harness.ihome.observed().len(), 2);
+    }
 }

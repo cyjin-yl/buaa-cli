@@ -25,7 +25,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod form_source;
 
 #[cfg(test)]
-mod smart_tests;
+mod service_tests;
 
 use url::Url;
 use zeroize::Zeroizing;
@@ -36,6 +36,15 @@ const CLASSROOM_HOST: &str = "classroom.msa.buaa.edu.cn";
 const CAS_SERVICE: &str = "https://yjapi.msa.buaa.edu.cn/casapi/index.php?forward=https%3A%2F%2Fclassroom.msa.buaa.edu.cn%2F&r=auth%2Flogin&tenant_code=21";
 const SMART_CLASSROOM_CAS_SERVICE: &str = "https://app.buaa.edu.cn/a_buaa/api/cas/index?redirect=https%3A%2F%2Fapp.buaa.edu.cn%2Fsite%2FclassRoomQuery%2Findex&from=wap&login_from=";
 const LIBRARY_CAS_SERVICE: &str = "https://booking.lib.buaa.edu.cn/v4/login/cas";
+/// The reviewed source declares the iHome CAS callback as a plaintext HTTP
+/// URL; the one exact upgrade to HTTPS is admitted in `upgraded_service_callback`.
+const IHOME_CAS_SERVICE: &str = "http://i.buaa.edu.cn/api/authLogin";
+const IHOME_HOST: &str = "i.buaa.edu.cn";
+const IHOME_CAS_CALLBACK_PATH: &str = "/api/authLogin";
+/// The iHome terminal token is bound from a fragment on the reviewed web
+/// prefix, never from the query and never from another path.
+const IHOME_TERMINAL_PATH: &str = "/web/";
+const MAX_TERMINAL_CREDENTIAL_BYTES: usize = 4096;
 
 /// Reviewed relying parties, not caller-supplied credential destinations.
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -44,6 +53,7 @@ pub(crate) enum CasService {
     Classroom,
     SmartClassrooms,
     Library,
+    Ihome,
 }
 
 impl CasService {
@@ -52,6 +62,7 @@ impl CasService {
             Self::Classroom => CAS_SERVICE,
             Self::SmartClassrooms => SMART_CLASSROOM_CAS_SERVICE,
             Self::Library => LIBRARY_CAS_SERVICE,
+            Self::Ihome => IHOME_CAS_SERVICE,
         }
     }
 }
@@ -3366,11 +3377,14 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::Classroom => ALLOWED_HOSTS.contains(&host),
             CasService::SmartClassrooms => matches!(host, "sso.buaa.edu.cn" | "app.buaa.edu.cn"),
             CasService::Library => matches!(host, "sso.buaa.edu.cn" | "booking.lib.buaa.edu.cn"),
+            CasService::Ihome => matches!(host, "sso.buaa.edu.cn" | IHOME_HOST),
         })
 }
 
 fn allowed(url: &Url, service: CasService) -> bool {
     allowed_origin(url, service) && url.fragment().is_none()
+        && (service != CasService::Ihome || url.host_str() != Some(IHOME_HOST)
+            || url.path() == IHOME_CAS_CALLBACK_PATH)
 }
 
 struct Hop {
@@ -3400,6 +3414,8 @@ fn receipt_route(url: &Url) -> &'static str {
         (Some(CLASSROOM_HOST), "/courseapi/v3/portal-home-setting/get-sub-info") => {
             "/courseapi/v3/portal-home-setting/get-sub-info"
         }
+        (Some(IHOME_HOST), "/api/authLogin") => "/api/authLogin",
+        (Some(IHOME_HOST), "/web/") => "/web/",
         _ => "<unknown-route>",
     }
 }
@@ -3625,7 +3641,41 @@ fn send(
             if location.trim().is_empty() {
                 return Err(unavailable());
             }
-            let next = url.join(&location).map_err(|_| invalid())?;
+            let mut next = url.join(&location).map_err(|_| invalid())?;
+            // The reviewed source declares the iHome CAS callback as a
+            // plaintext HTTP URL. Exactly that origin, path and default
+            // port are upgraded to HTTPS so the ticket exchange still
+            // travels encrypted; any other plaintext URL keeps its scheme
+            // and is refused by the origin predicate below.
+            if let Some(upgraded) = upgraded_service_callback(jar.service, &next) {
+                next = upgraded;
+            }
+            if jar.service == CasService::Ihome {
+                // A method-preserving redirect on the credential form ends
+                // the attempt before any terminal token is accepted from
+                // it; the form is never replayed.
+                if matches!(status, 307 | 308) && form.is_some() {
+                    return Err(Error::new(
+                        "auth_latched",
+                        "A method-preserving redirect answered the credential form; the attempt was refused without re-sending the credential.",
+                    ));
+                }
+                // The reviewed iHome terminal is a plaintext fragment URL
+                // consumed in memory and never fetched, so HTTPS origin
+                // admission cannot be its predicate and it binds before the
+                // origin check. A server cooldown still terminates the
+                // attempt first: the token is accepted only when the
+                // redirect carried no Retry-After.
+                if let Some(credential) = terminal_service_credential(jar.service, &next)? {
+                    if retry_after.is_none() {
+                        jar.terminal_credential = Some(credential);
+                    }
+                    return Ok(Hop {
+                        status, url, body, retry_after, challenge: challenged,
+                        content_type, redirected: had_redirect,
+                    });
+                }
+            }
             if !allowed_origin(&next, jar.service) {
                 return Err(invalid());
             }
@@ -3658,7 +3708,8 @@ fn send(
                     "A method-preserving redirect answered the credential form; the attempt was refused without re-sending the credential.",
                 ));
             }
-            if let Some(credential) = terminal_service_credential(jar.service, &next)? {
+            if jar.service != CasService::Ihome
+                && let Some(credential) = terminal_service_credential(jar.service, &next)? {
                 jar.terminal_credential = Some(credential);
                 return Ok(Hop {
                     status, url, body, retry_after, challenge: challenged,
@@ -3748,15 +3799,49 @@ fn pinned_login_route(url: &Url, service: CasService) -> bool {
     }
 }
 
-/// A library CAS credential belongs only to the library's HTTPS origin. It is
-/// consumed in memory by its business exchange, never fetched as a new URL or
-/// projected as ordinary response data.
+/// A terminal service credential belongs only to its relying party origin.
+/// The library CAS value and the iHome fragment token are consumed in memory
+/// by their business exchange, never fetched as a new URL or projected as
+/// ordinary response data.
 fn terminal_service_credential(service: CasService, url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
-    if !allowed_origin(url, service) {
-        return Err(invalid());
+    match service {
+        CasService::Library => library_terminal_credential(url),
+        CasService::Ihome => ihome_terminal_credential(url),
+        CasService::Classroom | CasService::SmartClassrooms => {
+            if !allowed_origin(url, service) {
+                return Err(invalid());
+            }
+            Ok(None)
+        }
     }
-    if service != CasService::Library {
-        return Ok(None);
+}
+
+/// Admit exactly the reviewed plaintext CAS callback for the iHome profile:
+/// the declared host, the exact callback path, the default port and no
+/// userinfo or fragment, upgraded to the HTTPS spelling actually requested.
+/// Every other URL is returned unchanged so the ordinary origin predicate
+/// keeps refusing plaintext transports.
+fn upgraded_service_callback(service: CasService, url: &Url) -> Option<Url> {
+    if service != CasService::Ihome
+        || url.scheme() != "http"
+        || url.host_str() != Some(IHOME_HOST)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.path() != IHOME_CAS_CALLBACK_PATH
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let mut upgraded = url.clone();
+    upgraded.set_scheme("https").ok()?;
+    Some(upgraded)
+}
+
+/// The library CAS credential binds only on the library's HTTPS origin.
+fn library_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
+    if !allowed_origin(url, CasService::Library) {
+        return Err(invalid());
     }
     let query = url.query().into_iter().flat_map(|query| url::form_urlencoded::parse(query.as_bytes()));
     let fragment = url.fragment().into_iter().flat_map(|fragment| {
@@ -3770,7 +3855,7 @@ fn terminal_service_credential(service: CasService, url: &Url) -> Result<Option<
         }
         let value = Zeroizing::new(value.into_owned());
         if url.host_str() != Some("booking.lib.buaa.edu.cn")
-            || credential.is_some() || value.trim().is_empty() || value.len() > 4096
+            || credential.is_some() || value.trim().is_empty() || value.len() > MAX_TERMINAL_CREDENTIAL_BYTES
             || value.chars().any(char::is_control)
         {
             return Err(invalid());
@@ -3778,6 +3863,75 @@ fn terminal_service_credential(service: CasService, url: &Url) -> Result<Option<
         credential = Some(value);
     }
     Ok(credential)
+}
+
+/// The iHome terminal token binds exactly the way the reviewed source
+/// consumes it: an http or https URL on the platform host whose path is the
+/// reviewed exact `/web/` path and whose fragment carries a unique `type=0`
+/// pair plus a unique nonempty `token`. The terminal is never fetched, so
+/// admitting the plaintext scheme here cannot weaken transport: no request
+/// is ever built from this URL. Credential parameters appearing outside the
+/// fragment are ambiguous with the reviewed contract and refuse.
+fn ihome_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
+    if url.host_str() != Some(IHOME_HOST) {
+        // Another party's terminal is not this profile's credential; the
+        // ordinary origin predicate decides whether it may be followed.
+        return Ok(None);
+    }
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return Err(invalid());
+    }
+    if url.path() != IHOME_TERMINAL_PATH {
+        return Ok(None);
+    }
+    let query_carries_credential = url.query_pairs().any(|(name, _)| {
+        matches!(name.as_ref(), "type" | "token")
+    });
+    if query_carries_credential {
+        return Err(invalid());
+    }
+    let Some(fragment) = url.fragment() else {
+        return Ok(None);
+    };
+    let Some((_, parameters)) = fragment.split_once('?') else {
+        // A fragment without terminal parameters is never a followable hop
+        // and never a credential: refuse instead of guessing.
+        return Err(invalid());
+    };
+    let mut credential = None;
+    let mut typed = false;
+    for (name, value) in url::form_urlencoded::parse(parameters.as_bytes()) {
+        match name.as_ref() {
+            "type" => {
+                if typed || value != "0" {
+                    return Err(invalid());
+                }
+                typed = true;
+            }
+            "token" => {
+                let value = Zeroizing::new(value.into_owned());
+                if credential.is_some()
+                    || value.trim().is_empty()
+                    || value.len() > MAX_TERMINAL_CREDENTIAL_BYTES
+                    || value.chars().any(char::is_control)
+                {
+                    return Err(invalid());
+                }
+                credential = Some(value);
+            }
+            _ => {}
+        }
+    }
+    match (typed, credential) {
+        (true, Some(credential)) => Ok(Some(credential)),
+        // A terminal-shaped fragment without exactly one type=0 and one
+        // nonempty token is malformed, not a bare redirect.
+        _ => Err(invalid()),
+    }
 }
 
 fn failed_code_body(body: &str) -> bool {
@@ -5846,12 +6000,12 @@ impl<'a> SsoCredentials<'a> {
     }
 }
 
-/// An in-memory Smart handoff. It never enters the classroom session store.
-pub(crate) struct SmartSession {
+/// An in-memory service handoff. It never enters the classroom session store.
+pub(crate) struct ServiceSession {
     jar: Jar,
 }
 
-impl Drop for SmartSession {
+impl Drop for ServiceSession {
     fn drop(&mut self) {
         for cookie in &mut self.jar.cookies {
             zeroize::Zeroize::zeroize(&mut cookie.value);
@@ -5859,12 +6013,12 @@ impl Drop for SmartSession {
     }
 }
 
-impl SmartSession {
+impl ServiceSession {
     pub(crate) fn cookie_header(&self, url: &Url) -> Result<(Option<Zeroizing<String>>, Option<SystemTime>), Error> {
         let expected_host = match self.jar.service {
             CasService::SmartClassrooms => "app.buaa.edu.cn",
             CasService::Library => "booking.lib.buaa.edu.cn",
-            CasService::Classroom => return Err(invalid()),
+            CasService::Classroom | CasService::Ihome => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
             return Err(invalid());
@@ -5884,12 +6038,15 @@ impl SmartSession {
         self.jar.absorb(url, headers)
     }
 
-    pub(crate) fn take_library_cas(&mut self) -> Result<Zeroizing<String>, Error> {
-        if self.jar.service != CasService::Library {
+    /// Consume the terminal credential of the selected relying party exactly
+    /// once. No retry or alternate credential can be manufactured after the
+    /// take.
+    pub(crate) fn take_service_credential(&mut self) -> Result<Zeroizing<String>, Error> {
+        if !matches!(self.jar.service, CasService::Library | CasService::Ihome) {
             return Err(invalid());
         }
         self.jar.terminal_credential.take().ok_or_else(|| Error::new(
-            "authentication_unconfirmed", "The library handoff did not provide a confirmed CAS credential; no retry was performed."
+            "authentication_unconfirmed", "The service handoff did not provide a confirmed credential; no retry was performed."
         ))
     }
 
@@ -5906,7 +6063,7 @@ impl SmartSession {
 /// Preserve transport, persistence and credential verdicts independently.
 /// A completed but unrecognized exchange is not a network failure or a
 /// password verdict; the caller retains its observed HTTP facts.
-fn smart_attempt_failure(error: Error) -> Error {
+fn service_attempt_failure(error: Error) -> Error {
     match error.code {
         "challenge_requires_human"
         | "cooldown"
@@ -5918,7 +6075,7 @@ fn smart_attempt_failure(error: Error) -> Error {
         | "governor_unavailable" => error,
         _ => Error::new(
             "authentication_unconfirmed",
-            "The Smart sign-on exchange could not be admitted; no automatic retry was performed.",
+            "The service sign-on exchange could not be admitted; no automatic retry was performed.",
         ),
     }
 }
@@ -5928,7 +6085,7 @@ fn smart_attempt_failure(error: Error) -> Error {
 fn challenge_required() -> Error {
     Error::new(
         "challenge_requires_human",
-        "Smart authentication requires an interactive challenge; no challenge was bypassed.",
+        "Service authentication requires an interactive challenge; no challenge was bypassed.",
     )
 }
 
@@ -5937,7 +6094,7 @@ fn challenge_required() -> Error {
 fn deferred() -> Error {
     Error::new(
         "cooldown",
-        "Smart authentication was deferred by the sign-on service; no retry was performed.",
+        "Service authentication was deferred by the sign-on service; no retry was performed.",
     )
 }
 
@@ -5950,12 +6107,12 @@ fn admission_failed(message: &'static str) -> Error {
 /// Consume exactly one deliberately supplied credential pair under the
 /// caller's existing request lease. No governor, account key, session file,
 /// refresh, retry or alternate relying party is created here.
-pub(crate) fn authenticate_smart(
+pub(crate) fn authenticate_service(
     lease: &mut RequestLease<'_>,
     client: &Client,
     service: CasService,
     credentials: SsoCredentials<'_>,
-) -> Result<SmartSession, Error> {
+) -> Result<ServiceSession, Error> {
     if service == CasService::Classroom {
         return Err(invalid());
     }
@@ -5963,7 +6120,7 @@ pub(crate) fn authenticate_smart(
     let mut jar = Jar { service, ..Jar::default() };
     let mut trail = Trail::new();
     let page = send(lease, client, &mut jar, &login_url, None, &mut trail, true, None)
-        .map_err(smart_attempt_failure)?;
+        .map_err(service_attempt_failure)?;
     if page.challenge {
         return Err(challenge_required());
     }
@@ -5974,15 +6131,15 @@ pub(crate) fn authenticate_smart(
         || page.body.trim().is_empty()
         || login_content_type_label(page.content_type.as_deref()) != Some("text/html")
     {
-        return Err(admission_failed("The Smart sign-on page could not be admitted; no credentials were submitted."));
+        return Err(admission_failed("The service sign-on page could not be admitted; no credentials were submitted."));
     }
     let prepared = prepare_credential_form(&page, service).map_err(|refusal| match refusal {
         FormRefusal::Challenge | FormRefusal::ChallengeText => challenge_required(),
-        FormRefusal::Unsafe(error) => smart_attempt_failure(error),
+        FormRefusal::Unsafe(error) => service_attempt_failure(error),
     })?;
     let form = login_form_values(&prepared.fields, credentials.username, credentials.password);
     let landed = send(lease, client, &mut jar, &prepared.action, Some((&form, &page.url)), &mut trail, false, None)
-        .map_err(smart_attempt_failure)?;
+        .map_err(service_attempt_failure)?;
     if landed.challenge {
         return Err(challenge_required());
     }
@@ -5998,33 +6155,54 @@ pub(crate) fn authenticate_smart(
             LandingVerdict::Clear => {}
             LandingVerdict::Challenge => return Err(challenge_required()),
             LandingVerdict::Rejected => {
-                return Err(Error::new("auth_latched", "Smart authentication was rejected by the sign-on service; no retry was performed."));
+                return Err(Error::new("auth_latched", "Service authentication was rejected by the sign-on service; no retry was performed."));
             }
             LandingVerdict::Unreadable => {
-                return Err(admission_failed("The Smart handoff page could not be read as a reviewed document; no retry was performed."));
+                return Err(admission_failed("The service handoff page could not be read as a reviewed document; no retry was performed."));
             }
         }
     }
-    if service == CasService::Library {
-        if jar.terminal_credential.is_none() {
-            return Err(admission_failed("The library did not provide a confirmed CAS handoff; no retry was performed."));
+    match service {
+        CasService::Library | CasService::Ihome => {
+            if jar.terminal_credential.is_none() {
+                return Err(admission_failed("The relying party did not provide a confirmed credential handoff; no retry was performed."));
+            }
+            if service == CasService::Ihome && !landed.body.trim().is_empty() {
+                // A terminal redirect with a nonempty body still carries the
+                // sign-on's own classification: a challenge or rejection page
+                // never proves login by token alone, and an unreadable page
+                // keeps the source uncertainty. An empty redirect body
+                // remains the normal terminal answer.
+                match landing_verdict(&landed) {
+                    LandingVerdict::Clear => {}
+                    LandingVerdict::Challenge => return Err(challenge_required()),
+                    LandingVerdict::Rejected => {
+                        return Err(Error::new("auth_latched", "Service authentication was rejected by the sign-on service; no retry was performed."));
+                    }
+                    LandingVerdict::Unreadable => {
+                        return Err(admission_failed("The terminal handoff page could not be read as a reviewed document; no retry was performed."));
+                    }
+                }
+            }
         }
-    } else {
-        // The handoff proves itself by a boring HTML landing on the relying
-        // party plus a usable scoped cookie.
-        if landed.status != 200
-            || landed.url.host_str() != Some("app.buaa.edu.cn")
-            || landed.body.trim().is_empty()
-            || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
-        {
-            return Err(admission_failed("The classroom-query handoff could not be confirmed; no retry was performed."));
+        CasService::SmartClassrooms => {
+            // The handoff proves itself by a boring HTML landing on the relying
+            // party plus a usable scoped cookie.
+            if landed.status != 200
+                || landed.url.host_str() != Some("app.buaa.edu.cn")
+                || landed.body.trim().is_empty()
+                || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
+            {
+                return Err(admission_failed("The classroom-query handoff could not be confirmed; no retry was performed."));
+            }
+            let probe = Url::parse("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1").map_err(|_| invalid())?;
+            if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
+                return Err(admission_failed("The classroom-query handoff supplied no usable scoped cookie; no retry was performed."));
+            }
         }
-        let probe = Url::parse("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1").map_err(|_| invalid())?;
-        if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
-            return Err(admission_failed("The classroom-query handoff supplied no usable scoped cookie; no retry was performed."));
-        }
+        CasService::Classroom => return Err(invalid()),
     }
-    Ok(SmartSession { jar })
+    Ok(ServiceSession { jar })
 }
 
 /// Acquire one classroom session for the operator's account.

@@ -2,25 +2,30 @@
 //!
 //! What this module implements, and what it deliberately does not:
 //!
-//! * It reads exactly two documented upstream endpoints over HTTPS only:
+//! * Business reads use exactly two documented endpoints over HTTPS only:
 //!   `GET /api/appeal?limit=<int>&page=<int>` (listing) and
 //!   `GET /api/appeal/<id>` (one appeal). Every request carries
 //!   `Accept: application/json`, `Authorization: Bearer <token>` and
 //!   `Referer: https://i.buaa.edu.cn/web/`.
-//! * It never logs in or acquires a token. The pinned third-party report
-//!   describes a token inside a fragment router query and a frontend
-//!   `appeal_pc_token` cookie, not a session implemented by this CLI.
-//!   This module only accepts an explicit bearer token plus an optional
-//!   description of where that token came from. A missing token is refused as
-//!   `authorization_required` before any cache or network access.
+//! * Legacy list/detail operations accept an explicit bearer token and an
+//!   optional caller declaration of its provenance. A missing token is refused
+//!   as `authorization_required` before any cache or network access.
+//!   The separate session operation performs one explicitly authorized CAS
+//!   login and one selected read, with exact `LOGIN <username> ihome` intent.
+//!   It consumes the reviewed `/web/` fragment token without fetching that
+//!   terminal URL. Only the exact reviewed HTTP `/api/authLogin` callback is
+//!   upgraded to HTTPS; no plaintext request or arbitrary same-host path is
+//!   admitted. Disabled reads perform no account-state or network I/O.
 //!   Typed decoding wraps each token immediately in `Zeroizing`, including
 //!   tokens decoded before a subsequent malformed or unknown field fails.
 //!   Dispatch reads only the operation and ignores the other fields without
 //!   constructing a generic JSON value or reserializing credentials. The
 //!   caller's input buffer, serde parser scratch space, and reqwest/TLS-owned
 //!   copies are outside this module's zeroization guarantee.
-//! * Every remote request takes its own shared-governor lease and keeps it
-//!   until the response body has been read and structured. A `429`/`Retry-After`
+//! * Legacy remote reads keep their existing shared-governor lease through
+//!   body processing. Session authentication and its one business read share
+//!   one Authentication lease; they never cache, persist credentials, paginate,
+//!   refresh or retry. A `429`/`Retry-After`
 //!   or a `401`/`403`/challenge stops every further request. Nothing is
 //!   retried automatically, and a rejected token is never refreshed here.
 //! * A response that cannot be structured is returned as a degraded success
@@ -31,9 +36,8 @@
 //!   `fallback_reason`. Safety-latched or unreviewed challenge bodies and
 //!   bodies carrying credential-marked JSON or HTML metadata are withheld
 //!   from output; only their provenance is exposed.
-//!   Those exact bytes are also stored in a
-//!   private, credential-scoped cache so the degraded evidence can be re-read
-//!   offline without another request.
+//!   Legacy token reads also retain admitted safe bytes in a private,
+//!   credential-scoped cache for offline reuse. Session reads never cache.
 //! * The supplied bearer token is never echoed. Every response body and
 //!   decoded JSON string is inspected for the token and the reversible forms
 //!   supported by `net::carries_secret` before projection or export. Matching
@@ -41,6 +45,8 @@
 //!   short token, withholds the body rather than risking disclosure.
 //!   A body that echoes the token is refused as `credential_echo`: no entry is
 //!   projected, no raw bytes are exported and the body is not cached.
+//!   Session output additionally guards the username, password, transmitted
+//!   cookie headers and current/retired cookie values, including MIME echoes.
 //!   Responses whose nested token inspection exceeds its bound are withheld as
 //!   unreviewed, without claiming an echo or an authentication refusal.
 //! * An explicit application-level authentication refusal (a root-level
@@ -72,6 +78,7 @@
 //!
 //! Source protocol reference (not current-deployment proof):
 //! https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeProtocol.kt
+//! https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeUpstreamClient.kt
 //!
 //! Nothing here has been exercised against the live campus service; the
 //! endpoint contract is the documented one and the online acceptance of this
@@ -80,6 +87,7 @@
 use crate::governor::{self, Governor, Outcome};
 use crate::html::{ChallengeAssessment, assess_challenge_body};
 use crate::net::{self, CacheStatus, Error, Response};
+use crate::recordings::session::{self as cas, CasService, SsoCredentials};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use reqwest::blocking::Client;
@@ -180,7 +188,7 @@ fn body_limit() -> Error {
 fn token_required() -> Error {
     Error::new(
         "authorization_required",
-        "ihome requires an explicit bearer token from the session layer; this module never logs in",
+        "ihome list/detail require an explicit bearer token; the separate session operation authenticates once",
     )
 }
 
@@ -201,16 +209,30 @@ fn sha256(bytes: &[u8]) -> String {
 // every member before last-member-wins insertion, including duplicates.
 struct TokenInspection<'a> {
     token: &'a str,
+    authentication: Option<&'a dyn Fn(&[u8]) -> bool>,
     scan_decoded: bool,
     echo: bool,
     incomplete: bool,
 }
 
 impl TokenInspection<'_> {
+    fn carries_secret(&self, bytes: &[u8]) -> bool {
+        net::carries_secret(bytes, self.token)
+            || self.authentication.is_some_and(|contains| contains(bytes))
+    }
+
+    fn scalar(&mut self, value: &Value) {
+        // Only a session read has additional authentication material. Check
+        // source numbers in the exact spelling a consumer would receive.
+        if self.authentication.is_some() && !self.echo {
+            self.echo = net::json_scalar_matches(value, |bytes| self.carries_secret(bytes));
+        }
+    }
+
     fn inspect(&mut self, text: &str, embedded_depth: usize, allow_embedded: bool) {
-        if self.token.is_empty() { return; }
+        if self.token.is_empty() && self.authentication.is_none() { return; }
         if self.scan_decoded && !self.echo {
-            self.echo = net::carries_secret(text.as_bytes(), self.token);
+            self.echo = self.carries_secret(text.as_bytes());
         }
         let trimmed = text.trim();
         if allow_embedded && trimmed.starts_with(['{', '[', '"']) {
@@ -247,9 +269,15 @@ impl<'de> serde::de::Visitor<'de> for LiteralSeed<'_, '_> {
     fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("a literal JSON value") }
     fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> { Ok(Value::Null) }
     fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Value, E> { Ok(Value::Bool(v)) }
-    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Value, E> { Ok(Value::from(v)) }
-    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Value, E> { Ok(Value::from(v)) }
-    fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Value, E> { Ok(Value::from(v)) }
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Value, E> {
+        let value = Value::from(v); self.inspection.scalar(&value); Ok(value)
+    }
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Value, E> {
+        let value = Value::from(v); self.inspection.scalar(&value); Ok(value)
+    }
+    fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Value, E> {
+        let value = Value::from(v); self.inspection.scalar(&value); Ok(value)
+    }
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Value, E> {
         self.inspection.inspect(v, self.embedded_depth, true);
         Ok(if self.build { Value::String(v.to_owned()) } else { Value::Null })
@@ -285,13 +313,13 @@ fn literal_document(bytes: &[u8], inspection: &mut TokenInspection<'_>) -> Optio
 }
 
 fn token_inspection(token: &str) -> TokenInspection<'_> {
-    TokenInspection { token, scan_decoded: true, echo: false, incomplete: false }
+    TokenInspection { token, authentication: None, scan_decoded: true, echo: false, incomplete: false }
 }
 
 /// Does any JSON string literal of this body carry the token once decoded?
 /// Duplicate members are all inspected: a parsed document keeps only the
 /// last member, so the raw literals are the complete evidence.
-fn decoded_strings_carry_token(body: &[u8], token: &str) -> bool {
+fn decoded_strings_carry_secret(body: &[u8], inspection: &TokenInspection<'_>) -> bool {
     let mut index = 0;
     while index < body.len() {
         if body[index] != b'"' {
@@ -302,7 +330,7 @@ fn decoded_strings_carry_token(body: &[u8], token: &str) -> bool {
             index += 1;
             continue;
         };
-        if net::carries_secret(literal.as_bytes(), token) {
+        if inspection.carries_secret(literal.as_bytes()) {
             return true;
         }
         index = next;
@@ -364,6 +392,7 @@ struct ResponseFacts {
     /// The body carries the supplied bearer token, verbatim, percent-encoded,
     /// or inside a decoded JSON string.
     token_echo: bool,
+    content_type_echo: bool,
     inspection_incomplete: bool,
     /// The body explicitly states that the session is not authenticated.
     session_denied: bool,
@@ -375,8 +404,17 @@ struct ResponseFacts {
 /// Inspect one response body once. The token is never echoed, so a body that
 /// carries it is refused before any projection or export.
 fn analyze_body(body: &[u8], token: &str) -> ResponseFacts {
+    analyze_authenticated_body(body, token, None)
+}
+
+fn analyze_authenticated_body(
+    body: &[u8],
+    token: &str,
+    authentication: Option<&dyn Fn(&[u8]) -> bool>,
+) -> ResponseFacts {
     let mut facts = ResponseFacts {
         token_echo: false,
+        content_type_echo: false,
         inspection_incomplete: false,
         session_denied: false,
         document: None,
@@ -386,12 +424,13 @@ fn analyze_body(body: &[u8], token: &str) -> ResponseFacts {
     // fact for the original lease. Without escapes, decoded literals are
     // already covered by the original scan; nested parsing still runs.
     let mut inspection = token_inspection(token);
-    let raw_echo = net::carries_secret(body, token);
+    inspection.authentication = authentication;
+    let raw_echo = inspection.carries_secret(body);
     inspection.echo = raw_echo;
-    inspection.scan_decoded = !raw_echo && !token.is_empty() && body.contains(&b'\\');
+    inspection.scan_decoded = !raw_echo && (!token.is_empty() || authentication.is_some()) && body.contains(&b'\\');
     let document = literal_document(body, &mut inspection);
     facts.token_echo = raw_echo || (document.is_some() && inspection.echo)
-        || (document.is_none() && inspection.scan_decoded && decoded_strings_carry_token(body, token));
+        || (document.is_none() && inspection.scan_decoded && decoded_strings_carry_secret(body, &inspection));
     facts.inspection_incomplete = inspection.incomplete;
     if let Some(document) = document {
         facts.session_denied = session_denied_document(&document);
@@ -617,7 +656,64 @@ impl<'de> Deserialize<'de> for DetailInput {
 enum Operation {
     List,
     Detail,
+    Session,
 }
+
+struct SessionInput {
+    operation: Option<Operation>,
+    authorized: bool,
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
+    intent: Zeroizing<String>,
+    read: SessionRead,
+}
+
+impl<'de> Deserialize<'de> for SessionInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(default, deserialize_with = "deserialize_session_operation")]
+            operation: Option<Operation>,
+            authorized: bool,
+            #[serde(deserialize_with = "deserialize_secret")]
+            username: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_secret")]
+            password: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_secret")]
+            intent: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_object")]
+            read: SessionRead,
+        }
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self { operation: raw.operation, authorized: raw.authorized, username: raw.username,
+            password: raw.password, intent: raw.intent, read: raw.read })
+    }
+}
+
+fn deserialize_secret<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Zeroizing<String>, D::Error> {
+    String::deserialize(deserializer).map(Zeroizing::new)
+}
+
+fn deserialize_session_operation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Operation>, D::Error> {
+    Operation::deserialize(deserializer).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum SessionRead {
+    List {
+        enabled: bool,
+        #[serde(default = "default_session_limit")]
+        limit: u32,
+        #[serde(default = "default_session_page")]
+        page: u32,
+    },
+    Detail { enabled: bool, id: u64 },
+}
+
+fn default_session_limit() -> u32 { DEFAULT_LIMIT }
+fn default_session_page() -> u32 { 1 }
 
 // Ignored fields are consumed by serde's IgnoredAny path, not materialized
 // into Value or copied into a serialized request. The second typed parse
@@ -1116,25 +1212,8 @@ impl Transport {
         refresh: bool,
         process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        if !allowed_url(url) {
-            return Err(invalid_url());
-        }
-        let credential = Zeroizing::new(format!("Bearer {token}"));
-        let mut authorization =
-            reqwest::header::HeaderValue::from_bytes(credential.as_bytes())
-                .map_err(|_| invalid_input("the bearer token cannot be sent as a header"))?;
-        authorization.set_sensitive(true);
-        let request = self
-            .http
-            .get(url.clone())
-            .header("Accept-Encoding", "identity")
-            .header("Accept", "application/json")
-            .header("Referer", IHOME_REFERER)
-            .header(reqwest::header::AUTHORIZATION, authorization)
-            // The builder timeout resets after every socket read; bind an equal
-            // per-request deadline to this actual request instead.
-            .timeout(Duration::from_secs(45));
-        let mut lease = net::acquire(&self.governor)?;
+        let request = read_request(&self.http, url, token)?;
+        let lease = net::acquire(&self.governor)?;
         if !refresh {
             match cache.load(url) {
                 Ok(Some((response, challenge))) => {
@@ -1159,6 +1238,37 @@ impl Transport {
                 }
             }
         }
+        execute_read(request, url, token, lease, None, |response, challenge, facts, issues_cookie| {
+            admit_response(cache, response, challenge, facts, issues_cookie, process)
+        })
+    }
+}
+
+fn read_request(client: &Client, url: &Url, token: &str) -> Result<reqwest::blocking::RequestBuilder, Error> {
+    if !allowed_url(url) { return Err(invalid_url()); }
+    let credential = Zeroizing::new(format!("Bearer {token}"));
+    let mut authorization = reqwest::header::HeaderValue::from_bytes(credential.as_bytes())
+        .map_err(|_| invalid_input("the bearer token cannot be sent as a header"))?;
+    authorization.set_sensitive(true);
+    Ok(client.get(url.clone())
+        .header("Accept-Encoding", "identity")
+        .header("Accept", "application/json")
+        .header("Referer", IHOME_REFERER)
+        .header(reqwest::header::AUTHORIZATION, authorization)
+        .timeout(Duration::from_secs(45)))
+}
+
+/// The existing response/body admission and settlement, shared by a legacy
+/// token read and a one-shot session. The latter passes its original auth
+/// lease and retains all authentication guards until processing completes.
+fn execute_read<T>(
+    request: reqwest::blocking::RequestBuilder,
+    url: &Url,
+    token: &str,
+    mut lease: governor::RequestLease<'_>,
+    authentication: Option<&dyn Fn(&[u8]) -> bool>,
+    process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts, bool) -> Result<T, Error>,
+) -> Result<T, Error> {
         let mut raw = match lease.start_request(||request.send()) {
             Ok(Ok(response)) => response,
             Ok(Err(_)) => {
@@ -1190,6 +1300,7 @@ impl Transport {
         };
         let mut facts = ResponseFacts {
             token_echo: false,
+            content_type_echo: false,
             inspection_incomplete: false,
             session_denied: false,
             document: None,
@@ -1227,8 +1338,13 @@ impl Transport {
                 revalidated_at_unix_ms: None,
                 revalidation_status: None,
             };
-            facts = analyze_body(&response.body, token);
-            admit_response(cache, &response, &challenge, &facts, issues_session_cookie, process)
+            facts = analyze_authenticated_body(&response.body, token, authentication);
+            facts.content_type_echo = authentication.is_some_and(|contains|
+                response.headers.get("content-type").is_some_and(|value|
+                    credential_value_carries_token(value, token)
+                        || contains(value.as_bytes()) || contains(value.to_ascii_lowercase().as_bytes())));
+            facts.token_echo |= facts.content_type_echo;
+            process(&response, &challenge, &facts, issues_session_cookie)
         })();
         let network_failure = result
             .as_ref()
@@ -1251,7 +1367,6 @@ impl Transport {
             .finish(outcome)
             .map_err(|_| governor_error())?;
         result
-    }
 }
 
 // Only a cookie-reviewed original reaches the version-4 writer. Older cache
@@ -1264,17 +1379,27 @@ fn admit_response<T>(
     issues_session_cookie: bool,
     process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts) -> Result<T, Error>,
 ) -> Result<T, Error> {
+    let processed = admit_body(response, challenge, facts, issues_session_cookie, process)?;
+    if !facts.token_echo {
+        cache.save(response, challenge)?;
+    }
+    Ok(processed)
+}
+
+fn admit_body<T>(
+    response: &Response,
+    challenge: &ChallengeAssessment,
+    facts: &ResponseFacts,
+    issues_session_cookie: bool,
+    process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts) -> Result<T, Error>,
+) -> Result<T, Error> {
     if issues_session_cookie {
         return Err(Error::new("session_cookie_issued", "response content withheld because upstream issued a session cookie"));
     }
     if facts.inspection_incomplete {
         return Err(Error::new("response_unreviewed", "response content withheld because token inspection was incomplete"));
     }
-    let processed = process(response, challenge, facts)?;
-    if !facts.token_echo {
-        cache.save(response, challenge)?;
-    }
-    Ok(processed)
+    process(response, challenge, facts)
 }
 
 fn observe_response_headers(lease:&mut governor::RequestLease<'_>,status:u16,headers:&reqwest::header::HeaderMap,challenge:bool)->Result<(),Error> {
@@ -1984,6 +2109,19 @@ fn refused_page(response: &Response, token: &str, reason: FallbackReason, succes
     }
 }
 
+fn credential_echo_page(response: &Response, token: &str, content_type_echo: bool) -> PageOutcome {
+    let mut page = refused_page(response, token, FallbackReason::CredentialEcho, None);
+    if content_type_echo {
+        page.meta["content_type"] = Value::Null;
+        page.meta["content_type_parameters_withheld"] = json!(true);
+        if let Some(evidence) = &mut page.evidence {
+            evidence["content_type"] = Value::Null;
+            evidence["content_type_parameters_withheld"] = json!(true);
+        }
+    }
+    page
+}
+
 fn cursor_is_incomparable(request: &ListRequest, entries: &[Entry]) -> bool {
     request.since_time.as_ref().is_some_and(|cursor| {
         entries.iter().any(|entry| {
@@ -2317,7 +2455,106 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
     match selector.operation {
         Operation::List => list(input, online),
         Operation::Detail => detail(input, online),
+        Operation::Session => session(input, online),
     }
+}
+
+/// One explicit CAS attempt followed by one listing page or one detail.
+/// Authentication material and response bytes never enter the response cache.
+pub fn session(input: &str, online: bool) -> Result<Value, Error> {
+    session_with_network(input, online, || Ok((cas::http_client()?,
+        Governor::open().map_err(|_| governor_error())?)))
+}
+
+pub(crate) fn session_with_network(
+    input: &str,
+    online: bool,
+    network: impl FnOnce() -> Result<(Client, Governor), Error>,
+) -> Result<Value, Error> {
+    if input.len() > 65536 { return Err(invalid_input("the ihome session request is too large")); }
+    let input: SessionInput = serde_json::from_str(input)
+        .map_err(|_| invalid_input("the ihome session request is invalid"))?;
+    if input.operation.is_some_and(|operation| operation != Operation::Session) {
+        return Err(invalid_input("the ihome operation must be session"));
+    }
+    let (enabled, url) = match &input.read {
+        SessionRead::List { enabled, limit, page } => {
+            if !(1..=MAX_LIMIT).contains(limit) || !(1..=MAX_PAGE).contains(page) {
+                return Err(invalid_input("the ihome list limit or page is outside its supported range"));
+            }
+            (*enabled, list_url(*limit, *page)?)
+        }
+        SessionRead::Detail { enabled, id } => (*enabled, detail_url(*id)?),
+    };
+    if !enabled {
+        return Ok(json!({"schema_version":1,"type":"ihome_session","result":"disabled",
+            "network_performed":false,"write_operations_performed":false}));
+    }
+    if !input.authorized {
+        return Err(Error::new("permission", "explicit authorization for one ihome authentication attempt is required"));
+    }
+    let credentials = SsoCredentials::new(&input.username, &input.password)?;
+    if *input.intent != format!("LOGIN {} ihome", &*input.username) {
+        return Err(invalid_input("the ihome authentication intent does not match"));
+    }
+    if !online {
+        return Err(Error::new("online_required", "ihome sessions require explicit online permission; no authentication was attempted"));
+    }
+    let (client, governor) = network()?;
+    let mut lease = net::acquire_kind(&governor, governor::RequestKind::Authentication)?;
+    let prepared = cas::authenticate_service(&mut lease, &client, CasService::Ihome, credentials)
+        .and_then(|mut session| {
+            let token = session.take_service_credential()?;
+            if !valid_token(&token) {
+                return Err(Error::new("authentication_unconfirmed", "the ihome handoff did not supply an admissible bearer token; no read was sent"));
+            }
+            let request = read_request(&client, &url, &token)?;
+            let reservation = lease.reserve_followup().map_err(|_| governor_error())?;
+            if !reservation.cooldown_wait.is_zero() {
+                return Err(Error::new("cooldown", "the ihome read was deferred; no retry was performed"));
+            }
+            if !reservation.request_wait.is_zero() {
+                std::thread::sleep(reservation.request_wait);
+            }
+            Ok((session, token, request))
+        });
+    let (session, token, request) = match prepared {
+        Ok(prepared) => prepared,
+        Err(failure) => {
+            if matches!(failure.code, "governor_denied" | "governor_error" | "governor_unavailable") {
+                // Persistence uncertainty retains the original pending attempt.
+                return Err(failure);
+            }
+            match failure.code {
+                "auth_latched" => lease.finish(Outcome::CredentialRejected),
+                "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ => lease.finish_without_request(),
+            }.map_err(|_| governor_error())?;
+            return Err(failure);
+        }
+    };
+    let contains = |bytes: &[u8]| net::carries_secret(bytes, &input.password)
+        || net::carries_secret(bytes, &input.username) || session.contains_secret_bytes(bytes);
+    enum SelectedRead { List(ListRequest), Detail(DetailRequest) }
+    let selected = match input.read {
+        SessionRead::List { limit, page, .. } => SelectedRead::List(ListRequest {
+            token, token_source: Some(TokenSource::RedirectFragmentToken), limit, page,
+            max_pages: 1, since_id: None, since_time_raw: None, since_time: None,
+            known: BTreeMap::new(), refresh: false }),
+        SessionRead::Detail { id, .. } => SelectedRead::Detail(DetailRequest {
+            token, token_source: Some(TokenSource::RedirectFragmentToken), id, refresh: false }),
+    };
+    let token = match &selected {
+        SelectedRead::List(read) => read.token.as_str(),
+        SelectedRead::Detail(read) => read.token.as_str(),
+    };
+    execute_read(request, &url, token, lease, Some(&contains), |response, challenge, facts, issues_cookie| {
+        admit_body(response, challenge, facts, issues_cookie, |response, challenge, facts| match &selected {
+            SelectedRead::List(read) => build_list_envelope(read, [Ok(list_page(read, response, challenge, facts))]),
+            SelectedRead::Detail(read) => Ok(build_detail_envelope(read, detail_page(read, response, challenge, facts))),
+        })
+    })
 }
 
 /// Read one bounded window of the appeal listing.
@@ -2370,7 +2607,7 @@ fn list_page(
         // The upstream echoed the submitted bearer token. Nothing from this
         // body is projected or exported, not even as the raw evidence of
         // another refusal.
-        return refused_page(response, request.token.as_str(), FallbackReason::CredentialEcho, None);
+        return credential_echo_page(response, request.token.as_str(), facts.content_type_echo);
     }
     if facts.inspection_incomplete {
         return refused_page(response, request.token.as_str(), FallbackReason::InspectionUnreviewed, None);
@@ -2421,6 +2658,10 @@ pub fn detail(input: &str, online: bool) -> Result<Value, Error> {
             Ok::<PageOutcome, Error>(detail_page(&request, response, challenge, facts))
         },
     )?;
+    Ok(build_detail_envelope(&request, outcome))
+}
+
+fn build_detail_envelope(request: &DetailRequest, outcome: PageOutcome) -> Value {
     let degraded = outcome.evidence.is_some();
     let entry = outcome.entries.into_iter().next();
     let result = if degraded {
@@ -2439,7 +2680,7 @@ pub fn detail(input: &str, online: bool) -> Result<Value, Error> {
         }),
         None => Value::Null,
     };
-    Ok(json!({
+    json!({
         "schema_version": 1,
         "type": "ihome_appeal_detail",
         "result": result,
@@ -2450,7 +2691,7 @@ pub fn detail(input: &str, online: bool) -> Result<Value, Error> {
         "advisory": advisory(),
         "provenance": provenance,
         "upstream_evidence": outcome.evidence,
-    }))
+    })
 }
 
 /// Structure one appeal. A refusal, an echoed token and an explicit session
@@ -2462,7 +2703,7 @@ fn detail_page(
     facts: &ResponseFacts,
 ) -> PageOutcome {
     if facts.token_echo {
-        return refused_page(response, request.token.as_str(), FallbackReason::CredentialEcho, None);
+        return credential_echo_page(response, request.token.as_str(), facts.content_type_echo);
     }
     if facts.inspection_incomplete {
         return refused_page(response, request.token.as_str(), FallbackReason::InspectionUnreviewed, None);
@@ -2498,7 +2739,7 @@ fn token_schema() -> Value {
         "minLength": 1,
         "maxLength": MAX_TOKEN_BYTES,
         "pattern": "^[!-~]+$",
-        "description": "An explicit ihome bearer token supplied through stdin. This CLI does not acquire it or implement iHome login. A pinned third-party report describes a fragment router-query token and a frontend appeal_pc_token cookie; that is not current-service or CLI-session proof. The token is never persisted, logged, echoed, or written to a file. Missing or null tokens are refused with authorization_required before cache or network access. Conservative credential-echo inspection also withholds accidental substring or supported encoded-form matches, especially with short tokens.",
+        "description": "An explicit ihome bearer token supplied through stdin for a legacy list/detail read; those commands do not log in or refresh it. The separate session command obtains one source-bound fragment token in memory, not through this input. The token is never persisted, logged, echoed, or written to a file. Missing or null tokens are refused with authorization_required before cache or network access. Conservative credential-echo inspection also withholds accidental substring or supported encoded-form matches, especially with short tokens.",
     })
 }
 
@@ -2739,6 +2980,30 @@ fn detail_input_schema() -> Value {
     })
 }
 
+fn session_input_schema() -> Value {
+    json!({
+        "type":"object", "additionalProperties":false,
+        "required":["authorized","username","password","intent","read"],
+        "description":"One deliberate CAS attempt and exactly one selected read. JSON objects only, at most 64 KiB; duplicate and unknown fields are refused. Disabled reads perform no authentication or I/O. No caller token, cookie, URL, refresh, mutation or multi-page traversal is accepted.",
+        "properties":{
+            "operation":{"const":"session"},
+            "authorized":{"type":"boolean"},
+            "username":{"type":"string","description":"Operator credentials via private stdin only; validated before an enabled attempt."},
+            "password":{"type":"string","writeOnly":true},
+            "intent":{"type":"string","description":"Exact LOGIN <username> ihome for an enabled attempt."},
+            "read":{"oneOf":[
+                {"type":"object","additionalProperties":false,"required":["operation","enabled"],"properties":{
+                    "operation":{"const":"list"},"enabled":{"type":"boolean"},
+                    "limit":{"type":"integer","minimum":1,"maximum":MAX_LIMIT,"default":DEFAULT_LIMIT},
+                    "page":{"type":"integer","minimum":1,"maximum":MAX_PAGE,"default":1}}},
+                {"type":"object","additionalProperties":false,"required":["operation","enabled","id"],"properties":{
+                    "operation":{"const":"detail"},"enabled":{"type":"boolean"},
+                    "id":{"type":"integer","minimum":0,"maximum":u64::MAX}}}
+            ]}
+        }
+    })
+}
+
 /// Build the `run` variant of one operation's input schema by adding the
 /// operation discriminator to that operation's own member set.
 fn run_input_schema(operation: &str, base: Value) -> Value {
@@ -2770,20 +3035,23 @@ pub fn schema() -> Value {
             "list_entry": entry_schema(true),
             "list_input": list_input_schema(),
             "detail_input": detail_input_schema(),
+            "session_input": session_input_schema(),
             "run_list_input": run_input_schema("list", list_input_schema()),
-            "run_detail_input": run_input_schema("detail", detail_input_schema())
+            "run_detail_input": run_input_schema("detail", detail_input_schema()),
+            "run_session_input": run_input_schema("session", session_input_schema())
         },
         "run": {
             "input": {
                 "type": "object",
-                "description": "The unified CLI entry point. The operation selects the upstream read; the remaining members are that operation's own fields. Every operation requires an explicit caller-supplied bearer token; this CLI does not acquire it or log in here.",
+                "description": "The operation selects list/detail with an explicit bearer token, or session with one deliberately supplied credential pair and one selected read. Each operation retains its own strict input contract.",
                 "oneOf": [
                     run_input_schema("list", list_input_schema()),
-                    run_input_schema("detail", detail_input_schema())
+                    run_input_schema("detail", detail_input_schema()),
+                    run_input_schema("session", session_input_schema())
                 ]
             },
             "options": {
-                "--online": "Permit one governed request per page on a cache miss; refresh:true explicitly bypasses cached pages. No automatic retry."
+                "--online": "Permit a token-read cache miss, or one explicit session authentication followed by one selected read. refresh:true belongs only to token reads. No automatic retry."
             },
             "output": {
                 "description": "Operation-specific output."
@@ -2879,14 +3147,65 @@ pub fn schema() -> Value {
             "attachment_download": "No modern attachment-download contract has been reviewed. Legacy php-ihome routes belong to a different historical social platform and are not endpoint evidence for this appeal service. Extraction covers recognized declared absolute URLs in body_data/image fields only, not a complete inventory; nonempty annex layouts and remote existence remain unverified. No URL is fetched.",
             "webvpn": "WebVPN URL encryption is an upstream client-side detail. It is documented here and deliberately not implemented; only direct HTTPS to i.buaa.edu.cn is used.",
             "idle_window": "The current upstream idle window is unknown; no time-based protection is asserted or enforced.",
-            "login": "This CLI does not acquire an iHome token or implement iHome login. An explicit caller-supplied bearer token is required; a missing token is refused as authorization_required.",
+            "login": "session implements one explicit in-memory source-bound CAS attempt and one fixed HTTPS read, without persistence, refresh or retry. Its current live deployment and account identity remain unverified. Existing list/detail still require an explicit bearer token.",
             "online_acceptance": "This adapter has not been exercised against the live campus service; its online acceptance is still unverified."
         }
     });
     let list_output = contract["list"]["output"].clone();
     let detail_output = contract["detail"]["output"].clone();
-    contract["run"]["output"] = json!({"oneOf": [list_output, detail_output]});
+    contract["$defs"]["list_output"] = list_output;
+    contract["$defs"]["detail_output"] = detail_output;
+    contract["$defs"]["disabled_session_output"] = json!({
+        "type":"object","additionalProperties":false,
+        "required":["schema_version","type","result","network_performed","write_operations_performed"],
+        "properties":{"schema_version":{"const":1},"type":{"const":"ihome_session"},
+            "result":{"const":"disabled"},"network_performed":{"const":false},"write_operations_performed":{"const":false}}
+    });
+    let output = json!({"oneOf":[{"$ref":"#/$defs/list_output"},{"$ref":"#/$defs/detail_output"},{"$ref":"#/$defs/disabled_session_output"}]});
+    contract["run"]["output"] = output.clone();
+    contract["session"] = json!({
+        "input":session_input_schema(),
+        "options":{"--online":"Required for an enabled one-shot authentication and read. All actual requests use HTTPS, no terminal credential URL is fetched, and no automatic login refresh/retry occurs."},
+        "output":output
+    });
     contract
+}
+
+#[cfg(test)]
+mod session_preflight {
+    use super::*;
+
+    #[test]
+    fn disabled_or_unapproved_reads_never_open_authentication_resources() {
+        let input = json!({"authorized":true,"username":"synthetic-operator-4b7",
+            "password":"synthetic-password-9q2","intent":"LOGIN synthetic-operator-4b7 ihome",
+            "read":{"operation":"list","enabled":true}});
+        for read in [json!({"operation":"list","enabled":false}),
+            json!({"operation":"detail","enabled":false,"id":42})] {
+            let mut disabled = input.clone();
+            disabled["read"] = read;
+            disabled["authorized"] = json!(false);
+            disabled["username"] = json!("");
+            disabled["password"] = json!("");
+            disabled["intent"] = json!("");
+            let output = session_with_network(&disabled.to_string(), true, || panic!("disabled read opened network resources")).unwrap();
+            assert_eq!(output["result"], "disabled");
+            assert_eq!(output["network_performed"], false);
+        }
+        let mut unauthorized = input.clone();
+        unauthorized["authorized"] = json!(false);
+        let mut mismatched = input.clone();
+        mismatched["intent"] = json!("LOGIN another-operator ihome");
+        let mut out_of_range = input.clone();
+        out_of_range["read"]["limit"] = json!(101);
+        for (input, online, expected) in [(unauthorized, true, "permission"),
+            (mismatched, true, "invalid_input"), (out_of_range, true, "invalid_input"),
+            (input, false, "online_required")] {
+            let failure = session_with_network(&input.to_string(), online,
+                || panic!("unapproved read opened authentication resources")).unwrap_err();
+            assert_eq!(failure.code, expected);
+        }
+    }
 }
 
 #[cfg(test)]

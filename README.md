@@ -78,7 +78,7 @@ cargo build --locked --offline
 | Announcements | `announcements list\|article\|document\|history`; `announcements college-source <college> [root\|notices\|public-notices]` | Selected source-bound pages and documents only; broader adapters, attachments, and history remain partial. |
 | Public SPOC | `spoc surface [root\|entry]`; `spoc script` | Sanitized public-surface metadata only; this is not authenticated course/material access. See [`docs/SPOC.md`](docs/SPOC.md). |
 | Smart reads | `smart [--online]`; `smart session [--online]` | Existing cookie/token reads, or one explicit in-memory CAS login followed by one classrooms/library read. Strict-TLS loopback and local CLI proof only; no live campus acceptance, persistence, automatic refresh or attendance mutation. |
-| iHome appeals | `ihome list\|detail [--online]` | Explicit caller-supplied bearer token through stdin; cache-first read only, no iHome login/token acquisition or attachment fetching. Source-shaped records and pagination have offline/native proof, not live campus acceptance. |
+| iHome appeals | `ihome list\|detail [--online]`; `ihome session [--online]` | Caller-token reads, or one explicit in-memory CAS login followed by one list page/detail. No session persistence, retry or attachment fetching. Offline/native proof only; no live campus acceptance. |
 | Gateway and governor | `gateway usage` and explicit operation flows; `governor boot-review-plan\|boot-review-commit --offline` | Cache-first gateway usage and local safety flows; no live account operation is claimed. See [`docs/GATEWAY.md`](docs/GATEWAY.md). |
 | Defect reporting | `report` | Explicitly writes a GitHub Issue from operator-sanitized input through an installed, authenticated `gh`; authentication failures and uncertain writer outcomes remain explicit. The command does not redact private content: never attach credentials or raw private responses. |
 
@@ -109,10 +109,29 @@ read evidence; credential echoes in the final response are withheld.
 
 ### Source-faithful iHome reads
 
-`ihome list` and `ihome detail` accept their JSON input only through stdin;
-`buaa schema` publishes `commands.ihome.list` and `.detail`. This CLI does not
-acquire an iHome token. Its optional `token_source` is a caller declaration,
-not proof of an implemented login flow or current token lifetime.
+`ihome list`, `ihome detail` and `ihome session` accept JSON only through
+stdin; `buaa schema` publishes all three contracts. Legacy list/detail accept
+a caller-supplied bearer. Their optional `token_source` remains a caller
+declaration, not proof of token acquisition or current lifetime.
+
+`ihome session [--online]` requires `authorized: true`, `username`, `password`,
+the exact intent `LOGIN <username> ihome`, and a `read` object selecting
+`operation: "list"` or `"detail"` with `enabled: true`. A list selects one page
+(`limit` 1–100, default 20; `page` defaults to 1); detail requires an unsigned
+`id`. Valid disabled reads check shape but not credential values or permission,
+and perform no account-state or network I/O. Enabled reads validate locally
+before constructing the client. Caller tokens, cookies, URLs and writes are
+not session inputs.
+
+One existing Authentication lease covers the fixed CAS flow and exactly one
+HTTPS business GET. The exact reviewed HTTP callback is upgraded to HTTPS;
+the terminal `/web/` fragment token is consumed without fetching its URL.
+No authentication response, token or read response is persisted or cached;
+there is no automatic pagination, refresh or retry. Final responses are checked
+against all held credential material before projection or safe fallback.
+A token or positive public listing does not establish account identity or
+full rights. Strict-TLS loopback and actual local CLI proof are not live-campus
+acceptance.
 
 Records without a title remain untitled; supplied titles and dates are copied,
 not reconstructed. HTTP 200 alone is not business success: numeric `code=20000`

@@ -2,7 +2,7 @@
 //! they are never persisted. Returned raw evidence is private caller-owned data.
 //! Explicit CAS sessions are in-memory, one-attempt flows, never automatic refresh.
 use crate::{governor::{Governor, Outcome, RequestKind, RequestLease}, net::{self, Error}};
-use crate::recordings::session::{self as cas, CasService, SmartSession, SsoCredentials};
+use crate::recordings::session::{self as cas, CasService, ServiceSession, SsoCredentials};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use md5::Md5;
 use reqwest::blocking::Client;
@@ -45,12 +45,12 @@ enum Request {
     Exams { enabled: bool, cookie: Secret, term_code: String },
     Classrooms { enabled: bool, cookie: Secret, campus_id: i64, date: String,
         #[serde(skip)] authentication_password: Option<Secret>,
-        #[serde(skip)] authentication_session: Option<SmartSession> },
+        #[serde(skip)] authentication_session: Option<ServiceSession> },
     Library { enabled: bool, token: Secret, query: LibraryQuery,
         #[serde(skip)] authentication_cookie: Option<Secret>,
         #[serde(skip)] authentication_password: Option<Secret>,
         #[serde(skip)] authentication_cas: Option<Secret>,
-        #[serde(skip)] authentication_session: Option<SmartSession> },
+        #[serde(skip)] authentication_session: Option<ServiceSession> },
     Cgyy { enabled: bool, app_key: String, access_token: Secret, query: CgyyQuery },
     Running { enabled: bool, uid: Secret, token: Secret, query: RunningQuery },
 }
@@ -272,9 +272,9 @@ fn next_request(lease: &mut RequestLease<'_>) -> Result<(), Error> {
 
 /// Exchange the source-issued library CAS credential once. Neither the raw
 /// authentication response nor its token enters a generic JSON value/output.
-fn library_login(client: &Client, lease: &mut RequestLease<'_>, session: &mut SmartSession) -> Result<(Secret,Secret), Error> {
+fn library_login(client: &Client, lease: &mut RequestLease<'_>, session: &mut ServiceSession) -> Result<(Secret,Secret), Error> {
     let url = url::Url::parse("https://booking.lib.buaa.edu.cn/v4/login/user").map_err(|_|invalid())?;
-    let credential = session.take_library_cas()?;
+    let credential = session.take_service_credential()?;
     #[derive(serde::Serialize)]
     struct CasBody<'a> { cas: &'a str }
     let body = Zeroizing::new(serde_json::to_vec(&CasBody { cas: &credential }).map_err(|_|invalid())?);
@@ -379,7 +379,7 @@ pub(crate) fn session_with_network(
     if !online { return Err(error("online_required","Smart sessions require explicit online permission; no authentication was attempted")); }
     let (client,governor) = network()?;
     let mut lease = net::acquire_kind(&governor,RequestKind::Authentication)?;
-    let authenticated = cas::authenticate_smart(&mut lease,&client,profile,credentials);
+    let authenticated = cas::authenticate_service(&mut lease,&client,profile,credentials);
     let prepared = authenticated.and_then(|mut session| {
         let (request,kind,builder,expiry) = match input.read {
             SessionRead::Classrooms { enabled, campus_id, date } => {

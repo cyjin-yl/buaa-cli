@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add `ihome session [--online]`: one explicitly authorized, in-memory CAS
+  login followed by one list page or detail under the existing Authentication
+  lease. Validate typed intent and read before I/O; narrowly upgrade only the
+  reviewed callback to HTTPS and consume the terminal fragment without fetching
+  it. No persistence, session cache, refresh, retry or business mutation.
+  Withhold final credential echoes, including username/password, current and
+  retired cookies and MIME parameters. Strict-TLS and actual CLI/schema proof
+  passed; current transport preflight failed before TLS/HTTP, so no real
+  credentials were submitted and campus compatibility remains unverified.
 - Preserve iHome records without inventing titles. Require the source-shaped
   positive business envelope (`code=20000`, `success=true`) for list/detail;
   negative or unknown envelopes retain safe original evidence instead of
@@ -11,7 +20,8 @@
   acquisition stops on anomalies, duplicate IDs, changing totals or a declared
   terminal page; anomalous/interrupted traversals retain valid records without
   advancing an incremental cursor. A full final page can now be complete.
-- Correct iHome provenance: this CLI does not acquire its bearer token, current
+- Correct legacy iHome token-read provenance: a caller token does not prove
+  acquisition or current lifetime. Current
   idle-window fields are null rather than an asserted schedule, and no reviewed
   modern attachment-download contract or complete attachment inventory is
   claimed. Remove the obsolete local-hour output and clock helpers. Synthetic
