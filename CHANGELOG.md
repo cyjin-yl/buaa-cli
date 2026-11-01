@@ -2,14 +2,18 @@
 
 ## Unreleased
 
+- Preserve exact Git-valid control-bearing source names in department metadata
+  under unchanged recursive object proof. Keep operator retrieval paths strict;
+  one source name outside that input policy no longer degrades the whole tree.
 - Resolve department branches through their commit's tree declaration before
   requesting the immutable recursive tree; keep strict root/subtree proof and
   separate untouched historical originals. Admit only exact root public-account
   member positions in object-shaped commit responses; other credentials and
   non-Commit surfaces remain strict. Preserve originating Surface through
   shared learning/Aerospace degraded inventory, search and fetch evidence.
-  Reproduced regressions, native School 3 inventory/cache/schema proof and the
-  full offline suite passed; other inventories and material rights remain open.
+  Native proof covers all nine fixed inventories and selected MIT maintainer
+  documentation, with independent whole-original/cache/schema checks and the
+  full offline suite. Other material permissions are not granted.
 - Preserve iHome landing-page challenge-control cues independently of the first
   form diagnostic, so an unrelated quirk cannot mask a later OTP/label cue.
   Refuse unreviewed cues without claiming a confirmed CAPTCHA; leave other CAS

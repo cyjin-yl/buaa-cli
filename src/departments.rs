@@ -316,12 +316,16 @@ fn valid_branch(value: &str) -> bool {
 }
 
 fn valid_path(value: &str) -> bool {
+    valid_tree_path(value) && !value.chars().any(char::is_control)
+}
+
+// Source names are exact Git metadata, not operator retrieval-path input.
+fn valid_tree_path(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_PATH
         && !value.starts_with('/')
         && !value.ends_with('/')
-        && !value.contains('\\')
-        && !value.chars().any(char::is_control)
+        && !value.contains(['\0', '\\'])
         && value
             .split('/')
             .all(|component| !component.is_empty() && component != "." && component != "..")
@@ -1000,7 +1004,7 @@ struct TreeEntry {
 }
 
 fn entry_kind(entry: &TreeEntry) -> Result<&'static str, Error> {
-    if !valid_path(&entry.path) || !valid_upstream_sha(&entry.sha) {
+    if !valid_tree_path(&entry.path) || !valid_upstream_sha(&entry.sha) {
         return Err(upstream_parse());
     }
     let kind = match (entry.mode.as_str(), entry.object_type.as_str()) {
@@ -2418,6 +2422,41 @@ mod tests {
             }
             assert!(!fixture.governor_dir().exists(), "{case}");
         }
+    }
+
+    #[test]
+    fn source_git_names_do_not_weaken_operator_path_admission() {
+        let fixture = Fixture::new();
+        env(&fixture, None, false);
+        let selected = selection(3, None, None);
+        // Native Git hash-object verifies this synthetic UTF-8 Git name.
+        let root = "f4ba846622afb24b2c1359094044ac23dd330ba2";
+        let blob = "ce013625030ba8dba906f756967f9e9ca394464a";
+        let path = "note\u{92}.txt";
+        let commit_url = selected.repository.commit_url(&selected.branch).unwrap();
+        let commit = json!({"sha":"1111111111111111111111111111111111111111",
+            "commit":{"tree":{"sha":root}}});
+        let tree_url = selected.repository.tree_url(root).unwrap();
+        let tree = json!({"sha":root,"truncated":false,"tree":[{
+            "path":path,"mode":"100644","type":"blob","sha":blob,"size":6
+        }]});
+        let cache = ResponseCache::open().unwrap();
+        cache.save(&response(&commit_url, &serde_json::to_vec(&commit).unwrap(), "application/json")).unwrap();
+        cache.save(&response(&tree_url, &serde_json::to_vec(&tree).unwrap(), "application/json")).unwrap();
+
+        let output = inventory(r#"{"school":3}"#, false).unwrap();
+        assert_eq!(output["result"], "inventory_snapshot");
+        assert_eq!(output["complete"], true);
+        assert_eq!(output["tree_sha"], root);
+        assert_eq!(output["entries"], json!([{
+            "path":path,"size":6,"kind":"file","branch":"main",
+            "repo":"AccSrd/BUAA_Course_Automation","rights_review_required":true,
+            "blob_sha":blob,"upstream_sha":blob
+        }]));
+        let request = json!({"school":3,"path":path,"tree_sha":root,
+            "blob_sha":blob,"rights_reviewed":true}).to_string();
+        assert_eq!(retrieve(&request, true).unwrap_err().code, "invalid_input");
+        assert!(!fixture.governor_dir().exists());
     }
 
     #[test]

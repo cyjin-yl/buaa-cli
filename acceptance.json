@@ -633,9 +633,8 @@
     {
       "id": "departments",
       "title": "Department material catalogs",
-      "status": "pending",
+      "status": "live-verified",
       "acceptance": "School 3/6/8/21 material inventories and rights-reviewed retrieval.",
-      "blocker": "Only the selected School 3 main inventory has current native online proof. The other eight selected inventories across Schools 6/8/21 and rights-reviewed material retrieval remain unverified; public repository visibility is not blanket material permission.",
       "sources": [
         "https://github.com/AccSrd/BUAA_Course_Automation",
         "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
@@ -670,7 +669,43 @@
           "offline_and_schema": "Actual cache-only replay matched every entry, root, original body digest and timestamp. Standard Draft 2020-12 validation passed for the native input and online/offline output documents.",
           "regressions": "Three branch/tree cases failed before the identity repair. Subsequent independent review and actual failing regressions exposed positional-array account exemption and shared malformed-commit Surface loss; both were repaired. The 52 focused department cases, including eleven public-account boundary variants, passed. Full locked offline suite: 1152 library passed, three existing ignored workers, 107 integration/CLI passed.",
           "review": "Two revised independent read-only source reviews found zero remaining findings. This is not trusted CI, exact-head merge approval or source-wide rights proof.",
-          "scope": "Selected School 3 main metadata inventory only. No material retrieval, account credentials, campus requests or campus mutations. Remaining selected inventories and material rights stay open."
+          "scope": "This earlier diagnostic observation covers only School 3 main. The all-selected-source observation below supersedes its interim remaining-inventory scope. No account credentials, campus requests or campus mutations were involved."
+        },
+        "all_selected_sources_observation_2026_11_02": {
+          "inventory_command": "buaa departments inventory --online, with the explicit school and, where required, repo/branch selector on stdin",
+          "pinned_inventory_count": 9,
+          "snapshot_entry_total_not_unique_files_across_branches": 8290,
+          "original_inventory_http_status": 200,
+          "inventory_observations": [
+            {"school": 3, "repo": "AccSrd/BUAA_Course_Automation", "branch": "main", "entries": 3283, "tree_sha": "3c59d746a206a14aa06ab21bf85953a1eca0359c"},
+            {"school": 6, "repo": "TheBloodthirster/BUAA_Course_Sharing", "branch": "master", "entries": 1991, "tree_sha": "a6ad073516ea9a5bda16ed88b59cc52201a3aa03"},
+            {"school": 8, "repo": "HoBeedzc/CreditCount", "branch": "main", "entries": 25, "tree_sha": "848d47ce16f410ea504b5052c2339d73c7eeb2e6"},
+            {"school": 8, "repo": "grandchicken/1708SEM_ISIM", "branch": "master", "entries": 1999, "tree_sha": "3d0068744664a182a4b98c423ed13743308519be"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "main", "entries": 1, "tree_sha": "c1ff8c4728db5e775a1bb32ab7792bef43f1e019"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "second-autumn", "entries": 227, "tree_sha": "036855ae8b07974196c7b356fa977790316f38b1"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "second-spring", "entries": 213, "tree_sha": "580bccf181c9654eb8fcb86a55211812c6f8aed5"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "third-autumn", "entries": 194, "tree_sha": "fbae921a2f14058676286a7d0330b97a368fdc57"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "third-spring", "entries": 357, "tree_sha": "d71504365c488d5db4cdb7a3b3866693f1cbdd4b"}
+          ],
+          "whole_inventory_proof": "Final actual cache-only CLI reads cover all nine selections. Independent Python reconstruction verifies every advertised directory and native git hash-object agrees on every root. Every normalized entry matches the complete original-derived sequence; original body digests/timestamps and whole private cache-file bytes remain unchanged. Same-UID regular single-link 0600 files under 0700 directories and standard input/output schemas were checked. This complete readback matrix performs no new network requests.",
+          "source_name_correction": "The original School 8 SEM HTTP200 tree has 1999 entries and 308 valid directory/root objects. One exact Git name contains U+0088/U+0089. Source metadata admission now preserves it under the unchanged verifier rather than applying the operator control-character rule. The same retained original yields the complete exact inventory without refetching, rewriting or omitting entries; operator control-bearing retrieval still refuses before cache or GET.",
+          "rights_reviewed_retrieval": {
+            "command": "buaa departments retrieve --online with school:6, selected path, exact tree_sha/blob_sha and rights_reviewed:true on stdin",
+            "repo": "TheBloodthirster/BUAA_Course_Sharing",
+            "tree_sha": "a6ad073516ea9a5bda16ed88b59cc52201a3aa03",
+            "license_source": "https://api.github.com/repos/TheBloodthirster/BUAA_Course_Sharing/git/blobs/dc06b50555a100a88417f07d1dd4f0192be3ebc3",
+            "license_review": "The exact MIT legal notice, Copyright (c) 2023 TheBloodthirster, was independently read and Git-blob-verified before selecting the original notice and associated maintainer README documentation. The copyright/permission notice remains with the originals. This does not license third-party course, exam or answer-bank materials.",
+            "selected_documents": [
+              {"path": "LICENSE", "bytes": 1073, "blob_sha": "dc06b50555a100a88417f07d1dd4f0192be3ebc3", "sha256": "f9c3c37207130bd4bd24312df7789ff0b74814d5c937f431ba9236ce4a3ed38c"},
+              {"path": "README.md", "bytes": 4317, "blob_sha": "a4468d77b7c379f86e43f0c01e17c6d3df67db9a", "sha256": "adc0104b26dc0d5fbab0e361d2830d01a8c0fcc5de10e8316d1a932b1434010d"}
+            ],
+            "native_result": "raw_snapshot with material_admitted:true",
+            "byte_proof": "Independent complete-byte length, Git-blob and SHA-256 checks match the exact immutable tree/path/blob binding. LICENSE equals the separately observed GitHub JSON blob in full. Actual offline CLI replay returns identical bytes and original body digests/timestamps; native and offline outputs validate against the published schema.",
+            "native_refusals": "rights_reviewed:false returns authorization_required/exit4/stdout0; an entirely synthetic control-bearing operator path returns invalid_input/exit2/stdout0. Source metadata completeness is not material permission."
+          },
+          "offline_regression": "Corrected focused suite: 53 department cases passed. Complete locked offline suite: 1153 library passed, three existing ignored workers, 107 integration/CLI passed. Two intermediate synthetic negative attempts mixed an unrelated shared blob with the fixed native-Git root; retained failures are excluded from valid single-factor before-proof. Only fixture input was corrected; the expected root and production verifier were not repinned. The real original-source before/after establishes the control-name repair.",
+          "independent_review": "Two corrected-source v2 read-only reviews found zero remaining findings across source integrity and typed operator boundaries. This is not trusted CI or exact-head merge approval.",
+          "scope": "Nine fixed school/repository/branch inventories and only the selected MIT maintainer legal notice/documentation. Other material rights are not granted; control-bearing operator paths remain unsupported. No campus requests, account credentials, campus mutation, question/answer-bank content or course binaries were retrieved."
         }
       }
     },
