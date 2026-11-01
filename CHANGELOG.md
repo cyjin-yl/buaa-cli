@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Review every followed iHome authentication redirect body before another hop
+  or terminal token consumption. Refuse nonempty bodies without reviewed HTML
+  MIME; preserve empty/ASCII-whitespace redirects, header/deferral precedence
+  and other CAS profiles. Strict-TLS regression and six native synthetic
+  scenarios cover challenge stops, unconfirmed MIME and one-read controls.
+- Accept Boya ciphertext wrapped in a JSON string as well as raw base64.
+  Unwrap only the quoted form into zeroizing storage; retain original wire
+  bytes, length and digest for safe fallback, with existing privacy checks.
+  Offline/native proof does not establish current campus compatibility.
 - Add `ihome session [--online]`: one explicitly authorized, in-memory CAS
   login followed by one list page or detail under the existing Authentication
   lease. Validate typed intent and read before I/O; narrowly upgrade only the

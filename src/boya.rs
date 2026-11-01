@@ -167,7 +167,15 @@ fn payload(req:&ReadRequest)->Result<(&'static str,Value),Error>{Ok(match req {
     ReadRequest::Course(p)=>("queryCourseById",json!(p)),ReadRequest::Chosen(p)=>("queryChosenCourse",json!(p)),ReadRequest::Selectable=>("querySelectableCourse",json!({})),ReadRequest::Fore=>("queryForeCourse",json!({})),ReadRequest::Config=>("getAllConfig",json!({})),ReadRequest::Statistics=>("queryStatisticByUserId",json!({})),})}
 fn decode_response_with_fields(bytes:&[u8],content_type:Option<&str>,key:&[u8;16])->(Value,SourceFields){
     if crate::html::assess_challenge_body(bytes,content_type,true)!=crate::html::ChallengeAssessment::Clear{return (fallback(bytes,content_type,"response_safety_not_clear"),SourceFields::default());}
-    let decoded=STANDARD.decode(bytes).ok().map(Zeroizing::new).and_then(|b|aes(&b,key,false).ok()).and_then(|b|serde_json::from_slice::<PrivateValue>(&b).ok());
+    // The reference client accepts a JSON string or raw base64. Keep the
+    // original bytes for evidence; only the ciphertext spelling is unwrapped.
+    let quoted = if bytes.trim_ascii_start().first() == Some(&b'"') {
+        serde_json::from_slice::<String>(bytes).ok().map(Zeroizing::new)
+    } else {
+        None
+    };
+    let ciphertext = quoted.as_ref().map_or(bytes, |text| text.as_bytes());
+    let decoded=STANDARD.decode(ciphertext).ok().map(Zeroizing::new).and_then(|b|aes(&b,key,false).ok()).and_then(|b|serde_json::from_slice::<PrivateValue>(&b).ok());
     if decoded.as_ref().is_some_and(|value|sensitive_value(value)){return (withheld_fallback(bytes,content_type),SourceFields::default());}
     match decoded {
         Some(v) if v.get("status").and_then(Value::as_str)==Some("0")=>{
@@ -436,6 +444,41 @@ mod numeric_admission_proof {
         }
     }
     #[test]fn aes_known_block_and_padding(){let key=[0u8;16];let encrypted=aes(&[0u8;16],&key,true).unwrap();assert_eq!(&encrypted[..16],&[0x66,0xe9,0x4b,0xd4,0xef,0x8a,0x2c,0x3b,0x88,0x4c,0xfa,0x59,0xca,0x34,0x2b,0x2e]);assert_eq!(&*aes(&encrypted,&key,false).unwrap(),&vec![0u8;16]);}
+    #[test]
+    fn quoted_ciphertext_preserves_the_decrypted_source_data() {
+        let key = [0u8; 16];
+        let data = json!({"name":"synthetic course","members":[17,23],"enabled":true});
+        let plain = serde_json::to_vec(&json!({"status":"0","data":data})).unwrap();
+        let cipher = STANDARD.encode(aes(&plain, &key, true).unwrap().as_slice());
+        let wire = format!(" \n{}\r\n", serde_json::to_string(&cipher).unwrap());
+        assert_eq!(decode_response(wire.as_bytes(), Some("application/json"), &key),
+            json!({"result":"success","data":data}));
+    }
+
+    #[test]
+    fn quoted_ciphertext_failure_retains_the_original_wire_bytes() {
+        let wire = b" \n\"ordinary invalid ciphertext\"\r\n";
+        let output = decode_response(wire, Some("application/json"), &[0u8; 16]);
+        assert_eq!(output["result"], "fallback");
+        assert_eq!(output["fallback_reason"], "base64_aes_json_contract_unrecognized");
+        assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(wire));
+        assert_eq!(output["raw_evidence"]["byte_length"], wire.len());
+        assert_eq!(output["raw_evidence"]["sha256"], format!("{:x}", Sha256::digest(wire)));
+    }
+
+    #[test]
+    fn quoted_ciphertext_with_sensitive_plaintext_withholds_the_original() {
+        let key = [0u8; 16];
+        let plain = br#"{"status":"0","data":{"access_token":"synthetic-private-material"}}"#;
+        let cipher = STANDARD.encode(aes(plain, &key, true).unwrap().as_slice());
+        let wire = serde_json::to_vec(&cipher).unwrap();
+        let output = decode_response(&wire, Some("application/json"), &key);
+        assert_eq!(output["fallback_reason"], "sensitive_response_withheld");
+        assert_eq!(output["raw_evidence"]["data"], Value::Null);
+        assert_eq!(output["raw_evidence"]["raw_withheld_reason"], "credential_echo");
+        assert!(!output.to_string().contains("synthetic-private-material"));
+    }
+
     #[test]fn status_error(){let key=[0u8;16];let wire=STANDARD.encode(aes(br#"{"status":"9","errmsg":"synthetic"}"#,&key,true).unwrap().as_slice());assert_eq!(decode_response(wire.as_bytes(),Some("text/plain"),&key)["result"],"upstream_error");}
     #[test]fn page_contract(){assert!(parse_page(&json!({"content":[],"totalElements":0,"totalPages":0,"size":20,"number":0})).is_ok());assert!(parse_page(&json!({"content":[]})).is_err());}
     #[test]fn unknown_writes_never_offer_confirmation(){assert_eq!(preview_write(&WriteIntent{operation:WriteOperation::Select,course_id:"fixture".into(),owner_present:true})["confirmation_available"],false);}

@@ -3706,7 +3706,17 @@ fn send(
                 // attempt first: the token is accepted only when the
                 // redirect carried no Retry-After.
                 if let Some(credential) = terminal_service_credential(jar.service, &next)? {
+                    // The token is accepted only after this redirect's own
+                    // body has been admitted: a challenge, a credential
+                    // rejection notice or an unreviewed nonempty body can
+                    // ride the same response and must not be discarded by
+                    // the token alone.
                     if retry_after.is_none() {
+                        ihome_redirect_body_admission(
+                            content_type.as_deref(),
+                            &body,
+                            "The terminal handoff page could not be read as a reviewed document; no retry was performed.",
+                        )?;
                         jar.terminal_credential = Some(credential);
                     }
                     return Ok(Hop {
@@ -3757,6 +3767,19 @@ fn send(
             }
             if !allowed(&next, jar.service) {
                 return Err(invalid());
+            }
+            if jar.service == CasService::Ihome {
+                // This redirect's body is discarded when the chain moves on:
+                // admit it before following so a challenge, a rejection
+                // notice or an unreviewed nonempty body is not lost. Every
+                // earlier refusal (header challenge, missing or disallowed
+                // target, cooldown, method-preserving credential POST) keeps
+                // precedence over this review.
+                ihome_redirect_body_admission(
+                    content_type.as_deref(),
+                    &body,
+                    "The redirect handoff page could not be read as a reviewed document; no retry was performed.",
+                )?;
             }
             had_redirect = true;
             url = next;
@@ -4084,11 +4107,17 @@ enum LandingVerdict {
 /// they do not refuse a page that is not a login page.
 fn landing_verdict(hop: &Hop) -> LandingVerdict {
     match login_content_type_label(hop.content_type.as_deref()) {
-        Some("text/html") => {}
-        Some("application/xhtml+xml") => return LandingVerdict::Unreadable,
-        _ => return LandingVerdict::Clear,
+        Some("text/html") => landing_document_verdict(&hop.body),
+        Some("application/xhtml+xml") => LandingVerdict::Unreadable,
+        _ => LandingVerdict::Clear,
     }
-    let fields = match login_fields(&hop.body, LoginSourceScope::FinalResponse) {
+}
+
+/// Classify a body that was already admitted as HTML. The challenge,
+/// rejection and challenge-wording rules are shared by final landings and
+/// iHome redirect bodies, so one admitted body is parsed exactly once.
+fn landing_document_verdict(body: &str) -> LandingVerdict {
+    let fields = match login_fields(body, LoginSourceScope::FinalResponse) {
         Ok(fields) => fields,
         Err(_) => return LandingVerdict::Unreadable,
     };
@@ -4112,6 +4141,36 @@ fn landing_verdict(hop: &Hop) -> LandingVerdict {
         return LandingVerdict::Challenge;
     }
     LandingVerdict::Clear
+}
+
+/// Admit one iHome authentication redirect body that is about to be
+/// discarded or followed. An empty or whitespace-only body is the normal
+/// redirect answer. A nonempty body must be a reviewed HTML document: a
+/// missing, malformed or unreviewed MIME label, including HTML-shaped
+/// markup labeled text/plain, is uncertainty and refuses instead of
+/// falling through a default clear. `unreadable` carries the caller's
+/// site-specific refusal wording.
+fn ihome_redirect_body_admission(
+    content_type: Option<&str>,
+    body: &str,
+    unreadable: &'static str,
+) -> Result<(), Error> {
+    if body.trim().is_empty() {
+        return Ok(());
+    }
+    let verdict = match login_content_type_label(content_type) {
+        Some("text/html") => landing_document_verdict(body),
+        _ => LandingVerdict::Unreadable,
+    };
+    match verdict {
+        LandingVerdict::Clear => Ok(()),
+        LandingVerdict::Challenge => Err(challenge_required()),
+        LandingVerdict::Rejected => Err(Error::new(
+            "auth_latched",
+            "Service authentication was rejected by the sign-on service; no retry was performed.",
+        )),
+        LandingVerdict::Unreadable => Err(admission_failed(unreadable)),
+    }
 }
 
 /// An explicit reference uses the first document element with that ID, not
@@ -6205,23 +6264,6 @@ pub(crate) fn authenticate_service(
         CasService::Library | CasService::Ihome => {
             if jar.terminal_credential.is_none() {
                 return Err(admission_failed("The relying party did not provide a confirmed credential handoff; no retry was performed."));
-            }
-            if service == CasService::Ihome && !landed.body.trim().is_empty() {
-                // A terminal redirect with a nonempty body still carries the
-                // sign-on's own classification: a challenge or rejection page
-                // never proves login by token alone, and an unreadable page
-                // keeps the source uncertainty. An empty redirect body
-                // remains the normal terminal answer.
-                match landing_verdict(&landed) {
-                    LandingVerdict::Clear => {}
-                    LandingVerdict::Challenge => return Err(challenge_required()),
-                    LandingVerdict::Rejected => {
-                        return Err(Error::new("auth_latched", "Service authentication was rejected by the sign-on service; no retry was performed."));
-                    }
-                    LandingVerdict::Unreadable => {
-                        return Err(admission_failed("The terminal handoff page could not be read as a reviewed document; no retry was performed."));
-                    }
-                }
             }
         }
         CasService::SmartClassrooms => {

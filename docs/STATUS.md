@@ -1,5 +1,42 @@
 ## Development status
 
+## 2026-11-02: authentication-body admission and Boya ciphertext envelopes
+
+iHome authentication now reviews each followed redirect body before discarding
+it, including the initial GET and credential POST responses. A nonempty body
+requires reviewed HTML MIME and successful document admission before another
+hop or terminal token consumption. Missing, unknown or malformed MIME refuses
+as `authentication_unconfirmed`, not as a fabricated positive challenge.
+Empty and ASCII-whitespace-only bodies remain valid without HTML metadata.
+Header challenges, Retry-After and credential replay refusals retain precedence;
+other CAS profiles retain their existing landing-body behavior. Authentication
+bodies are never exported, and each admitted HTML body is parsed only once.
+
+Four new regression cases ran against the previous production code: three
+consumer-visible refusals failed and the empty/whitespace control passed.
+After repair, all four passed. A separate non-test native consumer exercised
+six strict-TLS loopback scenarios: initial/POST redirect challenges, missing and
+unknown terminal MIME, whitespace with malformed MIME, and reviewed HTML on
+both redirects. The four refusals made zero business reads; both positive
+controls made exactly one. All six withheld credentials and never fetched the
+terminal credential URL. These are synthetic requests, with zero campus
+requests. The temporary source and Cargo entry were removed; the pre-existing
+Cargo manifest was preserved byte-for-byte.
+
+Boya now accepts either raw base64 ciphertext or a JSON string containing it,
+matching the pinned MIT public client's
+[`LocalBykcApi.kt` wrapper](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/local/LocalBykcApi.kt#L478-L482).
+Only a quoted JSON string is unwrapped, into zeroizing storage; ordinary raw
+ciphertext remains borrowed. Original-response fallback bytes, length and
+SHA-256 still bind the original wire body, including quotes and whitespace,
+not the decoded wrapper. Existing decrypted-field and held-credential privacy
+checks remain in force. Two quoted-response regressions failed before repair
+while the raw-wire control passed. The repaired 25 Boya library cases and two
+focused CLI cases passed. A separate native consumer confirmed raw and quoted
+source preservation, original-wire fallback and sensitive ciphertext
+withholding. This is compatibility with a historical public client, not a
+current campus response or completed login contract; Boya remains pending.
+
 ## 2026-11-01: bounded iHome session, offline proof only
 
 `ihome session [--online]` implements one explicit CAS login and one selected
@@ -36,11 +73,11 @@ exhaustion refuses before another request. Fallback string screening combines
 valid surrogate pairs without changing loose-escape or unpaired-surrogate
 behavior. Neither fix enables cookie export, adoption or persistence.
 
-The expanded focused suite passed 84 cases, including strict-TLS loopback
+The expanded focused suite passed 88 cases, including strict-TLS loopback
 login/read, one-POST/one-read/no-terminal-fetch boundaries, challenge/deferral/
 redirect refusals and credential echoes. A separate guard case exercised
 complete-header screening, deduplication and both history bounds. The complete
-locked offline suite passed 1141 library tests (three existing ignored workers)
+locked offline suite passed 1148 library tests (three existing ignored workers)
 and all 107 integration/CLI tests, including the 14 iHome CLI boundary cases.
 
 The independently supplied session/run output schemas also had unresolved

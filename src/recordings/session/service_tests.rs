@@ -3039,3 +3039,230 @@ fn ihome_review_regression_withholds_a_mime_that_reflects_the_transmitted_cookie
     assert_eq!(harness.ihome.observed().len(), 2);
     assert_terminal_never_fetched(&harness);
 }
+
+const IHOME_CHALLENGE_REVIEW_BODY: &str =
+    "<html><body><form><label>验证码<input name=\"captcha\"></label></form></body></html>";
+
+#[test]
+fn ihome_challenge_review_regression_redirect_body_challenge_stops_before_the_callback() {
+    let harness = CasHarness::with_service_responders(
+        |request| {
+            if request.method == "POST" {
+                return http_response(
+                    "302 Found",
+                    &[
+                        ("Location", IHOME_CALLBACK_TICKET),
+                        ("Content-Type", "text/html"),
+                    ],
+                    IHOME_CHALLENGE_REVIEW_BODY,
+                );
+            }
+            http_response(
+                "200 OK",
+                &[
+                    ("Content-Type", "text/html"),
+                    (
+                        "Set-Cookie",
+                        "CASTGC=host-only-credential; Path=/; Secure; HttpOnly",
+                    ),
+                ],
+                &service_login_page(CasService::Ihome),
+            )
+        },
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+    );
+    let (result, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-challenge-review-redirect-body",
+    );
+    assert!(
+        result.is_err(),
+        "a challenge in the redirect body must stop the attempt before the callback"
+    );
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.code,
+        "challenge_requires_human",
+        "a challenge in the redirect body must stop the attempt"
+    );
+    assert_one_credential_post(&harness, CasService::Ihome);
+    assert!(
+        harness.ihome.observed().is_empty(),
+        "the challenged redirect body must stop the flow before the callback"
+    );
+    assert!(harness.app.observed().is_empty());
+    assert!(harness.booking.observed().is_empty());
+    for secret in [SESSION_USERNAME, SESSION_PASSWORD, IHOME_TOKEN] {
+        assert!(
+            !error.message.contains(secret),
+            "{secret} leaked into the refusal"
+        );
+    }
+}
+
+#[test]
+fn ihome_challenge_review_regression_initial_get_redirect_body_challenge_stops_the_chain() {
+    let harness = CasHarness::with_service_responders(
+        |request| {
+            if request.target.contains("step=challenged") {
+                return http_response(
+                    "200 OK",
+                    &[
+                        ("Content-Type", "text/html"),
+                        (
+                            "Set-Cookie",
+                            "CASTGC=host-only-credential; Path=/; Secure; HttpOnly",
+                        ),
+                    ],
+                    &service_login_page(CasService::Ihome),
+                );
+            }
+            http_response(
+                "302 Found",
+                &[
+                    ("Location", "https://sso.buaa.edu.cn/login?step=challenged"),
+                    ("Content-Type", "text/html"),
+                ],
+                IHOME_CHALLENGE_REVIEW_BODY,
+            )
+        },
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+    );
+    let (result, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-challenge-review-initial-get",
+    );
+    assert!(
+        result.is_err(),
+        "a challenge in a redirect body must stop the chain"
+    );
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.code,
+        "challenge_requires_human",
+        "a challenge in a redirect body must stop the chain"
+    );
+    let sign_on = harness.sso.observed();
+    assert_eq!(
+        sign_on.len(),
+        1,
+        "only the challenged first hop was sent, the redirect was never followed"
+    );
+    assert_eq!(sign_on[0].method, "GET");
+    assert!(
+        harness.ihome.observed().is_empty(),
+        "no callback and no business read may follow a challenged redirect"
+    );
+    assert!(harness.app.observed().is_empty());
+    assert!(harness.booking.observed().is_empty());
+}
+
+#[test]
+fn ihome_challenge_review_regression_unreviewed_terminal_mime_refuses_without_a_business_read() {
+    for (name, content_type) in [
+        ("absent-mime", None),
+        ("malformed-mime", Some("text/html/../x")),
+        ("unknown-mime", Some("application/x-unknown-review-type")),
+        ("html-under-plain-text-mime", Some("text/plain")),
+    ] {
+        let harness = CasHarness::with_service_responders(
+            sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            move |request| {
+                let path = request.target.split('?').next().unwrap_or("");
+                if path == "/api/authLogin" {
+                    let mut headers: Vec<(&str, &str)> = vec![("Location", IHOME_TERMINAL)];
+                    if let Some(mime) = content_type {
+                        headers.push(("Content-Type", mime));
+                    }
+                    return http_response("302 Found", &headers, IHOME_CHALLENGE_REVIEW_BODY);
+                }
+                if path == "/api/appeal" {
+                    return http_response(
+                        "200 OK",
+                        &[("Content-Type", "application/json")],
+                        IHOME_LIST_BODY,
+                    );
+                }
+                http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+            },
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            &format!("ihome-challenge-review-mime-{name}"),
+        );
+        assert!(
+            result.is_err(),
+            "{name}: an unreviewed terminal MIME must not be promoted to a clear landing"
+        );
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.code,
+            "authentication_unconfirmed",
+            "{name}: an unreviewed terminal MIME must refuse the token as uncertainty"
+        );
+        let platform = harness.ihome.observed();
+        assert_eq!(platform.len(), 1, "{name}: no business read may follow");
+        assert_eq!(platform[0].method, "GET");
+        assert_terminal_never_fetched(&harness);
+        assert!(harness.app.observed().is_empty(), "{name}");
+        assert!(harness.booking.observed().is_empty(), "{name}");
+        for secret in [SESSION_USERNAME, SESSION_PASSWORD, IHOME_TOKEN] {
+            assert!(
+                !error.message.contains(secret),
+                "{name}: {secret} leaked into the refusal"
+            );
+        }
+    }
+}
+
+#[test]
+fn ihome_challenge_review_regression_empty_or_whitespace_terminal_body_stays_admissible() {
+    for (name, body, content_type) in [
+        ("empty-unknown-mime", "", Some("application/x-unknown-review-type")),
+        ("whitespace-missing-mime", " \t\r\n\x0c", None),
+        ("whitespace-malformed-mime", " \t\r\n", Some("text/html/../x")),
+    ] {
+        let harness = CasHarness::with_service_responders(
+            sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            move |request| {
+                let path = request.target.split('?').next().unwrap_or("");
+                if path == "/api/authLogin" {
+                    let mut headers = vec![("Location", IHOME_TERMINAL)];
+                    if let Some(mime) = content_type {
+                        headers.push(("Content-Type", mime));
+                    }
+                    return http_response("302 Found", &headers, body);
+                }
+                if path == "/api/appeal" {
+                    return http_response(
+                        "200 OK", &[("Content-Type", "application/json")], IHOME_LIST_BODY,
+                    );
+                }
+                http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+            },
+        );
+        let (result, _) = run_ihome_session(
+            &harness,
+            &ihome_session_input(ihome_list_read()),
+            &format!("ihome-empty-terminal-{name}"),
+        );
+        let output = result.expect(name);
+        assert_eq!(output["result"], "entries", "{name}");
+        assert_eq!(output["credential_source"], "redirect_fragment_token", "{name}");
+        assert_eq!(output["entry_count"], 1, "{name}");
+        let platform = harness.ihome.observed();
+        assert_eq!(platform.len(), 2, "{name}: one callback and one business read");
+        assert_terminal_never_fetched(&harness);
+    }
+}
