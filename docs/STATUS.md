@@ -1,5 +1,44 @@
 ## Development status
 
+## 2026-11-02: department commit-to-tree identity and public account metadata
+
+The actual School 3 branch-tree response contained 3,283 entries but named the
+branch commit `8da8dd8fa95bfef4eabed58e1d38b14feb6549bb`, not its root tree.
+Independent reconstruction and native Git agreed on root
+`3c59d746a206a14aa06ab21bf85953a1eca0359c`; all 420 nonroot directory hashes
+already verified. Departments now uses the existing learning commit resolver
+and requests the exact immutable recursive tree. Root/subtree verification and
+tree/blob/path/size/rights retrieval gates remain strict. Commit, immutable
+tree and historical branch originals stay separate; the historical original
+body and timestamp were independently checked unchanged.
+
+Commit-only privacy admission permits the two exact unescaped root
+`author.login` and `committer.login` member-name positions after object-root
+and bounded ASCII account-shape checks. Other positions, credential members,
+escaped names, duplicate or unborrowable account fields and non-Commit
+surfaces retain strict original-byte screening. A positional-array exemption
+was reproduced and closed before delivery. Shared learning evidence now keeps
+its originating Surface through failed normalization; inventory, search and
+fetch, including Aerospace, no longer misclassify commit originals as Tree.
+Safe malformed commits retain their exact original without selecting a tree
+or returning material bytes.
+
+After repair, the actual `buaa departments inventory --online` with
+`{"school":3}` returned HTTP 200, `inventory_snapshot`, the independently
+verified root and all 3,283 entries with `complete=true`. Every normalized
+entry matched the independent original-derived sequence. Cache-only replay
+returned the same entries, digest and original timestamp. The current native
+input and both outputs passed standard Draft 2020-12 JSON Schema validation.
+The 52 focused department cases and the complete locked offline suite passed:
+1,152 library cases, three existing ignored workers and 107 integration/CLI
+cases. Two revised independent source reviews found no remaining findings.
+These are local development checks, not trusted CI or exact-head merge approval.
+
+Only the selected School 3 main inventory is online-verified here. The other
+eight selected inventories across Schools 6/8/21 and rights-reviewed material
+retrieval remain unverified by this observation; departments remains pending.
+No material, account credential, campus request or campus mutation was involved.
+
 ## 2026-11-02: authentication-body admission and Boya ciphertext envelopes
 
 iHome authentication now reviews each followed redirect body before discarding

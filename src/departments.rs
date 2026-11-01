@@ -121,6 +121,18 @@ impl Repository {
         format!("https://github.com/{}", self.full_name)
     }
 
+    fn commit_url(&self, reference: &str) -> Result<Url, Error> {
+        let mut url = Url::parse("https://api.github.com/").map_err(|_| invalid_url())?;
+        url.path_segments_mut()
+            .map_err(|_| invalid_url())?
+            .push("repos")
+            .push(self.owner)
+            .push(self.name)
+            .push("commits")
+            .push(reference);
+        Ok(url)
+    }
+
     fn tree_url(&self, reference: &str) -> Result<Url, Error> {
         let mut url = Url::parse("https://api.github.com/").map_err(|_| invalid_url())?;
         url.path_segments_mut()
@@ -163,10 +175,6 @@ impl SourceSelection {
 
     fn repository_url(&self) -> String {
         self.repository.repository_url()
-    }
-
-    fn tree_url(&self) -> Result<Url, Error> {
-        self.repository.tree_url(&self.branch)
     }
 }
 
@@ -420,6 +428,7 @@ fn parse_retrieval_input(input: &str) -> Result<RetrievalRequest, Error> {
 
 #[derive(Clone, Copy)]
 enum Surface {
+    Commit,
     Tree,
     Blob,
 }
@@ -427,14 +436,14 @@ enum Surface {
 impl Surface {
     fn body_limit(self) -> usize {
         match self {
-            Self::Tree => MAX_TREE_BODY,
+            Self::Commit | Self::Tree => MAX_TREE_BODY,
             Self::Blob => MAX_RAW_BODY,
         }
     }
 
     fn accept(self) -> &'static str {
         match self {
-            Self::Tree => "application/vnd.github+json",
+            Self::Commit | Self::Tree => "application/vnd.github+json",
             Self::Blob => "application/vnd.github.raw+json",
         }
     }
@@ -1059,6 +1068,12 @@ fn screen_private_response(response: &Response) -> Result<(), Error> {
 
 fn screen_api_response(surface: Surface, response: &Response) -> Result<(), Error> {
     match surface {
+        Surface::Commit => {
+            if crate::welearn::learning::private_commit_evidence(&response.body, content_type(response).as_deref()) {
+                return Err(Error::new("sensitive_response", "department source contains credential-shaped evidence; raw response withheld"));
+            }
+            Ok(())
+        }
         Surface::Tree => screen_private_response(response),
         // Verified raw learning files are not API envelopes. Only their
         // rejected fallback is screened, before any output or cache write.
@@ -1083,12 +1098,25 @@ fn inventory_output(
     }
     let parsed: Result<_, Error> = (|| {
         let envelope = parse_tree_response(response)?;
+        if expected_url.path_segments().and_then(|mut segments| segments.next_back())
+            != Some(envelope.sha.as_str())
+        {
+            return Err(upstream_parse());
+        }
         let mut entries = Vec::with_capacity(envelope.tree.len());
         for entry in envelope.tree {
             entries.push(normalize_entry(selection, entry)?);
         }
         Ok((envelope.sha, envelope.truncated, entries))
     })();
+    Ok(inventory_result(selection, response, parsed))
+}
+
+fn inventory_result(
+    selection: &SourceSelection,
+    response: &Response,
+    parsed: Result<(String, bool, Vec<Value>), Error>,
+) -> Value {
     let common = json!({
         "schema_version": 1,
         "type": "department_material_inventory",
@@ -1118,7 +1146,7 @@ fn inventory_output(
             output["raw_response_base64"] = if truncated {
                 json!(STANDARD.encode(&response.body))
             } else { Value::Null };
-            Ok(output)
+            output
         }
         Err(error) => {
             let mut output = common;
@@ -1129,7 +1157,7 @@ fn inventory_output(
             output["entries"] = json!([]);
             output["fallback_reason"] = json!(error.code);
             output["raw_response_base64"] = json!(STANDARD.encode(&response.body));
-            Ok(output)
+            output
         }
     }
 }
@@ -1310,12 +1338,22 @@ fn retrieval_output(
     Ok(output)
 }
 
-/// Return one recursive GitHub tree snapshot. Offline is the default; `online`
-/// only permits a governed fetch on a cache miss and never triggers a retry.
+/// Resolve the branch commit, then return its exact recursive tree snapshot.
+/// Offline is the default; `online` permits these two sequential cache-miss
+/// reads and never triggers a retry. Preserve each admitted original separately.
 pub fn inventory(input: &str, online: bool) -> Result<Value, Error> {
     let selection = parse_inventory_input(input)?;
-    let url = selection.tree_url()?;
+    let commit_url = selection.repository.commit_url(&selection.branch)?;
     let cache = ResponseCache::open()?;
+    let resolved = cache.get(&commit_url, Surface::Commit, online, |response| {
+        Ok(crate::welearn::learning::resolved_tree_sha(response, &commit_url)
+            .map_err(|error| inventory_result(&selection, response, Err(error))))
+    })?;
+    let tree_sha = match resolved {
+        Ok(tree_sha) => tree_sha,
+        Err(output) => return Ok(output),
+    };
+    let url = selection.repository.tree_url(&tree_sha)?;
     cache.get(&url, Surface::Tree, online, |response| {
         inventory_output(&selection, &url, response)
     })
@@ -1434,7 +1472,7 @@ pub fn schema() -> Value {
                 "type":"object","additionalProperties":false,"required":["school"],
                 "properties":source_input.clone()
             },
-            "options":{"--online":"Permit one governed GitHub tree request on a cache miss; no automatic retry. Credential-bearing API/fallback bodies and Set-Cookie responses are withheld without new cache entries. Pre-cookie-admission cache records are retained but refused, not automatically refetched."},
+            "options":{"--online":"Permit up to two sequential governed GitHub requests on cache misses: resolve the branch commit, then read its exact immutable tree. An unresolved commit stops before the tree request; no automatic retry. Credential-bearing API/fallback bodies and Set-Cookie responses are withheld without new cache entries. Pre-cookie-admission cache records are retained but refused, not automatically refetched."},
             "output":{
                 "type":"object","additionalProperties":false,
                 "required":["schema_version","type","result","school","repo","repository_url","branch","community_source","tree_sha","truncated","complete","next_cursor","entries","fallback_reason","raw_response_base64","retrieval"],
@@ -1761,12 +1799,14 @@ mod tests {
         );
         assert!(select_source(21, None, Some("master")).is_err());
         assert!(select_source(4, None, None).is_err());
+        assert!(select_source(8, Some("HoBeedzc/CreditCount"), Some("a//b")).is_err());
+        assert!(select_source(8, Some("HoBeedzc/CreditCount"), Some("/x")).is_err());
     }
 
     #[test]
     fn inventory_normalizes_entries_and_marks_truncation_without_a_cursor() {
         let selected = selection(3, None, None);
-        let url = selected.tree_url().unwrap();
+        let url = selected.repository.tree_url("0123456789abcdef0123456789abcdef01234567").unwrap();
         let body = br#"{
             "sha":"0123456789abcdef0123456789abcdef01234567",
             "url":"https://api.github.com/ignored",
@@ -1803,7 +1843,7 @@ mod tests {
     #[test]
     fn malformed_inventory_degrades_with_original_bytes_and_reason() {
         let selected = selection(6, None, None);
-        let url = selected.tree_url().unwrap();
+        let url = selected.repository.tree_url(TREE_SHA).unwrap();
         let body = br#"{"sha":"not-a-digest","tree":[],"truncated":false}"#;
         let original = response(&url, body, "application/json");
         let output = inventory_output(&selected, &url, &original).unwrap();
@@ -1825,7 +1865,7 @@ mod tests {
     #[test]
     fn duplicate_inventory_paths_cannot_be_silently_overwritten() {
         let selected = selection(3, None, None);
-        let url = selected.tree_url().unwrap();
+        let url = selected.repository.tree_url(TREE_SHA).unwrap();
         let body = br#"{"sha":"0123456789abcdef0123456789abcdef01234567","truncated":false,"tree":[
             {"path":"same","mode":"100644","type":"blob","sha":"1123456789abcdef0123456789abcdef01234567","size":1},
             {"path":"same","mode":"100644","type":"blob","sha":"2123456789abcdef0123456789abcdef01234567","size":2}
@@ -1888,7 +1928,7 @@ mod tests {
     #[test]
     fn complete_inventory_rejects_unbound_root_subtree_mode_and_path() {
         let selected = selection(3, None, None);
-        let url = selected.tree_url().unwrap();
+        let url = selected.repository.tree_url(TREE_SHA).unwrap();
         let original: Value = serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
         let mut variants = Vec::new();
         let mut root = original.clone();
@@ -2126,33 +2166,13 @@ mod tests {
     #[test]
     fn inventory_schema_conforms_to_the_published_contract() {
         let selected = selection(3, None, None);
-        let url = selected.tree_url().unwrap();
+        let url = selected.repository.tree_url(TREE_SHA).unwrap();
         let body = tree_body(TREE_SHA, HELLO_BLOB, false);
         let output = inventory_output(&selected, &url, &response(&url, &body, "application/json"))
             .unwrap();
         assert_eq!(output["entries"][0]["blob_sha"], HELLO_BLOB);
         assert_eq!(output["entries"][0]["upstream_sha"], HELLO_BLOB);
         assert_schema(&output, &schema()["inventory"]["output"]);
-    }
-
-    #[test]
-    fn immutable_urls_bind_exact_objects_and_encode_inventory_branches() {
-        let slanted = selection(8, Some("HoBeedzc/CreditCount"), Some("feature/x"));
-        let tree = slanted.tree_url().unwrap().to_string();
-        assert!(tree.contains("trees/feature%2Fx"), "{tree}");
-        let request = request(TREE_SHA, HELLO_BLOB);
-        let immutable_tree = request.repository.tree_url(&request.tree_sha).unwrap();
-        let immutable_blob = request.repository.blob_url(&request.blob_sha).unwrap();
-        assert!(immutable_tree.as_str().contains(&format!("trees/{TREE_SHA}")));
-        assert!(immutable_blob.as_str().ends_with(&format!("/git/blobs/{HELLO_BLOB}")));
-        assert!(!immutable_tree.as_str().contains("main"));
-        assert!(!immutable_blob.as_str().contains("main"));
-        assert_ne!(
-            ResponseCache::name(&immutable_tree),
-            ResponseCache::name(&selection(3, None, None).tree_url().unwrap())
-        );
-        assert!(select_source(8, Some("HoBeedzc/CreditCount"), Some("a//b")).is_err());
-        assert!(select_source(8, Some("HoBeedzc/CreditCount"), Some("/x")).is_err());
     }
 
     static SEQUENCE: std::sync::atomic::AtomicUsize =
@@ -2271,6 +2291,136 @@ mod tests {
     }
 
     #[test]
+    fn branch_commit_resolves_to_immutable_tree_without_rewriting_original() {
+        let fixture = Fixture::new();
+        env(&fixture, None, false);
+        let selected = selection(3, None, None);
+        let branch_url = selected.repository.tree_url(&selected.branch).unwrap();
+        let commit_url = Url::parse("https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main").unwrap();
+        let tree_url = selected.repository.tree_url(TREE_SHA).unwrap();
+        let commit_sha = "1111111111111111111111111111111111111111";
+        let cache = ResponseCache::open().unwrap();
+        cache.save(&response(&branch_url, &tree_body(commit_sha, HELLO_BLOB, false), "application/json")).unwrap();
+        let original_path = fixture.cache_dir().join(ResponseCache::name(&branch_url));
+        let original = std::fs::read(&original_path).unwrap();
+        let commit = serde_json::to_vec(&json!({"sha":commit_sha,"commit":{"tree":{"sha":TREE_SHA}}})).unwrap();
+        cache.save(&response(&commit_url, &commit, "application/json")).unwrap();
+        let tree = tree_body(TREE_SHA, HELLO_BLOB, false);
+        cache.save(&response(&tree_url, &tree, "application/json")).unwrap();
+
+        let output = inventory(r#"{"school":3}"#, false).unwrap();
+        assert_eq!(output["result"], "inventory_snapshot");
+        assert_eq!(output["complete"], true);
+        assert_eq!(output["tree_sha"], TREE_SHA);
+        assert_eq!(output["entries"][0]["path"], "docs/readme.md");
+        assert_eq!(output["entries"][0]["blob_sha"], HELLO_BLOB);
+        assert_eq!(output["retrieval"]["source_url"], tree_url.as_str());
+        assert_eq!(output["retrieval"]["response_body_sha256"], sha256(&tree));
+        assert_schema(&output, &schema()["inventory"]["output"]);
+        assert_eq!(std::fs::read(original_path).unwrap(), original);
+        assert!(!fixture.governor_dir().exists());
+    }
+
+    #[test]
+    fn branch_commit_cannot_be_replaced_by_another_valid_tree() {
+        let fixture = Fixture::new();
+        env(&fixture, None, false);
+        let commit_url = Url::parse("https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main").unwrap();
+        let tree_url = selection(3, None, None).repository.tree_url(TREE_SHA).unwrap();
+        let cache = ResponseCache::open().unwrap();
+        let commit = serde_json::to_vec(&json!({"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":TREE_SHA}}})).unwrap();
+        cache.save(&response(&commit_url, &commit, "application/json")).unwrap();
+        let other_tree = br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","tree":[],"truncated":false}"#;
+        cache.save(&response(&tree_url, other_tree, "application/json")).unwrap();
+
+        let output = inventory(r#"{"school":3}"#, false).unwrap();
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(output["complete"], false);
+        assert_eq!(output["tree_sha"], Value::Null);
+        assert_eq!(output["entries"], json!([]));
+        assert_eq!(output["fallback_reason"], "upstream_parse");
+        assert_eq!(output["raw_response_base64"], STANDARD.encode(other_tree));
+        assert_eq!(output["retrieval"]["source_url"], tree_url.as_str());
+        assert_schema(&output, &schema()["inventory"]["output"]);
+        assert!(!fixture.governor_dir().exists());
+    }
+
+    #[test]
+    fn branch_commit_malformed_resolution_retains_raw_without_tree_request() {
+        let fixture = Fixture::new();
+        let body = br#"{"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":"not-an-object-id"}},"author":{"login":"course-owner"}}"#;
+        let server = Server::new(move |socket, _, index| {
+            assert_eq!(index, 0, "unresolved commit must not select a tree");
+            reply(socket, 200, "Content-Type: application/json\r\n", body)
+        });
+        env(&fixture, Some(server.address), true);
+        let output = inventory(r#"{"school":3}"#, true).unwrap();
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(output["tree_sha"], Value::Null);
+        assert_eq!(output["entries"], json!([]));
+        assert_eq!(output["raw_response_base64"], STANDARD.encode(body));
+        assert_eq!(output["retrieval"]["source_url"], "https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main");
+        let cached = inventory(r#"{"school":3}"#, false).unwrap();
+        assert_eq!(cached["raw_response_base64"], output["raw_response_base64"]);
+        assert_eq!(cached["fallback_reason"], "upstream_parse");
+        assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 1);
+    }
+
+    #[test]
+    fn public_commit_accounts_do_not_hide_other_credential_members() {
+        for case in ["public", "bot", "password", "token", "nested-login", "other-role", "invalid-handle", "escaped-name", "duplicate-name", "tree-account", "array-root"] {
+            let fixture = Fixture::new();
+            env(&fixture, None, false);
+            let selected = selection(3, None, None);
+            let commit_url = selected.repository.commit_url(&selected.branch).unwrap();
+            let tree_url = selected.repository.tree_url(TREE_SHA).unwrap();
+            let mut commit = json!({
+                "sha":"1111111111111111111111111111111111111111",
+                "commit":{"tree":{"sha":TREE_SHA}},
+                "author":{"login":"course-owner"},
+                "committer":{"login":"web-flow"}
+            });
+            match case {
+                "bot" => commit["author"]["login"] = json!("github-actions[bot]"),
+                "password" => commit["author"]["password"] = json!("synthetic-secret"),
+                "token" => commit["committer"]["token"] = json!("synthetic-secret"),
+                "nested-login" => commit["commit"]["author"] = json!({"login":"unreviewed"}),
+                "other-role" => commit["extra"] = json!({"login":"unreviewed"}),
+                "invalid-handle" => commit["author"]["login"] = json!("not/a/public/handle"),
+                "array-root" => commit = json!([{"login":"course-owner"},null]),
+                _ => {}
+            }
+            let mut body = serde_json::to_string(&commit).unwrap();
+            if case == "escaped-name" {
+                body = body.replacen("\"login\"", "\"lo\\u0067in\"", 1);
+            } else if case == "duplicate-name" {
+                body = body.replacen("\"login\":\"course-owner\"", "\"login\":\"course-owner\",\"login\":\"other-owner\"", 1);
+            }
+            let cache = ResponseCache::open().unwrap();
+            cache.save(&response(&commit_url, body.as_bytes(), "application/json")).unwrap();
+            let mut tree: Value = serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
+            if case == "tree-account" {
+                tree["author"] = json!({"login":"course-owner"});
+            }
+            cache.save(&response(&tree_url, &serde_json::to_vec(&tree).unwrap(), "application/json")).unwrap();
+
+            let result = inventory(r#"{"school":3}"#, false);
+            if matches!(case, "public" | "bot") {
+                let output = result.unwrap();
+                assert_eq!(output["result"], "inventory_snapshot", "{case}");
+                assert_eq!(output["tree_sha"], TREE_SHA, "{case}");
+                assert_eq!(output["entries"][0]["blob_sha"], HELLO_BLOB, "{case}");
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, "sensitive_response", "{case}");
+                assert!(!format!("{error:?}").contains("synthetic-secret"), "{case}");
+            }
+            assert!(!fixture.governor_dir().exists(), "{case}");
+        }
+    }
+
+    #[test]
     fn rights_gate_denial_has_no_cache_or_network_side_effects() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| reply(socket, 200, "", b""));
@@ -2300,7 +2450,8 @@ mod tests {
         assert!(!format!("{error:?}").contains("authenticity_token"));
         assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 0);
         assert_eq!(governor_state(&fixture)["safety_latched"], false);
-        let url = selection(3, None, None).tree_url().unwrap();
+        let selected = selection(3, None, None);
+        let url = selected.repository.commit_url(&selected.branch).unwrap();
         // Simulate a retained original from an older classifier. Loading must
         // re-screen even a record with the current cookie-admission version.
         ResponseCache::open().unwrap().save(&response(&url, body, "text/html")).unwrap();
@@ -2344,7 +2495,8 @@ mod tests {
         let fixture = Fixture::new();
         let server = Server::new(|_, _, _| panic!("old cache triggered a request"));
         env(&fixture, Some(server.address), true);
-        let url = selection(3, None, None).tree_url().unwrap();
+        let selected = selection(3, None, None);
+        let url = selected.repository.commit_url(&selected.branch).unwrap();
         let cache = ResponseCache::open().unwrap();
         cache.save(&response(&url, b"<html>reference</html>", "text/html")).unwrap();
         let path = fixture.cache_dir().join(ResponseCache::name(&url));
@@ -2476,7 +2628,8 @@ mod tests {
         assert_eq!(error.code, "unreviewed_body");
         assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 0);
         assert_eq!(governor_state(&fixture)["safety_latched"], false);
-        let url = selection(3, None, None).tree_url().unwrap();
+        let selected = selection(3, None, None);
+        let url = selected.repository.commit_url(&selected.branch).unwrap();
         let cached = response(&url, &tree_body(TREE_SHA, HELLO_BLOB, false), "application/json; charset=utf-8, text/html");
         assert_eq!(assess_response_body(&cached), ChallengeAssessment::Unreviewed);
     }
@@ -2796,14 +2949,23 @@ mod tests {
         let mut tree: Value = serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
         tree["note"] = json!(r#"<!doctype html><html><input name="captcha"></html>"#);
         let bytes = serde_json::to_vec(&tree).unwrap();
-        let server = Server::new(move |socket, _, _| {
-            reply(socket, 200, "Content-Type: application/json\r\n", &bytes)
+        let commit = serde_json::to_vec(&json!({
+            "sha":"1111111111111111111111111111111111111111",
+            "commit":{"tree":{"sha":TREE_SHA}},
+            "note":r#"<!doctype html><html><input name="captcha"></html>"#
+        })).unwrap();
+        let server = Server::new(move |socket, _, index| {
+            reply(socket, 200, "Content-Type: application/json\r\n", match index {
+                0 => &commit,
+                1 => &bytes,
+                _ => panic!("unexpected extra request"),
+            })
         });
         env(&fixture, Some(server.address), true);
         let output = inventory(r#"{"school":3}"#, true).unwrap();
         assert_eq!(output["result"], "inventory_snapshot");
         assert_eq!(governor_state(&fixture)["safety_latched"], false);
-        assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]

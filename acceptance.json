@@ -635,6 +635,7 @@
       "title": "Department material catalogs",
       "status": "pending",
       "acceptance": "School 3/6/8/21 material inventories and rights-reviewed retrieval.",
+      "blocker": "Only the selected School 3 main inventory has current native online proof. The other eight selected inventories across Schools 6/8/21 and rights-reviewed material retrieval remain unverified; public repository visibility is not blanket material permission.",
       "sources": [
         "https://github.com/AccSrd/BUAA_Course_Automation",
         "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
@@ -653,6 +654,23 @@
           "command": "buaa departments inventory with an empty object",
           "observed": "invalid_input exit 2: explicit school selector required",
           "live_blocker": "Live inventory needs a governed directory read; cached snapshots serve offline only."
+        },
+        "online_observation_2026_11_02": {
+          "command": "buaa departments inventory --online; stdin {\"school\":3}",
+          "source": "AccSrd/BUAA_Course_Automation main",
+          "result": "inventory_snapshot",
+          "http_status": 200,
+          "entry_count": 3283,
+          "complete": true,
+          "commit_sha": "8da8dd8fa95bfef4eabed58e1d38b14feb6549bb",
+          "tree_sha": "3c59d746a206a14aa06ab21bf85953a1eca0359c",
+          "original_tree_response_bytes": 1257612,
+          "original_tree_response_sha256": "b787945c8693b7b796b33fc8c35dd2f7aa8f57f8f590b061d82c2ff0c6a227f8",
+          "independent_proof": "Independent Python Git-object encoding and native git hash-object agreed on the root; all 420 nonroot directories verified. All 3283 normalized entries matched the complete independently derived original sequence. The commit binds that exact immutable tree; three private originals remain separate, with the historical branch body and timestamp unchanged.",
+          "offline_and_schema": "Actual cache-only replay matched every entry, root, original body digest and timestamp. Standard Draft 2020-12 validation passed for the native input and online/offline output documents.",
+          "regressions": "Three branch/tree cases failed before the identity repair. Subsequent independent review and actual failing regressions exposed positional-array account exemption and shared malformed-commit Surface loss; both were repaired. The 52 focused department cases, including eleven public-account boundary variants, passed. Full locked offline suite: 1152 library passed, three existing ignored workers, 107 integration/CLI passed.",
+          "review": "Two revised independent read-only source reviews found zero remaining findings. This is not trusted CI, exact-head merge approval or source-wide rights proof.",
+          "scope": "Selected School 3 main metadata inventory only. No material retrieval, account credentials, campus requests or campus mutations. Remaining selected inventories and material rights stay open."
         }
       }
     },

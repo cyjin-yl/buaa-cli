@@ -340,7 +340,6 @@ pub fn fetch(input: &str, online: bool) -> Result<Value, Error> {
                     response,
                     identity,
                     identity.tree_error().unwrap_or("upstream_parse"),
-                    learning::Surface::Tree,
                 )?,
             )),
         }

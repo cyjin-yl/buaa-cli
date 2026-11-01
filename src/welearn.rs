@@ -269,18 +269,22 @@ pub(crate) mod learning {
     /// original bytes, observed content type, byte count, SHA-256 and reason.
     /// Challenge, unreviewed and credential-bearing bodies are never exposed.
     pub(crate) fn degraded_evidence(
-        surface: Surface,
         response: &Response,
         identity: &ObservedIdentity,
         reason: &str,
     ) -> Result<Value, Error> {
+        let surface = identity.surface;
         let url = Url::parse(&response.url).map_err(|_| upstream_parse())?;
         let observed = content_type(response);
         let assessment = response_assessment(surface, &url, response, identity);
         if assessment == ChallengeAssessment::Detected {
             return Err(challenge_refusal());
         }
-        if private_evidence(&response.body, observed.as_deref()) {
+        let private = match surface {
+            Surface::Commit => private_commit_evidence(&response.body, observed.as_deref()),
+            _ => private_evidence(&response.body, observed.as_deref()),
+        };
+        if private {
             return Err(sensitive_refusal());
         }
         if assessment == ChallengeAssessment::Unreviewed {
@@ -524,7 +528,7 @@ pub(crate) mod learning {
                 let result = fixture.transport.fetch(&fixture.cache, &url, Surface::Raw, |response, identity| {
                     assert_ne!(identity.blob_sha(), Some(requested.as_str()));
                     degraded_admission_output(&super::super::SOURCE, super::super::RAW_TYPE_LABEL,
-                        "synthetic.txt", response, identity, "blob_identity_mismatch", Surface::Raw)
+                        "synthetic.txt", response, identity, "blob_identity_mismatch")
                 });
                 worker.join();
                 assert_eq!(std::fs::read(&path).unwrap(), old_bytes);
@@ -877,7 +881,8 @@ pub(crate) mod learning {
             let spec = &super::super::SOURCE;
             let root = "17ba6f4f78b8480cfd0746758b08bacb877d0c9c";
             let commit = json!({"sha":"1111111111111111111111111111111111111111",
-                "commit":{"tree":{"sha":root}}}).to_string();
+                "commit":{"tree":{"sha":root}},"author":{"login":"course-owner"},
+                "committer":{"login":"web-flow"}}).to_string();
             let body = br#"{"sha":"17ba6f4f78b8480cfd0746758b08bacb877d0c9c","truncated":false,"tree":[
                 {"path":"docs","mode":"040000","type":"tree","sha":"640ba63b141ba35b527fee65e78140148c8d0a5b"},
                 {"path":"docs/note.txt","mode":"100644","type":"blob","sha":"ce013625030ba8dba906f756967f9e9ca394464a","size":6}
@@ -920,14 +925,26 @@ pub(crate) mod learning {
             let fixture = TransportFixture::new();
             let spec = &super::super::SOURCE;
             let commit_url = spec.commit_url().unwrap();
-            let body = br#"{"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":"invalid","url":"https://foreign.invalid/tree"}}}"#;
+            let body = br#"{"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":"invalid","url":"https://foreign.invalid/tree"}},"author":{"login":"course-owner"},"committer":{"login":"web-flow"}}"#;
             fixture.cache.save(&retained_json(&commit_url, body)).unwrap();
-            let output = with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
-                inventory_output(spec, super::super::TYPE_LABEL, url, response, identity, &super::super::classify)
-            }).unwrap();
-            assert_eq!(output["result"], "degraded");
-            assert_eq!(output["fallback_reason"], "commit_tree_unresolved");
-            assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body));
+            for action in ["inventory", "search", "fetch"] {
+                let output = with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
+                    match action {
+                        "inventory" => inventory_output(spec, super::super::TYPE_LABEL, url, response, identity, &super::super::classify),
+                        "search" => search_output(spec, super::super::TYPE_LABEL, url, response, identity, "note", &super::super::classify),
+                        _ => degraded_admission_output(spec, super::super::RAW_TYPE_LABEL, "note.txt", response, identity, identity.tree_error().unwrap_or("upstream_parse")),
+                    }
+                }).unwrap();
+                assert_eq!(output["result"], "degraded", "{action}");
+                assert_eq!(output["fallback_reason"], "commit_tree_unresolved", "{action}");
+                assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body), "{action}");
+                assert_eq!(output["retrieval"]["source_url"], commit_url.as_str(), "{action}");
+                match action {
+                    "inventory" => assert_eq!(output["entries"], json!([])),
+                    "search" => assert_eq!(output["matches"], json!([])),
+                    _ => assert!(output["bytes"].is_null()),
+                }
+            }
             assert_eq!(fixture.cache.test_forbidden_operations.as_ref().unwrap().get(), 0);
         }
     }
@@ -948,10 +965,63 @@ pub(crate) mod learning {
         }
     }
 
+    /// GitHub commit author/committer logins are public account identifiers.
+    /// Exempt only their exact, unescaped member-name positions; all other
+    /// members and original bytes retain the ordinary credential screening.
+    pub(crate) fn private_commit_evidence(bytes: &[u8], mime: Option<&str>) -> bool {
+        #[derive(Deserialize)]
+        struct PublicAuthor<'a> {
+            login: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct PublicAuthors<'a> {
+            #[serde(borrow)]
+            author: Option<PublicAuthor<'a>>,
+            #[serde(borrow)]
+            committer: Option<PublicAuthor<'a>>,
+        }
+
+        fn member_name(bytes: &[u8], author: Option<PublicAuthor<'_>>) -> Option<(usize, usize)> {
+            let login = author?.login;
+            let handle = login.strip_suffix("[bot]").unwrap_or(login);
+            if handle.is_empty() || handle.len() > 39
+                || handle.starts_with('-') || handle.ends_with('-')
+                || !handle.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return None;
+            }
+            // Borrowed strings point into these original bytes. An escaped
+            // value cannot be borrowed; an escaped member fails this suffix.
+            let value_start = (login.as_ptr() as usize)
+                .checked_sub(bytes.as_ptr() as usize)?.checked_sub(1)?;
+            let prefix = bytes.get(..value_start)?.trim_ascii_end()
+                .strip_suffix(b":")?.trim_ascii_end();
+            let start = prefix.strip_suffix(b"\"login\"")?.len() + 1;
+            Some((start, prefix.len() - 1))
+        }
+
+        if bytes.trim_ascii_start().first() != Some(&b'{') {
+            return private_evidence(bytes, mime);
+        }
+        let Ok(authors) = serde_json::from_slice::<PublicAuthors<'_>>(bytes) else {
+            return private_evidence(bytes, mime);
+        };
+        let public_names = [member_name(bytes, authors.author), member_name(bytes, authors.committer)];
+        private_evidence_with_public_names(bytes, mime, Some(&public_names))
+    }
+
     /// True when a body carries private credential material. Only the shape
     /// of the body is inspected: a JSON member name or an HTML form control.
     /// Values are never copied into diagnostics.
     pub(crate) fn private_evidence(bytes: &[u8], mime: Option<&str>) -> bool {
+        private_evidence_with_public_names(bytes, mime, None)
+    }
+
+    fn private_evidence_with_public_names(
+        bytes: &[u8],
+        mime: Option<&str>,
+        public_names: Option<&[Option<(usize, usize)>; 2]>,
+    ) -> bool {
         let private_name = |name: &str| {
             let mut normalized = String::with_capacity(name.len());
             for character in name.chars() {
@@ -1032,6 +1102,7 @@ pub(crate) mod learning {
             }
             if let Ok(name) = std::str::from_utf8(name)
                 && private_name(name)
+                && !public_names.is_some_and(|names| names.contains(&Some((start, cursor - 1))))
             {
                 return true;
             }
@@ -1409,8 +1480,10 @@ pub(crate) mod learning {
     /// The observed identity of one response. A blob carries the Git object
     /// identity of its bytes; a tree carries the root object identity the
     /// response advertises, verified against its own entries, or the reason
-    /// why the tree could not be admitted.
+    /// why the tree could not be admitted. The originating surface survives
+    /// normalization failure so commit evidence never becomes tree evidence.
     pub(crate) struct ObservedIdentity {
+        surface: Surface,
         tree: Option<AdmittedTree>,
         tree_error: Option<&'static str>,
         blob_sha: Option<String>,
@@ -1453,11 +1526,13 @@ pub(crate) mod learning {
                 Ok((tree_sha, entries))
             }) {
                 Ok((tree_sha, entries)) => ObservedIdentity {
+                    surface,
                     tree: Some(AdmittedTree { tree_sha, entries }),
                     tree_error: None,
                     blob_sha: None,
                 },
                 Err(error) => ObservedIdentity {
+                    surface,
                     tree: None,
                     tree_error: Some(error.code),
                     blob_sha: None,
@@ -1466,9 +1541,9 @@ pub(crate) mod learning {
             Surface::Raw => {
                 let blob_sha = requested_blob_sha(url)
                     .map(|requested| git_blob_sha(body, requested.len()));
-                ObservedIdentity { tree: None, tree_error: None, blob_sha }
+                ObservedIdentity { surface, tree: None, tree_error: None, blob_sha }
             }
-            Surface::Commit => ObservedIdentity { tree: None, tree_error: None, blob_sha: None },
+            Surface::Commit => ObservedIdentity { surface, tree: None, tree_error: None, blob_sha: None },
         }
     }
 
@@ -2173,11 +2248,12 @@ pub(crate) mod learning {
         with_resolved_tree(&cache, spec, online, process)
     }
 
-    fn resolved_tree_sha(response: &Response, expected: &Url) -> Result<String, Error> {
-        if response.url != expected.as_str() || response.status != 200
-            || !response.headers.get("content-type").is_some_and(|value| json_media_type(value))
-        {
+    pub(crate) fn resolved_tree_sha(response: &Response, expected: &Url) -> Result<String, Error> {
+        if response.url != expected.as_str() || response.status != 200 {
             return Err(upstream_parse());
+        }
+        if !response.headers.get("content-type").is_some_and(|value| json_media_type(value)) {
+            return Err(unexpected_content());
         }
         #[derive(Deserialize)]
         struct ObjectId { sha: String }
@@ -2210,7 +2286,7 @@ pub(crate) mod learning {
                 Ok(tree_sha) => Ok(Resolution::Tree(tree_sha)),
                 Err(_) => {
                     let identity = ObservedIdentity {
-                        tree: None, tree_error: Some("commit_tree_unresolved"), blob_sha: None,
+                        surface: Surface::Commit, tree: None, tree_error: Some("commit_tree_unresolved"), blob_sha: None,
                     };
                     let output = process.take().expect("one resolution consumer")(
                         response, &identity, &commit_url,
@@ -2300,7 +2376,7 @@ pub(crate) mod learning {
                 output["result"] = json!("degraded");
                 output["entries"] = json!([]);
                 output["fallback_reason"] = json!(reason);
-                output["raw_evidence"] = degraded_evidence(Surface::Tree, response, identity, reason)?;
+                output["raw_evidence"] = degraded_evidence(response, identity, reason)?;
                 Ok(output)
             }
         }
@@ -2375,7 +2451,7 @@ pub(crate) mod learning {
                 output["result"] = json!("degraded");
                 output["matches"] = json!([]);
                 output["fallback_reason"] = json!(reason);
-                output["raw_evidence"] = degraded_evidence(Surface::Tree, response, identity, reason)?;
+                output["raw_evidence"] = degraded_evidence(response, identity, reason)?;
                 Ok(output)
             }
         }
@@ -2407,7 +2483,6 @@ pub(crate) mod learning {
                 response,
                 identity,
                 "blob_identity_mismatch",
-                Surface::Raw,
             );
         }
         if response.body.len() as u64 != expected_size {
@@ -2420,7 +2495,6 @@ pub(crate) mod learning {
                 response,
                 identity,
                 "blob_size_mismatch",
-                Surface::Raw,
             );
         }
         let mut output = raw_output_at(
@@ -2497,7 +2571,7 @@ pub(crate) mod learning {
                 output["result"] = json!("degraded");
                 output["fallback_reason"] = json!(reason);
                 output["raw_evidence"] =
-                    degraded_evidence(Surface::Raw, response, identity, reason)?;
+                    degraded_evidence(response, identity, reason)?;
                 Ok(output)
             }
         }
@@ -2513,9 +2587,8 @@ pub(crate) mod learning {
         response: &Response,
         identity: &ObservedIdentity,
         reason: &str,
-        surface: Surface,
     ) -> Result<Value, Error> {
-        let evidence = degraded_evidence(surface, response, identity, reason)?;
+        let evidence = degraded_evidence(response, identity, reason)?;
         Ok(json!({
             "schema_version": 1,
             "type": type_label,
@@ -3761,7 +3834,6 @@ pub fn fetch(input: &str, online: bool) -> Result<Value, Error> {
                     response,
                     identity,
                     identity.tree_error().unwrap_or("upstream_parse"),
-                    learning::Surface::Tree,
                 )?,
             )),
         }
