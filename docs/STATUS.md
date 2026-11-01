@@ -1,5 +1,54 @@
 ## Development status
 
+## 2026-11-01: source-faithful iHome records and bounded pagination
+
+The iHome reader no longer requires or invents an appeal title. A supplied
+string title and the original content/dates are preserved; an absent title is
+omitted, not replaced with null or derived prose. Required collections still
+fail closed when missing. Business acceptance requires numeric `code=20000`
+and Boolean `success=true` for both list and detail. HTTP 200, a negative
+business flag, or an unknown envelope cannot establish an empty result.
+Safe original response bytes remain available as degraded evidence through
+the existing privacy/admission path; credential echoes and refusals still
+withhold unsafe bodies.
+
+The contract was checked against the pinned MIT-licensed public client
+[`IhomeProtocol.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeProtocol.kt).
+Client defaults are not server truth: missing collections, dates, pagination
+or titles are not silently reconstructed from that client's defaults.
+
+Page acquisition is lazy. Declared current page, last page and total must
+agree with the request limit and source record count. Missing/mismatched facts,
+duplicate IDs (including within one page), changing totals and later read
+failures stop before another acquisition. Valid records remain published, but
+the traversal is incomplete and advances no incremental cursor. Consistent
+bounded nonterminal windows retain their documented continuation; observed
+cursor maxima must not advance `since_id` until traversal completes. A full
+source-declared final page and a confirmed zero-total empty page terminate
+correctly. Completion does not establish history before the requested start.
+The existing over-limit response refusal remains in place.
+
+Six regression cases failed before the repair and all six then passed.
+The expanded iHome offline suite passed 60 cases, including ten source-protocol
+cases. The actual debug CLI then ran twelve synthetic, cache-only scenarios
+and emitted its schema separately: untitled list/detail, business/unknown
+envelopes, missing/wrong pagination, full-final and duplicate-page stops,
+limit mismatch, bounded continuation, confirmed emptiness and token-echo
+withholding. JSON Schema validation accepted every actual scenario output;
+safe fallback bytes, lengths and SHA-256 values matched the synthetic originals.
+Two independent read-only source reviewers found no concrete defect in the
+record/privacy and pagination scopes. Their review is not merge approval or
+live-service proof.
+
+No real credentials, campus request, token acquisition, new account key,
+governor scheduling state, automatic retry or attachment fetch was used.
+This CLI still does not implement iHome login. The pinned third-party report's
+fragment router-query/frontend-cookie description is not a CLI-produced
+session or current server lifetime. Current idle-window output is explicitly
+unknown, and legacy `php-ihome` social-platform routes do not establish modern
+attachment endpoints. Current source/history, nonempty attachment layouts and
+live account acceptance remain open; the acceptance item stays pending.
+
 ## 2026-11-01: bounded Smart session implementation, offline proof only
 
 `smart session [--online]` now implements one explicit CAS login followed by

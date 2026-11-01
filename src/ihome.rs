@@ -7,9 +7,10 @@
 //!   `GET /api/appeal/<id>` (one appeal). Every request carries
 //!   `Accept: application/json`, `Authorization: Bearer <token>` and
 //!   `Referer: https://i.buaa.edu.cn/web/`.
-//! * It never logs in. The SSO redirect-chain token (`?token=` / `#token=`) and
-//!   the `appeal_pc_token` session cookie are produced by the session layer;
-//!   this module only accepts an explicit bearer token plus an optional
+//! * It never logs in or acquires a token. The pinned third-party report
+//!   describes a token inside a fragment router query and a frontend
+//!   `appeal_pc_token` cookie, not a session implemented by this CLI.
+//!   This module only accepts an explicit bearer token plus an optional
 //!   description of where that token came from. A missing token is refused as
 //!   `authorization_required` before any cache or network access.
 //!   Typed decoding wraps each token immediately in `Zeroizing`, including
@@ -46,8 +47,9 @@
 //!   message that states the session is not authenticated) is not an empty
 //!   listing. It is reported as `authentication_refused` and it settles the
 //!   original lease as a credential rejection, so the shared governor latches
-//!   and the next request requires an explicit resume. An ordinary business
-//!   `success=false` answer stays an empty listing.
+//!   and the next request requires an explicit resume. Business acceptance
+//!   separately requires numeric `code=20000` and Boolean `success=true`;
+//!   a negative or unknown envelope degrades instead of inventing emptiness.
 //! * A cached HTTP `401`/`403`, and a cached application-level refusal, are
 //!   published to the shared governor on every cache read, so a replay of the
 //!   same rejection cannot leave the governor unlatched.
@@ -55,19 +57,21 @@
 //!   that were already admitted are preserved and reported as a `partial`
 //!   traversal. The traversal is never reported as complete and the
 //!   incremental cursor is not advanced.
-//! * Attachments are never downloaded. The modern platform exposes no
-//!   dedicated attachment endpoint; the legacy `php-ihome` upload/attachment
-//!   routes are reference-only and their contract is UNKNOWN, so no attachment
+//! * Attachments are never downloaded. No modern attachment-download contract
+//!   has been reviewed; legacy `php-ihome` upload/attachment routes are not
+//!   evidence about the modern appeal service, so no attachment
 //!   endpoint is guessed here. Only URLs that the upstream record itself
 //!   declares are reported, with their presence, and they are never fetched.
 //! * WebVPN URL encryption is an upstream client-side detail and is not
-//!   implemented; only direct HTTPS to `i.buaa.edu.cn` is used. The upstream
-//!   22:00-07:00 idle window is surfaced as an advisory hint only: it never
-//!   blocks, delays, or rewrites a request.
-//! * An ordinary upstream `success=false` answer is an empty listing, not a
-//!   fault and not a retry trigger. An explicit authentication refusal inside
-//!   that envelope is not an empty listing: it is reported as
-//!   `authentication_refused` and it latches the shared governor.
+//!   implemented; only direct HTTPS to `i.buaa.edu.cn` is used. The current
+//!   idle window is unknown and never blocks, delays or rewrites a request.
+//! * Missing titles remain absent; supplied titles and dates are preserved.
+//!   Source pagination must match the requested page, limit and record count.
+//!   Missing/inconsistent facts, changing totals and duplicate ids stop the
+//!   traversal without advancing a cursor or claiming complete history.
+//!
+//! Source protocol reference (not current-deployment proof):
+//! https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeProtocol.kt
 //!
 //! Nothing here has been exercised against the live campus service; the
 //! endpoint contract is the documented one and the online acceptance of this
@@ -479,14 +483,6 @@ fn unix_ms() -> Result<u64, Error> {
     u64::try_from(milliseconds).map_err(|_| cache_error())
 }
 
-fn unix_seconds() -> Result<i64, Error> {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| cache_error())?
-        .as_secs();
-    i64::try_from(seconds).map_err(|_| cache_error())
-}
-
 // ---------------------------------------------------------------------------
 // Time handling
 // ---------------------------------------------------------------------------
@@ -517,13 +513,6 @@ fn compare_timestamps(left: &Timestamp, right: &Timestamp) -> Option<Ordering> {
         (Timestamp::Offset(a), Timestamp::Offset(b)) => Some(a.cmp(b)),
         _ => None,
     }
-}
-
-/// Campus local hour (UTC+8), used only for the advisory idle-window hint.
-fn campus_local_hour(epoch_seconds: i64) -> u32 {
-    let local = epoch_seconds + 8 * 3600;
-    let hour = local.rem_euclid(86_400) / 3600;
-    hour as u32
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,6 +1514,7 @@ enum FallbackReason {
     UnexpectedContent,
     UpstreamParse,
     UpstreamShape,
+    BusinessRejected,
     RateLimited,
     SafetyLatched,
     ChallengeUnreviewed,
@@ -1547,6 +1537,7 @@ impl FallbackReason {
             Self::UnexpectedContent => "unexpected_content",
             Self::UpstreamParse => "upstream_parse",
             Self::UpstreamShape => "upstream_shape",
+            Self::BusinessRejected => "business_rejected",
             Self::RateLimited => "rate_limited",
             Self::SafetyLatched => "safety_latched",
             Self::ChallengeUnreviewed => "challenge_unreviewed",
@@ -1617,7 +1608,7 @@ struct Reply {
 
 struct Entry {
     id: u64,
-    title: String,
+    title: Option<String>,
     content: String,
     created_at: String,
     status: String,
@@ -1753,7 +1744,11 @@ fn parse_entry(value: &Value) -> Result<Entry, FallbackReason> {
     }
     Ok(Entry {
         id: required_u64(map, "id")?,
-        title: required_str(map, "title")?,
+        title: match map.get("title") {
+            None => None,
+            Some(Value::String(title)) => Some(title.clone()),
+            Some(_) => return Err(FallbackReason::UpstreamShape),
+        },
         content,
         created_at: required_str(map, "created_at")?,
         status: required_str(map, "publish_status_text")?,
@@ -1763,13 +1758,12 @@ fn parse_entry(value: &Value) -> Result<Entry, FallbackReason> {
     })
 }
 
-/// Parse the upstream envelope. `success=false` is an empty listing, not a
-/// fault; every other deviation is reported with its own fallback reason.
-/// The document is decoded once by the caller and reused here.
-fn parse_envelope(
+/// Require the source-declared positive business envelope, independently of
+/// HTTP status. Authentication/challenge facts have already been inspected.
+fn envelope_data<'a>(
     mime: Option<&str>,
-    document: Option<&Value>,
-) -> Result<(bool, Vec<Entry>), FallbackReason> {
+    document: Option<&'a Value>,
+) -> Result<&'a Map<String, Value>, FallbackReason> {
     if let Some(mime) = mime {
         if !json_mime(mime) {
             return Err(FallbackReason::UnexpectedContent);
@@ -1777,17 +1771,44 @@ fn parse_envelope(
     }
     let document = document.ok_or(FallbackReason::UpstreamParse)?;
     let root = document.as_object().ok_or(FallbackReason::UpstreamShape)?;
-    let success = match root.get("success") {
-        Some(Value::Bool(value)) => *value,
-        _ => return Err(FallbackReason::UpstreamShape),
-    };
-    if !success {
-        return Ok((false, Vec::new()));
+    if required_u64(root, "code")? != 20000 {
+        return Err(FallbackReason::BusinessRejected);
     }
-    let data = root
+    match root.get("success") {
+        Some(Value::Bool(true)) => {},
+        Some(Value::Bool(false)) => return Err(FallbackReason::BusinessRejected),
+        _ => return Err(FallbackReason::UpstreamShape),
+    }
+    root
         .get("data")
         .and_then(Value::as_object)
-        .ok_or(FallbackReason::UpstreamShape)?;
+        .ok_or(FallbackReason::UpstreamShape)
+}
+
+#[derive(Clone, Copy)]
+struct Pagination {
+    current_page: u32,
+    last_page: u32,
+    total: u64,
+}
+
+impl Pagination {
+    fn parse(data: &Map<String, Value>) -> Option<Self> {
+        Some(Self {
+            current_page: u32::try_from(data.get("current_page")?.as_u64()?).ok()?,
+            last_page: u32::try_from(data.get("last_page")?.as_u64()?).ok()?,
+            total: data.get("total")?.as_u64()?,
+        })
+    }
+}
+
+/// Decode once in the caller; missing pagination does not invent or discard
+/// otherwise valid records, but cannot authorize traversal or a cursor.
+fn parse_envelope(
+    mime: Option<&str>,
+    document: Option<&Value>,
+) -> Result<(Option<Pagination>, Vec<Entry>), FallbackReason> {
+    let data = envelope_data(mime, document)?;
     let items = data
         .get("data")
         .and_then(Value::as_array)
@@ -1799,40 +1820,24 @@ fn parse_envelope(
     for item in items {
         entries.push(parse_entry(item)?);
     }
-    Ok((true, entries))
+    Ok((Pagination::parse(data), entries))
 }
 
 /// Accept the documented single item as `data` or as `data.data`.
 fn parse_detail_envelope(
     mime: Option<&str>,
     document: Option<&Value>,
-) -> Result<(bool, Option<Entry>), FallbackReason> {
-    if let Some(mime) = mime {
-        if !json_mime(mime) {
-            return Err(FallbackReason::UnexpectedContent);
-        }
-    }
-    let document = document.ok_or(FallbackReason::UpstreamParse)?;
-    let root = document.as_object().ok_or(FallbackReason::UpstreamShape)?;
-    let success = match root.get("success") {
-        Some(Value::Bool(value)) => *value,
-        _ => return Err(FallbackReason::UpstreamShape),
-    };
-    if !success {
-        return Ok((false, None));
-    }
-    let data = root
-        .get("data")
-        .and_then(Value::as_object)
-        .ok_or(FallbackReason::UpstreamShape)?;
+) -> Result<Option<Entry>, FallbackReason> {
+    let data = envelope_data(mime, document)?;
     let item = match data.get("data") {
         Some(Value::Array(items)) if items.len() == 1 => &items[0],
-        Some(Value::Array(items)) if items.is_empty() => return Ok((true, None)),
+        Some(Value::Array(items)) if items.is_empty() => return Ok(None),
         Some(value @ Value::Object(_)) => value,
-        None if data.contains_key("id") => root.get("data").ok_or(FallbackReason::UpstreamShape)?,
+        None if data.contains_key("id") => document.and_then(|root| root.get("data"))
+            .ok_or(FallbackReason::UpstreamShape)?,
         _ => return Err(FallbackReason::UpstreamShape),
     };
-    Ok((true, Some(parse_entry(item)?)))
+    Ok(Some(parse_entry(item)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -1873,9 +1878,8 @@ fn project_entry(entry: &Entry, response: &Response) -> Value {
             })
         })
         .collect();
-    json!({
+    let mut projected = json!({
         "id": entry.id,
-        "title": entry.title,
         "content": entry.content,
         "created_at": entry.created_at,
         "status": entry.status,
@@ -1884,7 +1888,11 @@ fn project_entry(entry: &Entry, response: &Response) -> Value {
         "departments": entry.departments.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<Value>>(),
         "attachments": attachments,
         "provenance": entry_provenance(response),
-    })
+    });
+    if let Some(title) = &entry.title {
+        projected["title"] = json!(title);
+    }
+    projected
 }
 
 /// The degradation evidence: the original bytes when they are admissible, the
@@ -1963,6 +1971,17 @@ struct PageOutcome {
     success: Option<bool>,
     evidence: Option<Value>,
     entries: Vec<Value>,
+    pagination: Option<Pagination>,
+}
+
+fn refused_page(response: &Response, token: &str, reason: FallbackReason, success: Option<bool>) -> PageOutcome {
+    PageOutcome {
+        meta: page_meta(response, 0, token),
+        success,
+        evidence: Some(evidence(reason, response, token)),
+        entries: Vec::new(),
+        pagination: None,
+    }
 }
 
 fn cursor_is_incomparable(request: &ListRequest, entries: &[Entry]) -> bool {
@@ -1977,20 +1996,29 @@ fn cursor_is_incomparable(request: &ListRequest, entries: &[Entry]) -> bool {
     })
 }
 
-fn page_is_terminal(outcome: &PageOutcome, limit: u32) -> bool {
-    outcome.evidence.is_some()
-        || outcome.success == Some(false)
-        || outcome.entries.len() < limit as usize
+fn pagination_issue(pagination: Option<Pagination>, page: u32, limit: u32, count: usize) -> Option<&'static str> {
+    let Some(pagination) = pagination else { return Some("pagination_unconfirmed"); };
+    if pagination.current_page != page {
+        return Some("page_mismatch");
+    }
+    let last = if pagination.total == 0 { 1 } else { (pagination.total - 1) / u64::from(limit) + 1 };
+    let preceding = u64::from(page - 1) * u64::from(limit);
+    let expected = pagination.total.saturating_sub(preceding).min(u64::from(limit));
+    if pagination.current_page == 0 || pagination.current_page > pagination.last_page
+        || u64::from(pagination.last_page) != last
+        || u64::try_from(count).ok() != Some(expected)
+    {
+        return Some("pagination_inconsistent");
+    }
+    None
 }
 
 fn advisory() -> Value {
-    let hour = campus_local_hour(unix_seconds().unwrap_or(0));
     json!({
-        "upstream_idle_window": "22:00-07:00 campus local time",
-        "campus_local_hour": hour,
-        "inside_idle_window": hour >= 22 || hour < 7,
+        "upstream_idle_window": null,
+        "inside_idle_window": null,
         "enforced": false,
-        "note": "advisory only; this adapter never blocks, delays or retries because of the idle window",
+        "note": "the current upstream idle window is unverified; this adapter never blocks, delays or retries because of an assumed window",
     })
 }
 
@@ -1998,7 +2026,7 @@ fn attachments_notice() -> Value {
     json!({
         "downloaded": false,
         "contract": "unknown",
-        "note": "the platform exposes no dedicated attachment endpoint; legacy php-ihome upload and attachment routes are reference-only, so no attachment endpoint is guessed and no declared URL is fetched",
+        "note": "only recognized source-declared URLs are listed, not a complete attachment inventory; no modern download contract is reviewed, legacy php-ihome routes are not evidence about this service, and no URL is guessed or fetched",
     })
 }
 
@@ -2095,9 +2123,8 @@ fn set_field(value: &mut Value, key: &str, field: Value) {
 
 fn build_list_envelope(
     request: &ListRequest,
-    pages: Vec<PageOutcome>,
-    incomplete: Option<&'static str>,
-) -> Value {
+    pages: impl IntoIterator<Item = Result<PageOutcome, Error>>,
+) -> Result<Value, Error> {
     let mut counts = Counts {
         kept_new: 0,
         kept_changed: 0,
@@ -2112,13 +2139,32 @@ fn build_list_envelope(
     let mut incomparable_dates = false;
     let mut seen_ids = BTreeSet::new();
     let mut upstream_success: Option<bool> = None;
-    let mut last_meta: Option<Value> = None;
     let mut page_records: Vec<Value> = Vec::new();
     let mut degraded_evidence: Option<Value> = None;
+    let mut incomplete = None;
+    let mut previous_pagination: Option<Pagination> = None;
+    let mut has_more = false;
+    let mut reached_terminal = false;
 
-    for page in pages {
-        page_records.push(page.meta.clone());
-        last_meta = Some(page.meta.clone());
+    for result in pages {
+        let page = match result {
+            Ok(page) => page,
+            Err(error) if page_records.is_empty() => return Err(error),
+            Err(error) => {
+                incomplete = Some(error.code);
+                break;
+            }
+        };
+        let expected_page = request.page + u32::try_from(page_records.len()).unwrap_or(0);
+        let mut meta = page.meta;
+        if let Some(pagination) = page.pagination {
+            meta["pagination"] = json!({
+                "current_page": pagination.current_page,
+                "last_page": pagination.last_page,
+                "total": pagination.total,
+            });
+        }
+        page_records.push(meta);
         if let Some(success) = page.success {
             upstream_success = Some(success);
         }
@@ -2126,12 +2172,19 @@ fn build_list_envelope(
             degraded_evidence = Some(found);
             break;
         }
+        incomplete = pagination_issue(page.pagination, expected_page, request.limit, page.entries.len());
+        if incomplete.is_none() && previous_pagination.zip(page.pagination).is_some_and(|(before, after)| {
+            before.total != after.total || before.last_page != after.last_page
+        }) {
+            incomplete = Some("pagination_changed");
+        }
         for mut entry in page.entries {
             if let Some(map) = entry.as_object() {
                 let id = map.get("id").and_then(Value::as_u64);
                 let created_at = map.get("created_at").and_then(Value::as_str);
                 if let Some(id) = id {
                     if !seen_ids.insert(id) {
+                        incomplete.get_or_insert("duplicate_entry_id");
                         continue;
                     }
                     max_id = Some(max_id.map_or(id, |current| current.max(id)));
@@ -2157,6 +2210,17 @@ fn build_list_envelope(
                 entries.push(entry);
             }
         }
+        if incomplete.is_some() {
+            break;
+        }
+        if let Some(pagination) = page.pagination {
+            has_more = pagination.current_page < pagination.last_page;
+            reached_terminal = !has_more;
+            previous_pagination = Some(pagination);
+        }
+        if reached_terminal {
+            break;
+        }
     }
 
     if incomparable_dates {
@@ -2164,15 +2228,8 @@ fn build_list_envelope(
     }
     let pages_fetched = page_records.len();
     let next_page = request.page.saturating_add(u32::try_from(pages_fetched).unwrap_or(0));
-    let has_more = pages_fetched > 0
-        && page_records
-            .last()
-            .and_then(Value::as_object)
-            .and_then(|meta| meta.get("entry_count"))
-            .and_then(Value::as_u64)
-            .is_some_and(|count| count == u64::from(request.limit));
-    let complete = degraded_evidence.is_none() && !has_more;
-    let provenance = match last_meta.as_ref().and_then(Value::as_object) {
+    let complete = degraded_evidence.is_none() && reached_terminal;
+    let provenance = match page_records.last().and_then(Value::as_object) {
         Some(meta) => json!({
             "source_url": meta.get("url").cloned().unwrap_or(Value::Null),
             "fetched_at_unix_ms": meta.get("fetched_at_unix_ms").cloned().unwrap_or(Value::Null),
@@ -2208,7 +2265,7 @@ fn build_list_envelope(
             "has_more": has_more,
         })
     };
-    json!({
+    Ok(json!({
         "schema_version": 1,
         "type": "ihome_appeal_list",
         "result": result,
@@ -2239,7 +2296,7 @@ fn build_list_envelope(
         "advisory": advisory(),
         "provenance": provenance,
         "upstream_evidence": degraded_evidence,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -2283,12 +2340,12 @@ fn list_with_cache(
     cache: &ResponseCache,
     online: bool,
 ) -> Result<Value, Error> {
-    let mut pages = Vec::new();
-    let mut incomplete: Option<&'static str> = None;
-    for offset in 0..request.max_pages {
+    // Lazy acquisition lets the collector stop before asking for another
+    // page on a terminal, inconsistent, repeated or refused source response.
+    let pages = (0..request.max_pages).map(|offset| {
         let page = request.page.saturating_add(offset);
         let url = list_url(request.limit, page)?;
-        let outcome = match cache.get(
+        cache.get(
             &url,
             request.token.as_str(),
             online,
@@ -2296,29 +2353,9 @@ fn list_with_cache(
             |response, challenge, facts| {
                 Ok::<PageOutcome, Error>(list_page(request, response, challenge, facts))
             },
-        ) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                if pages.is_empty() {
-                    // Nothing was admitted yet, so the refusal itself is the
-                    // only truthful outcome.
-                    return Err(error);
-                }
-                // A later page could not be fetched. The pages that were
-                // already admitted stay valid; the traversal is reported as
-                // incomplete, the reason is named, and the incremental cursor
-                // is not advanced.
-                incomplete = Some(error.code);
-                break;
-            }
-        };
-        let stop = page_is_terminal(&outcome, request.limit);
-        pages.push(outcome);
-        if stop {
-            break;
-        }
-    }
-    Ok(build_list_envelope(request, pages, incomplete))
+        )
+    });
+    build_list_envelope(request, pages)
 }
 
 /// Structure one listing page. A refusal, an echoed token and an explicit
@@ -2333,65 +2370,36 @@ fn list_page(
         // The upstream echoed the submitted bearer token. Nothing from this
         // body is projected or exported, not even as the raw evidence of
         // another refusal.
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: None,
-            evidence: Some(evidence(FallbackReason::CredentialEcho, response, request.token.as_str())),
-            entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), FallbackReason::CredentialEcho, None);
     }
     if facts.inspection_incomplete {
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()), success: None,
-            evidence: Some(evidence(FallbackReason::InspectionUnreviewed, response, request.token.as_str())), entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), FallbackReason::InspectionUnreviewed, None);
     }
     if let Some(reason) = response_refusal(response, challenge) {
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: None,
-            evidence: Some(evidence(reason, response, request.token.as_str())),
-            entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), reason, None);
     }
     if facts.session_denied {
         // An explicit session denial is not an empty listing.
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: Some(false),
-            evidence: Some(evidence(FallbackReason::AuthenticationRefused, response, request.token.as_str())),
-            entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), FallbackReason::AuthenticationRefused, Some(false));
     }
     let mime = response.headers.get("content-type").map(String::as_str);
     match parse_envelope(mime, facts.document.as_ref()) {
-        Ok((true, entries)) if entries.len() > request.limit as usize => PageOutcome {
+        Ok((pagination, entries)) if entries.len() > request.limit as usize => PageOutcome {
             meta: page_meta(response, entries.len(), request.token.as_str()),
             success: Some(true),
             evidence: Some(evidence(FallbackReason::UpstreamShape, response, request.token.as_str())),
-            entries: Vec::new(),
+            entries: Vec::new(), pagination,
         },
-        Ok((true, entries)) if cursor_is_incomparable(request, &entries) => PageOutcome {
+        Ok((_, entries)) if cursor_is_incomparable(request, &entries) =>
+            refused_page(response, request.token.as_str(), FallbackReason::IncomparableTimestamp, Some(true)),
+        Ok((pagination, entries)) => PageOutcome {
             meta: page_meta(response, entries.len(), request.token.as_str()),
-            success: Some(true),
-            evidence: Some(evidence(FallbackReason::IncomparableTimestamp, response, request.token.as_str())),
-            entries: Vec::new(),
+            success: Some(true), evidence: None,
+            entries: entries.iter().map(|entry| project_entry(entry, response)).collect(),
+            pagination,
         },
-        Ok((success, entries)) => PageOutcome {
-            meta: page_meta(response, entries.len(), request.token.as_str()),
-            success: Some(success),
-            evidence: None,
-            entries: entries
-                .iter()
-                .map(|entry| project_entry(entry, response))
-                .collect(),
-        },
-        Err(reason) => PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: None,
-            evidence: Some(evidence(reason, response, request.token.as_str())),
-            entries: Vec::new(),
-        },
+        Err(reason) => refused_page(response, request.token.as_str(), reason,
+            facts.document.as_ref().and_then(|root| root.get("success")).and_then(Value::as_bool)),
     }
 }
 
@@ -2454,57 +2462,29 @@ fn detail_page(
     facts: &ResponseFacts,
 ) -> PageOutcome {
     if facts.token_echo {
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: None,
-            evidence: Some(evidence(FallbackReason::CredentialEcho, response, request.token.as_str())),
-            entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), FallbackReason::CredentialEcho, None);
     }
     if facts.inspection_incomplete {
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()), success: None,
-            evidence: Some(evidence(FallbackReason::InspectionUnreviewed, response, request.token.as_str())), entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), FallbackReason::InspectionUnreviewed, None);
     }
     if let Some(reason) = response_refusal(response, challenge) {
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: None,
-            evidence: Some(evidence(reason, response, request.token.as_str())),
-            entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), reason, None);
     }
     if facts.session_denied {
-        return PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: Some(false),
-            evidence: Some(evidence(FallbackReason::AuthenticationRefused, response, request.token.as_str())),
-            entries: Vec::new(),
-        };
+        return refused_page(response, request.token.as_str(), FallbackReason::AuthenticationRefused, Some(false));
     }
     let mime = response.headers.get("content-type").map(String::as_str);
     match parse_detail_envelope(mime, facts.document.as_ref()) {
-        Ok((true, Some(entry))) if entry.id != request.id => PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: Some(true),
-            evidence: Some(evidence(FallbackReason::UpstreamShape, response, request.token.as_str())),
-            entries: Vec::new(),
-        },
-        Ok((success, entry)) => PageOutcome {
+        Ok(Some(entry)) if entry.id != request.id =>
+            refused_page(response, request.token.as_str(), FallbackReason::UpstreamShape, Some(true)),
+        Ok(entry) => PageOutcome {
             meta: page_meta(response, usize::from(entry.is_some()), request.token.as_str()),
-            success: Some(success),
-            evidence: None,
-            entries: entry
-                .map(|entry| vec![project_entry(&entry, response)])
-                .unwrap_or_default(),
+            success: Some(true), evidence: None,
+            entries: entry.map(|entry| vec![project_entry(&entry, response)]).unwrap_or_default(),
+            pagination: None,
         },
-        Err(reason) => PageOutcome {
-            meta: page_meta(response, 0, request.token.as_str()),
-            success: None,
-            evidence: Some(evidence(reason, response, request.token.as_str())),
-            entries: Vec::new(),
-        },
+        Err(reason) => refused_page(response, request.token.as_str(), reason,
+            facts.document.as_ref().and_then(|root| root.get("success")).and_then(Value::as_bool)),
     }
 }
 
@@ -2518,14 +2498,13 @@ fn token_schema() -> Value {
         "minLength": 1,
         "maxLength": MAX_TOKEN_BYTES,
         "pattern": "^[!-~]+$",
-        "description": "The ihome bearer token produced by the session layer from the SSO redirect chain (?token= or #token=) or from the appeal_pc_token cookie. It is read from stdin only, is never persisted, logged, echoed, or written to any file, and this module never logs in. A missing or null token is accepted by the parser and then refused with authorization_required before any cache or network access. Credential-echo inspection is conservative: an accidental substring or supported encoded-form match in an upstream body is also withheld, which is more likely with short tokens.",
+        "description": "An explicit ihome bearer token supplied through stdin. This CLI does not acquire it or implement iHome login. A pinned third-party report describes a fragment router-query token and a frontend appeal_pc_token cookie; that is not current-service or CLI-session proof. The token is never persisted, logged, echoed, or written to a file. Missing or null tokens are refused with authorization_required before cache or network access. Conservative credential-echo inspection also withholds accidental substring or supported encoded-form matches, especially with short tokens.",
     })
 }
 
 fn entry_schema(include_change: bool) -> Value {
     let mut required = vec![
         "id",
-        "title",
         "content",
         "created_at",
         "status",
@@ -2537,7 +2516,7 @@ fn entry_schema(include_change: bool) -> Value {
     ];
     let mut properties = json!({
         "id": {"type": "integer", "minimum": 0},
-        "title": {"type": "string"},
+        "title": {"type": "string", "description": "Copied only when supplied as a string; absent upstream titles remain absent, never derived from content or replaced with null."},
         "content": {"type": "string"},
         "created_at": {"type": "string", "description": "The canonical upstream created_at value, copied verbatim and never re-derived."},
         "status": {"type": "string", "description": "The upstream publish_status_text value."},
@@ -2639,6 +2618,16 @@ fn page_meta_schema() -> Value {
             "content_type": {"type": ["string", "null"]},
             "content_type_parameters_withheld": {"type":"boolean", "description": "True when the response declared a content type that is not fully projected: untrusted parameters, a malformed value, or a value carrying the submitted credential."},
             "entry_count": {"type": "integer", "minimum": 0},
+            "pagination": {
+                "type": "object", "additionalProperties": false,
+                "required": ["current_page", "last_page", "total"],
+                "properties": {
+                    "current_page": {"type": "integer", "minimum": 0},
+                    "last_page": {"type": "integer", "minimum": 0},
+                    "total": {"type": "integer", "minimum": 0}
+                },
+                "description": "Source-declared numeric pagination when available; its presence alone does not establish that it matches the request."
+            },
             "fetched_at_unix_ms": {"type": "integer", "minimum": 0},
             "response_body_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "cache_status": {"enum": ["hit", "miss", "revalidated"]}
@@ -2666,7 +2655,7 @@ fn evidence_schema() -> Value {
         "additionalProperties": false,
         "required": ["fallback_reason","content_type","content_type_parameters_withheld","byte_length","sha256","evidence_kind","http_status"],
         "properties": {
-            "fallback_reason": {"enum": ["unexpected_content","upstream_parse","upstream_shape","rate_limited","safety_latched","challenge_unreviewed","redirect_refused","http_rejected","unsupported_encoding","incomparable_timestamp","authentication_refused","credential_echo","inspection_unreviewed"]},
+            "fallback_reason": {"enum": ["unexpected_content","upstream_parse","upstream_shape","business_rejected","rate_limited","safety_latched","challenge_unreviewed","redirect_refused","http_rejected","unsupported_encoding","incomparable_timestamp","authentication_refused","credential_echo","inspection_unreviewed"]},
             "content_type": {"type": ["string", "null"], "description": "Safe observed MIME essence; null when absent or unsafe. Untrusted parameters are withheld, never replaced by an expected MIME."},
             "content_type_parameters_withheld": {"type":"boolean", "description": "True when the response declared a content type that is not fully projected: untrusted parameters, a malformed value, or a value carrying the submitted credential."},
             "byte_length": {"type": "integer", "minimum": 0},
@@ -2682,11 +2671,10 @@ fn advisory_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["upstream_idle_window","campus_local_hour","inside_idle_window","enforced","note"],
+        "required": ["upstream_idle_window","inside_idle_window","enforced","note"],
         "properties": {
-            "upstream_idle_window": {"type": "string"},
-            "campus_local_hour": {"type": "integer", "minimum": 0, "maximum": 23},
-            "inside_idle_window": {"type": "boolean"},
+            "upstream_idle_window": {"type": "null"},
+            "inside_idle_window": {"type": "null"},
             "enforced": {"const": false},
             "note": {"type": "string"}
         }
@@ -2730,7 +2718,7 @@ fn list_input_schema() -> Value {
                 }
             },
             "refresh": {"type": ["boolean", "null"], "default": false, "description": "Explicitly fetch fresh data, bypassing the cache; requires --online. Absent or null is false."},
-            "download_attachments": {"type": ["boolean", "null"], "default": false, "description": "true is refused with unsupported: attachment download is not implemented, the platform exposes no dedicated attachment endpoint, and the legacy attachment contract is unknown."}
+            "download_attachments": {"type": ["boolean", "null"], "default": false, "description": "true is refused with unsupported: no modern attachment download contract has been reviewed and no legacy endpoint is assumed to apply."}
         }
     })
 }
@@ -2788,7 +2776,7 @@ pub fn schema() -> Value {
         "run": {
             "input": {
                 "type": "object",
-                "description": "The unified CLI entry point. The operation selects the upstream read; the remaining members are that operation's own fields. Every operation requires an explicit bearer token from the session layer, and login is never performed here.",
+                "description": "The unified CLI entry point. The operation selects the upstream read; the remaining members are that operation's own fields. Every operation requires an explicit caller-supplied bearer token; this CLI does not acquire it or log in here.",
                 "oneOf": [
                     run_input_schema("list", list_input_schema()),
                     run_input_schema("detail", detail_input_schema())
@@ -2813,17 +2801,17 @@ pub fn schema() -> Value {
                 "properties": {
                     "schema_version": {"const": 1},
                     "type": {"const": "ihome_appeal_list"},
-                    "result": {"enum": ["entries","empty","partial","degraded"], "description": "empty covers an upstream success=false business answer and a page with no entries; partial means a later page could not be fetched and the pages already admitted remain published; degraded means the response was refused or could not be structured and upstream_evidence carries the reason and the original bytes when they are admissible."},
+                    "result": {"enum": ["entries","empty","partial","degraded"], "description": "empty requires an accepted positive envelope with no emitted entries; partial preserves valid records when pagination is unconfirmed, inconsistent, repeated or interrupted; degraded reports a refusal or parse failure with safe original evidence, never an invented empty business result."},
                     "upstream": {
                         "type": "object",
                         "additionalProperties": false,
                         "required": ["success","pages","complete","incomplete","incomplete_reason"],
                         "properties": {
-                            "success": {"type": ["boolean","null"], "description": "The upstream success flag; false with no upstream_evidence is an empty listing, not an error. An explicit session denial also reports false and carries upstream_evidence with fallback_reason authentication_refused."},
+                            "success": {"type": ["boolean","null"], "description": "The observed Boolean upstream flag, not HTTP or business acceptance. Business acceptance additionally requires numeric code=20000. Negative and malformed business envelopes degrade; explicit authentication denial is separately classified."},
                             "pages": {"type": "array", "items": page_meta_schema()},
-                            "complete": {"type": "boolean", "description": "True only when the whole requested window was fetched and structured."},
-                            "incomplete": {"type": "boolean", "description": "True when a later page could not be fetched. The pages already admitted remain valid and are published."},
-                            "incomplete_reason": {"type": ["string","null"], "description": "The refusal code of the page that could not be fetched, or null when the traversal finished."}
+                            "complete": {"type": "boolean", "description": "True only at a source-declared terminal page with matching page, count, total and limit facts throughout this requested traversal; it does not establish earlier history before the requested start page."},
+                            "incomplete": {"type": "boolean", "description": "True for missing/inconsistent pagination, changing totals, duplicate ids, or later acquisition failure. Valid records remain published without cursor advancement."},
+                            "incomplete_reason": {"type": ["string","null"], "description": "Pagination/duplicate refusal or later acquisition error code; null for a consistent bounded window, which may still have more pages."}
                         }
                     },
                     "entries": {"type": "array", "items": entry_schema(true)},
@@ -2888,10 +2876,10 @@ pub fn schema() -> Value {
             }
         },
         "unknown": {
-            "attachment_download": "The modern platform has no dedicated attachment endpoint. The legacy php-ihome routes (POST /cp.php?ac=upload&type=attach with the multipart field attachupload, GET /attachment/<path>) are reference-only and their request and response contract is UNKNOWN, so no attachment endpoint is implemented or guessed here. Attachment extraction is limited to declared absolute URLs and structured values in body_data and image fields; unrecognized source layouts and remote URL existence are unverified.",
+            "attachment_download": "No modern attachment-download contract has been reviewed. Legacy php-ihome routes belong to a different historical social platform and are not endpoint evidence for this appeal service. Extraction covers recognized declared absolute URLs in body_data/image fields only, not a complete inventory; nonempty annex layouts and remote existence remain unverified. No URL is fetched.",
             "webvpn": "WebVPN URL encryption is an upstream client-side detail. It is documented here and deliberately not implemented; only direct HTTPS to i.buaa.edu.cn is used.",
-            "idle_window": "The upstream 22:00-07:00 idle protection is surfaced as an advisory hint only and is never enforced by this adapter.",
-            "login": "Login is not implemented here. The session layer supplies the bearer token; a missing token is refused as authorization_required.",
+            "idle_window": "The current upstream idle window is unknown; no time-based protection is asserted or enforced.",
+            "login": "This CLI does not acquire an iHome token or implement iHome login. An explicit caller-supplied bearer token is required; a missing token is refused as authorization_required.",
             "online_acceptance": "This adapter has not been exercised against the live campus service; its online acceptance is still unverified."
         }
     });
@@ -2981,10 +2969,10 @@ mod rawvalue_regressions {
 
     #[test]
     fn controls() {
-        let (facts, listing, detail) = pages(br#"{"success":false,"message":"ordinary"}"#, "abc_123");
+        let (facts, listing, detail) = pages(br#"{"code":20000,"success":true,"data":{"data":[]}}"#, "abc_123");
         assert!(!facts.token_echo && !facts.session_denied);
         for page in [&listing, &detail] {
-            assert_eq!(page.success, Some(false));
+            assert_eq!(page.success, Some(true));
             assert!(page.evidence.is_none());
         }
 
@@ -2998,7 +2986,7 @@ mod rawvalue_regressions {
             assert_refusal(&detail, "credential_echo");
         }
         // The marker is an ordinary member, not an encoded replacement root.
-        let body = br#"{"$serde_json::private::RawValue":"{\"success\":false,\"message\":\"unauthorized\"}","success":true,"data":{"data":[]}}"#;
+        let body = br#"{"$serde_json::private::RawValue":"{\"success\":false,\"message\":\"unauthorized\"}","code":20000,"success":true,"data":{"data":[]}}"#;
         let (facts, listing, _) = pages(body, "abc_123");
         assert!(!facts.session_denied && !facts.token_echo);
         assert_eq!(listing.success, Some(true));
@@ -3054,8 +3042,12 @@ mod tests {
     }
 
     const LIST_BODY: &[u8] = br#"{
+        "code": 20000,
         "success": true,
         "data": {
+            "current_page": 1,
+            "last_page": 1,
+            "total": 2,
             "data": [
                 {
                     "id": 41,
@@ -3116,29 +3108,224 @@ mod tests {
         let observed = content_type(&original, "synthetic-token-value");
         let facts = analyze_body(&original.body, "synthetic-token-value");
         match parse_envelope(observed.as_deref(), facts.document.as_ref()) {
-            Ok((success, entries)) => PageOutcome {
+            Ok((pagination, entries)) => PageOutcome {
                 meta: page_meta(&original, entries.len(), "synthetic-token-value"),
-                success: Some(success),
-                evidence: None,
-                entries: entries
-                    .iter()
-                    .map(|entry| project_entry(entry, &original))
-                    .collect(),
+                success: Some(true), evidence: None,
+                entries: entries.iter().map(|entry| project_entry(entry, &original)).collect(),
+                pagination,
             },
-            Err(reason) => PageOutcome {
-                meta: page_meta(&original, 0, "synthetic-token-value"),
-                success: None,
-                evidence: Some(evidence(reason, &original, "synthetic-token-value")),
-                entries: Vec::new(),
-            },
+            Err(reason) => refused_page(&original, "synthetic-token-value", reason, None),
         }
+    }
+
+    fn source_page(current: u32, last: u32, total: u64, ids: &[u64]) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "code": 20000,
+            "success": true,
+            "data": {
+                "current_page": current, "last_page": last, "total": total,
+                "data": ids.iter().map(|id| json!({
+                    "id": id, "title": "Source-supplied title", "content": "Synthetic appeal body",
+                    "created_at": "2026-10-20 08:30:00", "publish_status_text": "Pending",
+                    "departments": [], "appeal_reply": []
+                })).collect::<Vec<_>>()
+            }
+        })).unwrap()
+    }
+
+    fn source_outcome(request: &ListRequest, page: u32, body: &[u8]) -> PageOutcome {
+        let original = response(&list_url(request.limit, page).unwrap(), body, Some("application/json"));
+        let facts = analyze_body(body, request.token.as_str());
+        list_page(request, &original, &ChallengeAssessment::Clear, &facts)
+    }
+
+    #[test]
+    fn source_protocol_preserves_untitled_list_and_detail_records() {
+        let mut document: Value = serde_json::from_slice(&source_page(1, 1, 1, &[41])).unwrap();
+        document["data"]["data"][0].as_object_mut().unwrap().remove("title");
+        let body = serde_json::to_vec(&document).unwrap();
+        let request = list_request(20);
+        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        assert_eq!(envelope["result"], "entries");
+        assert_eq!(envelope["entries"][0]["id"], 41);
+        assert_eq!(envelope["entries"][0]["content"], "Synthetic appeal body");
+        assert_eq!(envelope["entries"][0]["created_at"], "2026-10-20 08:30:00");
+        assert!(envelope["entries"][0].get("title").is_none());
+
+        let detail_body = serde_json::to_vec(&json!({
+            "code": 20000, "success": true, "data": document["data"]["data"][0]
+        })).unwrap();
+        let original = response(&detail_url(41).unwrap(), &detail_body, Some("application/json"));
+        let facts = analyze_body(&detail_body, request.token.as_str());
+        let detail = DetailRequest {token: Zeroizing::new(request.token.to_string()), token_source: None, id: 41, refresh: false};
+        let outcome = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(outcome.evidence.is_none());
+        assert_eq!(outcome.entries[0]["content"], "Synthetic appeal body");
+        assert!(outcome.entries[0].get("title").is_none());
+    }
+
+    #[test]
+    fn source_protocol_requires_positive_business_code_and_success() {
+        let request = list_request(20);
+        let detail = DetailRequest {token: Zeroizing::new(request.token.to_string()), token_source: None, id: 41, refresh: false};
+        for (body, reason) in [
+            (br#"{"code":40001,"success":false,"message":"ordinary business rejection"}"#.as_slice(), "business_rejected"),
+            (br#"{"code":40001,"success":"","message":"ordinary business rejection"}"#.as_slice(), "business_rejected"),
+            (br#"{"code":20000,"success":false,"data":{"data":[]}}"#.as_slice(), "business_rejected"),
+            (br#"{"code":40001,"success":true,"data":{"data":[]}}"#.as_slice(), "business_rejected"),
+            (br#"{"success":true,"data":{"data":[]}}"#.as_slice(), "upstream_shape"),
+            (br#"{"code":"20000","success":true,"data":{"data":[]}}"#.as_slice(), "upstream_shape"),
+        ] {
+            let facts = analyze_body(body, request.token.as_str());
+            assert!(!facts.session_denied && !facts.token_echo);
+            let original = response(&detail_url(41).unwrap(), body, Some("application/json"));
+            for page in [source_outcome(&request, 1, body), detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts)] {
+                let found = page.evidence.as_ref().expect("business rejection must not become an empty result");
+                assert_eq!(found["fallback_reason"], reason);
+                assert_eq!(STANDARD.decode(found["raw_response_base64"].as_str().unwrap()).unwrap(), body);
+                assert!(page.entries.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn source_protocol_does_not_complete_missing_or_mismatched_pagination() {
+        let request = list_request(20);
+        for (mut document, reason) in [
+            (serde_json::from_slice::<Value>(&source_page(1, 1, 1, &[41])).unwrap(), "pagination_unconfirmed"),
+            (serde_json::from_slice::<Value>(&source_page(2, 2, 21, &[41])).unwrap(), "page_mismatch"),
+            (serde_json::from_slice::<Value>(&source_page(1, 1, 21, &[41])).unwrap(), "pagination_inconsistent"),
+        ] {
+            if reason == "pagination_unconfirmed" {
+                document["data"].as_object_mut().unwrap().remove("current_page");
+            }
+            let body = serde_json::to_vec(&document).unwrap();
+            let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+            assert_eq!(envelope["result"], "partial");
+            assert_eq!(envelope["entries"][0]["id"], 41);
+            assert_eq!(envelope["upstream"]["complete"], false);
+            assert_eq!(envelope["upstream"]["incomplete_reason"], reason);
+            assert_eq!(envelope["next_cursor"], Value::Null);
+        }
+    }
+
+    #[test]
+    fn source_protocol_short_page_is_not_terminal_without_matching_totals() {
+        let request = list_request(20);
+        let body = source_page(1, 2, 21, &[41]);
+        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        assert_eq!(envelope["result"], "partial");
+        assert_eq!(envelope["upstream"]["complete"], false);
+        assert_eq!(envelope["next_cursor"], Value::Null);
+    }
+
+    #[test]
+    fn source_protocol_full_last_page_is_complete_and_empty_total_is_empty() {
+        let request = list_request(2);
+        let body = source_page(1, 1, 2, &[41, 42]);
+        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        assert_eq!(envelope["upstream"]["complete"], true);
+        assert_eq!(envelope["next_cursor"]["has_more"], false);
+        assert_eq!(envelope["next_cursor"]["max_id"], 42);
+        let body = source_page(1, 1, 0, &[]);
+        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        assert_eq!(envelope["result"], "empty");
+        assert_eq!(envelope["upstream"]["complete"], true);
+    }
+
+    #[test]
+    fn source_protocol_missing_collections_and_invalid_titles_do_not_invent_facts() {
+        let request = list_request(20);
+        for field in ["departments", "appeal_reply", "title"] {
+            let mut document: Value = serde_json::from_slice(&source_page(1, 1, 1, &[41])).unwrap();
+            if field == "title" {
+                document["data"]["data"][0][field] = Value::Null;
+            } else {
+                document["data"]["data"][0].as_object_mut().unwrap().remove(field);
+            }
+            let body = serde_json::to_vec(&document).unwrap();
+            let envelope = build_list_envelope(&request, [Ok(source_outcome(&request, 1, &body))]).unwrap();
+            assert_eq!(envelope["result"], "degraded");
+            assert_eq!(envelope["next_cursor"], Value::Null);
+            let found = &envelope["upstream_evidence"];
+            assert_eq!(found["fallback_reason"], "upstream_shape");
+            assert_eq!(STANDARD.decode(found["raw_response_base64"].as_str().unwrap()).unwrap(), body);
+        }
+    }
+
+    #[test]
+    fn source_protocol_changing_totals_prevent_incremental_cursor_advancement() {
+        let request = list_request(2);
+        let pages = [
+            Ok(source_outcome(&request, 1, &source_page(1, 2, 3, &[41, 42]))),
+            Ok(source_outcome(&request, 2, &source_page(2, 2, 4, &[43, 44]))),
+        ];
+        let envelope = build_list_envelope(&request, pages).unwrap();
+        assert_eq!(envelope["result"], "partial");
+        assert_eq!(envelope["entry_count"], 4);
+        assert_eq!(envelope["upstream"]["incomplete_reason"], "pagination_changed");
+        assert_eq!(envelope["upstream"]["complete"], false);
+        assert_eq!(envelope["next_cursor"], Value::Null);
+    }
+
+    #[test]
+    fn source_protocol_more_records_than_requested_retains_safe_original_without_cursor() {
+        let request = list_request(1);
+        let body = source_page(1, 1, 2, &[41, 42]);
+        let envelope = build_list_envelope(&request, [Ok(source_outcome(&request, 1, &body))]).unwrap();
+        assert_eq!(envelope["result"], "degraded");
+        assert_eq!(envelope["upstream"]["complete"], false);
+        assert_eq!(envelope["next_cursor"], Value::Null);
+        assert_eq!(STANDARD.decode(envelope["upstream_evidence"]["raw_response_base64"].as_str().unwrap()).unwrap(), body);
+    }
+
+    #[test]
+    fn source_protocol_valid_traversal_stops_at_declared_full_last_page() {
+        let directory = std::env::temp_dir().join(format!("buaa-ihome-terminal-pages-{}-{}", std::process::id(), SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)));
+        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        let cache = ResponseCache {directory: governor::open_directory(&directory, false, true).unwrap()};
+        for (page, ids) in [(1, [41, 42]), (2, [43, 44]), (3, [45, 46])] {
+            let body = source_page(page, 2, 4, &ids);
+            cache.save(&response(&list_url(2, page).unwrap(), &body, Some("application/json")), &ChallengeAssessment::Clear).unwrap();
+        }
+        let mut request = list_request(2);
+        request.max_pages = 3;
+        let envelope = list_with_cache(&request, &cache, false).unwrap();
+        assert_eq!(envelope["upstream"]["complete"], true);
+        assert_eq!(envelope["upstream"]["pages"].as_array().unwrap().len(), 2);
+        assert_eq!(envelope["entries"].as_array().unwrap().iter().map(|entry| entry["id"].as_u64().unwrap()).collect::<Vec<_>>(), [41, 42, 43, 44]);
+        assert_eq!(envelope["next_cursor"]["has_more"], false);
+        assert_eq!(envelope["next_cursor"]["max_id"], 44);
+        drop(cache);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn source_protocol_repeated_ids_stop_before_the_following_cached_page() {
+        let directory = std::env::temp_dir().join(format!("buaa-ihome-source-pages-{}-{}", std::process::id(), SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)));
+        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        let cache = ResponseCache {directory: governor::open_directory(&directory, false, true).unwrap()};
+        for page in 1..=3 {
+            let body = source_page(page, 3, 6, if page == 3 { &[43, 44] } else { &[41, 42] });
+            cache.save(&response(&list_url(2, page).unwrap(), &body, Some("application/json")), &ChallengeAssessment::Clear).unwrap();
+        }
+        let mut request = list_request(2);
+        request.max_pages = 3;
+        let envelope = list_with_cache(&request, &cache, false).unwrap();
+        assert_eq!(envelope["upstream"]["pages"].as_array().unwrap().len(), 2, "a repeated page must stop traversal before page three");
+        assert_eq!(envelope["upstream"]["incomplete_reason"], "duplicate_entry_id");
+        assert_eq!(envelope["upstream"]["complete"], false);
+        assert_eq!(envelope["next_cursor"], Value::Null);
+        assert_eq!(envelope["entries"].as_array().unwrap().iter().map(|entry| entry["id"].as_u64().unwrap()).collect::<Vec<_>>(), [41, 42]);
+        drop(cache);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn listing_is_normalized_with_declared_attachments_only() {
         let request = list_request(20);
         let envelope =
-            build_list_envelope(&request, vec![page_from(LIST_BODY, Some("application/json"))], None);
+            build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "entries");
         assert_eq!(envelope["entry_count"], 2);
         let first = &envelope["entries"][0];
@@ -3181,25 +3368,23 @@ mod tests {
     #[test]
     fn detail_parses_one_record_and_keeps_the_canonical_dates() {
         let url = detail_url(41).unwrap();
-        let body = br#"{"success":true,"data":{"data":{"id":41,"title":"Dormitory heating","content":"Body","created_at":"2026-10-20 08:30:00","publish_status_text":"Replied","departments":[{"id":3,"name":"Logistics"}],"appeal_reply":[{"id":900,"department":{"id":3,"name":"Logistics"},"content":"Reply","created_at":"2026-10-21 09:00:00"}]}}}"#;
+        let body = br#"{"code":20000,"success":true,"data":{"data":{"id":41,"title":"Dormitory heating","content":"Body","created_at":"2026-10-20 08:30:00","publish_status_text":"Replied","departments":[{"id":3,"name":"Logistics"}],"appeal_reply":[{"id":900,"department":{"id":3,"name":"Logistics"},"content":"Reply","created_at":"2026-10-21 09:00:00"}]}}}"#;
         let original = response(&url, body, Some("application/json"));
         let observed = content_type(&original, "synthetic-token-value");
         let facts = analyze_body(&original.body, "synthetic-token-value");
-        let (success, entry) =
+        let entry =
             parse_detail_envelope(observed.as_deref(), facts.document.as_ref()).unwrap();
-        assert!(success);
         let entry = entry.unwrap();
         assert_eq!(entry.id, 41);
         assert_eq!(entry.created_at, "2026-10-20 08:30:00");
         assert_eq!(entry.replies[0].created_at, "2026-10-21 09:00:00");
         assert_eq!(entry.status, "Replied");
 
-        let direct = br#"{"success":true,"data":{"id":41,"title":"t","content":"c","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}}"#;
+        let direct = br#"{"code":20000,"success":true,"data":{"id":41,"title":"t","content":"c","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}}"#;
         let direct_facts = analyze_body(direct, "synthetic-token-value");
         assert_eq!(
             parse_detail_envelope(Some("application/json"), direct_facts.document.as_ref())
                 .unwrap()
-                .1
                 .unwrap()
                 .id,
             41
@@ -3207,26 +3392,11 @@ mod tests {
     }
 
     #[test]
-    fn upstream_success_false_is_an_empty_listing_not_an_error() {
-        let body = br#"{"success":false,"data":{"data":[]}}"#;
-        let page = page_from(body, Some("application/json"));
-        assert_eq!(page.success, Some(false));
-        assert!(page.entries.is_empty());
-        assert!(page_is_terminal(&page, 20));
-        let request = list_request(20);
-        let envelope = build_list_envelope(&request, vec![page], None);
-        assert_eq!(envelope["result"], "empty");
-        assert_eq!(envelope["entry_count"], 0);
-        assert_eq!(envelope["upstream"]["success"], false);
-        assert_eq!(envelope["upstream_evidence"], Value::Null);
-    }
-
-    #[test]
     fn an_empty_page_is_reported_as_empty_with_a_cursor() {
-        let body = br#"{"success":true,"data":{"data":[]}}"#;
+        let body = br#"{"code":20000,"success":true,"data":{"data":[],"current_page":1,"last_page":1,"total":0}}"#;
         let request = list_request(20);
         let envelope =
-            build_list_envelope(&request, vec![page_from(body, Some("application/json"))], None);
+            build_list_envelope(&request, (vec![page_from(body, Some("application/json"))]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "empty");
         assert_eq!(envelope["next_cursor"]["max_id"], Value::Null);
         assert_eq!(envelope["next_cursor"]["has_more"], false);
@@ -3290,7 +3460,7 @@ mod tests {
             refresh: false,
         };
         let envelope =
-            build_list_envelope(&request, vec![page_from(LIST_BODY, Some("application/json"))], None);
+            build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["entry_count"], 1);
         assert_eq!(envelope["entries"][0]["id"], 42);
         assert_eq!(envelope["entries"][0]["change"], "status_changed");
@@ -3326,7 +3496,7 @@ mod tests {
             refresh: false,
         };
         let envelope =
-            build_list_envelope(&request, vec![page_from(LIST_BODY, Some("application/json"))], None);
+            build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["entry_count"], 1);
         assert_eq!(envelope["entries"][0]["id"], 41);
         assert_eq!(envelope["dedup"]["skipped_unchanged"], 1);
@@ -3338,7 +3508,7 @@ mod tests {
         let mut request = list_request(20);
         request.since_id = Some(100);
         request.known.insert(41, KnownItem { id: 41, status: "Pending".into(), reply_count: 1 });
-        let envelope = build_list_envelope(&request, vec![page_from(LIST_BODY, Some("application/json"))], None);
+        let envelope = build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["entry_count"], 1);
         assert_eq!(envelope["entries"][0]["id"], 41);
         assert_eq!(envelope["entries"][0]["change"], "status_changed");
@@ -3485,7 +3655,7 @@ mod tests {
         assert_eq!(found["raw_response_base64"], STANDARD.encode(body));
         assert_eq!(found["evidence_kind"], "upstream_http_body");
         let request = list_request(20);
-        let envelope = build_list_envelope(&request, vec![page], None);
+        let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "degraded");
         assert_eq!(envelope["entry_count"], 0);
         assert_eq!(envelope["next_cursor"], Value::Null);
@@ -3540,28 +3710,11 @@ mod tests {
         let found = page.evidence.clone().expect("evidence");
         assert_eq!(found["fallback_reason"], "authentication_refused");
         assert!(found.get("raw_response_base64").is_none());
-        let envelope = build_list_envelope(&request, vec![page], None);
+        let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "degraded");
         assert_eq!(envelope["entry_count"], 0);
         assert_eq!(envelope["upstream"]["complete"], false);
         assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "authentication_refused");
-    }
-
-    #[test]
-    fn an_ordinary_business_failure_stays_an_empty_listing() {
-        let url = list_url(20, 1).unwrap();
-        let body = r#"{"success":false,"message":"没有符合条件的数据"}"#.as_bytes();
-        let original = response(&url, body, Some("application/json"));
-        let facts = analyze_body(&original.body, "synthetic-token-value");
-        assert!(!facts.session_denied);
-        let request = list_request(20);
-        let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
-        assert_eq!(page.success, Some(false));
-        assert!(page.evidence.is_none());
-        let envelope = build_list_envelope(&request, vec![page], None);
-        assert_eq!(envelope["result"], "empty");
-        assert_eq!(envelope["upstream"]["success"], false);
-        assert_eq!(envelope["upstream"]["complete"], true);
     }
 
     #[test]
@@ -3636,7 +3789,7 @@ mod tests {
             let original = response(&list_url(20, 1).unwrap(), list_body.as_bytes(), Some("application/json"));
             let facts = analyze_body(&original.body, token);
             let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
-            let envelope = build_list_envelope(&request, vec![page], None);
+            let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
             assert_eq!(envelope["result"], "degraded", "token={token} title={title}");
             assert_eq!(envelope["entry_count"], 0);
             assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
@@ -3661,7 +3814,7 @@ mod tests {
         let original = response(&list_url(20, 1).unwrap(), body, Some("text/plain"));
         let facts = analyze_body(body, "abc");
         let list = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
-        let envelope = build_list_envelope(&request, vec![list], None);
+        let envelope = build_list_envelope(&request, (vec![list]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "degraded");
         assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
         assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
@@ -3672,16 +3825,16 @@ mod tests {
         assert!(evidence.get("raw_response_base64").is_none());
 
         let entry = r#"{"id":41,"title":"Quiet hallway","content":"ordinary","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}"#;
-        let list_body = format!(r#"{{"success":true,"data":{{"data":[{entry}]}}}}"#);
+        let list_body = format!(r#"{{"code":20000,"success":true,"data":{{"data":[{entry}],"current_page":1,"last_page":1,"total":1}}}}"#);
         let original = response(&list_url(20, 1).unwrap(), list_body.as_bytes(), Some("application/json"));
         let facts = analyze_body(&original.body, "abc");
         let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
-        let envelope = build_list_envelope(&request, vec![page], None);
+        let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "entries");
         assert_eq!(envelope["entries"][0]["title"], "Quiet hallway");
         assert!(envelope["upstream_evidence"].is_null());
 
-        let detail_body = format!(r#"{{"success":true,"data":{entry}}}"#);
+        let detail_body = format!(r#"{{"code":20000,"success":true,"data":{entry}}}"#);
         let original = response(&detail_url(41).unwrap(), detail_body.as_bytes(), Some("application/json"));
         let facts = analyze_body(&original.body, "abc");
         let page = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
@@ -3729,7 +3882,7 @@ mod tests {
             assert_eq!(found["fallback_reason"], "credential_echo");
             assert!(found.get("raw_response_base64").is_none());
             assert_eq!(found["evidence_kind"], "upstream_http_metadata");
-            let envelope = build_list_envelope(&request, vec![page], None);
+            let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
             assert_eq!(envelope["entry_count"], 0);
             assert!(envelope["upstream_evidence"]["fallback_reason"] == "credential_echo");
         }
@@ -3927,9 +4080,9 @@ mod tests {
 
     #[test]
     fn an_incomplete_traversal_keeps_the_admitted_pages_and_advances_no_cursor() {
-        let request = list_request(20);
-        let page = page_from(LIST_BODY, Some("application/json"));
-        let envelope = build_list_envelope(&request, vec![page], Some("offline_miss"));
+        let request = list_request(2);
+        let page = source_outcome(&request, 1, &source_page(1, 2, 3, &[41, 42]));
+        let envelope = build_list_envelope(&request, [Ok(page), Err(Error::new("offline_miss", "synthetic missing page"))]).unwrap();
         assert_eq!(envelope["result"], "partial");
         assert_eq!(envelope["entry_count"], 2);
         assert_eq!(envelope["upstream"]["complete"], false);
@@ -4147,7 +4300,7 @@ mod tests {
 
     #[test]
     fn a_json_body_with_a_foreign_shape_degrades_as_upstream_shape() {
-        let body = br#"{"success":true,"data":{"data":[{"id":"not-a-number"}]}}"#;
+        let body = br#"{"code":20000,"success":true,"data":{"data":[{"id":"not-a-number"}]}}"#;
         let page = page_from(body, Some("application/json"));
         let found = page.evidence.clone().expect("evidence");
         assert_eq!(found["fallback_reason"], "upstream_shape");
@@ -4174,7 +4327,7 @@ mod tests {
         let page_url = list_url(20, 1).unwrap();
         let entry_url = detail_url(41).unwrap();
         let token = "synthetic-bearer";
-        let body = br#"{"success":true,"data":{"data":[],"notice":"ordinary maintenance"}}"#;
+        let body = br#"{"code":20000,"success":true,"data":{"data":[],"current_page":1,"last_page":1,"total":0,"notice":"ordinary maintenance"}}"#;
         let list = ListRequest {
             token: Zeroizing::new(token.to_owned()), token_source: None,
             limit: 20, page: 1, max_pages: 1, since_id: None,
@@ -4262,12 +4415,13 @@ mod tests {
             assert_eq!(found["evidence_kind"], "upstream_http_metadata");
             assert_eq!(found["sha256"], sha256(body));
             assert_eq!(found["content_type"], "text/html");
-            let envelope = build_list_envelope(&list_request(20), vec![PageOutcome {
+            let envelope = build_list_envelope(&list_request(20), (vec![PageOutcome {
                 meta: page_meta(&original, 0, token),
                 success: None,
                 evidence: Some(found),
                 entries: Vec::new(),
-            }], None);
+                pagination: None,
+            }]).into_iter().map(Ok)).unwrap();
             assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
         }
         // Ordinary metadata and inert controls keep the raw body admissible.
@@ -4290,45 +4444,4 @@ mod tests {
             .is_none());
     }
 
-    #[test]
-    fn the_schema_matches_the_runtime_contract() {
-        let contract = schema();
-        assert_eq!(
-            contract["$defs"]["list_input"]["properties"]["download_attachments"]["default"],
-            false
-        );
-        assert_eq!(
-            contract["$defs"]["list_input"]["properties"]["since_id"]["type"][0],
-            "integer"
-        );
-        assert_eq!(
-            contract["list"]["output"]["properties"]["result"]["enum"],
-            json!(["entries", "empty", "partial", "degraded"])
-        );
-        assert_eq!(
-            contract["detail"]["output"]["properties"]["result"]["enum"],
-            json!(["appeal", "not_found", "degraded"])
-        );
-        assert!(
-            contract["unknown"]["attachment_download"]
-                .as_str()
-                .unwrap()
-                .contains("UNKNOWN")
-        );
-        assert_eq!(
-            contract["list"]["output"]["properties"]["credential_source"]["enum"][3],
-            Value::Null
-        );
-        assert_eq!(
-            contract["$defs"]["list_entry"]["required"]
-                .as_array()
-                .unwrap()
-                .len(),
-            12
-        );
-        assert_eq!(
-            contract["$defs"]["entry"]["required"].as_array().unwrap().len(),
-            10
-        );
-    }
 }

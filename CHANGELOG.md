@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Preserve iHome records without inventing titles. Require the source-shaped
+  positive business envelope (`code=20000`, `success=true`) for list/detail;
+  negative or unknown envelopes retain safe original evidence instead of
+  becoming empty results. Existing authentication/challenge/echo refusals keep
+  precedence, and missing required collections do not become empty arrays.
+- Bind iHome traversal to declared page/count/total/last-page facts. Lazy page
+  acquisition stops on anomalies, duplicate IDs, changing totals or a declared
+  terminal page; anomalous/interrupted traversals retain valid records without
+  advancing an incremental cursor. A full final page can now be complete.
+- Correct iHome provenance: this CLI does not acquire its bearer token, current
+  idle-window fields are null rather than an asserted schedule, and no reviewed
+  modern attachment-download contract or complete attachment inventory is
+  claimed. Remove the obsolete local-hour output and clock helpers. Synthetic
+  offline/native proof does not establish current campus compatibility.
 - Add `smart session [--online]`: one explicitly authorized, in-memory CAS
   login for classrooms or library followed by one selected read, under the
   existing Authentication lease. Validate intent/query before opening I/O;

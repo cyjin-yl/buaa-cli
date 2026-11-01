@@ -78,6 +78,7 @@ cargo build --locked --offline
 | Announcements | `announcements list\|article\|document\|history`; `announcements college-source <college> [root\|notices\|public-notices]` | Selected source-bound pages and documents only; broader adapters, attachments, and history remain partial. |
 | Public SPOC | `spoc surface [root\|entry]`; `spoc script` | Sanitized public-surface metadata only; this is not authenticated course/material access. See [`docs/SPOC.md`](docs/SPOC.md). |
 | Smart reads | `smart [--online]`; `smart session [--online]` | Existing cookie/token reads, or one explicit in-memory CAS login followed by one classrooms/library read. Strict-TLS loopback and local CLI proof only; no live campus acceptance, persistence, automatic refresh or attendance mutation. |
+| iHome appeals | `ihome list\|detail [--online]` | Explicit caller-supplied bearer token through stdin; cache-first read only, no iHome login/token acquisition or attachment fetching. Source-shaped records and pagination have offline/native proof, not live campus acceptance. |
 | Gateway and governor | `gateway usage` and explicit operation flows; `governor boot-review-plan\|boot-review-commit --offline` | Cache-first gateway usage and local safety flows; no live account operation is claimed. See [`docs/GATEWAY.md`](docs/GATEWAY.md). |
 | Defect reporting | `report` | Explicitly writes a GitHub Issue from operator-sanitized input through an installed, authenticated `gh`; authentication failures and uncertain writer outcomes remain explicit. The command does not redact private content: never attach credentials or raw private responses. |
 
@@ -105,6 +106,26 @@ there is no stored-session reuse, automatic login refresh or retry. Challenges,
 deferrals and unconfirmed authentication stop the flow. A complete HTTP failure
 is not presented as a password verdict. Authentication responses are never raw
 read evidence; credential echoes in the final response are withheld.
+
+### Source-faithful iHome reads
+
+`ihome list` and `ihome detail` accept their JSON input only through stdin;
+`buaa schema` publishes `commands.ihome.list` and `.detail`. This CLI does not
+acquire an iHome token. Its optional `token_source` is a caller declaration,
+not proof of an implemented login flow or current token lifetime.
+
+Records without a title remain untitled; supplied titles and dates are copied,
+not reconstructed. HTTP 200 alone is not business success: numeric `code=20000`
+and Boolean `success=true` are required. Negative or unknown business envelopes
+return degraded evidence with safe original bytes rather than an empty result.
+
+Pagination must match the requested page/limit and declared total/last page.
+Missing or inconsistent metadata, repeated IDs, changing totals and later read
+failures preserve valid records but stop traversal without advancing a cursor.
+A consistent bounded window may return `has_more`; advance incremental cursors
+only after completing its traversal. Unknown idle-window and attachment
+contracts remain unknown; declared URLs are neither fetched nor a verified
+complete attachment inventory. No current-campus iHome acceptance is claimed.
 
 ## Examples
 
