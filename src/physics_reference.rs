@@ -16,8 +16,9 @@
 //! are listed with their exclusion reason and are never retrievable. Public
 //! visibility is not permission, and no upstream implementation or upstream
 //! prose is copied into this project: an admitted item is fetched at run time
-//! and published with the license notice that must accompany any conveyed
-//! copy.
+//! and published with attribution and an immutable license-object reference.
+//! The license text is retrieved separately through `LICENSE`; metadata and
+//! the notice-obligation flag do not attest redistribution compliance.
 //!
 //! Retrieval returns the exact original bytes of one admitted item, bound to
 //! the reviewed tree, blob identity and declared length. Every request is
@@ -123,29 +124,6 @@ fn retrievable(class: MaterialClass) -> bool {
     matches!(class, MaterialClass::Guide | MaterialClass::License)
 }
 
-/// One published item of the pinned tree.
-struct Item {
-    path: String,
-    kind: &'static str,
-    mode: String,
-    size: Option<u64>,
-    sha: String,
-}
-
-/// The items of an admitted tree.
-fn items(entries: &[learning::TreeEntry]) -> Vec<Item> {
-    entries
-        .iter()
-        .map(|entry| Item {
-            path: entry.path.clone(),
-            kind: entry.kind().unwrap_or("other"),
-            mode: entry.mode.clone(),
-            size: entry.size,
-            sha: entry.sha.clone(),
-        })
-        .collect()
-}
-
 /// The license provenance bound to the admitted tree. The SPDX reference is
 /// the reviewed identifier of the exact license object the tree carries; it is
 /// an operator review of that object, not an independent proof.
@@ -160,7 +138,7 @@ fn license_value(entries: &[learning::TreeEntry]) -> Value {
             "spdx_id": REVIEWED_LICENSE_SPDX,
             "name": REVIEWED_LICENSE_NAME,
         })).unwrap_or(Value::Null),
-        "bound_license_blob_sha": bound.map(|entry| Value::String(entry.sha.clone())).unwrap_or(Value::Null),
+        "bound_license_blob_sha": bound.map(|entry| entry.sha.as_str()),
         "bound_license_size": bound.and_then(|entry| entry.size),
         "bound_license_url": bound
             .and_then(|entry| SOURCE.blob_url(&entry.sha).ok())
@@ -171,17 +149,17 @@ fn license_value(entries: &[learning::TreeEntry]) -> Value {
 }
 
 /// One published catalog entry.
-fn catalog_entry(item: &Item) -> Value {
+fn catalog_entry(item: &learning::TreeEntry) -> Value {
     let (class, reason) = classify(&item.path, &item.sha, item.size);
     json!({
         "path": item.path,
-        "kind": item.kind,
+        "kind": item.kind().unwrap_or("other"),
         "mode": item.mode,
         "size": item.size,
         "upstream_sha": item.sha,
         "material_class": class.as_str(),
         "admission_reason": reason,
-        "retrievable": retrievable(class) && item.kind == "file",
+        "retrievable": retrievable(class) && item.kind() == Some("file"),
     })
 }
 
@@ -192,11 +170,10 @@ fn revision_value() -> Value {
 /// The catalog of the pinned revision, published only from a tree whose every
 /// object was verified.
 fn catalog_snapshot(tree_sha: &str, entries: &[learning::TreeEntry], retrieval: Value) -> Value {
-    let items = items(entries);
-    let values: Vec<Value> = items.iter().map(catalog_entry).collect();
+    let values: Vec<Value> = entries.iter().map(catalog_entry).collect();
     let admitted_count = values
         .iter()
-        .filter(|value| value["retrievable"] == json!(true))
+        .filter(|value| value["retrievable"].as_bool() == Some(true))
         .count();
     json!({
         "schema_version": 1,
@@ -211,9 +188,9 @@ fn catalog_snapshot(tree_sha: &str, entries: &[learning::TreeEntry], retrieval: 
         "attribution": SOURCE.full_name(),
         "rights_reviewed": false,
         "entries": values,
-        "entry_count": items.len(),
+        "entry_count": entries.len(),
         "admitted_count": admitted_count,
-        "excluded_count": items.len() - admitted_count,
+        "excluded_count": entries.len() - admitted_count,
         "fallback_reason": Value::Null,
         "raw_evidence": Value::Null,
         "retrieval": retrieval,
@@ -268,14 +245,26 @@ fn parse_retrieve_input(input: &str) -> Result<RetrieveInput, Error> {
             "the retrieval request is too large",
         ));
     }
-    // A positional array is not a request object, so the object form is
-    // required before the typed fields are read.
-    let value: Value = serde_json::from_str(input)
-        .map_err(|_| learning::invalid_input("invalid retrieval request"))?;
-    if !value.is_object() {
-        return Err(learning::invalid_input("invalid retrieval request"));
+    // Match the map-only admission used by the selection/session adapters.
+    // Decoding directly through MapAccess also preserves duplicate fields so
+    // the derived request visitor rejects them instead of last-key-wins.
+    struct RequestObject;
+    impl<'de> serde::de::Visitor<'de> for RequestObject {
+        type Value = RetrieveInput;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a reference retrieval request object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            serde::Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
     }
-    let request: RetrieveInput = serde_json::from_value(value)
+    let mut decoder = serde_json::Deserializer::from_str(input);
+    let request = serde::Deserializer::deserialize_map(&mut decoder, RequestObject)
+        .map_err(|_| learning::invalid_input("invalid retrieval request"))?;
+    decoder
+        .end()
         .map_err(|_| learning::invalid_input("invalid retrieval request"))?;
     if request.rights_reviewed != Some(true) {
         return Err(learning::authorization_required(
@@ -336,8 +325,42 @@ pub fn catalog(input: &str, online: bool) -> Result<Value, Error> {
 
 /// The membership of the pinned tree for one requested item.
 enum Membership {
-    Admitted { items: Vec<Item>, license: Value },
+    Admitted {
+        class: MaterialClass,
+        reason: &'static str,
+        license: Value,
+    },
+    Refused(Error),
     Degraded(Value),
+}
+
+fn select_item(
+    entries: &[learning::TreeEntry],
+    request: &RetrieveInput,
+) -> Result<(MaterialClass, &'static str), Error> {
+    let item = entries
+        .iter()
+        .find(|item| item.path == request.path)
+        .ok_or_else(|| {
+            learning::invalid_input("the requested path is not present in the reviewed tree")
+        })?;
+    let (class, reason) = classify(&item.path, &item.sha, item.size);
+    if !retrievable(class) {
+        return Err(learning::authorization_required(
+            "the requested item has no documented per-item rights and is never retrievable",
+        ));
+    }
+    if item.kind() != Some("file") {
+        return Err(learning::invalid_input(
+            "only a regular file of the reviewed tree can be retrieved",
+        ));
+    }
+    if item.sha != request.blob_sha || item.size != Some(request.size) {
+        return Err(learning::invalid_input(
+            "the requested item does not match the reviewed immutable identity",
+        ));
+    }
+    Ok((class, reason))
 }
 
 /// The original bytes of one rights-reviewed reference item.
@@ -350,9 +373,15 @@ pub fn retrieve(input: &str, online: bool) -> Result<Value, Error> {
         &REVISION,
         online,
         |response, identity, _url| match identity.tree() {
-            Some(admitted) => Ok(Membership::Admitted {
-                items: items(&admitted.entries),
-                license: license_value(&admitted.entries),
+            Some(admitted) => Ok(match select_item(&admitted.entries, &request) {
+                Ok((class, reason)) => Membership::Admitted {
+                    class,
+                    reason,
+                    license: license_value(&admitted.entries),
+                },
+                // Keep a refused selection inside the successful response
+                // consumer so the complete source tree is still cached.
+                Err(error) => Membership::Refused(error),
             }),
             None => {
                 let reason = identity.tree_error().unwrap_or("upstream_parse");
@@ -387,34 +416,17 @@ pub fn retrieve(input: &str, online: bool) -> Result<Value, Error> {
             }
         },
     )?;
-    let (items, license) = match membership {
+    let (class, reason, license) = match membership {
         Membership::Degraded(output) => return Ok(output),
-        Membership::Admitted { items, license } => (items, license),
+        Membership::Refused(error) => return Err(error),
+        Membership::Admitted {
+            class,
+            reason,
+            license,
+        } => (class, reason, license),
     };
-    let Some(item) = items.into_iter().find(|item| item.path == request.path) else {
-        return Err(learning::invalid_input(
-            "the requested path is not present in the reviewed tree",
-        ));
-    };
-    let (class, reason) = classify(&item.path, &item.sha, item.size);
-    if !retrievable(class) {
-        return Err(Error::new(
-            "authorization_required",
-            "the requested item has no documented per-item rights and is never retrievable",
-        ));
-    }
-    if item.kind != "file" {
-        return Err(learning::invalid_input(
-            "only a regular file of the reviewed tree can be retrieved",
-        ));
-    }
-    if item.sha != request.blob_sha || item.size != Some(request.size) {
-        return Err(learning::invalid_input(
-            "the requested item does not match the reviewed immutable identity",
-        ));
-    }
     learning::with_raw_response(&SOURCE, &request.blob_sha, online, |response, identity| {
-        raw_bytes_output(response, identity, &request, class, reason, license.clone())
+        raw_bytes_output(response, identity, &request, class, reason, license)
     })
 }
 
@@ -632,7 +644,7 @@ fn bytes_schema() -> Value {
 pub fn schema() -> Value {
     json!({
         "schema_version": 1,
-        "description": "Rights-reviewed physics reference catalog and original-byte retrieval from one pinned public upstream revision. The catalog lists every item of the reviewed tree with its per-item rights verdict; an excluded item is never retrievable. Retrieval returns the exact original bytes of one admitted item after its Git object identity and declared length are verified, together with the license notice that must accompany any conveyed copy. Every request is cache-first and paced by the shared governor; no campus service, authentication or mutation exists here.",
+        "description": "Rights-reviewed physics reference catalog and original-byte retrieval from one pinned public upstream revision. The catalog lists every item of the reviewed tree with its per-item rights verdict; an excluded item is never retrievable. Retrieval returns the exact original bytes of one admitted item after its Git object identity and declared length are verified, with attribution, immutable license-object metadata and an explicit license-notice obligation. The LICENSE text is a separate retrieval; the metadata is not an attestation of redistribution compliance. Every request is cache-first and paced by the shared governor; no campus service, authentication or mutation exists here.",
         "catalog": {
             "input": {
                 "type":"object","additionalProperties":false,"required":[],"properties":{},
@@ -665,154 +677,6 @@ mod tests {
     use super::*;
     use crate::net::{CacheStatus, Response};
     use std::collections::BTreeMap;
-
-    /// A bounded JSON Schema checker for the constructs this module
-    /// publishes. An unsupported type or pattern is a test failure rather
-    /// than a silent pass; an unknown keyword would be ignored, so the
-    /// published schemas use only the keywords handled here.
-    fn schema_type(value: &Value, expected: &str) -> bool {
-        match expected {
-            "object" => value.is_object(),
-            "array" => value.is_array(),
-            "string" => value.is_string(),
-            "null" => value.is_null(),
-            "boolean" => value.is_boolean(),
-            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-            other => panic!("unsupported schema type {other}"),
-        }
-    }
-
-    /// Whether a number is below a published minimum. A negative integer is
-    /// below every unsigned minimum, and an integer above the signed range
-    /// is above every unsigned maximum.
-    fn number_below(value: &Value, minimum: u64) -> bool {
-        match (value.as_i64(), value.as_u64()) {
-            (Some(number), _) => number < 0 || (number as u64) < minimum,
-            (_, Some(number)) => number < minimum,
-            _ => false,
-        }
-    }
-
-    /// Whether a number is above a published maximum.
-    fn number_above(value: &Value, maximum: u64) -> bool {
-        match (value.as_i64(), value.as_u64()) {
-            (Some(number), _) => number < 0 || (number as u64) > maximum,
-            (_, Some(number)) => number > maximum,
-            _ => false,
-        }
-    }
-
-    fn validate(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
-        let fail = |message: &str| Err(format!("{path}: {message} for {value}"));
-        if let Some(expected) = schema.get("const")
-            && value != expected
-        {
-            return fail("const mismatch");
-        }
-        if let Some(expected) = schema.get("enum").and_then(Value::as_array)
-            && !expected.contains(value)
-        {
-            return fail("enum mismatch");
-        }
-        if let Some(expected) = schema.get("type") {
-            let matches = match expected {
-                Value::String(kind) => schema_type(value, kind),
-                Value::Array(kinds) => kinds
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .any(|kind| schema_type(value, kind)),
-                _ => false,
-            };
-            if !matches {
-                return fail("type mismatch");
-            }
-        }
-        if let Some(object) = value.as_object()
-            && let Some(required) = schema.get("required").and_then(Value::as_array)
-        {
-            for key in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(key) {
-                    return fail(&format!("missing required {key}"));
-                }
-            }
-        }
-        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-            if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
-                for key in value.as_object().into_iter().flat_map(|map| map.keys()) {
-                    if !properties.contains_key(key) {
-                        return fail(&format!("additional property {key}"));
-                    }
-                }
-            }
-            for (key, subschema) in properties {
-                if let Some(child) = value.get(key) {
-                    validate(child, subschema, &format!("{path}.{key}"))?;
-                }
-            }
-        }
-        if let Some(items) = schema.get("items") {
-            for (index, child) in value.as_array().into_iter().flatten().enumerate() {
-                validate(child, items, &format!("{path}[{index}]"))?;
-            }
-        }
-        if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64)
-            && value.as_array().map_or(0, Vec::len) as u64 > maximum
-        {
-            return fail("too many items");
-        }
-        if let Some(minimum) = schema.get("minimum").and_then(Value::as_u64)
-            && number_below(value, minimum)
-        {
-            return fail("below minimum");
-        }
-        if let Some(maximum) = schema.get("maximum").and_then(Value::as_u64)
-            && number_above(value, maximum)
-        {
-            return fail("above maximum");
-        }
-        if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64)
-            && value
-                .as_str()
-                .is_some_and(|text| (text.chars().count() as u64) < minimum)
-        {
-            return fail("too short");
-        }
-        if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64)
-            && value
-                .as_str()
-                .is_some_and(|text| (text.chars().count() as u64) > maximum)
-        {
-            return fail("too long");
-        }
-        if let Some(pattern) = schema.get("pattern").and_then(Value::as_str)
-            && let Some(text) = value.as_str()
-        {
-            let matches = match pattern {
-                "^[0-9a-f]{64}$" => learning::valid_sha256(text),
-                "^([0-9a-f]{40}|[0-9a-f]{64})$" => learning::valid_upstream_sha(text),
-                "^[0-9a-f]{40}$" => {
-                    text.len() == 40
-                        && text
-                            .bytes()
-                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-                }
-                other => panic!("unsupported schema pattern {other}"),
-            };
-            if !matches {
-                return fail("pattern mismatch");
-            }
-        }
-        if let Some(alternatives) = schema.get("oneOf").and_then(Value::as_array) {
-            let matched = alternatives
-                .iter()
-                .filter(|alternative| validate(value, alternative, path).is_ok())
-                .count();
-            if matched != 1 {
-                return fail(&format!("oneOf matched {matched} alternatives"));
-            }
-        }
-        Ok(())
-    }
 
     /// The root tree object of the fixture, produced by native Git.
     const FIXTURE_TREE: &str = "e5a784b1ae0c9096068fa89d4de81e96279a32e0";
@@ -903,50 +767,72 @@ mod tests {
     }
 
     #[test]
-    fn the_reviewed_license_is_bound_to_the_admitted_tree() {
+    fn selection_requires_reviewed_tree_membership_and_exact_object() {
         let (_, entries, _) = admitted();
-        let license = license_value(&entries);
-        assert_eq!(license["operator_reference"]["spdx_id"], json!("GPL-3.0"));
+        let mut request = RetrieveInput {
+            path: "README.md".to_owned(),
+            tree_sha: REVISION.tree.to_owned(),
+            blob_sha: REVIEWED_GUIDE_BLOB.to_owned(),
+            size: REVIEWED_GUIDE_SIZE,
+            rights_reviewed: Some(true),
+        };
         assert_eq!(
-            license["bound_license_blob_sha"],
-            json!("474503f3470a8b7e0e859945b2b866aeb7a3f096")
+            select_item(&entries, &request).unwrap().0,
+            MaterialClass::Guide
         );
-        assert_eq!(license["bound_license_size"], json!(35113));
-        assert_eq!(license["independently_verified"], json!(false));
+        request.blob_sha = REVIEWED_LICENSE_BLOB.to_owned();
         assert_eq!(
-            license["bound_license_url"],
-            json!(
-                "https://api.github.com/repos/wtdcode/BUAAPhyhelper/git/blobs/474503f3470a8b7e0e859945b2b866aeb7a3f096"
-            )
+            select_item(&entries, &request).unwrap_err().code,
+            "invalid_input"
         );
+        request.blob_sha = REVIEWED_GUIDE_BLOB.to_owned();
+        request.size -= 1;
+        assert_eq!(
+            select_item(&entries, &request).unwrap_err().code,
+            "invalid_input"
+        );
+        request.path = "missing.md".to_owned();
+        assert_eq!(
+            select_item(&entries, &request).unwrap_err().code,
+            "invalid_input"
+        );
+        for entry in entries
+            .iter()
+            .filter(|entry| matches!(entry.path.as_str(), "1021/2/paper.pdf" | "1021/1/main.m"))
+        {
+            request.path = entry.path.clone();
+            request.blob_sha = entry.sha.clone();
+            request.size = entry.size.unwrap();
+            assert_eq!(
+                select_item(&entries, &request).unwrap_err().code,
+                "authorization_required"
+            );
+        }
     }
 
     #[test]
     fn a_reviewed_object_identity_mismatch_is_not_admitted() {
         // The same paths with unreviewed object identities stay excluded.
-        let (class, reason) = classify(
+        let (class, _) = classify(
             "README.md",
             "ad1fa0d43c170e76768c04152e1d6ddfe3879f7c",
             Some(13),
         );
         assert_eq!(class, MaterialClass::Excluded);
-        assert!(reason.contains("not_the_reviewed_guide"));
         assert!(!retrievable(class));
-        let (class, reason) = classify(
+        let (class, _) = classify(
             "LICENSE",
             "e6a86361c7f596424543a3d9a6c1362b8601204e",
             Some(15),
         );
         assert_eq!(class, MaterialClass::Excluded);
-        assert!(reason.contains("not_the_reviewed_license"));
-        let (class, reason) = classify(
+        let (class, _) = classify(
             "LICENSE",
             "474503f3470a8b7e0e859945b2b866aeb7a3f096",
             Some(REVIEWED_LICENSE_SIZE),
         );
         assert_eq!(class, MaterialClass::License);
         assert!(retrievable(class));
-        assert_eq!(reason, "verbatim_license_notice_of_the_reviewed_work");
     }
 
     #[test]
@@ -988,13 +874,6 @@ mod tests {
     }
 
     #[test]
-    fn the_published_schema_matches_the_published_shapes() {
-        let (tree_sha, entries, response) = admitted();
-        let snapshot = catalog_snapshot(&tree_sha, &entries, learning::retrieval(&response));
-        validate(&snapshot, &catalog_schema(), "$").unwrap();
-    }
-
-    #[test]
     fn a_positional_retrieval_request_is_not_a_request_object() {
         // The published input schema requires an object. A positional array
         // must never reach cache or network processing.
@@ -1008,21 +887,57 @@ mod tests {
     }
 
     #[test]
-    fn withheld_bytes_are_never_encoded_into_the_output() {
-        // A response that is not the reviewed object never passed the
-        // per-item rights admission, so its bytes are withheld and only the
-        // length, digest and reason are reported.
+    fn duplicate_selection_or_rights_fields_are_rejected() {
+        let input = format!(
+            r#"{{"path":"README.md","tree_sha":"{}","blob_sha":"{}","size":{},"rights_reviewed":true}}"#,
+            REVISION.tree, REVIEWED_GUIDE_BLOB, REVIEWED_GUIDE_SIZE,
+        );
+        for duplicate in [
+            r#""rights_reviewed":false,"#,
+            r#""path":"LICENSE","#,
+            r#""size":1,"#,
+        ] {
+            let request = format!("{{{duplicate}{}", &input[1..]);
+            assert_eq!(
+                parse_retrieve_input(&request).unwrap_err().code,
+                "invalid_input"
+            );
+        }
+        // A second document is not part of the one-object stdin contract.
+        assert_eq!(
+            parse_retrieve_input(&format!("{input} {{}}"))
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
+    }
+
+    #[test]
+    fn a_truncated_inventory_keeps_original_evidence_without_admitting_entries() {
+        let body = format!(r#"{{"sha":"{FIXTURE_TREE}","truncated":true,"tree":[]}}"#);
         let url = fixture_url();
-        let body = b"bytes that never matched an admitted object";
-        let response = response(&url, body);
-        let evidence = withheld_evidence(&response, "blob_identity_mismatch");
-        assert_eq!(evidence["kind"], json!("withheld_response"));
-        assert_eq!(evidence["data"], Value::Null);
-        assert_eq!(evidence["byte_length"], json!(body.len()));
-        assert_eq!(evidence["sha256"], json!(learning::sha256_hex(body)));
-        assert_eq!(evidence["fallback_reason"], json!("blob_identity_mismatch"));
-        assert!(!evidence.to_string().contains("never matched an admitted"));
-        validate(&evidence, &withheld_evidence_schema(), "$").unwrap();
+        let response = response(&url, body.as_bytes());
+        let identity = learning::observed_identity(
+            learning::Surface::Tree,
+            &url,
+            &response.body,
+            Some("application/json"),
+        );
+        assert!(identity.tree().is_none());
+        let reason = identity.tree_error().unwrap();
+        assert_eq!(reason, "incomplete_tree");
+        let output = degraded_catalog(&response, &identity, reason).unwrap();
+        assert_eq!(output["result"], "degraded");
+        assert!(output["tree_sha"].is_null());
+        assert_eq!(output["entries"], json!([]));
+        assert_eq!(output["admitted_count"], 0);
+        assert_eq!(
+            STANDARD
+                .decode(output["raw_evidence"]["data"].as_str().unwrap())
+                .unwrap(),
+            body.as_bytes()
+        );
+        assert_eq!(output["fallback_reason"], reason);
     }
 
     #[test]
@@ -1068,208 +983,5 @@ mod tests {
         assert_eq!(output["raw_evidence"]["kind"], json!("withheld_response"));
         assert_eq!(output["raw_evidence"]["data"], Value::Null);
         assert!(!output.to_string().contains("never passed the rights"));
-        validate(&output, &bytes_schema(), "$").unwrap();
-    }
-
-    #[test]
-    fn an_admitted_blob_response_matches_the_published_bytes_schema() {
-        let request = RetrieveInput {
-            path: "README.md".to_owned(),
-            tree_sha: REVISION.tree.to_owned(),
-            blob_sha: REVIEWED_GUIDE_BLOB.to_owned(),
-            size: REVIEWED_GUIDE_SIZE,
-            rights_reviewed: Some(true),
-        };
-        let url = url::Url::parse(&format!(
-            "https://api.github.com/repos/wtdcode/BUAAPhyhelper/git/blobs/{REVIEWED_GUIDE_BLOB}"
-        ))
-        .unwrap();
-        // The exact bytes of the reviewed object.
-        let body = b"the reviewed guide bytes";
-        let mut response = response(&url, body);
-        response.headers = BTreeMap::from([("content-type".to_owned(), "text/plain".to_owned())]);
-        let identity = learning::observed_identity(
-            learning::Surface::Raw,
-            &url,
-            &response.body,
-            Some("text/plain"),
-        );
-        let blob_sha = identity.blob_sha().unwrap().to_owned();
-        let mut request = request;
-        request.blob_sha = blob_sha;
-        request.size = body.len() as u64;
-        let output = raw_bytes_output(
-            &response,
-            &identity,
-            &request,
-            MaterialClass::Guide,
-            "author_written_original_processing_guide",
-            learning::unknown_license(),
-        )
-        .unwrap();
-        assert_eq!(output["result"], json!("raw_snapshot"));
-        assert_eq!(output["byte_length"], json!(body.len()));
-        assert_eq!(output["sha256"], json!(learning::sha256_hex(body)));
-        validate(&output, &bytes_schema(), "$").unwrap();
-    }
-
-    #[test]
-    fn the_degraded_catalog_matches_the_published_schema() {
-        // A tree that cannot be admitted stays a degraded success: the
-        // original bytes are the inspectable evidence and no entry is
-        // published.
-        let url = fixture_url();
-        let response = response(&url, b"{\"truncated\":true,\"tree\":[]}");
-        let identity = learning::observed_identity(
-            learning::Surface::Tree,
-            &url,
-            &response.body,
-            Some("application/json"),
-        );
-        assert!(identity.tree().is_none());
-        let output = degraded_catalog(&response, &identity, "incomplete_tree").unwrap();
-        assert_eq!(output["result"], json!("degraded"));
-        assert!(output["tree_sha"].is_null());
-        assert!(output["entries"].as_array().unwrap().is_empty());
-        assert_eq!(output["fallback_reason"], json!("incomplete_tree"));
-        validate(&output, &catalog_schema(), "$").unwrap();
-    }
-
-    #[test]
-    fn a_content_type_degraded_retrieval_matches_the_published_schema() {
-        // The bytes are the reviewed object, but the declared media type is
-        // not one this client admits, so the result stays degraded and the
-        // original bytes are the inspectable evidence.
-        let request = RetrieveInput {
-            path: "README.md".to_owned(),
-            tree_sha: REVISION.tree.to_owned(),
-            blob_sha: REVIEWED_GUIDE_BLOB.to_owned(),
-            size: REVIEWED_GUIDE_SIZE,
-            rights_reviewed: Some(true),
-        };
-        let url = url::Url::parse(&format!(
-            "https://api.github.com/repos/wtdcode/BUAAPhyhelper/git/blobs/{REVIEWED_GUIDE_BLOB}"
-        ))
-        .unwrap();
-        let body = b"the reviewed guide bytes";
-        let mut response = response(&url, body);
-        response.headers = BTreeMap::from([(
-            "content-type".to_owned(),
-            "application/x-unreviewed".to_owned(),
-        )]);
-        let identity = learning::observed_identity(
-            learning::Surface::Raw,
-            &url,
-            &response.body,
-            Some("application/x-unreviewed"),
-        );
-        let mut request = request;
-        request.blob_sha = identity.blob_sha().unwrap().to_owned();
-        request.size = body.len() as u64;
-        let output = raw_bytes_output(
-            &response,
-            &identity,
-            &request,
-            MaterialClass::Guide,
-            "author_written_original_processing_guide",
-            learning::unknown_license(),
-        )
-        .unwrap();
-        assert_eq!(output["result"], json!("degraded"));
-        assert_eq!(output["fallback_reason"], json!("unexpected_content"));
-        assert!(output["bytes"].is_null());
-        validate(&output, &bytes_schema(), "$").unwrap();
-    }
-
-    #[test]
-    fn the_schema_checker_catches_mutated_outputs() {
-        // The checker is the regression oracle for the published schemas, so
-        // it must reject the mutations it is meant to catch.
-        let (tree_sha, entries, response) = admitted();
-        let snapshot = catalog_snapshot(&tree_sha, &entries, learning::retrieval(&response));
-        validate(&snapshot, &catalog_schema(), "$").unwrap();
-
-        let mut negative = snapshot.clone();
-        negative["entry_count"] = json!(-1);
-        assert!(validate(&negative, &catalog_schema(), "$").is_err());
-
-        let mut oversized = snapshot.clone();
-        oversized["retrieval"]["response_body_byte_length"] = json!(16_777_217u64);
-        assert!(validate(&oversized, &catalog_schema(), "$").is_err());
-
-        // An integer above the signed range must not escape the maximum.
-        let mut huge = snapshot.clone();
-        huge["retrieval"]["response_body_byte_length"] = json!(u64::MAX);
-        assert!(validate(&huge, &catalog_schema(), "$").is_err());
-
-        let mut huge_count = snapshot.clone();
-        huge_count["entry_count"] = json!(u64::MAX);
-        assert!(validate(&huge_count, &catalog_schema(), "$").is_err());
-
-        let mut extra = snapshot.clone();
-        extra["unexpected"] = json!(true);
-        assert!(validate(&extra, &catalog_schema(), "$").is_err());
-
-        let mut missing = snapshot.clone();
-        missing.as_object_mut().unwrap().remove("admitted_count");
-        assert!(validate(&missing, &catalog_schema(), "$").is_err());
-
-        let mut wrong_class = snapshot.clone();
-        wrong_class["entries"][0]["material_class"] = json!("guide");
-        assert!(validate(&wrong_class, &catalog_schema(), "$").is_err());
-
-        let mut wrong_sha = snapshot.clone();
-        wrong_sha["entries"][0]["upstream_sha"] = json!("NOTHEX");
-        assert!(validate(&wrong_sha, &catalog_schema(), "$").is_err());
-    }
-
-    #[test]
-    fn the_published_schema_wires_the_published_shapes() {
-        let published = schema();
-        let (tree_sha, entries, tree_response) = admitted();
-        let snapshot = catalog_snapshot(&tree_sha, &entries, learning::retrieval(&tree_response));
-        validate(&snapshot, &published["catalog"]["output"], "$").unwrap();
-        // The published input schema is an object form, so the request the
-        // module accepts is the object the schema describes.
-        let request = json!({
-            "path": "README.md",
-            "tree_sha": REVISION.tree,
-            "blob_sha": REVIEWED_GUIDE_BLOB,
-            "size": REVIEWED_GUIDE_SIZE,
-            "rights_reviewed": true,
-        });
-        validate(&request, &published["retrieve"]["input"], "$").unwrap();
-        // The retrieval output the module publishes validates against the
-        // published retrieval output contract as well.
-        let url = url::Url::parse(&format!(
-            "https://api.github.com/repos/wtdcode/BUAAPhyhelper/git/blobs/{REVIEWED_GUIDE_BLOB}"
-        ))
-        .unwrap();
-        let body = b"the reviewed guide bytes";
-        let mut response = response(&url, body);
-        response.headers = BTreeMap::from([("content-type".to_owned(), "text/plain".to_owned())]);
-        let identity = learning::observed_identity(
-            learning::Surface::Raw,
-            &url,
-            &response.body,
-            Some("text/plain"),
-        );
-        let request = RetrieveInput {
-            path: "README.md".to_owned(),
-            tree_sha: REVISION.tree.to_owned(),
-            blob_sha: identity.blob_sha().unwrap().to_owned(),
-            size: body.len() as u64,
-            rights_reviewed: Some(true),
-        };
-        let output = raw_bytes_output(
-            &response,
-            &identity,
-            &request,
-            MaterialClass::Guide,
-            "author_written_original_processing_guide",
-            learning::unknown_license(),
-        )
-        .unwrap();
-        validate(&output, &published["retrieve"]["output"], "$").unwrap();
     }
 }

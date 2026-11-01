@@ -2774,17 +2774,33 @@ could reach cache or network processing. Both are repaired: a response that
 is not the reviewed object now reports only its content type, length, digest
 and reason and never encodes its bytes, and the retrieval request must be a
 JSON object. The published schemas gained the withheld-evidence shape and an
-entry-count bound, the offline schema oracle now enforces numeric maxima and
-rejects negative or oversized integers, and the CLI boundary has its own
-offline regression cases.
+entry-count bound. A subsequent cache-only native reproduction exposed
+last-key-wins merging of duplicate rights declarations: `false` followed by
+`true` still returned the original. Direct map-only typed deserialization now
+rejects duplicates and trailing documents before cache access; the same native
+request returns `invalid_input` with empty stdout.
+
+The handwritten partial Schema checker, synthetic success tests that replaced
+the expected blob hash, and tests depending on the host user's cache were
+removed. Permanent regressions cover selection membership, exact object/size
+admission, duplicate/array rejection, withheld blob bytes, and preservation of
+safe original evidence for a truncated inventory. Standard Draft 2020-12
+validation of the actual native contracts and cached outputs passed separately.
+Independent Git encoding reproduced all 19 tree objects (root plus 18
+directories); independent byte-length, Git-blob and SHA-256 checks matched both
+retrieved originals. This final readback made no network request and is not a
+new upstream observation. The metadata-only receipt is
+`local://buaa-physics-reference-current-proof-20261102.json`.
 
 The upstream work is GPL-3.0 while this project is MIT, so no upstream prose
 or implementation is copied into this repository. An admitted item is fetched
 at run time through the shared governor and cache, and every retrieval output
 carries the attribution, the bound license object and a
-`license_notice_required` flag so any conveyed copy is accompanied by its
-license notice; `operator_reference` stays an operator review of the exact
-reviewed license object and `independently_verified` stays false.
+`license_notice_required` obligation flag. Actual license text requires a
+separate `LICENSE` retrieval: metadata and a flag do not prove redistribution
+compliance or that a conveyed copy includes the required notice.
+`operator_reference` records the reviewed license object and
+`independently_verified` stays false.
 
 `src/physics_experiment.rs` keeps `physics-select` only. Its previous
 `physics-reference` operation and its rights blocker were removed because the

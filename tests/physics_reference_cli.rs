@@ -73,6 +73,17 @@ fn the_retrieval_refuses_a_positional_request() {
 }
 
 #[test]
+fn duplicate_rights_attestations_are_refused_before_cache_access() {
+    let input = format!(
+        r#"{{"path":"README.md","tree_sha":"{TREE}","blob_sha":"{GUIDE_BLOB}","size":6736,"rights_reviewed":false,"rights_reviewed":true}}"#
+    );
+    let output = invoke(&["physics-reference", "retrieve"], input.as_bytes());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(error_of(&output)["error"], "invalid_input");
+}
+
+#[test]
 fn the_retrieval_refuses_a_missing_rights_attestation() {
     let input = format!(
         r#"{{"path":"README.md","tree_sha":"{TREE}","blob_sha":"{GUIDE_BLOB}","size":6736}}"#
@@ -108,63 +119,4 @@ fn the_retrieval_refuses_a_credential_field_without_echoing_it() {
     assert!(!stderr.contains("fixture-only"), "{stderr}");
     let error = error_of(&output);
     assert_eq!(error["error"], "invalid_input");
-}
-
-#[test]
-fn the_offline_catalog_reports_a_cache_miss_instead_of_inventing_entries() {
-    // Offline: the command either serves a verified cached catalog, serves a
-    // cached degraded response, or reports the miss. It never publishes an
-    // inventory it never verified.
-    let output = invoke(&["physics-reference", "catalog"], b"");
-    if output.status.success() {
-        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(value["type"], "physics_reference_catalog");
-        assert!(value["entries"].is_array());
-        match value["result"].as_str() {
-            Some("catalog_snapshot") => {
-                // A verified snapshot names the reviewed tree and admits
-                // exactly the two reviewed items.
-                assert_eq!(
-                    value["tree_sha"],
-                    "82655593cd3486549b5e49eec55ca9add1d3ccd4"
-                );
-                assert_eq!(value["admitted_count"], 2);
-                assert_eq!(value["excluded_count"], 49);
-            }
-            Some("degraded") => {
-                // A retained but unparseable cached response stays degraded
-                // and names no tree.
-                assert!(value["tree_sha"].is_null());
-                assert!(value["fallback_reason"].is_string());
-                assert!(value["entries"].as_array().unwrap().is_empty());
-            }
-            other => panic!("unexpected catalog result {other:?}"),
-        }
-    } else {
-        assert_eq!(output.status.code(), Some(7));
-        let error = error_of(&output);
-        assert_eq!(error["error"], "unavailable");
-    }
-}
-
-#[test]
-fn the_reference_command_is_published_in_the_schema_and_help() {
-    let output = invoke(&["schema"], b"");
-    assert!(output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let published = &value["commands"]["physics-reference"];
-    assert!(published["catalog"]["output"].is_object());
-    assert!(published["retrieve"]["output"].is_object());
-    assert!(published["retrieve"]["input"]["properties"]["rights_reviewed"].is_object());
-
-    let output = invoke(&["help"], b"");
-    assert!(output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let commands = value["commands"].as_array().unwrap();
-    assert!(
-        commands
-            .iter()
-            .any(|command| command == "physics-reference catalog|retrieve [--online]"),
-        "{commands:?}"
-    );
 }

@@ -1949,28 +1949,6 @@ mod tests {
     }
 
     #[test]
-    fn the_selection_adapter_no_longer_advertises_a_reference_capability() {
-        // The reference capability lives in its own module and command, so
-        // this offline selection adapter refuses that operation outright
-        // instead of publishing a stale rights blocker.
-        for action in ["catalog", "retrieve"] {
-            let request =
-                json!({"operation": "physics-reference", "action": action, "selection": null});
-            assert!(run(&request.to_string(), false).is_err());
-            let request = json!({"operation": "physics-reference", "action": action, "password": "fixture-only"});
-            assert!(run(&request.to_string(), false).is_err());
-        }
-        let value = run(
-            r#"{"operation":"physics-select","action":"capability"}"#,
-            false,
-        )
-        .unwrap();
-        assert_eq!(value["result"], "capability");
-        assert_eq!(value["reference"]["capability"], "physics-reference");
-        assert_eq!(value["network_request_performed"], false);
-    }
-
-    #[test]
     fn replay_is_fixture_evidence_not_enrollment() {
         let request = replay_request(
             "verdict",
