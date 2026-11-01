@@ -39,12 +39,17 @@ pass, together with the unrelated-control and reviewed-HTML controls. The
 expanded focused suite passed 89 cases; the complete locked offline suite
 passed 1149 library cases (three existing ignored workers) and 107 integration/
 CLI cases. A separate non-test strict-TLS consumer passed seven scenarios:
-initial/POST OTP, an OTP cue after an unrelated form diagnostic, NBSP with
-missing MIME and EM SPACE with unknown MIME all made zero business reads;
+initial/POST OTP, an OTP cue following unrelated credential-control markup,
+NBSP with missing MIME and EM SPACE with unknown MIME all made zero business reads;
 reviewed-HTML Unicode and unrelated-control controls each made one. Every case
 withheld credentials and never fetched the terminal credential URL. All were
 synthetic loopback requests, with zero campus requests. The follow-up temporary
 source and Cargo entry were removed and the manifest restored byte-for-byte.
+
+The mixed-control fixture proves markup-order and consumer-refusal behavior.
+Final-response review does not populate credential-form diagnostics; independence
+from an earlier stored diagnostic is established by the source accumulation,
+not by that runtime fixture.
 
 Boya now accepts either raw base64 ciphertext or a JSON string containing it,
 matching the pinned MIT public client's
