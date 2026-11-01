@@ -2734,3 +2734,62 @@ The current module SHA `d58ed3f6ecb3eb156ffb43ae487960352d0da977bc690bebe0909ddb
 Independent review of SHA `12d326a29a678f717fff2d7aa3cb8f13d575647724b92d98df20797fe48cc6eb` found template-option, range step-base, date/URL/datetime normalization, CSS color syntax, request-body CRLF, Cookie quoting/prefix, DOM-work, raw-error-text and MIME interpretation gaps. The current source applies exact browser-observed form defaults and wire normalization, excludes template-derived successful values while preserving datalist/inert-attribute entries, enforces cookie prefix flags/provenance and quoted values, and bounds DOM/text subtrees before submission. Failure classification and challenge vetoes now derive only from active DOM text facts; final JSON is not interpreted as embedded HTML. This SHA `f3f559000fdb2b535a0a1f6c089760dec67116cd11b7cbd23ea423665432d3f4` passes 65 focused session tests with stable source, unchanged governor and zero campus requests. A full native gate and fresh complete-source review remain pending; authenticated online confirmation has not yet run.
 
 Later, that exact SHA passed a full native gate (468 library, 19 CLI, three ignored workers; strict clippy/fmt/build, manifest equality and stable source/governor, zero campus requests). Its fresh review found that initial credential pages did not scan text-only active markers before POST. The current source applies the same review-only predicate to the initial page and exposes it in inspection without reporting an active challenge. SHA `12d326a29a678f717fff2d7aa3cb8f13d575647724b92d98df20797fe48cc6eb` passes all 59 session cases with stable source and unchanged governor. Its complete native gate, fresh complete-source approval and one deliberate governed authentication remain pending; no password has been submitted under the new contract.
+
+## 2026-11-02: rights-reviewed physics reference catalog and retrieval
+
+`buaa physics-reference catalog|retrieve [--online]` implements the pending
+`physics-reference` acceptance item against one public upstream revision of
+`wtdcode/BUAAPhyhelper`: commit `dd2fda76dfa61d921e5efaf84f92a44e9243f3b2`,
+tree `82655593cd3486549b5e49eec55ca9add1d3ccd4`. The commit object must name
+that commit and declare that tree, and every advertised directory plus the
+root object is reconstructed and verified before an entry is published, so a
+branch that moves or a rewritten upstream cannot substitute other bytes.
+
+Rights are decided per item rather than per repository. Of the 51 entries,
+exactly two are admitted: the author's own calculation and processing method
+write-up `README.md` (Git blob `02427435071267252f752280278fbb8af6b1919b`,
+6736 bytes) and the verbatim GNU GPL v3 notice `LICENSE` (Git blob
+`474503f3470a8b7e0e859945b2b866aeb7a3f096`, 35113 bytes). The remaining 49
+are published with their exclusion reason and are never retrievable: 25
+upstream implementation sources, 20 repository metadata or directory items,
+one separately published third-party article that the repository license does
+not clear, two textbook-derived sample data files and one link-only README
+stub. A live retrieval request for the third-party article and for an upstream
+implementation source were each refused with `authorization_required` before
+any byte request.
+
+Retrieval returns the exact original bytes of one admitted item after its Git
+object identity and declared length are verified. `README.md` returned 6736
+bytes with SHA-256
+`d18b137437a1c1f80a2b7c1fa36ad39702f30d94cc9d8531ce9d6f021247b331`, and
+independent recomputation of both that digest and the Git blob identifier over
+the returned bytes matched; the cache-only replay returned byte-identical
+content. `LICENSE` returned 35113 bytes with SHA-256
+`b4149adf6fb680f46ae787da3427841e20dcdafb1873ff0648215acc8862cf29`.
+
+Two independent source reviews of this slice found that a response whose
+bytes did not match the reviewed object could still disclose those bytes
+through the shared degraded-evidence path, and that a positional JSON array
+could reach cache or network processing. Both are repaired: a response that
+is not the reviewed object now reports only its content type, length, digest
+and reason and never encodes its bytes, and the retrieval request must be a
+JSON object. The published schemas gained the withheld-evidence shape and an
+entry-count bound, the offline schema oracle now enforces numeric maxima and
+rejects negative or oversized integers, and the CLI boundary has its own
+offline regression cases.
+
+The upstream work is GPL-3.0 while this project is MIT, so no upstream prose
+or implementation is copied into this repository. An admitted item is fetched
+at run time through the shared governor and cache, and every retrieval output
+carries the attribution, the bound license object and a
+`license_notice_required` flag so any conveyed copy is accompanied by its
+license notice; `operator_reference` stays an operator review of the exact
+reviewed license object and `independently_verified` stays false.
+
+`src/physics_experiment.rs` keeps `physics-select` only. Its previous
+`physics-reference` operation and its rights blocker were removed because the
+capability now exists for real, and its capability and schema output point at
+the new command instead of publishing a stale blocker. The remaining
+candidate sources and every third-party document inside this tree are not
+cleared by this observation, and no campus physics service, selection or
+assessment access was established.

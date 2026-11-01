@@ -508,6 +508,27 @@ fn run_welearn(args: &[String]) -> CliResult {
     emit(&output)
 }
 
+fn run_physics_reference(args: &[String]) -> CliResult {
+    let operation = match args.first().map(String::as_str) {
+        Some(operation @ ("catalog" | "retrieve")) => operation,
+        _ => {
+            return Err((
+                "unsupported",
+                3,
+                "expected physics-reference catalog or retrieve".into(),
+            ));
+        }
+    };
+    let online = online_flag(&args[1..])?;
+    let input = Zeroizing::new(read_input()?);
+    let output = match operation {
+        "catalog" => buaa_cli::physics_reference::catalog(input.as_str(), online),
+        _ => buaa_cli::physics_reference::retrieve(input.as_str(), online),
+    }
+    .map_err(service_error)?;
+    emit(&output)
+}
+
 fn run_aerospace(args: &[String]) -> CliResult {
     let operation = match args.first().map(String::as_str) {
         Some(operation @ ("materials" | "search" | "fetch" | "practice")) => operation,
@@ -672,6 +693,7 @@ fn command_schemas() -> Value {
         ("coursegrading", buaa_cli::coursegrading::schema()),
         ("physics", buaa_cli::physics::schema()),
         ("physics-experiment", buaa_cli::physics_experiment::schema()),
+        ("physics-reference", buaa_cli::physics_reference::schema()),
         ("timed-input", json!({
                     "stdin": {"format":"[seconds]text lines", "max_bytes":MAX_INPUT,
                         "seconds":"nonnegative fixed decimal; at most 9 fractional digits",
@@ -702,7 +724,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "departments inventory|retrieve [--online]", "contribution scan", "timetable-pg parse", "smart [--online]", "smart session [--online]", "ihome list|detail [--online]", "ihome session [--online]", "welearn materials|search|fetch|practice [--online]", "aerospace materials|search|fetch|practice [--online]", "enrol [--online]", "evaluation [--online]", "checkin [--online]", "boya [--online]", "drive [--online]", "shuttle [--online]", "electricity [--online]", "os-lab read|plan [--online]", "coursegrading unsupported|probe-https|preview|status [--online]", "physics-experiment [--online]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "departments inventory|retrieve [--online]", "contribution scan", "timetable-pg parse", "smart [--online]", "smart session [--online]", "ihome list|detail [--online]", "ihome session [--online]", "welearn materials|search|fetch|practice [--online]", "aerospace materials|search|fetch|practice [--online]", "enrol [--online]", "evaluation [--online]", "checkin [--online]", "boya [--online]", "drive [--online]", "shuttle [--online]", "electricity [--online]", "os-lab read|plan [--online]", "coursegrading unsupported|probe-https|preview|status [--online]", "physics-experiment [--online]", "physics-reference catalog|retrieve [--online]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":NETWORK_OPT_IN, "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
             "help": "recordings subtitles export reads authorized caller-supplied normalized segments, srt/vtt format and absolute new output path from JSON stdin; it is offline and does not verify source, rights or native track association. timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting. 'recordings session --offline' with intent 'RESUME CLASSROOM AUTH' validates durable governor state without sending a request; 'recordings session diagnose --online' submits no credential. Authentication attempts are always admitted — no latch requires clearing; challenges and HTTP 401/403 are reported per request."
         })),
@@ -860,6 +882,7 @@ fn run() -> CliResult {
             run_json_module(&args[2..], buaa_cli::ihome::session),
         "ihome" => run_ihome(&args[1..]),
         "welearn" => run_welearn(&args[1..]),
+        "physics-reference" => run_physics_reference(&args[1..]),
         "aerospace" => run_aerospace(&args[1..]),
         "os-lab" => run_os_lab(&args[1..]),
         "coursegrading" => run_coursegrading(&args[1..]),

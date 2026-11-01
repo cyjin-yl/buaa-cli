@@ -29,6 +29,7 @@ pub mod os_lab;
 pub mod organizations;
 pub mod physics;
 pub mod physics_experiment;
+pub mod physics_reference;
 pub mod recordings;
 pub mod report;
 pub mod shuttle;

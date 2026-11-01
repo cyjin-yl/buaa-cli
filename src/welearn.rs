@@ -1184,6 +1184,14 @@ pub(crate) mod learning {
         pub branch: &'static str,
     }
 
+    /// One reviewed upstream revision: the commit that was reviewed and the
+    /// tree that commit declares. A branch head may move, so a rights review
+    /// is bound to these immutable object identities instead.
+    pub(crate) struct Revision {
+        pub commit: &'static str,
+        pub tree: &'static str,
+    }
+
     impl SourceSpec {
         pub(crate) fn blob_url(&self, sha: &str) -> Result<Url, Error> {
             if !valid_upstream_sha(sha) {
@@ -1201,6 +1209,11 @@ pub(crate) mod learning {
         }
 
         fn commit_url(&self) -> Result<Url, Error> {
+            self.commit_url_at(self.branch)
+        }
+
+        /// The commit object URL of one reviewed revision.
+        fn commit_url_at(&self, reference: &str) -> Result<Url, Error> {
             let mut url = Url::parse("https://api.github.com/").map_err(|_| invalid_url())?;
             url.path_segments_mut()
                 .map_err(|_| invalid_url())?
@@ -1208,7 +1221,7 @@ pub(crate) mod learning {
                 .push(self.owner)
                 .push(self.name)
                 .push("commits")
-                .push(self.branch);
+                .push(reference);
             Ok(url)
         }
 
@@ -2301,6 +2314,77 @@ pub(crate) mod learning {
                 let url = spec.tree_at(&tree_sha)?;
                 cache.get(&url, Surface::Tree, online, |response, identity| {
                     process.expect("unconsumed tree consumer")(response, identity, &url)
+                })
+            }
+        }
+    }
+
+    /// The tree identity one reviewed commit object declares. The response
+    /// must name exactly the reviewed commit and declare exactly the reviewed
+    /// tree, so a rewritten revision cannot substitute another tree.
+    fn resolved_revision(
+        response: &Response,
+        expected: &Url,
+        revision: &Revision,
+    ) -> Result<String, Error> {
+        if response.url != expected.as_str() || response.status != 200 {
+            return Err(upstream_parse());
+        }
+        if !response.headers.get("content-type").is_some_and(|value| json_media_type(value)) {
+            return Err(unexpected_content());
+        }
+        #[derive(Deserialize)]
+        struct ObjectId { sha: String }
+        #[derive(Deserialize)]
+        struct CommitData { tree: ObjectId }
+        #[derive(Deserialize)]
+        struct Commit { sha: String, commit: CommitData }
+        let commit: Commit = serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
+        if !valid_upstream_sha(&commit.sha) || !valid_upstream_sha(&commit.commit.tree.sha) {
+            return Err(upstream_parse());
+        }
+        if commit.sha != revision.commit || commit.commit.tree.sha != revision.tree {
+            return Err(upstream_parse());
+        }
+        Ok(commit.commit.tree.sha)
+    }
+
+    /// Fetch one reviewed revision: its commit object must name the reviewed
+    /// commit and declare the reviewed tree, and the tree is then requested at
+    /// its own immutable object identity. A commit that cannot be resolved is
+    /// handed to the consumer as degraded evidence, exactly like a branch
+    /// resolution failure.
+    pub(crate) fn with_pinned_tree_response<T>(
+        spec: &SourceSpec,
+        revision: &Revision,
+        online: bool,
+        process: impl FnOnce(&Response, &ObservedIdentity, &Url) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        enum Resolution<T> { Tree(String), Degraded(T) }
+        let commit_url = spec.commit_url_at(revision.commit)?;
+        let tree_url = spec.tree_at(revision.tree)?;
+        let cache = ResponseCache::open()?;
+        let mut process = Some(process);
+        let resolution = cache.get(&commit_url, Surface::Commit, online, |response, _| {
+            match resolved_revision(response, &commit_url, revision) {
+                Ok(tree_sha) => Ok(Resolution::Tree(tree_sha)),
+                Err(_) => {
+                    let identity = ObservedIdentity {
+                        surface: Surface::Commit, tree: None, tree_error: Some("commit_tree_unresolved"), blob_sha: None,
+                    };
+                    let output = process.take().expect("one resolution consumer")(
+                        response, &identity, &commit_url,
+                    )?;
+                    Ok(Resolution::Degraded(output))
+                }
+            }
+        })?;
+        match resolution {
+            Resolution::Degraded(output) => Ok(output),
+            Resolution::Tree(tree_sha) => {
+                debug_assert_eq!(tree_sha, revision.tree);
+                cache.get(&tree_url, Surface::Tree, online, |response, identity| {
+                    process.expect("unconsumed tree consumer")(response, identity, &tree_url)
                 })
             }
         }

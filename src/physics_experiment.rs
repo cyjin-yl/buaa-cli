@@ -1493,38 +1493,6 @@ fn evidence(bytes: &[u8], content_type: Option<&str>, reason: Option<&str>) -> V
     })
 }
 
-fn reference_blocker() -> Value {
-    json!({
-        "schema_version": 1,
-        "type": "physics_reference",
-        "result": "unsupported",
-        "source_candidate": {
-            "origin": "https://gitee.com/PhisicsExperiment/PhysicsExperiment",
-            "commit": "658a981f6425ff1cd1bc213caa3cb2c7036e4f64",
-            "tree": "828b8f793f373cb34fb839ca9040f3ed700b78d5",
-            "status": "research_identity_only_not_locally_verified_inventory",
-        },
-        "reason": "The pinned public repository contains Preview.pdf candidates, but its root MIT software/documentation license does not establish per-PDF or third-party-text rights. Some reports may contain assessment answers. No item has documented rights and assessment admission or locally verified complete tree/blob SHA and byte length; catalog and retrieval are unavailable.",
-        "required_admission": [
-            "complete pinned tree and blob identity verification",
-            "per-item documented rights covering original bytes",
-            "per-item assessment-content admission",
-            "source-owned selectors and origins",
-            "cache-first exact original bytes",
-            "shared-governor single-request transport",
-        ],
-        "gitee_envelope_notes": {
-            "blob": "base64 content inside JSON, not raw PDF bytes",
-            "directory": {"mode": "40000", "size": 0},
-        },
-        "rights_review_required": true,
-        "assessment_review_required": true,
-        "inventory_verified": false,
-        "network_request_performed": false,
-        "requests_sent": 0,
-    })
-}
-
 fn unsupported() -> Value {
     json!({
         "schema_version": 1,
@@ -1546,7 +1514,11 @@ fn capability() -> Value {
         "support": ["offline_selection_preview", "operator_fixture_html_replay"],
         "authentication": "unsupported",
         "selection_submission": "unsupported",
-        "reference": reference_blocker(),
+        "reference": {
+            "capability": "physics-reference",
+            "status": "implemented_in_a_separate_module",
+            "command": "buaa physics-reference catalog|retrieve [--online]",
+        },
         "network_request_performed": false,
         "requests_sent": 0,
     })
@@ -1870,13 +1842,6 @@ pub fn run(input: &str, _online: bool) -> Result<Value, Error> {
             }
             _ => Err(invalid()),
         },
-        "physics-reference" => match request.action.as_str() {
-            "catalog" | "retrieve" => {
-                request.allow_only(&[])?;
-                Ok(reference_blocker())
-            }
-            _ => Err(invalid()),
-        },
         _ => Err(invalid()),
     }
 }
@@ -1918,7 +1883,6 @@ pub fn schema() -> Value {
                     "content_type": {"type": ["string", "null"], "description": "Missing and null both mean that no Content-Type was supplied."},
                 })),
                 branch("physics-select", json!({"enum": ["options", "submit", "captcha", "resume", "login", "verify_session", "logout_preview", "logout", "withdraw"]}), json!(["operation", "action"]), json!({})),
-                branch("physics-reference", json!({"enum": ["catalog", "retrieve"]}), json!(["operation", "action"]), json!({})),
             ],
         },
         "output": {
@@ -1945,7 +1909,10 @@ pub fn schema() -> Value {
                 },
             },
         },
-        "reference_admission": reference_blocker(),
+        "reference_capability": {
+            "capability": "physics-reference",
+            "command": "buaa physics-reference catalog|retrieve [--online]",
+        },
     })
 }
 
@@ -1982,7 +1949,10 @@ mod tests {
     }
 
     #[test]
-    fn reference_identity_does_not_grant_pdf_rights() {
+    fn the_selection_adapter_no_longer_advertises_a_reference_capability() {
+        // The reference capability lives in its own module and command, so
+        // this offline selection adapter refuses that operation outright
+        // instead of publishing a stale rights blocker.
         for action in ["catalog", "retrieve"] {
             let request =
                 json!({"operation": "physics-reference", "action": action, "selection": null});
@@ -1991,14 +1961,13 @@ mod tests {
             assert!(run(&request.to_string(), false).is_err());
         }
         let value = run(
-            r#"{"operation":"physics-reference","action":"catalog"}"#,
+            r#"{"operation":"physics-select","action":"capability"}"#,
             false,
         )
         .unwrap();
-        assert_eq!(value["result"], "unsupported");
-        assert_eq!(value["inventory_verified"], false);
-        assert_eq!(value["rights_review_required"], true);
-        assert_eq!(value["assessment_review_required"], true);
+        assert_eq!(value["result"], "capability");
+        assert_eq!(value["reference"]["capability"], "physics-reference");
+        assert_eq!(value["network_request_performed"], false);
     }
 
     #[test]

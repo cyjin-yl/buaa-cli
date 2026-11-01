@@ -571,7 +571,7 @@
     {
       "id": "physics-reference",
       "title": "Physics reference access",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Rights-reviewed material inventory and actual retrieval, not only links.",
       "sources": [
         "https://www.wzk.plus/project/phyexp/",
@@ -587,6 +587,18 @@
           "command": "buaa physics-reference",
           "observed": "unsupported exit 3: subcommand form required",
           "live_blocker": "Reference material retrieval is not source-authorized in this run."
+        },
+        "online_observation_2026_11_02": {
+          "command": "buaa physics-reference catalog --online; buaa physics-reference retrieve --online with the reviewed tree, blob and size",
+          "scope": "One public upstream revision of wtdcode/BUAAPhyhelper: a rights-reviewed inventory of every item of the reviewed tree plus the exact original bytes of one admitted item. No campus login, no platform selection, no assessment content and no upstream implementation is retrieved or copied into this project.",
+          "source": "wtdcode/BUAAPhyhelper commit dd2fda76dfa61d921e5efaf84f92a44e9243f3b2, tree 82655593cd3486549b5e49eec55ca9add1d3ccd4",
+          "inventory": "51 entries admitted from the pinned recursive tree response: 33 blobs and 18 directories. The commit object must name the reviewed commit and declare the reviewed tree, and every advertised directory plus the root object is reconstructed and verified before an entry is published. Exactly 2 of the 51 items are admitted; the other 49 are listed with their exclusion reason and are never retrievable.",
+          "per_item_rights": "Admitted: the author's own calculation and processing method write-up README.md (Git blob 02427435071267252f752280278fbb8af6b1919b, 6736 bytes) and the verbatim GNU GPL v3 license notice LICENSE (Git blob 474503f3470a8b7e0e859945b2b866aeb7a3f096, 35113 bytes). Excluded with a stated reason: 25 upstream implementation sources (.m/.py), 20 repository metadata or directory items, 1 separately published third-party article (a .pdf that the repository license does not clear), 2 textbook-derived sample data files and 1 link-only README stub. A live retrieve request for the third-party article and for an upstream implementation source both failed with authorization_required before any byte request.",
+          "selected_bytes": "README.md: 6736 original bytes, Git blob 02427435071267252f752280278fbb8af6b1919b, SHA-256 d18b137437a1c1f80a2b7c1fa36ad39702f30d94cc9d8531ce9d6f021247b331, content type text/plain. Independent recomputation of the SHA-256 and the Git blob object identifier over the returned bytes matched. LICENSE: 35113 original bytes, Git blob 474503f3470a8b7e0e859945b2b866aeb7a3f096, SHA-256 b4149adf6fb680f46ae787da3427841e20dcdafb1873ff0648215acc8862cf29.",
+          "offline_and_schema": "The cache-only replay of the same retrieval returned byte-identical content and the same digest with cache_status hit. A credential-bearing request field, a wrong tree object, a missing rights attestation and an absent path were each refused before any byte request.",
+          "admission_hardening": "Two independent source reviews found that a response whose bytes did not match the reviewed object could still disclose those bytes through the shared degraded-evidence path, and that a positional JSON array could reach cache or network processing. Both are repaired: a response that is not the reviewed object now reports only its content type, length, digest and reason and never encodes its bytes, and the retrieval request must be a JSON object. The published schemas gained the withheld-evidence shape and an entry-count bound, and the offline schema oracle now enforces numeric maxima and rejects negative or oversized integers.",
+          "copyleft_handling": "The upstream work is GPL-3.0 while this project is MIT, so no upstream prose or implementation is copied here. An admitted item is fetched at run time through the shared governor and cache, and every retrieval output carries the attribution, the bound license object and a license_notice_required flag so that any conveyed copy is accompanied by its license notice. The operator_reference SPDX identifier is an operator review of the exact reviewed license object, and independently_verified stays false.",
+          "limits": "This verifies one upstream revision of one candidate source. It does not establish campus physics-service availability, selection, submission or assessment access, and it does not clear the rights of the other candidate sources or of any third-party document inside this tree."
         }
       }
     },
