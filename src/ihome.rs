@@ -340,9 +340,11 @@ fn decoded_strings_carry_secret(body: &[u8], inspection: &TokenInspection<'_>) -
 
 /// Decode the JSON string literal that starts at `start`. The second value is
 /// the offset after the literal. A literal that never closes is refused.
-fn decode_json_string_literal(body: &[u8], start: usize) -> Option<(String, usize)> {
+/// Combine UTF-16 pairs without changing unpaired-surrogate or loose-escape
+/// screening. The decoded credential material is zeroized on drop.
+fn decode_json_string_literal(body: &[u8], start: usize) -> Option<(Zeroizing<String>, usize)> {
     let mut cursor = start + 1;
-    let mut decoded = String::new();
+    let mut decoded = Zeroizing::new(String::new());
     while cursor < body.len() {
         match body[cursor] {
             b'"' => return Some((decoded, cursor + 1)),
@@ -360,16 +362,25 @@ fn decode_json_string_literal(body: &[u8], start: usize) -> Option<(String, usiz
                     b'r' => decoded.push('\r'),
                     b't' => decoded.push('\t'),
                     b'u' => {
-                        let mut code = 0u32;
-                        let mut digits = 0;
-                        while digits < 4 {
-                            let digit = *body.get(cursor)?;
-                            let value = (digit as char).to_digit(16)?;
-                            code = code * 16 + value;
-                            cursor += 1;
-                            digits += 1;
+                        let code = read_escape_code(body, &mut cursor)?;
+                        // A high surrogate is only half of a character. The low
+                        // half must follow immediately; an unpaired surrogate
+                        // keeps the replacement character.
+                        let point = if (0xD800..=0xDBFF).contains(&code) {
+                            match next_escape_code(body, cursor) {
+                                Some(low) if (0xDC00..=0xDFFF).contains(&low) => {
+                                    cursor += 6;
+                                    Some(0x1_0000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        match point {
+                            Some(point) => decoded.push(char::from_u32(point).expect("combined surrogate")),
+                            None => decoded.push(char::from_u32(code).unwrap_or('\u{fffd}')),
                         }
-                        decoded.push(char::from_u32(code).unwrap_or('\u{fffd}'));
                     }
                     other => decoded.push(other as char),
                 }
@@ -384,6 +395,31 @@ fn decode_json_string_literal(body: &[u8], start: usize) -> Option<(String, usiz
         }
     }
     None
+}
+
+/// Read the four hexadecimal digits of a `\uXXXX` escape and leave the cursor
+/// after them.
+fn read_escape_code(body: &[u8], cursor: &mut usize) -> Option<u32> {
+    let mut code = 0u32;
+    let mut digits = 0;
+    while digits < 4 {
+        let digit = *body.get(*cursor)?;
+        let value = (digit as char).to_digit(16)?;
+        code = code * 16 + value;
+        *cursor += 1;
+        digits += 1;
+    }
+    Some(code)
+}
+
+/// The code unit of an immediately following `\uXXXX` escape, if the literal
+/// continues with one.
+fn next_escape_code(body: &[u8], cursor: usize) -> Option<u32> {
+    if body.get(cursor) != Some(&b'\\') || body.get(cursor + 1) != Some(&b'u') {
+        return None;
+    }
+    let mut probe = cursor + 2;
+    read_escape_code(body, &mut probe)
 }
 
 /// Facts about one response body that both the projection and the shared
@@ -3151,17 +3187,19 @@ pub fn schema() -> Value {
             "online_acceptance": "This adapter has not been exercised against the live campus service; its online acceptance is still unverified."
         }
     });
+    // The run and session output contracts are published as standalone
+    // schemas, so every variant is inlined. A fragment reference resolves
+    // against the root of the whole published document, where these
+    // definitions do not live.
     let list_output = contract["list"]["output"].clone();
     let detail_output = contract["detail"]["output"].clone();
-    contract["$defs"]["list_output"] = list_output;
-    contract["$defs"]["detail_output"] = detail_output;
-    contract["$defs"]["disabled_session_output"] = json!({
+    let disabled_session_output = json!({
         "type":"object","additionalProperties":false,
         "required":["schema_version","type","result","network_performed","write_operations_performed"],
         "properties":{"schema_version":{"const":1},"type":{"const":"ihome_session"},
             "result":{"const":"disabled"},"network_performed":{"const":false},"write_operations_performed":{"const":false}}
     });
-    let output = json!({"oneOf":[{"$ref":"#/$defs/list_output"},{"$ref":"#/$defs/detail_output"},{"$ref":"#/$defs/disabled_session_output"}]});
+    let output = json!({"oneOf":[list_output, detail_output, disabled_session_output]});
     contract["run"]["output"] = output.clone();
     contract["session"] = json!({
         "input":session_input_schema(),
@@ -4763,4 +4801,158 @@ mod tests {
             .is_none());
     }
 
+}
+
+// ---------------------------------------------------------------------------
+// Reviewed session privacy regressions
+// ---------------------------------------------------------------------------
+
+/// A session read holds the operator credential for the whole request, so a
+/// body that reflects it must be refused as `credential_echo` with its
+/// original bytes withheld, whatever reversible spelling the upstream used.
+/// Every credential here is synthetic.
+#[cfg(test)]
+mod ihome_review_regressions {
+    use super::*;
+
+    /// A permitted credential with a non-BMP character. Its UTF-16 surrogate
+    /// pair spelling is the reviewed gap.
+    const HELD_CREDENTIAL: &str = "q😀r";
+    const BEARER: &str = "synthetic-token-value";
+
+    fn review_response(url: &Url, body: &[u8], content_type: Option<&str>) -> Response {
+        let mut headers = BTreeMap::new();
+        if let Some(value) = content_type {
+            headers.insert("content-type".to_owned(), value.to_owned());
+        }
+        Response {
+            url: url.as_str().to_owned(),
+            status: 200,
+            headers,
+            body: body.to_vec(),
+            sha256: sha256(body),
+            fetched_at_unix_ms: 1_700_000_000_000,
+            cache_status: CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        }
+    }
+
+    fn review_list_request() -> ListRequest {
+        ListRequest {
+            token: Zeroizing::new(BEARER.to_owned()),
+            token_source: Some(TokenSource::RedirectFragmentToken),
+            limit: 20,
+            page: 1,
+            max_pages: 1,
+            since_id: None,
+            since_time_raw: None,
+            since_time: None,
+            known: BTreeMap::new(),
+            refresh: false,
+        }
+    }
+
+    fn review_detail_request() -> DetailRequest {
+        DetailRequest {
+            token: Zeroizing::new(BEARER.to_owned()),
+            token_source: Some(TokenSource::RedirectFragmentToken),
+            id: 41,
+            refresh: false,
+        }
+    }
+
+    /// The extra held-credential predicate a session read applies to every
+    /// response body in addition to the bearer token.
+    fn holds_credential(bytes: &[u8]) -> bool {
+        net::carries_secret(bytes, HELD_CREDENTIAL)
+    }
+
+    #[test]
+    fn ihome_review_regression_surrogate_escaped_credential_prose_is_withheld() {
+        // A complete non-JSON text/plain prose that quotes the held
+        // credential as a JSON string literal spelled with UTF-16 surrogate
+        // escapes. The decoded literal is the credential, so the original
+        // bytes must be withheld and the refusal must be reported as
+        // `credential_echo` instead of only toggling an internal flag.
+        let body = br#"notice: "q\ud83d\ude00r" was recorded"#;
+        let url = list_url(20, 1).unwrap();
+        let original = review_response(&url, body, Some("text/plain"));
+        let contains: &dyn Fn(&[u8]) -> bool = &holds_credential;
+        let facts = analyze_authenticated_body(&original.body, BEARER, Some(contains));
+        let request = review_list_request();
+        let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(page.entries.is_empty());
+        let found = page.evidence.as_ref().expect("withheld list evidence");
+        assert_eq!(found["fallback_reason"], "credential_echo");
+        assert_eq!(found["evidence_kind"], "upstream_http_metadata");
+        assert!(found.get("raw_response_base64").is_none(), "reversible raw response leaked");
+        let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
+        assert_eq!(envelope["result"], "degraded");
+        assert_eq!(envelope["entry_count"], 0);
+        assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
+        assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
+        assert!(!serde_json::to_string(&envelope).unwrap().contains("ud83d"));
+        // The detail read refuses the same body.
+        let detail_request = review_detail_request();
+        let detail = detail_page(&detail_request, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(detail.entries.is_empty());
+        let found = detail.evidence.as_ref().expect("withheld detail evidence");
+        assert_eq!(found["fallback_reason"], "credential_echo");
+        assert!(found.get("raw_response_base64").is_none());
+    }
+
+    #[test]
+    fn ihome_review_regression_surrogate_escaped_credential_json_document_is_refused() {
+        // The parsed-document branch decodes the surrogate pair already. The
+        // held credential must be refused there too, and the parsed document
+        // must never be projected.
+        let body = br#"{"message":"q\ud83d\ude00r"}"#;
+        let url = list_url(20, 1).unwrap();
+        let original = review_response(&url, body, Some("application/json"));
+        let contains: &dyn Fn(&[u8]) -> bool = &holds_credential;
+        let facts = analyze_authenticated_body(&original.body, BEARER, Some(contains));
+        let request = review_list_request();
+        let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(page.entries.is_empty());
+        let found = page.evidence.as_ref().expect("withheld evidence");
+        assert_eq!(found["fallback_reason"], "credential_echo");
+        assert!(found.get("raw_response_base64").is_none());
+    }
+
+    #[test]
+    fn ihome_review_regression_ordinary_escaped_prose_stays_admissible() {
+        // The same prose shape without the credential keeps its original
+        // bytes: the decoder must not refuse every escaped literal.
+        let body = br#"notice: "caf\u00e9 \ud83d\ude00" was recorded"#;
+        let url = list_url(20, 1).unwrap();
+        let original = review_response(&url, body, Some("text/plain"));
+        let contains: &dyn Fn(&[u8]) -> bool = &holds_credential;
+        let facts = analyze_authenticated_body(&original.body, BEARER, Some(contains));
+        let request = review_list_request();
+        let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(page.entries.is_empty());
+        let found = page.evidence.as_ref().expect("fallback evidence");
+        assert_eq!(found["fallback_reason"], "unexpected_content");
+        assert_eq!(found["evidence_kind"], "upstream_http_body");
+        assert_eq!(found["raw_response_base64"], STANDARD.encode(body));
+    }
+
+    #[test]
+    fn ihome_review_regression_unpaired_surrogate_prose_stays_admissible() {
+        // An unpaired high surrogate is not the credential spelling and must
+        // not be combined with the text that follows it. The body stays
+        // admissible and its original bytes are released.
+        let body = br#"notice: "\ud83dA" was recorded"#;
+        let url = list_url(20, 1).unwrap();
+        let original = review_response(&url, body, Some("text/plain"));
+        let contains: &dyn Fn(&[u8]) -> bool = &holds_credential;
+        let facts = analyze_authenticated_body(&original.body, BEARER, Some(contains));
+        let request = review_list_request();
+        let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+        assert!(page.entries.is_empty());
+        let found = page.evidence.as_ref().expect("fallback evidence");
+        assert_eq!(found["fallback_reason"], "unexpected_content");
+        assert_eq!(found["raw_response_base64"], STANDARD.encode(body));
+    }
 }

@@ -8,7 +8,12 @@
   reviewed callback to HTTPS and consume the terminal fragment without fetching
   it. No persistence, session cache, refresh, retry or business mutation.
   Withhold final credential echoes, including username/password, current and
-  retired cookies and MIME parameters. Strict-TLS and actual CLI/schema proof
+  retired cookies, complete authentication Cookie headers and MIME parameters.
+  Retain headers in bounded, invocation-only zeroizing storage without copying
+  the selected snapshot; exhaustion refuses before sending. Decode UTF-16
+  surrogate pairs during original-response screening. Publish independently
+  valid session/run output schemas instead of unresolved external references.
+  Strict-TLS regressions, direct native/schema proof and the full offline suite
   passed; current transport preflight failed before TLS/HTTP, so no real
   credentials were submitted and campus compatibility remains unverified.
 - Preserve iHome records without inventing titles. Require the source-shaped

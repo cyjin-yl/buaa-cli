@@ -273,10 +273,19 @@ struct Jar {
     /// an ordinary response field, so they stay reachable for the privacy
     /// guard of one in-memory attempt.
     retired: Vec<Zeroizing<String>>,
+    /// Invocation-only Cookie headers prepared for transmission. Encoding a
+    /// whole header can hide every separately screened cookie-value spelling.
+    transmitted_headers: Vec<Zeroizing<String>>,
+    transmitted_header_bytes: usize,
 }
 
 /// A retired credential is kept for the lifetime of one attempt only.
 const MAX_RETIRED_CREDENTIALS: usize = MAX_COOKIE_COUNT;
+
+/// The complete Cookie headers of one attempt are kept for the lifetime of
+/// that attempt only, and only within these bounds.
+const MAX_TRANSMITTED_HEADERS: usize = MAX_COOKIE_COUNT;
+const MAX_TRANSMITTED_HEADER_BYTES: usize = MAX_STORED_SESSION_BYTES;
 
 /// A cookie value is stored exactly as the server sent it, quotes included.
 /// Both the raw value and its unquoted spelling are credential carriers, and
@@ -887,6 +896,30 @@ impl Jar {
         Ok(())
     }
 
+    /// Move a scoped snapshot into the private guard before sending. Repeated
+    /// headers reuse their index; exhaustion refuses before another request.
+    fn retain_transmitted_header(&mut self, header: Zeroizing<String>) -> Result<usize, Error> {
+        if let Some(index) = self
+            .transmitted_headers
+            .iter()
+            .position(|retained| retained.as_str() == header.as_str())
+        {
+            return Ok(index);
+        }
+        if self.transmitted_headers.len() >= MAX_TRANSMITTED_HEADERS
+            || self
+                .transmitted_header_bytes
+                .saturating_add(header.len())
+                > MAX_TRANSMITTED_HEADER_BYTES
+        {
+            return Err(Error::new("body_limit", "Authentication cookie header history exceeds its privacy bound; no further request is allowed."));
+        }
+        self.transmitted_header_bytes += header.len();
+        let index = self.transmitted_headers.len();
+        self.transmitted_headers.push(header);
+        Ok(index)
+    }
+
     /// Every credential value this attempt may have carried: the live
     /// cookies of every scope (including a path-scoped or sign-on host-only
     /// cookie that is never delivered to the final service), the values
@@ -903,6 +936,10 @@ impl Jar {
                 .terminal_credential
                 .as_ref()
                 .is_some_and(|value| carries_cookie_value(bytes, value.as_str()))
+            || self
+                .transmitted_headers
+                .iter()
+                .any(|header| crate::net::carries_secret(bytes, header.as_str()))
     }
 
     fn select_cookies(&self, url: &Url, reject_expired: bool) -> ScopedCookies {
@@ -3497,11 +3534,13 @@ fn send(
     let mut first = initial;
     let mut had_redirect = false;
     for _ in 0..=MAX_REDIRECTS {
-        // Snapshot the scoped cookie and its earliest expiry before any
-        // pacing or request-start admission. The zeroizing buffer stays local.
+        // Snapshot scope/expiry and retain the zeroizing header before pacing
+        // or request-start admission. Guard exhaustion sends no request.
         let cookie_snapshot = match jar.select_cookies(&url, true) {
             ScopedCookies::Anonymous => None,
-            ScopedCookies::Ready(cookie, expiry) => Some((cookie, expiry)),
+            ScopedCookies::Ready(cookie, expiry) => {
+                Some((jar.retain_transmitted_header(cookie)?, expiry))
+            }
             ScopedCookies::Unusable => return Err(scoped_cookie_unusable()),
         };
         if !first {
@@ -3534,8 +3573,8 @@ fn send(
                 return SessionStart::CookieUnusable;
             }
             let mut request = client.request(method.clone(), url.clone()).timeout(Duration::from_secs(30));
-            if let Some((cookie, _)) = &cookie_snapshot {
-                let Ok(mut header) = HeaderValue::from_str(cookie.as_str()) else {
+            if let Some((index, _)) = &cookie_snapshot {
+                let Ok(mut header) = HeaderValue::from_str(jar.transmitted_headers[*index].as_str()) else {
                     return SessionStart::CookieUnusable;
                 };
                 header.set_sensitive(true);
@@ -6656,6 +6695,8 @@ fn stored_session_in(directory: &File, fingerprint: &str) -> Result<Jar, Error> 
         service: CasService::Classroom,
         terminal_credential: None,
         retired: Vec::new(),
+        transmitted_headers: Vec::new(),
+        transmitted_header_bytes: 0,
     })
 }
 
@@ -8392,6 +8433,40 @@ mod tests {
         assert!(!status.safety_latched);
         assert!(!status.authentication_armed);
         assert_eq!(status.consecutive_network_failures, 0);
+    }
+
+    #[test]
+    fn a_transmitted_cookie_header_is_screened_as_a_complete_credential() {
+        let mut jar = Jar::default();
+        jar.retain_transmitted_header(Zeroizing::new("sid=synthetic-value".to_owned()))
+            .expect("the header is retained");
+        assert_eq!(jar.transmitted_headers.len(), 1);
+        // The same header is not copied twice.
+        jar.retain_transmitted_header(Zeroizing::new("sid=synthetic-value".to_owned()))
+            .expect("the header is retained");
+        assert_eq!(jar.transmitted_headers.len(), 1);
+        // The complete header is a credential in its own right: the base64
+        // spelling of the header carries neither the cookie value nor its
+        // own base64 spelling, so only the complete header identifies it.
+        assert!(jar.contains_secret_bytes(b"sid=synthetic-value"));
+        assert!(jar.contains_secret_bytes(b"c2lkPXN5bnRoZXRpYy12YWx1ZQ=="));
+        assert!(!jar.contains_secret_bytes(b"ordinary response body"));
+        // The bounded storage refuses instead of growing without bound.
+        for index in 0..MAX_TRANSMITTED_HEADERS - 1 {
+            jar.retain_transmitted_header(Zeroizing::new(format!("sid=synthetic-{index}")))
+                .expect("the header is retained");
+        }
+        jar.retain_transmitted_header(Zeroizing::new("sid=synthetic-value".to_owned()))
+            .expect("an existing header still fits at capacity");
+        let error = jar
+            .retain_transmitted_header(Zeroizing::new("sid=one-header-too-many".to_owned()))
+            .expect_err("the bounded storage refuses");
+        assert_eq!(error.code, "body_limit");
+        let mut byte_limited = Jar::default();
+        let error = byte_limited
+            .retain_transmitted_header(Zeroizing::new("x".repeat(MAX_TRANSMITTED_HEADER_BYTES + 1)))
+            .expect_err("a single oversized header cannot bypass the byte bound");
+        assert_eq!(error.code, "body_limit");
     }
 
     fn assert_unreviewed_interaction(fields: &ParsedLoginForm) {
@@ -10815,6 +10890,8 @@ mod tests {
             service: CasService::Classroom,
             terminal_credential: None,
             retired: Vec::new(),
+            transmitted_headers: Vec::new(),
+            transmitted_header_bytes: 0,
         };
         assert!(store_session(&directory, &fingerprint, &jar).is_err());
         assert_eq!(std::fs::read(&original).expect("read"), b"JSESSIONID=other");

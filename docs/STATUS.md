@@ -27,14 +27,32 @@ not raw bytes or an invented empty result. Application-level positive admission
 and the existing record/pagination rules remain required. A token or successful
 public listing alone does not establish account identity or complete rights.
 
-The focused suite passed 78 cases, including strict-TLS loopback login/read,
-one-POST/one-read/no-terminal-fetch boundaries, challenge/deferral/redirect
-refusals and credential echoes. Fourteen CLI boundary cases passed. Separate
-actual-binary runs validated both disabled read types, disabled empty credential
-values, offline/permission/injected-token refusals and the emitted input/output
-JSON Schemas, including the generic run output. CLI errors retain the existing
-mapping: offline `online_required` becomes `unavailable` (exit 7); missing
-operator permission is `permission` (exit 5).
+Independent review found encoded complete authentication Cookie headers and
+UTF-16 surrogate-pair credential spellings could escape the final privacy
+guard. Three privacy cases failed before repair while three controls passed.
+The guard now retains bounded, invocation-only, zeroizing complete headers;
+selected snapshots move into that guard without an extra string copy, and
+exhaustion refuses before another request. Fallback string screening combines
+valid surrogate pairs without changing loose-escape or unpaired-surrogate
+behavior. Neither fix enables cookie export, adoption or persistence.
+
+The expanded focused suite passed 84 cases, including strict-TLS loopback
+login/read, one-POST/one-read/no-terminal-fetch boundaries, challenge/deferral/
+redirect refusals and credential echoes. A separate guard case exercised
+complete-header screening, deduplication and both history bounds. The complete
+locked offline suite passed 1141 library tests (three existing ignored workers)
+and all 107 integration/CLI tests, including the 14 iHome CLI boundary cases.
+
+The independently supplied session/run output schemas also had unresolved
+references; their variants are now self-contained. An earlier smoke that
+copied external definitions did not establish standalone validity. Actual
+rebuilt commands now pass ten direct standard-validator checks using the
+unmodified emitted contracts, covering disabled list/detail and empty values.
+The specific session input permits an omitted operation selector; generic
+run input requires it. Separate native offline/permission/injected-token
+refusals withheld the synthetic credentials. CLI errors retain the existing
+stderr JSON protocol: offline `online_required` becomes `unavailable` (exit 7);
+missing operator permission is `permission` (exit 5).
 
 Current DNS-resolved IPv4 targets for SSO and iHome refused TCP 443; their IPv6
 targets had no route. These were bounded transport-only probes, not HTTP or

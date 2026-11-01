@@ -454,17 +454,6 @@ fn non_library_profiles_never_release_the_library_credential() {
     ] {
         assert!(matches!(credential(service, input), Ok(None)), "{input}");
     }
-    // The booking origin is refused outright outside the library profile; a
-    // well-formed library credential URL never leaks across profiles.
-    let booking = "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=ST-synthetic";
-    for service in [CasService::Classroom, CasService::SmartClassrooms, CasService::Ihome] {
-        assert!(credential(service, booking).is_err());
-    }
-    let booking_fragment =
-        "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-synthetic";
-    for service in [CasService::Classroom, CasService::SmartClassrooms, CasService::Ihome] {
-        assert!(credential(service, booking_fragment).is_err());
-    }
 }
 
 #[test]
@@ -2533,6 +2522,10 @@ fn ihome_session_refuses_shaped_callbacks_and_plaintext_downgrades() {
             "http://ihome.buaa.edu.cn/api/authLogin?ticket=ST-synthetic-ihome",
         ),
         (
+            "foreign-booking",
+            "https://booking.lib.buaa.edu.cn/v4/login/cas?cas=ST-synthetic",
+        ),
+        (
             "https-business-path",
             "https://i.buaa.edu.cn/api/appeal?limit=20&page=1",
         ),
@@ -2553,6 +2546,10 @@ fn ihome_session_refuses_shaped_callbacks_and_plaintext_downgrades() {
         assert!(
             harness.ihome.observed().is_empty(),
             "{name}: no platform request may follow a refused callback"
+        );
+        assert!(
+            harness.app.observed().is_empty() && harness.booking.observed().is_empty(),
+            "{name}: no request may reach another relying party"
         );
     }
 
@@ -2845,4 +2842,200 @@ fn ihome_session_degrades_a_mime_echo_without_leaking_the_content_type() {
         assert!(!output.to_string().contains(secret));
         assert_eq!(harness.ihome.observed().len(), 2);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review regressions: the complete transmitted Cookie header is itself a
+// credential. Its base64 spelling carries neither the cookie names nor the
+// individual cookie values that are screened on their own, so a response
+// that reflects the whole header must still be withheld.
+// ---------------------------------------------------------------------------
+
+/// The exact `Cookie` header one iHome attempt really transmits. The value
+/// is read from an observed request of a completed attempt, so a regression
+/// always screens the header that was actually sent instead of an assumed
+/// spelling.
+fn ihome_review_regression_transmitted_cookie_header(name: &str) -> String {
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, IHOME_LIST_BODY),
+    );
+    let (result, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        name,
+    );
+    let output = result.expect("the ordinary listing is admissible");
+    assert_eq!(
+        output["result"], "entries",
+        "the probe attempt must authenticate and project its listing"
+    );
+    let headers = ihome_review_regression_transmitted_cookie_headers(&harness);
+    assert!(
+        !headers.is_empty(),
+        "the sign-on exchange transmits a Cookie header"
+    );
+    headers.into_iter().next().expect("a transmitted Cookie header")
+}
+
+/// Every `Cookie` header one attempt really transmitted, in request order.
+/// An empty header is not a header.
+fn ihome_review_regression_transmitted_cookie_headers(harness: &CasHarness) -> Vec<String> {
+    let sign_on = harness.sso.observed();
+    let platform = harness.ihome.observed();
+    sign_on
+        .iter()
+        .chain(platform.iter())
+        .filter_map(|request| request.header("cookie"))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The encoded complete header must stay outside every spelling that is
+/// already screened on its own: it carries no cookie value, no username or
+/// password and no standalone reversible spelling of one. Only the complete
+/// transmitted header identifies it.
+fn ihome_review_regression_assert_uniquely_identified(encoded: &str) {
+    use base64::Engine as _;
+    for guarded in [
+        "host-only-credential",
+        SESSION_USERNAME,
+        SESSION_PASSWORD,
+        IHOME_TOKEN,
+    ] {
+        assert!(
+            !encoded.contains(guarded),
+            "{guarded} is spelled inside the encoded header"
+        );
+        for spelling in [
+            base64::engine::general_purpose::STANDARD.encode(guarded),
+            base64::engine::general_purpose::URL_SAFE.encode(guarded),
+        ] {
+            assert!(
+                !encoded.contains(spelling.trim_end_matches('=')),
+                "{guarded} has a reversible spelling inside the encoded header"
+            );
+        }
+    }
+}
+
+/// A listing that reflects the complete transmitted Cookie header in base64
+/// is a credential echo. The attempt itself succeeds: the sign-on completes,
+/// the platform answers with an otherwise valid listing envelope and only
+/// that envelope decides the outcome.
+#[test]
+fn ihome_review_regression_withholds_a_listing_that_reflects_the_transmitted_cookie_header() {
+    use base64::Engine as _;
+    let transmitted = ihome_review_regression_transmitted_cookie_header(
+        "ihome-review-regression-header-probe",
+    );
+    assert_eq!(
+        transmitted, "CASTGC=host-only-credential",
+        "the synthetic sign-on transmits the complete name=value header"
+    );
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&transmitted);
+    ihome_review_regression_assert_uniquely_identified(&encoded);
+
+    let body = IHOME_LIST_BODY.replace("synthetic appeal content", encoded.as_str());
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        ihome_responder(IHOME_TERMINAL, body),
+    );
+    let (result, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-review-regression-header-listing",
+    );
+    // This attempt transmitted the very header the body reflects.
+    let observed = ihome_review_regression_transmitted_cookie_headers(&harness);
+    assert!(
+        observed.iter().any(|header| header == &transmitted),
+        "this attempt transmitted the complete header the body reflects"
+    );
+
+    let output = result.expect("a credential echo degrades gracefully, it does not error");
+    assert_eq!(output["type"], "ihome_appeal_list");
+    assert_eq!(output["result"], "degraded");
+    assert_eq!(output["entry_count"], 0);
+    assert!(output["next_cursor"].is_null());
+    let evidence = &output["upstream_evidence"];
+    assert_eq!(evidence["fallback_reason"], "credential_echo");
+    assert_eq!(evidence["evidence_kind"], "upstream_http_metadata");
+    assert_eq!(evidence["http_status"], 200);
+    assert!(
+        evidence.get("raw_response_base64").is_none(),
+        "the withheld body was exported"
+    );
+    assert!(
+        !output.to_string().contains(&encoded),
+        "the encoded transmitted header was released"
+    );
+    // The business read happened exactly once and settled; the flow did not
+    // retry after the echo.
+    assert_eq!(harness.ihome.observed().len(), 2);
+    assert_terminal_never_fetched(&harness);
+}
+
+/// The same complete header is a credential in the retained MIME value, and
+/// that boundary is distinct from the body: the body itself stays ordinary,
+/// so only the header guard can withhold it.
+#[test]
+fn ihome_review_regression_withholds_a_mime_that_reflects_the_transmitted_cookie_header() {
+    use base64::Engine as _;
+    let transmitted = ihome_review_regression_transmitted_cookie_header(
+        "ihome-review-regression-mime-probe",
+    );
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&transmitted);
+    ihome_review_regression_assert_uniquely_identified(&encoded);
+
+    let mime = format!("application/json; profile=\"{encoded}\"");
+    let harness = CasHarness::with_service_responders(
+        sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        move |request| {
+            let path = request.target.split('?').next().unwrap_or("");
+            if path == "/api/authLogin" {
+                return http_response("302 Found", &[("Location", IHOME_TERMINAL)], "");
+            }
+            if path == "/api/appeal" {
+                return http_response(
+                    "200 OK",
+                    &[("Content-Type", mime.as_str())],
+                    IHOME_LIST_BODY,
+                );
+            }
+            http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected")
+        },
+    );
+    let (result, _) = run_ihome_session(
+        &harness,
+        &ihome_session_input(ihome_list_read()),
+        "ihome-review-regression-mime",
+    );
+    let output = result.expect("a MIME echo degrades gracefully");
+    assert_eq!(output["type"], "ihome_appeal_list");
+    assert_eq!(output["result"], "degraded");
+    assert_eq!(output["entry_count"], 0);
+    let evidence = &output["upstream_evidence"];
+    assert_eq!(evidence["fallback_reason"], "credential_echo");
+    assert!(evidence["content_type"].is_null());
+    assert_eq!(evidence["content_type_parameters_withheld"], true);
+    assert_eq!(evidence["http_status"], 200);
+    assert_eq!(evidence["byte_length"], IHOME_LIST_BODY.len());
+    assert!(
+        evidence.get("raw_response_base64").is_none(),
+        "the withheld body was exported"
+    );
+    assert!(
+        !output.to_string().contains(&encoded),
+        "the encoded transmitted header was released"
+    );
+    assert_eq!(harness.ihome.observed().len(), 2);
+    assert_terminal_never_fetched(&harness);
 }
