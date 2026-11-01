@@ -4107,7 +4107,7 @@ enum LandingVerdict {
 /// they do not refuse a page that is not a login page.
 fn landing_verdict(hop: &Hop) -> LandingVerdict {
     match login_content_type_label(hop.content_type.as_deref()) {
-        Some("text/html") => landing_document_verdict(&hop.body),
+        Some("text/html") => landing_document_verdict(&hop.body, false),
         Some("application/xhtml+xml") => LandingVerdict::Unreadable,
         _ => LandingVerdict::Clear,
     }
@@ -4116,7 +4116,7 @@ fn landing_verdict(hop: &Hop) -> LandingVerdict {
 /// Classify a body that was already admitted as HTML. The challenge,
 /// rejection and challenge-wording rules are shared by final landings and
 /// iHome redirect bodies, so one admitted body is parsed exactly once.
-fn landing_document_verdict(body: &str) -> LandingVerdict {
+fn landing_document_verdict(body: &str, review_challenge_controls: bool) -> LandingVerdict {
     let fields = match login_fields(body, LoginSourceScope::FinalResponse) {
         Ok(fields) => fields,
         Err(_) => return LandingVerdict::Unreadable,
@@ -4140,11 +4140,14 @@ fn landing_document_verdict(body: &str) -> LandingVerdict {
         // that carried no session (no scoped cookie, no terminal CAS).
         return LandingVerdict::Challenge;
     }
+    if review_challenge_controls && fields.has_unreviewed_challenge_control {
+        return LandingVerdict::Unreadable;
+    }
     LandingVerdict::Clear
 }
 
 /// Admit one iHome authentication redirect body that is about to be
-/// discarded or followed. An empty or whitespace-only body is the normal
+/// discarded or followed. An empty or ASCII-whitespace body is the normal
 /// redirect answer. A nonempty body must be a reviewed HTML document: a
 /// missing, malformed or unreviewed MIME label, including HTML-shaped
 /// markup labeled text/plain, is uncertainty and refuses instead of
@@ -4155,11 +4158,11 @@ fn ihome_redirect_body_admission(
     body: &str,
     unreadable: &'static str,
 ) -> Result<(), Error> {
-    if body.trim().is_empty() {
+    if body.trim_ascii().is_empty() {
         return Ok(());
     }
     let verdict = match login_content_type_label(content_type) {
-        Some("text/html") => landing_document_verdict(body),
+        Some("text/html") => landing_document_verdict(body, true),
         _ => LandingVerdict::Unreadable,
     };
     match verdict {
@@ -4508,6 +4511,7 @@ struct ParsedLoginForm {
     active_text_facts: ActiveTextFacts,
     has_password_control: bool,
     has_active_challenge_control: bool,
+    has_unreviewed_challenge_control: bool,
     has_unverified_challenge_text: bool,
     interaction_reason: Option<&'static str>,
     first_rejected_control: Option<RejectedControl>,
@@ -5220,6 +5224,7 @@ fn login_document_fields(
     let mut field_bytes = 0usize;
     let mut credential_direction_entries = Vec::new();
     let mut has_active_challenge_control = false;
+    let mut has_unreviewed_challenge_control = false;
     let mut username_seen = false;
     let mut password_seen = false;
     let mut interaction_reason = None;
@@ -5254,10 +5259,9 @@ fn login_document_fields(
         };
         let label_challenge = !challenge
             && (control_label_challenge || associated_challenge_labels.contains(&control.id()));
-        if (challenge || label_challenge)
-            && !structurally_inert(control)
-            && interaction_reason.is_none()
-        {
+        let unreviewed_challenge = (challenge || label_challenge) && !structurally_inert(control);
+        has_unreviewed_challenge_control |= unreviewed_challenge;
+        if unreviewed_challenge && interaction_reason.is_none() {
             interaction_reason = Some("unreviewed_challenge_control");
             first_rejected_control = Some(RejectedControl::observe(
                 control,
@@ -5471,6 +5475,7 @@ fn login_document_fields(
         active_text_facts,
         has_password_control: password_seen,
         has_active_challenge_control,
+        has_unreviewed_challenge_control,
         has_unverified_challenge_text,
         interaction_reason,
         first_rejected_control,

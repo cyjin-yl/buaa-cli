@@ -23,6 +23,29 @@ terminal credential URL. These are synthetic requests, with zero campus
 requests. The temporary source and Cargo entry were removed; the pre-existing
 Cargo manifest was preserved byte-for-byte.
 
+Follow-up review found two gaps in that admission: challenge-control cues such
+as `one-time-code` were retained by the form parser but lost by the landing
+verdict, and Unicode `trim()` incorrectly admitted NBSP/EM SPACE as empty
+without reviewed HTML MIME. Landing review now consumes an independent
+challenge-control fact, so an earlier unrelated form diagnostic cannot mask a
+later cue. It refuses as `authentication_unconfirmed`, not a confirmed CAPTCHA;
+other CAS profiles retain their prior landing policy. The empty-body exception
+uses ASCII whitespace only. Non-ASCII whitespace is still admissible when the
+body has reviewed HTML MIME.
+
+Before this follow-up, the initial OTP redirect followed a second SSO GET and
+the missing-MIME NBSP case incorrectly succeeded. Both failed regressions now
+pass, together with the unrelated-control and reviewed-HTML controls. The
+expanded focused suite passed 89 cases; the complete locked offline suite
+passed 1149 library cases (three existing ignored workers) and 107 integration/
+CLI cases. A separate non-test strict-TLS consumer passed seven scenarios:
+initial/POST OTP, an OTP cue after an unrelated form diagnostic, NBSP with
+missing MIME and EM SPACE with unknown MIME all made zero business reads;
+reviewed-HTML Unicode and unrelated-control controls each made one. Every case
+withheld credentials and never fetched the terminal credential URL. All were
+synthetic loopback requests, with zero campus requests. The follow-up temporary
+source and Cargo entry were removed and the manifest restored byte-for-byte.
+
 Boya now accepts either raw base64 ciphertext or a JSON string containing it,
 matching the pinned MIT public client's
 [`LocalBykcApi.kt` wrapper](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/local/LocalBykcApi.kt#L478-L482).
@@ -73,11 +96,11 @@ exhaustion refuses before another request. Fallback string screening combines
 valid surrogate pairs without changing loose-escape or unpaired-surrogate
 behavior. Neither fix enables cookie export, adoption or persistence.
 
-The expanded focused suite passed 88 cases, including strict-TLS loopback
+The expanded focused suite passed 89 cases, including strict-TLS loopback
 login/read, one-POST/one-read/no-terminal-fetch boundaries, challenge/deferral/
 redirect refusals and credential echoes. A separate guard case exercised
 complete-header screening, deduplication and both history bounds. The complete
-locked offline suite passed 1148 library tests (three existing ignored workers)
+locked offline suite passed 1149 library tests (three existing ignored workers)
 and all 107 integration/CLI tests, including the 14 iHome CLI boundary cases.
 
 The independently supplied session/run output schemas also had unresolved

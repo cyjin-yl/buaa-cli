@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Preserve iHome landing-page challenge-control cues independently of the first
+  form diagnostic, so an unrelated quirk cannot mask a later OTP/label cue.
+  Refuse unreviewed cues without claiming a confirmed CAPTCHA; leave other CAS
+  landing policies unchanged. Limit the missing-MIME empty-body exception to
+  ASCII whitespace. Seven native strict-TLS synthetic cases preserve both
+  refusal-before-business-read and normal reviewed-HTML/control behavior.
 - Review every followed iHome authentication redirect body before another hop
   or terminal token consumption. Refuse nonempty bodies without reviewed HTML
   MIME; preserve empty/ASCII-whitespace redirects, header/deferral precedence

@@ -3164,12 +3164,87 @@ fn ihome_challenge_review_regression_initial_get_redirect_body_challenge_stops_t
 }
 
 #[test]
+fn ihome_challenge_review_regression_cue_controls_refuse_without_rejecting_unrelated_quirks() {
+    for (name, body, review_required) in [
+        ("otp", r#"<form><input name="otp" autocomplete="one-time-code" required></form>"#, true),
+        ("otp-after-quirk", r#"<form><input name="username" type="checkbox"><input name="password" type="password"><input name="otp" autocomplete="one-time-code" required></form>"#, true),
+        ("unrelated-quirk", r#"<form><input name="username" type="checkbox"><input name="password" type="password"></form>"#, false),
+    ] {
+        for &stage in if review_required { &[0, 1, 2][..] } else { &[1, 2][..] } {
+            let ordinary_sso = sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]);
+            let harness = CasHarness::with_service_responders(
+                move |request| {
+                    if (stage == 0 && request.method == "GET" && !request.target.contains("step=next"))
+                        || (stage == 1 && request.method == "POST")
+                    {
+                        let location = if stage == 0 {
+                            "https://sso.buaa.edu.cn/login?step=next"
+                        } else {
+                            IHOME_CALLBACK_TICKET
+                        };
+                        return http_response(
+                            "302 Found",
+                            &[("Location", location), ("Content-Type", "text/html")],
+                            body,
+                        );
+                    }
+                    ordinary_sso(request)
+                },
+                |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+                |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+                move |request| {
+                    match request.target.split('?').next().unwrap_or("") {
+                        "/api/authLogin" => http_response(
+                            "302 Found",
+                            &[("Location", IHOME_TERMINAL), ("Content-Type", "text/html")],
+                            if stage == 2 { body } else { "" },
+                        ),
+                        "/api/appeal" => http_response(
+                            "200 OK", &[("Content-Type", "application/json")], IHOME_LIST_BODY,
+                        ),
+                        _ => http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+                    }
+                },
+            );
+            let (result, _) = run_ihome_session(
+                &harness,
+                &ihome_session_input(ihome_list_read()),
+                &format!("ihome-review-cue-{name}-{stage}"),
+            );
+            if review_required {
+                let error = result.expect_err("an unreviewed verification control must stop the flow");
+                assert_eq!(error.code, "authentication_unconfirmed", "{name}/{stage}");
+                assert_eq!(harness.ihome.observed().len(), usize::from(stage == 2), "{name}/{stage}");
+                for secret in [SESSION_USERNAME, SESSION_PASSWORD, IHOME_TOKEN] {
+                    assert!(!error.message.contains(secret), "{name}/{stage}: credential export");
+                }
+            } else {
+                let output = result.expect("unrelated control quirks must not become challenges");
+                assert_eq!(output["result"], "entries", "{name}/{stage}");
+                assert_eq!(harness.ihome.observed().len(), 2, "{name}/{stage}");
+            }
+            if review_required && stage == 0 {
+                assert_eq!(harness.sso.observed().len(), 1, "{name}/{stage}");
+            } else {
+                assert_one_credential_post(&harness, CasService::Ihome);
+            }
+            assert_terminal_never_fetched(&harness);
+            assert!(harness.app.observed().is_empty());
+            assert!(harness.booking.observed().is_empty());
+        }
+    }
+}
+
+#[test]
 fn ihome_challenge_review_regression_unreviewed_terminal_mime_refuses_without_a_business_read() {
-    for (name, content_type) in [
-        ("absent-mime", None),
-        ("malformed-mime", Some("text/html/../x")),
-        ("unknown-mime", Some("application/x-unknown-review-type")),
-        ("html-under-plain-text-mime", Some("text/plain")),
+    for (name, content_type, body) in [
+        ("absent-mime", None, IHOME_CHALLENGE_REVIEW_BODY),
+        ("malformed-mime", Some("text/html/../x"), IHOME_CHALLENGE_REVIEW_BODY),
+        ("unknown-mime", Some("application/x-unknown-review-type"), IHOME_CHALLENGE_REVIEW_BODY),
+        ("html-under-plain-text-mime", Some("text/plain"), IHOME_CHALLENGE_REVIEW_BODY),
+        ("nbsp-missing-mime", None, "\u{a0}"),
+        ("em-space-unknown-mime", Some("application/x-unknown-review-type"), "\u{2003}"),
+        ("unicode-malformed-mime", Some("text/html/../x"), " \u{a0}\t"),
     ] {
         let harness = CasHarness::with_service_responders(
             sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
@@ -3182,7 +3257,7 @@ fn ihome_challenge_review_regression_unreviewed_terminal_mime_refuses_without_a_
                     if let Some(mime) = content_type {
                         headers.push(("Content-Type", mime));
                     }
-                    return http_response("302 Found", &headers, IHOME_CHALLENGE_REVIEW_BODY);
+                    return http_response("302 Found", &headers, body);
                 }
                 if path == "/api/appeal" {
                     return http_response(
@@ -3230,6 +3305,7 @@ fn ihome_challenge_review_regression_empty_or_whitespace_terminal_body_stays_adm
         ("empty-unknown-mime", "", Some("application/x-unknown-review-type")),
         ("whitespace-missing-mime", " \t\r\n\x0c", None),
         ("whitespace-malformed-mime", " \t\r\n", Some("text/html/../x")),
+        ("non-ascii-reviewed-html", "\u{a0}", Some("text/html")),
     ] {
         let harness = CasHarness::with_service_responders(
             sso_responder(CasService::Ihome, IHOME_CALLBACK_TICKET, &[]),
