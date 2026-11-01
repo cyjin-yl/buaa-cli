@@ -343,6 +343,7 @@
       "acceptance": "Preview typed intent, idempotent commit and postcondition; no autonomous grabs.",
       "evidence": {
         "candidate_offline": "Thirteen synthetic CLI admission cases passed. Three additional synthetic Session cases exercised probe/list/verify privacy-fact gating and original-lease settlement, including an exact-target postcondition that remains unknown.",
+        "source_contract_review_2026_11_02": "Read-only reference research found no current secure IEAS binding. Errno1024/BUAA-Course-Grab at 8f688e0ecb46066323a712b4207fa4a7d658946e targets legacy plaintext jwxt.buaa.edu.cn:8080/ieas2.1 and has no declared license; facts were inspected, not code copied. The deleted/private Colorfulshadow reference could not supply a current contract. Historical WebVPN rewriting and the distinct modern yjsxk application are not equivalent HTTPS IEAS origins. The current module has no production Session, and synthetic trusted-base/privacy facts cannot establish one. No campus request or authentication was performed for this research.",
         "remaining": "The Session supplied its privacy facts and trusted-base claim; no production transport, authenticated account, current selected-course contract or authorized mutation was verified. Writes remain blocked."
       },
       "sources": [
@@ -755,6 +756,11 @@
           "command": "buaa coursegrading unsupported",
           "observed": "unsupported exit 0: HTTP-only upstream, HTTPS equivalence unestablished",
           "live_blocker": "Live probing would target an HTTP-only upstream and is refused by design."
+        },
+        "source_contract_review_2026_11_02": {
+          "protocol_reference": "dhy2000/CG-Submit commit ef2869d756ce4f701dba0856a6ebf302570bdbd2, tree 70c8792675f3f85f8a3cf157cf3658bed29a71fd, cg_submit.py blob d75cea5409cd9be9dfc1120807cf64eae6a6245e. This is a 2021-scoped plaintext-HTTP community submission client with no declared license; protocol facts only, no implementation copied.",
+          "historical_https_limit": "Public archives establish historical HTTPS login-page availability, not a current authenticated submission contract. The archived SSO service target is HTTP and the login captcha shape varies between captures. Empty assignment-archive results do not establish that no current secure route exists.",
+          "remaining": "Need a current TLS-validated authenticated session path, assignment/problem identity contract, secure submission method/fields and an authoritative accepted-submission postcondition distinct from HTTP 200. No current judge probe, authentication or submission was performed. Connection failures previously observed for other campus hosts are not evidence of judge availability."
         }
       }
     },
@@ -2901,7 +2907,7 @@
     {
       "id": "contribution",
       "title": "Governed autonomous contribution",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Bounded unclaimed issue selection, linked PR, independent review, real permissions and maintainer merge gates.",
       "sources": [],
       "evidence": {
@@ -2909,6 +2915,17 @@
           "command": "buaa contribution scan with an empty object",
           "observed": "invalid_input exit 2: scan target required",
           "live_blocker": "Contribution scanning is local analysis; no remote service is claimed."
+        },
+        "readonly_observation_2026_11_02": {
+          "command": "buaa contribution scan; authenticated read-only input on protected stdin",
+          "repository": "cyjin-yl/buaa-cli",
+          "result": "scan_completed",
+          "authenticated_permissions": "Repository response confirms can_write and can_triage; repository is neither archived nor disabled. These permissions are not maintainer merge approval.",
+          "candidates": 0,
+          "excluded": 0,
+          "write_operations_performed": false,
+          "proof": "Native output passed the published standard Schema; token was obtained from the existing gh authentication in memory, supplied only on stdin, and absent from stdout/stderr. No raw authenticated response body, claim, Issue, PR or merge was emitted/performed. Receipt: local://buaa-contribution-readonly-observation-20261102.json.",
+          "remaining": "This corrects the dated local-only characterization for discovery, not the full contribution lifecycle. No eligible issue was discovered at the retired GitHub downstream; claim/linked-PR/exact-head-review/merge workflows remain unimplemented by this command. Work on the active Gitea primary requires its own admitted workflow and permission/readiness evidence; no artificial issue or upstream write was created for acceptance."
         }
       }
     },
