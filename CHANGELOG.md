@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Resolve each learning-material branch through its commit's tree declaration,
+  then request and verify the immutable recursive tree. Preserve strict root
+  and subtree Git-object checks, reject a different valid tree substituted for
+  the requested object, and retain malformed commit declarations as safe
+  degraded evidence without following response-supplied URLs. Commit and tree
+  requests share the existing cache, cookie refusal and HTTP safety path.
+- Include the exact Git `mode` in learning-material inventory/search entries,
+  so a caller can construct the already-required tree/blob/mode/size-bound fetch
+  solely from the published inventory. Publish the two new resolution/binding
+  fallback reasons in the output schemas.
+- Fix WE Learn and Aerospace practice input schemas to expose the actual
+  `oneOf` request contract rather than a nested command wrapper. Remove the
+  incidental schema-shape assertions that had been changed to accept that
+  broken nesting; runtime answer-material and local-only safeguards remain.
+- Merge duplicate capability `evidence` keys so dated offline observations no
+  longer hide the earlier safety evidence and unverified limits.
+- Represent the evaluation dispatcher's Legacy command as an empty struct
+  variant, enforcing its published no-extra-fields contract instead of
+  accepting extra keys through serde's unit-variant behavior. Valid Legacy
+  requests remain unsupported; malformed requests are rejected before dispatch.
 - Admit two retained operator-asserted offline history sources in
   `announcements history`: the literal Math HTTP root with an optional
   `news`/`notices` root view, and the GBK-decoded legacy Materials root

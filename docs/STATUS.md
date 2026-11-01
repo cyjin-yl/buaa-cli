@@ -1,5 +1,80 @@
 ## Development status
 
+## 2026-11-01: immutable learning-source binding and bounded online proof
+
+The all-feature online objective is still open. The observations below cover
+public documentation and local practice, not campus authentication, attendance,
+graded answers or source-wide rights.
+
+An existing Aerospace branch-tree response carried 646 entries and advertised
+`6c28cbb7679865546eace87089807944a07f1714` in its envelope. Independent
+reconstruction verified all 177 advertised subtrees, but native Git computed
+the root tree as `4eb358ae271b5ceae2aa0003999172f806a128d7`; the former ID
+was the branch commit, not that tree. The attempted root-hash exception was
+withdrawn. Every root and subtree still passes the same strict Git-object
+verification, including flat and empty trees.
+
+The shared learning reader now resolves the reviewed branch through the
+commit's tree declaration, then requests that immutable recursive tree through
+the existing cache and transport. A different valid tree cannot substitute for
+the requested tree ID. Commit and tree source bytes stay separate; malformed
+commit declarations yield safe degraded evidence and never authorize a
+response-supplied URL. Historical branch-response bytes remain untouched.
+
+Actual native commands observed:
+
+| Source | Verified inventory | Selected documentation | Independent byte proof |
+|---|---|---|---|
+| Caniformia/HangGai | 646 entries, root `4eb358ae…` | README.md, 228 bytes | Git blob `0b4aaae2…` and whole-body SHA-256 matched; offline bytes identical |
+| Micraow/WE-Learn-Answers | 3 entries, root `dc0a5574…` | README.md, 2021 bytes | Git blob `6f8071cf…` and whole-body SHA-256 matched; offline bytes identical |
+
+Aerospace search selected README.md. Inventories now emit the exact Git mode
+required to construct the existing tree/blob/mode/size-bound fetch without
+guessing. JSON Schema 4.25.1 validated the actual inventory/search/fetch outputs
+and practice inputs/results. The practice helper now publishes the real input
+schema rather than a nested command wrapper; the old incidental tests that
+had been repinned to that broken nesting were removed, not repinned again.
+
+Both modules' cloze generation, answer recording and local checking ran through
+the CLI. Aerospace's caller-supplied question-set branch also ran through that
+lifecycle. All checked results remained `local_only`, with no official grade,
+submission or completion claim. A question set carrying an answer field and an
+Aerospace fetch selecting the bundled answer database were refused. No answer
+database blob cache was created; no answer-bank content was retrieved.
+
+Independent read-only source reviews found no concrete defect in the assigned
+tree-binding and HTML/credential-admission scopes. They ran no builds, tests,
+campus requests or credential inspection and do not approve a future Git head.
+A separate coding agent fixed evaluation's Legacy variant to be a zero-field
+struct: extra keys must be rejected in line with its published schema, rather
+than changing a regression to accept serde's unit-variant behavior.
+
+The gateway vectors also received independent non-Rust verification against
+`fontlos/buaa-api@1da573856c7438e69dcf01dc3f0881465ce50049`, including
+the reference author's own XEncode vector, and agreed for both ASCII and UTF-8
+synthetic inputs. No further production crypto change was justified. This is
+protocol-source evidence, not a successful campus gateway login or proof of
+the earlier server-error attribution.
+
+Five duplicate capability `evidence` keys were merged so dated observations no
+longer hide earlier safety evidence or remaining limitations. Public CLI
+refusals, a bounded headless player process, or a missing callback alone are
+not proof of full service functionality, rendered playback, or a particular
+HTTP failure cause. The dated records below retain their original scope.
+
+The complete locked, offline test command passed 1084 library tests (three
+ignored workers) and 80 integration/CLI cases, with no failed case. Release
+build and full native `capabilities` equality against the current 51-capability
+manifest passed. Evaluation's valid Legacy request returned `unsupported`;
+the same request with an extra key returned a parse-time `blocked` result,
+matching the published input schema.
+
+Strict all-target Clippy with `-D warnings` did not pass: it reported 35 errors
+across existing style and parameter-count checks. No lint suppression or broad
+unrelated refactor was applied to turn that into a false green gate. Test and
+runtime proof above do not substitute for the outstanding static gate or
+repository publication/merge approvals.
+
 ## Classroom CAS callback: evidence boundary
 
 `sso.buaa.edu.cn` is the sign-on service in the observed classroom flow;

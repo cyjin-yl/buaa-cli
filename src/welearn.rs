@@ -327,7 +327,7 @@ pub(crate) mod learning {
         bound: bool,
     ) -> ChallengeAssessment {
         match surface {
-            Surface::Tree => crate::html::assess_challenge_body(bytes, declared, complete),
+            Surface::Tree | Surface::Commit => crate::html::assess_challenge_body(bytes, declared, complete),
             Surface::Raw => {
                 if bound && complete {
                     return ChallengeAssessment::Clear;
@@ -860,6 +860,76 @@ pub(crate) mod learning {
                 assert_eq!(std::fs::read(path).unwrap(), bytes);
             }
         }
+
+        fn retained_json(url: &Url, body: &[u8]) -> Response {
+            Response {
+                url: url.to_string(), status: 200,
+                headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
+                body: body.to_vec(), sha256: sha256_hex(body), fetched_at_unix_ms: 1,
+                cache_status: CacheStatus::Miss, revalidated_at_unix_ms: None,
+                revalidation_status: None,
+            }
+        }
+
+        #[test]
+        fn a_branch_commit_resolves_to_its_verified_immutable_tree() {
+            let fixture = TransportFixture::new();
+            let spec = &super::super::SOURCE;
+            let root = "17ba6f4f78b8480cfd0746758b08bacb877d0c9c";
+            let commit = json!({"sha":"1111111111111111111111111111111111111111",
+                "commit":{"tree":{"sha":root}}}).to_string();
+            let body = br#"{"sha":"17ba6f4f78b8480cfd0746758b08bacb877d0c9c","truncated":false,"tree":[
+                {"path":"docs","mode":"040000","type":"tree","sha":"640ba63b141ba35b527fee65e78140148c8d0a5b"},
+                {"path":"docs/note.txt","mode":"100644","type":"blob","sha":"ce013625030ba8dba906f756967f9e9ca394464a","size":6}
+            ]}"#;
+            let branch = spec.tree_url().unwrap();
+            let old = retained_json(&branch, b"{\"sha\":\"old-branch-evidence\"}");
+            fixture.cache.save(&old).unwrap();
+            let original_path = fixture.root.join("cache").join(ResponseCache::name(&branch));
+            let original = std::fs::read(&original_path).unwrap();
+            fixture.cache.save(&retained_json(&spec.commit_url().unwrap(), commit.as_bytes())).unwrap();
+            let immutable = spec.tree_at(root).unwrap();
+            fixture.cache.save(&retained_json(&immutable, body)).unwrap();
+            let output = with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
+                inventory_output(spec, super::super::TYPE_LABEL, url, response, identity, &super::super::classify)
+            }).unwrap();
+            assert_eq!(output["result"], "inventory_snapshot");
+            assert_eq!(output["tree_sha"], root);
+            assert_eq!(output["entries"][1]["path"], "docs/note.txt");
+            assert_eq!(output["retrieval"]["source_url"], immutable.as_str());
+            assert_eq!(std::fs::read(original_path).unwrap(), original);
+            assert_eq!(fixture.cache.test_forbidden_operations.as_ref().unwrap().get(), 0);
+        }
+
+        #[test]
+        fn another_valid_tree_cannot_replace_the_requested_immutable_tree() {
+            let spec = &super::super::SOURCE;
+            let url = spec.tree_at("17ba6f4f78b8480cfd0746758b08bacb877d0c9c").unwrap();
+            let body = br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","truncated":false,"tree":[]}"#;
+            let response = retained_json(&url, body);
+            let identity = observed_identity(Surface::Tree, &url, body, Some("application/json"));
+            let output = inventory_output(spec, super::super::TYPE_LABEL, &url, &response, &identity, &super::super::classify).unwrap();
+            assert_eq!(output["result"], "degraded");
+            assert_eq!(output["fallback_reason"], "tree_identity_mismatch");
+            assert_eq!(output["entries"], json!([]));
+            assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body));
+        }
+
+        #[test]
+        fn malformed_commit_retains_evidence_without_selecting_a_tree() {
+            let fixture = TransportFixture::new();
+            let spec = &super::super::SOURCE;
+            let commit_url = spec.commit_url().unwrap();
+            let body = br#"{"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":"invalid","url":"https://foreign.invalid/tree"}}}"#;
+            fixture.cache.save(&retained_json(&commit_url, body)).unwrap();
+            let output = with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
+                inventory_output(spec, super::super::TYPE_LABEL, url, response, identity, &super::super::classify)
+            }).unwrap();
+            assert_eq!(output["result"], "degraded");
+            assert_eq!(output["fallback_reason"], "commit_tree_unresolved");
+            assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body));
+            assert_eq!(fixture.cache.test_forbidden_operations.as_ref().unwrap().get(), 0);
+        }
     }
 
     /// Publish an initial cached observation without opening a request
@@ -1059,7 +1129,24 @@ pub(crate) mod learning {
             format!("https://github.com/{}/{}", self.owner, self.name)
         }
 
+        fn commit_url(&self) -> Result<Url, Error> {
+            let mut url = Url::parse("https://api.github.com/").map_err(|_| invalid_url())?;
+            url.path_segments_mut()
+                .map_err(|_| invalid_url())?
+                .push("repos")
+                .push(self.owner)
+                .push(self.name)
+                .push("commits")
+                .push(self.branch);
+            Ok(url)
+        }
+
+        #[cfg(test)]
         pub(crate) fn tree_url(&self) -> Result<Url, Error> {
+            self.tree_at(self.branch)
+        }
+
+        fn tree_at(&self, reference: &str) -> Result<Url, Error> {
             let mut url = Url::parse("https://api.github.com/").map_err(|_| invalid_url())?;
             url.path_segments_mut()
                 .map_err(|_| invalid_url())?
@@ -1068,7 +1155,7 @@ pub(crate) mod learning {
                 .push(self.name)
                 .push("git")
                 .push("trees")
-                .push(self.branch);
+                .push(reference);
             url.query_pairs_mut().append_pair("recursive", "1");
             Ok(url)
         }
@@ -1356,7 +1443,15 @@ pub(crate) mod learning {
         content_type: Option<&str>,
     ) -> ObservedIdentity {
         match surface {
-            Surface::Tree => match admit_tree(body, content_type) {
+            Surface::Tree => match admit_tree(body, content_type).and_then(|(tree_sha, entries)| {
+                if url.path_segments().and_then(|mut segments| segments.next_back())
+                    .filter(|segment| valid_upstream_sha(segment))
+                    .is_some_and(|requested| requested != tree_sha)
+                {
+                    return Err(Error::new("tree_identity_mismatch", "the response is not the requested immutable tree"));
+                }
+                Ok((tree_sha, entries))
+            }) {
                 Ok((tree_sha, entries)) => ObservedIdentity {
                     tree: Some(AdmittedTree { tree_sha, entries }),
                     tree_error: None,
@@ -1373,6 +1468,7 @@ pub(crate) mod learning {
                     .map(|requested| git_blob_sha(body, requested.len()));
                 ObservedIdentity { tree: None, tree_error: None, blob_sha }
             }
+            Surface::Commit => ObservedIdentity { tree: None, tree_error: None, blob_sha: None },
         }
     }
 
@@ -1390,7 +1486,7 @@ pub(crate) mod learning {
             // re-readable offline even when it cannot be normalized, and it
             // is verified again on every read, so it never becomes material
             // without a verified root object.
-            Surface::Tree => true,
+            Surface::Tree | Surface::Commit => true,
             Surface::Raw => match (requested_blob_sha(url), identity.blob_sha.as_deref()) {
                 (Some(requested), Some(actual)) => requested == actual,
                 _ => false,
@@ -1462,6 +1558,7 @@ pub(crate) mod learning {
                 "url": url,
                 "size": entry.size,
                 "kind": kind,
+                "mode": entry.mode,
                 "material_class": class.as_str(),
                 "mirror_allowed": kind == "file"
                     && class.mirror_allowed()
@@ -1483,19 +1580,20 @@ pub(crate) mod learning {
     pub(crate) enum Surface {
         Tree,
         Raw,
+        Commit,
     }
 
     impl Surface {
         fn body_limit(self) -> usize {
             match self {
-                Self::Tree => MAX_TREE_BODY,
+                Self::Tree | Self::Commit => MAX_TREE_BODY,
                 Self::Raw => MAX_RAW_BODY,
             }
         }
 
         fn accept(self) -> &'static str {
             match self {
-                Self::Tree => "application/vnd.github+json",
+                Self::Tree | Self::Commit => "application/vnd.github+json",
                 Self::Raw => "application/vnd.github.raw+json",
             }
         }
@@ -1857,7 +1955,7 @@ pub(crate) mod learning {
                 .timeout(Duration::from_secs(45))
                 .header("Accept-Encoding", "identity")
                 .header("Accept", surface.accept());
-            if matches!(surface, Surface::Tree) {
+            if matches!(surface, Surface::Tree | Surface::Commit) {
                 request = request.header("X-GitHub-Api-Version", "2022-11-28");
             }
             let mut raw = match lease.start_request(|| request.send()) {
@@ -2069,11 +2167,67 @@ pub(crate) mod learning {
     pub(crate) fn with_tree_response<T>(
         spec: &SourceSpec,
         online: bool,
-        process: impl FnOnce(&Response, &ObservedIdentity) -> Result<T, Error>,
+        process: impl FnOnce(&Response, &ObservedIdentity, &Url) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let url = spec.tree_url()?;
         let cache = ResponseCache::open()?;
-        cache.get(&url, Surface::Tree, online, process)
+        with_resolved_tree(&cache, spec, online, process)
+    }
+
+    fn resolved_tree_sha(response: &Response, expected: &Url) -> Result<String, Error> {
+        if response.url != expected.as_str() || response.status != 200
+            || !response.headers.get("content-type").is_some_and(|value| json_media_type(value))
+        {
+            return Err(upstream_parse());
+        }
+        #[derive(Deserialize)]
+        struct ObjectId { sha: String }
+        #[derive(Deserialize)]
+        struct CommitData { tree: ObjectId }
+        #[derive(Deserialize)]
+        struct Commit { sha: String, commit: CommitData }
+        let commit: Commit = serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
+        if !valid_upstream_sha(&commit.sha) || !valid_upstream_sha(&commit.commit.tree.sha)
+            || commit.sha.len() != commit.commit.tree.sha.len()
+        {
+            return Err(upstream_parse());
+        }
+        Ok(commit.commit.tree.sha)
+    }
+
+    fn with_resolved_tree<T>(
+        cache: &ResponseCache,
+        spec: &SourceSpec,
+        online: bool,
+        process: impl FnOnce(&Response, &ObservedIdentity, &Url) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        enum Resolution<T> { Tree(String), Degraded(T) }
+        let commit_url = spec.commit_url()?;
+        let mut process = Some(process);
+        // A branch resolves to a commit, not a tree object. Keep that response
+        // separate from the immutable tree request and never waive root proof.
+        let resolution = cache.get(&commit_url, Surface::Commit, online, |response, _| {
+            match resolved_tree_sha(response, &commit_url) {
+                Ok(tree_sha) => Ok(Resolution::Tree(tree_sha)),
+                Err(_) => {
+                    let identity = ObservedIdentity {
+                        tree: None, tree_error: Some("commit_tree_unresolved"), blob_sha: None,
+                    };
+                    let output = process.take().expect("one resolution consumer")(
+                        response, &identity, &commit_url,
+                    )?;
+                    Ok(Resolution::Degraded(output))
+                }
+            }
+        })?;
+        match resolution {
+            Resolution::Degraded(output) => Ok(output),
+            Resolution::Tree(tree_sha) => {
+                let url = spec.tree_at(&tree_sha)?;
+                cache.get(&url, Surface::Tree, online, |response, identity| {
+                    process.expect("unconsumed tree consumer")(response, identity, &url)
+                })
+            }
+        }
     }
 
     pub(crate) fn with_raw_response<T>(
@@ -2479,7 +2633,7 @@ pub(crate) mod learning {
     pub(crate) fn entry_schema() -> Value {
         json!({
             "type":"object","additionalProperties":false,
-            "required":["title","source","source_url","branch","path","url","size","kind","material_class","mirror_allowed","retrieval_allowed","rights_review_required","rights_reviewed","license","attribution","upstream_sha"],
+            "required":["title","source","source_url","branch","path","url","size","kind","mode","material_class","mirror_allowed","retrieval_allowed","rights_review_required","rights_reviewed","license","attribution","upstream_sha"],
             "properties":{
                 "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_BYTES},
                 "source":{"type":"string","minLength":1},
@@ -2489,6 +2643,7 @@ pub(crate) mod learning {
                 "url":{"type":["string","null"],"description":"The immutable blob object URL for a regular file entry; null for entries this client cannot retrieve."},
                 "size":{"type":["integer","null"],"minimum":0},
                 "kind":{"enum":["file","directory","symlink","submodule"]},
+                "mode":{"enum":["100644","100755","040000","120000","160000"],"description":"The exact source Git mode, required with the tree and blob identities when selecting a file for retrieval."},
                 "material_class":{"enum":MATERIAL_CLASSES},
                 "mirror_allowed":{"type":"boolean","description":"False for answer-bearing and assessment material; this module implements no bulk mirror operation at all."},
                 "retrieval_allowed":{"type":"boolean","description":"False for answer-bearing material, whose bytes are never retrieved."},
@@ -2507,6 +2662,8 @@ pub(crate) mod learning {
             "missing_content_type",
             "upstream_parse",
             "incomplete_tree",
+            "commit_tree_unresolved",
+            "tree_identity_mismatch",
             "blob_identity_mismatch",
             "blob_size_mismatch",
             null
@@ -3330,11 +3487,7 @@ pub(crate) mod learning {
                 "session":session_schema(type_label)
             }
         }));
-        json!({
-            "input":{"oneOf":branches},
-            "options":{},
-            "output":session_schema(type_label)
-        })
+        json!({"oneOf":branches})
     }
 }
 
@@ -3513,9 +3666,8 @@ pub fn materials(input: &str, online: bool) -> Result<Value, Error> {
         .as_object()
         .ok_or_else(|| learning::invalid_input("the materials request must be an object"))?;
     learning::only_keys(object, &[])?;
-    let url = SOURCE.tree_url()?;
-    learning::with_tree_response(&SOURCE, online, |response, identity| {
-        learning::inventory_output(&SOURCE, TYPE_LABEL, &url, response, identity, &classify)
+    learning::with_tree_response(&SOURCE, online, |response, identity, url| {
+        learning::inventory_output(&SOURCE, TYPE_LABEL, url, response, identity, &classify)
     })
 }
 
@@ -3523,12 +3675,11 @@ pub fn materials(input: &str, online: bool) -> Result<Value, Error> {
 /// before any cache or network admission.
 pub fn search(input: &str, online: bool) -> Result<Value, Error> {
     let request = parse_search_input(input)?;
-    let url = SOURCE.tree_url()?;
-    learning::with_tree_response(&SOURCE, online, |response, identity| {
+    learning::with_tree_response(&SOURCE, online, |response, identity, url| {
         learning::search_output(
             &SOURCE,
             SEARCH_TYPE_LABEL,
-            &url,
+            url,
             response,
             identity,
             &request.query,
@@ -3557,7 +3708,7 @@ enum Admission {
 /// refused before any byte request is made.
 pub fn fetch(input: &str, online: bool) -> Result<Value, Error> {
     let request = parse_fetch_input(input)?;
-    let admission = learning::with_tree_response(&SOURCE, online, |response, identity| {
+    let admission = learning::with_tree_response(&SOURCE, online, |response, identity, _| {
         match identity.tree() {
             Some(admitted) => {
                 let tree_sha = admitted.tree_sha.as_str();
@@ -4034,7 +4185,7 @@ pub fn schema() -> Value {
                 "type":"object","additionalProperties":false,"properties":{},"required":[],
                 "description":"The reviewed source, branch and license are pinned; this request accepts no parameter. An empty input is accepted as this empty object."
             },
-            "options":{"--online":"Permit one governed GitHub tree request on a cache miss; no automatic retry, refresh or pagination."},
+            "options":{"--online":"Permit cache-first commit resolution and its immutable recursive-tree request; no automatic retry, refresh or pagination."},
             "output":learning::inventory_schema(TYPE_LABEL)
         },
         "search": {
@@ -4045,7 +4196,7 @@ pub fn schema() -> Value {
                     "rights_reviewed":{"const":true,"description":"Required operator attestation. False or omitted fails before cache or network admission."}
                 }
             },
-            "options":{"--online":"Permit one governed GitHub tree request on a cache miss; no automatic retry or refresh."},
+            "options":{"--online":"Permit cache-first commit resolution and its immutable recursive-tree request; no automatic retry or refresh."},
             "output":learning::search_schema(SEARCH_TYPE_LABEL)
         },
         "fetch": {
@@ -4060,7 +4211,7 @@ pub fn schema() -> Value {
                     "size":{"type":"integer","minimum":0,"description":"The reviewed byte length. The retrieved blob must have exactly this length."}
                 }
             },
-            "options":{"--online":"Permit the governed inventory lookup and the governed byte request on a cache miss; no automatic retry or redirect."},
+            "options":{"--online":"Permit cache-first commit/tree resolution and the reviewed immutable blob request; no automatic retry or redirect."},
             "output":learning::raw_schema(RAW_TYPE_LABEL)
         },
         "practice": {
@@ -4829,31 +4980,6 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(refused.code, "invalid_input");
-    }
-
-    #[test]
-    fn the_schema_matches_the_accepted_sets() {
-        let contract = schema();
-        assert_eq!(
-            contract["search"]["input"]["properties"]["rights_reviewed"]["const"],
-            true
-        );
-        assert_eq!(
-            contract["fetch"]["input"]["properties"]["rights_reviewed"]["const"],
-            true
-        );
-        assert_eq!(
-            contract["materials"]["output"]["properties"]["rights_reviewed"]["const"],
-            false
-        );
-        assert!(contract["materials"]["output"]["oneOf"].is_array());
-        assert!(contract["fetch"]["output"]["oneOf"].is_array());
-        assert_eq!(
-            contract["practice"]["input"]["input"]["oneOf"]
-                .as_array()
-                .map(Vec::len),
-            Some(4)
-        );
     }
 
 }

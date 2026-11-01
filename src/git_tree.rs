@@ -212,6 +212,14 @@ mod tests {
     }
 
     #[test]
+    fn a_flat_tree_never_waives_its_root_identity() {
+        assert_eq!(
+            verify_recursive_tree(EMPTY, [entry("note.txt", "100644", "blob", BLOB)]),
+            Err("tree object identifier mismatch"),
+        );
+    }
+
+    #[test]
     fn rejects_wrong_advertised_objects_and_ownership() {
         for index in 0..2 {
             let mut entries = nested();

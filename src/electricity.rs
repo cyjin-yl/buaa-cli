@@ -1860,7 +1860,7 @@ mod tests {
     #[test]
     fn legacy_meta_charset_precedes_utf8_guess_and_conflicts_withhold() {
         let ascii = PAGE.replace("知行楼", "ROOM").replace("北京市", "ADDR");
-        let (before, after) = ascii.split_once("ROOM").unwrap();
+        let (before, _) = ascii.split_once("ROOM").unwrap();
         let mut bytes = b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=GBK\">".to_vec();
         bytes.extend_from_slice(before.as_bytes());
         // The same rule applies when the charset comes from the legacy meta:
@@ -1898,7 +1898,7 @@ mod tests {
         }
 
         let ascii = PAGE.replace("知行楼", "ROOM").replace("北京市", "ADDR");
-        let (before, after) = ascii.split_once("ROOM").unwrap();
+        let (before, _) = ascii.split_once("ROOM").unwrap();
         // The declared charset governs the whole page, so the tail must be
         // GBK bytes too: an in-GBK "地址:" label is the only way the room
         // address survives the decode the way a real legacy page would.

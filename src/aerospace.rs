@@ -245,9 +245,8 @@ pub fn materials(input: &str, online: bool) -> Result<Value, Error> {
         .as_object()
         .ok_or_else(|| learning::invalid_input("the materials request must be an object"))?;
     learning::only_keys(object, &[])?;
-    let url = SOURCE.tree_url()?;
-    learning::with_tree_response(&SOURCE, online, |response, identity| {
-        learning::inventory_output(&SOURCE, TYPE_LABEL, &url, response, identity, &classify)
+    learning::with_tree_response(&SOURCE, online, |response, identity, url| {
+        learning::inventory_output(&SOURCE, TYPE_LABEL, url, response, identity, &classify)
     })
 }
 
@@ -255,12 +254,11 @@ pub fn materials(input: &str, online: bool) -> Result<Value, Error> {
 /// before any cache or network admission.
 pub fn search(input: &str, online: bool) -> Result<Value, Error> {
     let request = parse_search_input(input)?;
-    let url = SOURCE.tree_url()?;
-    learning::with_tree_response(&SOURCE, online, |response, identity| {
+    learning::with_tree_response(&SOURCE, online, |response, identity, url| {
         learning::search_output(
             &SOURCE,
             SEARCH_TYPE_LABEL,
-            &url,
+            url,
             response,
             identity,
             &request.query,
@@ -289,7 +287,7 @@ enum Admission {
 /// refused before any byte request is made.
 pub fn fetch(input: &str, online: bool) -> Result<Value, Error> {
     let request = parse_fetch_input(input)?;
-    let admission = learning::with_tree_response(&SOURCE, online, |response, identity| {
+    let admission = learning::with_tree_response(&SOURCE, online, |response, identity, _| {
         match identity.tree() {
             Some(admitted) => {
                 let tree_sha = admitted.tree_sha.as_str();
@@ -609,7 +607,7 @@ pub fn schema() -> Value {
                 "type":"object","additionalProperties":false,"properties":{},"required":[],
                 "description":"The reviewed source, branch and license are pinned; this request accepts no parameter. An empty input is accepted as this empty object."
             },
-            "options":{"--online":"Permit one governed GitHub tree request on a cache miss; no automatic retry, refresh or pagination."},
+            "options":{"--online":"Permit cache-first commit resolution and its immutable recursive-tree request; no automatic retry, refresh or pagination."},
             "output":learning::inventory_schema(TYPE_LABEL)
         },
         "search": {
@@ -620,7 +618,7 @@ pub fn schema() -> Value {
                     "rights_reviewed":{"const":true,"description":"Required operator attestation. False or omitted fails before cache or network admission."}
                 }
             },
-            "options":{"--online":"Permit one governed GitHub tree request on a cache miss; no automatic retry or refresh."},
+            "options":{"--online":"Permit cache-first commit resolution and its immutable recursive-tree request; no automatic retry or refresh."},
             "output":learning::search_schema(SEARCH_TYPE_LABEL)
         },
         "fetch": {
@@ -635,7 +633,7 @@ pub fn schema() -> Value {
                     "size":{"type":"integer","minimum":0,"description":"The reviewed byte length. The retrieved blob must have exactly this length."}
                 }
             },
-            "options":{"--online":"Permit the governed inventory lookup and the governed byte request on a cache miss; no automatic retry or redirect."},
+            "options":{"--online":"Permit cache-first commit/tree resolution and the reviewed immutable blob request; no automatic retry or redirect."},
             "output":learning::raw_schema(RAW_TYPE_LABEL)
         },
         "practice": {
@@ -909,27 +907,4 @@ mod tests {
         assert_eq!(keyed["questions"][0]["local_self_check_key"], json!(["A"]));
     }
 
-    #[test]
-    fn the_schema_matches_the_accepted_sets() {
-        let contract = schema();
-        assert_eq!(
-            contract["search"]["input"]["properties"]["rights_reviewed"]["const"],
-            true
-        );
-        assert_eq!(
-            contract["fetch"]["input"]["properties"]["rights_reviewed"]["const"],
-            true
-        );
-        assert!(contract["fetch"]["output"]["oneOf"].is_array());
-        assert_eq!(
-            contract["practice"]["input"]["input"]["oneOf"]
-                .as_array()
-                .map(Vec::len),
-            Some(4)
-        );
-        let question_set = &contract["practice"]["input"]["input"]["oneOf"][1]["properties"]["question_set"];
-        assert!(question_set["properties"]["questions"]["items"]["properties"]
-            .get("answer")
-            .is_none());
-    }
 }

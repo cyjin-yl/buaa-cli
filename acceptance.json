@@ -348,21 +348,19 @@
       "acceptance": "Owner-authored answers with preview, typed confirmation and idempotency.",
       "evidence": {
         "candidate_offline": "A synthetic admission test reproduced a numeric submitted-cookie echo in a task total; the repaired path passed the same test with an ordinary control and a normalized numeric course-field case.",
-        "remaining": "Mixed-separator credentials passed focused synthetic post-fix cases; the pre-fix variant was source-traced but its run was blocked by the heavy-work slot. A trusted current session, task contract, owner-authored mutation workflow and authorized postcondition remain unverified."
+        "remaining": "Mixed-separator credentials passed focused synthetic post-fix cases; the pre-fix variant was source-traced but its run was blocked by the heavy-work slot. A trusted current session, task contract, owner-authored mutation workflow and authorized postcondition remain unverified.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa evaluation with an empty object",
+          "observed": "returned a typed status object with exit 0; no request performed",
+          "live_blocker": "Live evaluation reads need an authenticated JWXT session that is not established here."
+        }
       },
       "sources": [
         "https://github.com/bearbattle/buaa-teacher-evaluation",
         "https://github.com/APassbyDreg/BUAA_JW_Utils",
         "https://github.com/el-ev/BUAA-Teacher-Evaluation",
         "https://github.com/ZenAlexa/BUAA_TeachingEvaluation_2024Winter"
-      ],
-      "evidence": {
-        "offline_observation_2026_10_31": {
-          "command": "buaa evaluation with an empty object",
-          "observed": "returned a typed status object with exit 0; no request performed",
-          "live_blocker": "Live evaluation reads need an authenticated JWXT session that is not established here."
-        }
-      }
+      ]
     },
     {
       "id": "marks",
@@ -436,21 +434,19 @@
       "acceptance": "Owner-present, authorized current session only, preview and confirmed idempotent commit.",
       "evidence": {
         "candidate_offline": "Synthetic admission cases reproduced and then withheld normalized numeric session-credential echoes, including structured and fallback outputs. Separate Checkin/OS-lab admission cases passed; they do not exercise real transport or lease settlement.",
-        "remaining": "No authenticated current session, owner presence, authorized lesson, idempotent commit or postcondition has been established. The review does not authorize attendance."
+        "remaining": "No authenticated current session, owner presence, authorized lesson, idempotent commit or postcondition has been established. The review does not authorize attendance.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa checkin with an empty object",
+          "observed": "blocked exit 0 with a stated reason",
+          "live_blocker": "Live check-in needs a current authorized classroom session and owner presence; committing attendance is a campus mutation."
+        }
       },
       "sources": [
         "https://github.com/Fucov/BUAASignTool",
         "https://github.com/singledog957/duaa",
         "https://github.com/zeroduhyy/iclass_buaa",
         "https://github.com/Yiki21/iclass_buaa_tui"
-      ],
-      "evidence": {
-        "offline_observation_2026_10_31": {
-          "command": "buaa checkin with an empty object",
-          "observed": "blocked exit 0 with a stated reason",
-          "live_blocker": "Live check-in needs an authenticated sunlight-clockin session and is a campus mutation."
-        }
-      }
+      ]
     },
     {
       "id": "boya",
@@ -494,20 +490,18 @@
       "acceptance": "Authorized meter balance and cached threshold transitions; polling at least 15 minutes.",
       "evidence": {
         "candidate_offline": "Three synthetic integration cases and a separate native consumer exercised literal identifier and numeric-history source types; scoped source review found no new concrete issue.",
-        "remaining": "No current authorized meter, threshold transition, background observation or online service contract was verified."
+        "remaining": "No current authorized meter, threshold transition, background observation or online service contract was verified.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa electricity with an empty object",
+          "observed": "invalid_input exit 2: typed resolve/balance input required",
+          "live_blocker": "Live balance reads need an authorized meter selection and a verified service contract."
+        }
       },
       "sources": [
         "https://github.com/Apodead/BuaaAmmeterBot",
         "https://github.com/LaciliaExe/BUAA-ECC",
         "https://github.com/Colorfulshadow/buaa-power-monitor"
-      ],
-      "evidence": {
-        "offline_observation_2026_10_31": {
-          "command": "buaa electricity with an empty object",
-          "observed": "invalid_input exit 2: typed resolve/balance input required",
-          "live_blocker": "Live balance reads need a campus electricity session."
-        }
-      }
+      ]
     },
     {
       "id": "physics-select",
@@ -578,22 +572,28 @@
     {
       "id": "aerospace",
       "title": "Aerospace study/questions",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Authorized material retrieval and local study practice, no assessment impersonation.",
       "evidence": {
         "candidate_offline": "The shared learning transport passed five synthetic cookie/cache cases before later publication changes; this is not a separate aerospace online observation.",
-        "remaining": "The shared cache publication fix passed two strengthened synthetic cases and scoped review; fsync-failure and collision-exhaustion behavior were not exercised. Source rights and authorized material retrieval remain unverified."
-      },
-      "sources": [
-        "https://github.com/Caniformia/HangGai"
-      ],
-      "evidence": {
+        "selected_read_2026_11_01": {
+          "scope": "Actual aerospace materials --online, search, inventory-bound README fetch, cache-only replay, and local practice commands; no campus login, attendance, graded submission or answer-bank retrieval.",
+          "inventory": "646 entries admitted under root tree 4eb358ae271b5ceae2aa0003999172f806a128d7 after commit-to-tree resolution. Independent raw Git-object reconstruction verified all 177 advertised subtrees; native git hash-object reproduced the root. The earlier branch response advertised commit 6c28cbb7679865546eace87089807944a07f1714, which is not that root tree and is never accepted as its substitute.",
+          "selected_bytes": "README.md: 228 original bytes, Git blob 0b4aaae22b098e2d00e603fb7ce39b95fd13905f, SHA-256 290d9823a1c0bf1e9dbff11a54d835e9f9f4f7b1436ff19820617202a3f6803f. Independently rehashed length, Git blob and SHA-256 matched; offline output bytes matched the online capture.",
+          "consumer_contract": "Inventory now exposes the exact Git mode needed for its tree/blob/mode/size-bound fetch. Published inventory/search/fetch outputs and actual practice requests were checked with JSON Schema 4.25.1.",
+          "practice_and_refusals": "Cloze and caller-supplied question-set generation, answer recording and local checking ran through the CLI. Authority remained local_only, official_grade null, submission_state not_submitted and completion_reported false. A question set carrying an answer field and a fetch selecting the bundled answer database were refused; no answer-bank blob cache was created.",
+          "limits": "Only the selected public documentation bytes and local practice lifecycle were observed. Source license interpretation, source-wide material rights, upstream answer contents and remote assessment workflows are not verified or authorized by these receipts."
+        },
+        "remaining": "Selected documentation retrieval is observed in selected_read_2026_11_01. Source-wide rights, license interpretation and upstream assessment content remain unverified; cache fsync-failure and collision-exhaustion behavior were not exercised.",
         "offline_observation_2026_10_31": {
           "command": "buaa aerospace materials",
           "observed": "unavailable exit 7: no retained cache and no --online opt-in",
-          "live_blocker": "Live material fetch needs a governed GitHub tree read; not performed here."
+          "live_blocker": "This dated offline observation does not establish online material retrieval."
         }
-      }
+      },
+      "sources": [
+        "https://github.com/Caniformia/HangGai"
+      ]
     },
     {
       "id": "drive",
@@ -738,27 +738,32 @@
       "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
       "evidence": {
         "candidate_offline": "An operator-supplied CLI page reproduced a percent-encoded CSRF echo in visible text; two post-fix cases passed, including an ordinary page control and encoded variants.",
-        "remaining": "Mixed-separator CSRF values passed focused synthetic post-fix cases; their pre-fix variant was source-traced but its run was blocked by the heavy-work slot. No authenticated timetable, availability, booking, payment or cancellation contract has been verified."
-      },
-      "sources": [
-        "https://github.com/zeroduhyy/school_buss_ticket"
-      ],
-      "evidence": {
+        "remaining": "Mixed-separator CSRF values passed focused synthetic post-fix cases; their pre-fix variant was source-traced but its run was blocked by the heavy-work slot. No authenticated timetable, availability, booking, payment or cancellation contract has been verified.",
         "offline_observation_2026_10_31": {
           "command": "buaa shuttle with an empty object",
           "observed": "invalid_input exit 2: typed request required",
           "live_blocker": "No authorized live shuttle page read in this run."
         }
-      }
+      },
+      "sources": [
+        "https://github.com/zeroduhyy/school_buss_ticket"
+      ]
     },
     {
       "id": "welearn",
       "title": "WE Learn materials/practice",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Rights-reviewed learning materials and local practice, no fabricated completion or graded auto-answers.",
       "evidence": {
         "candidate_offline": "Five synthetic transport/cache cases and a separate native consumer passed before independent review found two additional cache regressions. Both were reproduced; after atomic no-replace publication and distinct rejected-evidence naming, the two focused synthetic cases passed.",
-        "remaining": "Strengthened assertions passed and scoped source review found no new issue; fsync-failure and collision-exhaustion behavior were not exercised. Current source rights and online retrieval remain unverified."
+        "selected_read_2026_11_01": {
+          "scope": "Actual public materials --online, inventory-bound documentation fetch, cache-only byte replay and caller-supplied local cloze practice; no campus login, platform completion or graded auto-answer.",
+          "inventory": "Three entries admitted under immutable root tree dc0a557442e6e48198ee6f074538256e6308df26 through commit-to-tree resolution with strict root verification.",
+          "selected_bytes": "README.md: 2021 original bytes, Git blob 6f8071cf883ead0a2449ab27ec33ce1bc4357eda, SHA-256 3151252695d5b3fb98920cc8aae9b7f2fbcccee260f4c89990632aba9966b38a. Independent complete-byte length/Git-blob/SHA-256 checks and cache-only replay matched.",
+          "local_practice": "Real generate/answer/check CLI requests and their returned sessions validated against the published schema; no nested command wrapper was accepted as an input. Results remained local_only with no official grade, submission or completion claim.",
+          "limits": "This verifies only the selected public documentation retrieval and local practice path. It does not establish campus WE Learn authentication, remote learning progress, source-wide rights or authorized graded assessment access."
+        },
+        "remaining": "Selected documentation retrieval and local practice are observed in selected_read_2026_11_01. Campus WE Learn authentication, source-wide rights, remote progress and assessments remain unverified; cache fsync-failure and collision-exhaustion behavior were not exercised."
       },
       "sources": [
         "https://github.com/Micraow/WE-Learn-Answers"

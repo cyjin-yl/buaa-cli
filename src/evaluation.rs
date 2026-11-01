@@ -453,7 +453,7 @@ enum Command {
     Prepare { intent: Intent, topics: Value },
     Submit { intent: Intent, topics: Value, confirmation: String, reconfirmation: bool, #[serde(default, deserialize_with="optional_cookie")] session_cookie: Option<Zeroizing<String>> },
     Verify { course: Value, #[serde(default, deserialize_with="optional_cookie")] session_cookie: Option<Zeroizing<String>>, source: Option<Value> },
-    Legacy,
+    Legacy {},
 }
 fn optional_cookie<'de,D:serde::Deserializer<'de>>(deserializer:D) -> Result<Option<Zeroizing<String>>,D::Error> {
     Option::<String>::deserialize(deserializer).map(|cookie| cookie.map(Zeroizing::new))
@@ -547,7 +547,7 @@ pub fn run(input:&str, online:bool) -> Result<Value,Error> {
                 // final proof of this invocation's confirmed submission.
                 Ok(json!({"status":"ok","completed":false,"verification":false,"postcondition_matches":matched,"source":if operator_supplied {"operator_supplied"} else {"online_unbound"},"reason":"final completion requires authorized online readback bound to the account and immutable submission preview"}))
             }
-            Command::Legacy=>Ok(report(legacy())),
+            Command::Legacy{}=>Ok(report(legacy())),
         }
     })();
     Ok(match result { Ok(value)=>value,Err(error)=>report(error) })
@@ -745,12 +745,12 @@ mod tests {
         assert_eq!(value["status"],"ok"); assert_eq!(value["total"],1);
         assert_eq!(run(r#"{"operation":"courses","wjid":"w"}"#,false).unwrap()["status"],"blocked");
         assert_eq!(run(r#"{"operation":"legacy"}"#,false).unwrap()["status"],"unsupported");
-        // serde 1.0.229 ignores unknown fields on a unit variant of an
-        // internally tagged enum even with deny_unknown_fields (serde-rs
-        // #2294), so the command still parses as Legacy and reports the same
-        // unsupported status. The schema's blocked/unsupported split comes from
-        // report mapping, not from a parse rejection.
-        assert_eq!(run(r#"{"operation":"legacy","unexpected":true}"#,false).unwrap()["status"],"unsupported");
+        // The zero-field struct variant routes through struct deserialization,
+        // so deny_unknown_fields rejects unknown keys (serde-rs #2294 only
+        // relaxed unit variants). Extra keys are refused at parse time, while
+        // a well-formed legacy command still reports its unsupported status.
+        assert_eq!(run(r#"{"operation":"legacy","unexpected":true}"#,false).unwrap()["status"],"blocked");
+        assert_eq!(run(r#"{"operation":"legacy","unexpected":true}"#,false).unwrap()["reason"],"invalid evaluation command");
         let (intent,topics,pattern)=fixture(); let preview=prepare(intent.clone(),&topics,&pattern).unwrap();
         let command=json!({"operation":"submit","intent":intent,"topics":topics,"confirmation":preview.digest(),"reconfirmation":false});
         let output=run(&command.to_string(),true).unwrap();
