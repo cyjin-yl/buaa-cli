@@ -3016,3 +3016,59 @@ contains no live credential. The primary's daily synchronization of every
 branch and tag to the public GitHub downstream is a separate downstream
 action and is not claimed here. The metadata-only receipt is
 `local://buaa-gitea-publication-20261102.json`.
+
+## 2026-11-03: Smart library session repaired and verified online
+
+Two transport defects in the Smart library CAS path were observed with the
+corrected account identifier and repaired in
+`c24e319632befd6e18c0cbe0c183f16a787b3f06`. First,
+`booking.lib.buaa.edu.cn` presents only its leaf certificate and omits the
+issuing GlobalSign GCC R3 DV TLS CA 2020 intermediate; rustls performs no
+AIA fetching, so the sign-on exchange failed inside the TLS handshake and
+was folded into the generic sign-on refusal. The reviewed intermediate is
+now embedded as an additional anchor in the shared CAS client, which
+completes the chain to a Mozilla root without weakening any leaf checks.
+Second, the exchange slept the shared pacing gap before consuming the
+single-use CAS credential, which expires in seconds; the credential was
+dead by the time the exchange POST went out, and upstream answered code 1
+(`操作失败`) with an empty member array. The Smart follow-up admission was
+split so the credential exchange uses the same continuation path already
+proven for the classroom CAS chain, while the business read keeps pacing.
+
+With owner credentials delivered over protected stdin, one authorized
+in-memory CAS login then completed the sign-on chain, consumed the
+credential once, and sent the selected library premises read. The endpoint
+answered, and the response was withheld by the privacy gate as designed
+(`sensitive_response_withheld`, `session_cookie_issued`, exit 0). Parsed
+premises data is not claimed: a newly issued session cookie is never
+exported, which is the correct outcome for the first live read. One CAS
+sign-on attempt per deliberate resume held throughout; the failure class
+was retryable (no `auth_latched`, no challenge), and exactly one retry was
+performed after the fix.
+
+Other Smart profiles remain unverified. Classrooms, exams, cgyy and running
+share the session contract but have their own upstream shapes; nothing here
+claims them.
+
+## 2026-11-03: ordered stack merged into primary main
+
+The ordered stack (`work/gitea-metadata-recovery-boundary-20261030` →
+`work/gitea-metadata-attribution-20261030` →
+`work/gitea-review-transport-20261030`) was merged into the primary `main`
+as `d1a7753bfc3589db2bdc2499334b1d3d0b62aa02`, a non-force fast-forward
+of `ec479b46cbb66e50a3f52bff054e56d854f7d283`. The two main-only commits
+are merge commits whose net tree difference against their merge base is
+empty, so the merged tree is byte-identical to the reviewed leaf tree
+`c24e319632befd6e18c0cbe0c183f16a787b3f06` (merge-tree dry-run confirmed
+identical). The leaf branch was advanced by the same push to include the
+Smart repair commit.
+
+The offline gate on the merged tree (which equals the tested leaf tree)
+passes 1207 library tests (3 existing ignored) and every integration
+target. The remote `refs/heads/main` and the leaf branch were read back
+with a direct ref query after the write: `d1a7753` and `c24e319` match
+the pushed values. No other branch was written; no force push was used.
+Draft pull requests 163 and 164 remain open on the primary as the stack's
+review record. The daily synchronization that carries branches to the
+public GitHub downstream is a separate downstream action and is not
+claimed here.
