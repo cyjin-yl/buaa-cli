@@ -131,6 +131,40 @@ fn physics_commands_report_results_and_reject_invalid_input() {
 }
 
 #[test]
+fn physics_experiment_preview_cannot_authorize_an_unverified_service() {
+    let request = |experiment: &str| serde_json::json!({
+        "operation":"physics-select", "action":"preview", "selection":{
+            "type":0,"eid_prefix":"exp","week":"01","experiment":experiment,
+            "weekday":"1","period":"2"
+        }
+    }).to_string();
+    let first = invoke(&["physics-experiment"], request("1011").as_bytes());
+    let second = invoke(&["physics-experiment"], request("1021").as_bytes());
+    assert!(first.status.success() && second.status.success());
+    let a: Value = serde_json::from_slice(&first.stdout).unwrap();
+    let b: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(a["result"], "preview");
+    assert_eq!(a["preview"]["executable"], false);
+    assert_eq!(a["preview"]["confirmation_authorizes_network"], false);
+    assert_ne!(a["preview"]["preview_digest"], b["preview"]["preview_digest"]);
+    let login = invoke(&["physics-experiment", "--online"], br#"{"operation":"physics-select","action":"login"}"#);
+    let refusal: Value = serde_json::from_slice(&login.stdout).unwrap();
+    assert_eq!(refusal["result"], "unsupported");
+    assert_eq!(refusal["network_request_performed"], false);
+}
+
+#[test]
+fn electricity_does_not_probe_an_unverified_private_directory() {
+    let input = br#"{"operation":"balance","selector":{"identity_no":"synthetic-private-selector"},"authorization_confirmed":true}"#;
+    let output = invoke(&["electricity", "--online"], input);
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["result"], "blocked");
+    assert_eq!(value["network_requests"], 0);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-private-selector"));
+}
+
+#[test]
 fn raw_replay_closes_with_exact_payload_and_no_json_wrapper() {
     let output = invoke(&["timed-input", "--raw"], "[0]  雪\t\r\n[0]\r\n".as_bytes());
     assert!(output.status.success());
@@ -142,6 +176,81 @@ fn raw_replay_closes_with_exact_payload_and_no_json_wrapper() {
 fn non_utf8_and_oversized_inputs_fail_without_stdout() {
     for input in [vec![0xff], vec![b'x'; 8 * 1024 * 1024 + 1]] {
         let output = invoke(&["timed-input", "--dry-run"], &input);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+    }
+}
+
+#[test]
+fn os_lab_read_requires_online_and_rejects_out_of_range_ports() {
+    let offline = invoke(&["os-lab", "read"], b"");
+    assert_eq!(offline.status.code(), Some(2));
+    assert!(offline.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&offline.stderr).unwrap();
+    assert_eq!(error["error"], "invalid_input");
+
+    let invalid_port = invoke(
+        &["os-lab", "plan"],
+        br#"{"host":"buaaos.studio","asset":"asset","system_user":"user","local_port":65537,"target_ipv4":"192.0.2.1","target_port":22,"repository":"19373example-lab","confirm":true}"#,
+    );
+    assert_eq!(invalid_port.status.code(), Some(2));
+    assert!(invalid_port.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&invalid_port.stderr).unwrap();
+    assert_eq!(error["error"], "invalid_input");
+
+    let unrelated_secret = invoke(
+        &["os-lab", "plan"],
+        br#"{"host":"buaaos.studio","asset":"a","system_user":"u","local_port":2222,"target_ipv4":"192.0.2.1","target_port":22,"repository":"19373000-lab","confirm":true,"sessionid":"synthetic-secret"}"#,
+    );
+    assert_eq!(unrelated_secret.status.code(), Some(2));
+    assert!(unrelated_secret.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&unrelated_secret.stderr).contains("synthetic-secret"));
+
+    let explicit_target = invoke(
+        &["os-lab", "plan"],
+        br#"{"host":"buaaos.studio","asset":"a","system_user":"u","local_port":2222,"target_ipv4":"192.0.2.1","target_port":22,"repository":"lab","confirm":true}"#,
+    );
+    assert!(explicit_target.status.success());
+    let plan: Value = serde_json::from_slice(&explicit_target.stdout).unwrap();
+    assert_eq!(plan["executed"], false);
+    assert_eq!(plan["target"], "192.0.2.1:22");
+    assert_eq!(plan["smux_connect_bytes"], serde_json::json!([0,192,0,2,1,22,0]));
+}
+
+#[test]
+fn coursegrading_unsupported_does_not_wait_for_stdin() {
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_buaa"))
+        .args(["coursegrading", "unsupported"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = child.stdin.take().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("unsupported command waited for stdin");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    drop(input);
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["result"], "unsupported");
+}
+
+#[test]
+fn coursegrading_status_requires_explicit_encoded_bytes() {
+    for input in [br#"{}"#.as_slice(), br#"{"body_base64":false}"#.as_slice()] {
+        let output = invoke(&["coursegrading", "status"], input);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         let error: Value = serde_json::from_slice(&output.stderr).unwrap();

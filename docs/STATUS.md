@@ -1,5 +1,917 @@
 ## Development status
 
+## 2026-11-02: department inventories and rights-reviewed documentation
+
+The actual School 3 branch-tree response named the branch commit
+`8da8dd8fa95bfef4eabed58e1d38b14feb6549bb`, not its root tree.
+Independent reconstruction and native Git agreed on root
+`3c59d746a206a14aa06ab21bf85953a1eca0359c`; all 420 nonroot directory hashes
+already verified. Departments now uses the existing learning commit resolver
+and requests the exact immutable recursive tree. Root/subtree verification and
+tree/blob/path/size/rights retrieval gates remain strict. Commit, immutable
+tree and historical branch originals stay separate; the historical original
+body and timestamp were independently checked unchanged.
+
+Commit-only privacy admission permits the two exact unescaped root
+`author.login` and `committer.login` member-name positions after object-root
+and bounded ASCII account-shape checks. Other positions, credential members,
+escaped names, duplicate or unborrowable account fields and non-Commit
+surfaces retain strict original-byte screening. A positional-array exemption
+was reproduced and closed before delivery. Shared learning evidence now keeps
+its originating Surface through failed normalization; inventory, search and
+fetch, including Aerospace, no longer misclassify commit originals as Tree.
+Safe malformed commits retain their exact original without selecting a tree
+or returning material bytes.
+
+The School 8 SEM original initially degraded despite all 308 directory/root
+objects verifying. One exact UTF-8 Git name contains U+0088 and U+0089;
+the source parser had applied the operator path's control-character policy.
+Source metadata now preserves that name without normalization or omission,
+under the unchanged Git verifier. Operator control-bearing retrieval paths
+still refuse before cache or network access. The original was re-parsed from
+cache, not fetched again; the whole resulting entry sequence matched.
+
+All nine pinned selections have actual HTTP-200 source observations and
+complete, strictly verified inventory output:
+
+| School | Repository | Branch | Entries |
+|---|---|---|---:|
+| 3 | AccSrd/BUAA_Course_Automation | main | 3283 |
+| 6 | TheBloodthirster/BUAA_Course_Sharing | master | 1991 |
+| 8 | HoBeedzc/CreditCount | main | 25 |
+| 8 | grandchicken/1708SEM_ISIM | master | 1999 |
+| 21 | Soft-Where-21/21CoreDocs | main | 1 |
+| 21 | Soft-Where-21/21CoreDocs | second-autumn | 227 |
+| 21 | Soft-Where-21/21CoreDocs | second-spring | 213 |
+| 21 | Soft-Where-21/21CoreDocs | third-autumn | 194 |
+| 21 | Soft-Where-21/21CoreDocs | third-spring | 357 |
+| Snapshot total, not unique files across branches | | | 8290 |
+
+Final actual cache-only CLI reads covered every selection. Independent Python
+Git-object reconstruction verified every directory; native Git agreed on each
+root. Every normalized entry matched the complete original-derived sequence.
+Private same-UID single-link 0600 cache files under 0700 directories remained
+byte-for-byte unchanged. Original digests/timestamps and standard Draft 2020-12
+input/output schema validation matched. The SEM success uses its originally
+HTTP-200-acquired body after repair, not a new live request.
+
+School 6's exact [MIT license notice](https://api.github.com/repos/TheBloodthirster/BUAA_Course_Sharing/git/blobs/dc06b50555a100a88417f07d1dd4f0192be3ebc3)
+was separately read and verified against the inventory's Git blob before the
+selected maintainer documentation reads. The copyright/permission notice is
+retained with the originals; no license to third-party course materials is
+inferred. Actual `departments retrieve --online` admitted only these selected
+documents under immutable tree/path/blob/size binding:
+
+| Selected document | Original bytes | Git blob |
+|---|---:|---|
+| LICENSE | 1073 | `dc06b50555a100a88417f07d1dd4f0192be3ebc3` |
+| README.md | 4317 | `a4468d77b7c379f86e43f0c01e17c6d3df67db9a` |
+
+Independent whole-byte length, Git-blob and SHA-256 checks passed; LICENSE also
+matched the separately observed GitHub JSON blob in full. Actual offline reads
+returned identical bytes and original timestamps/digests. Native and offline
+outputs passed schema validation. A real `rights_reviewed:false` request
+refused with exit 4; a synthetic control-bearing operator path refused with
+exit 2. A complete inventory is metadata proof, not permission to retrieve
+every entry.
+
+The corrected focused suite passed 53 department cases; the complete locked
+offline suite passed 1,153 library cases, three existing ignored workers and
+107 integration/CLI cases. Two revised source reviews found no remaining
+findings. Two intermediate negative test attempts mixed an unrelated shared
+blob with the independently fixed synthetic root; those failures are retained
+but excluded from valid single-factor before-proof. The fixture input was
+corrected, not the expected root or production verifier. The real retained
+source establishes the source-name before/after behavior.
+
+Departments is live-verified for these fixed inventories and selected MIT
+maintainer documents, not source-wide material rights or a campus service.
+Operator control-bearing retrieval remains unsupported. No campus request,
+account credential, mutation, question/answer-bank or course-binary retrieval
+was involved. These are local development checks, not trusted CI or exact-head
+merge approval.
+
+## 2026-11-02: authentication-body admission and Boya ciphertext envelopes
+
+iHome authentication now reviews each followed redirect body before discarding
+it, including the initial GET and credential POST responses. A nonempty body
+requires reviewed HTML MIME and successful document admission before another
+hop or terminal token consumption. Missing, unknown or malformed MIME refuses
+as `authentication_unconfirmed`, not as a fabricated positive challenge.
+Empty and ASCII-whitespace-only bodies remain valid without HTML metadata.
+Header challenges, Retry-After and credential replay refusals retain precedence;
+other CAS profiles retain their existing landing-body behavior. Authentication
+bodies are never exported, and each admitted HTML body is parsed only once.
+
+Four new regression cases ran against the previous production code: three
+consumer-visible refusals failed and the empty/whitespace control passed.
+After repair, all four passed. A separate non-test native consumer exercised
+six strict-TLS loopback scenarios: initial/POST redirect challenges, missing and
+unknown terminal MIME, whitespace with malformed MIME, and reviewed HTML on
+both redirects. The four refusals made zero business reads; both positive
+controls made exactly one. All six withheld credentials and never fetched the
+terminal credential URL. These are synthetic requests, with zero campus
+requests. The temporary source and Cargo entry were removed; the pre-existing
+Cargo manifest was preserved byte-for-byte.
+
+Follow-up review found two gaps in that admission: challenge-control cues such
+as `one-time-code` were retained by the form parser but lost by the landing
+verdict, and Unicode `trim()` incorrectly admitted NBSP/EM SPACE as empty
+without reviewed HTML MIME. Landing review now consumes an independent
+challenge-control fact, so an earlier unrelated form diagnostic cannot mask a
+later cue. It refuses as `authentication_unconfirmed`, not a confirmed CAPTCHA;
+other CAS profiles retain their prior landing policy. The empty-body exception
+uses ASCII whitespace only. Non-ASCII whitespace is still admissible when the
+body has reviewed HTML MIME.
+
+Before this follow-up, the initial OTP redirect followed a second SSO GET and
+the missing-MIME NBSP case incorrectly succeeded. Both failed regressions now
+pass, together with the unrelated-control and reviewed-HTML controls. The
+expanded focused suite passed 89 cases; the complete locked offline suite
+passed 1149 library cases (three existing ignored workers) and 107 integration/
+CLI cases. A separate non-test strict-TLS consumer passed seven scenarios:
+initial/POST OTP, an OTP cue following unrelated credential-control markup,
+NBSP with missing MIME and EM SPACE with unknown MIME all made zero business reads;
+reviewed-HTML Unicode and unrelated-control controls each made one. Every case
+withheld credentials and never fetched the terminal credential URL. All were
+synthetic loopback requests, with zero campus requests. The follow-up temporary
+source and Cargo entry were removed and the manifest restored byte-for-byte.
+
+The mixed-control fixture proves markup-order and consumer-refusal behavior.
+Final-response review does not populate credential-form diagnostics; independence
+from an earlier stored diagnostic is established by the source accumulation,
+not by that runtime fixture.
+
+Boya now accepts either raw base64 ciphertext or a JSON string containing it,
+matching the pinned MIT public client's
+[`LocalBykcApi.kt` wrapper](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/local/LocalBykcApi.kt#L478-L482).
+Only a quoted JSON string is unwrapped, into zeroizing storage; ordinary raw
+ciphertext remains borrowed. Original-response fallback bytes, length and
+SHA-256 still bind the original wire body, including quotes and whitespace,
+not the decoded wrapper. Existing decrypted-field and held-credential privacy
+checks remain in force. Two quoted-response regressions failed before repair
+while the raw-wire control passed. The repaired 25 Boya library cases and two
+focused CLI cases passed. A separate native consumer confirmed raw and quoted
+source preservation, original-wire fallback and sensitive ciphertext
+withholding. This is compatibility with a historical public client, not a
+current campus response or completed login contract; Boya remains pending.
+
+## 2026-11-01: bounded iHome session, offline proof only
+
+`ihome session [--online]` implements one explicit CAS login and one selected
+list page or detail. Object-only typed input, exact `LOGIN <username> ihome`
+intent, authorization and read bounds are checked before client/account-state
+construction. Valid disabled reads remain local. Legacy caller-token reads
+retain their cache and traversal behavior; the new session never caches,
+persists credentials, paginates automatically, refreshes or retries.
+
+The pinned MIT public
+[`IhomeUpstreamClient.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeUpstreamClient.kt)
+binds the literal HTTP CAS service declaration, exact `/api/authLogin` callback
+and `/web/` fragment handoff. Actual requests remain HTTPS-only with certificate
+verification. Only the exact default-port HTTP callback is upgraded; arbitrary
+platform business paths cannot be followed during authentication. A regression
+first observed an unwanted same-origin business GET, then passed after this
+restriction. Terminal URLs are consumed in memory and never fetched. The
+reference client's broad HTTPS rewrite and automatic retry are not adopted.
+
+One existing Authentication lease spans CAS and one business GET. Authentication
+responses are not exported. Final body/MIME admission guards the username,
+password, issued token, complete transmitted cookie headers and current/retired
+cookie values. A credential echo degrades with safe status/length/hash facts,
+not raw bytes or an invented empty result. Application-level positive admission
+and the existing record/pagination rules remain required. A token or successful
+public listing alone does not establish account identity or complete rights.
+
+Independent review found encoded complete authentication Cookie headers and
+UTF-16 surrogate-pair credential spellings could escape the final privacy
+guard. Three privacy cases failed before repair while three controls passed.
+The guard now retains bounded, invocation-only, zeroizing complete headers;
+selected snapshots move into that guard without an extra string copy, and
+exhaustion refuses before another request. Fallback string screening combines
+valid surrogate pairs without changing loose-escape or unpaired-surrogate
+behavior. Neither fix enables cookie export, adoption or persistence.
+
+The expanded focused suite passed 89 cases, including strict-TLS loopback
+login/read, one-POST/one-read/no-terminal-fetch boundaries, challenge/deferral/
+redirect refusals and credential echoes. A separate guard case exercised
+complete-header screening, deduplication and both history bounds. The complete
+locked offline suite passed 1149 library tests (three existing ignored workers)
+and all 107 integration/CLI tests, including the 14 iHome CLI boundary cases.
+
+The independently supplied session/run output schemas also had unresolved
+references; their variants are now self-contained. An earlier smoke that
+copied external definitions did not establish standalone validity. Actual
+rebuilt commands now pass ten direct standard-validator checks using the
+unmodified emitted contracts, covering disabled list/detail and empty values.
+The specific session input permits an omitted operation selector; generic
+run input requires it. Separate native offline/permission/injected-token
+refusals withheld the synthetic credentials. CLI errors retain the existing
+stderr JSON protocol: offline `online_required` becomes `unavailable` (exit 7);
+missing operator permission is `permission` (exit 5).
+
+Current DNS-resolved IPv4 targets for SSO and iHome refused TCP 443; their IPv6
+targets had no route. These were bounded transport-only probes, not HTTP or
+password verdicts. No real credentials were submitted, no authentication
+attempt or VPN recovery was performed, and no route/account key/limiter was
+created. Live authentication, current source/history, full text, nonempty
+attachments and token lifetime remain unverified. The acceptance item remains
+pending; synthetic TLS flows do not establish current campus compatibility.
+
+## 2026-11-01: source-faithful iHome records and bounded pagination
+
+The iHome reader no longer requires or invents an appeal title. A supplied
+string title and the original content/dates are preserved; an absent title is
+omitted, not replaced with null or derived prose. Required collections still
+fail closed when missing. Business acceptance requires numeric `code=20000`
+and Boolean `success=true` for both list and detail. HTTP 200, a negative
+business flag, or an unknown envelope cannot establish an empty result.
+Safe original response bytes remain available as degraded evidence through
+the existing privacy/admission path; credential echoes and refusals still
+withhold unsafe bodies.
+
+The contract was checked against the pinned MIT-licensed public client
+[`IhomeProtocol.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeProtocol.kt).
+Client defaults are not server truth: missing collections, dates, pagination
+or titles are not silently reconstructed from that client's defaults.
+
+Page acquisition is lazy. Declared current page, last page and total must
+agree with the request limit and source record count. Missing/mismatched facts,
+duplicate IDs (including within one page), changing totals and later read
+failures stop before another acquisition. Valid records remain published, but
+the traversal is incomplete and advances no incremental cursor. Consistent
+bounded nonterminal windows retain their documented continuation; observed
+cursor maxima must not advance `since_id` until traversal completes. A full
+source-declared final page and a confirmed zero-total empty page terminate
+correctly. Completion does not establish history before the requested start.
+The existing over-limit response refusal remains in place.
+
+Six regression cases failed before the repair and all six then passed.
+The expanded iHome offline suite passed 60 cases, including ten source-protocol
+cases. The actual debug CLI then ran twelve synthetic, cache-only scenarios
+and emitted its schema separately: untitled list/detail, business/unknown
+envelopes, missing/wrong pagination, full-final and duplicate-page stops,
+limit mismatch, bounded continuation, confirmed emptiness and token-echo
+withholding. JSON Schema validation accepted every actual scenario output;
+safe fallback bytes, lengths and SHA-256 values matched the synthetic originals.
+Two independent read-only source reviewers found no concrete defect in the
+record/privacy and pagination scopes. Their review is not merge approval or
+live-service proof.
+
+No real credentials, campus request, token acquisition, new account key,
+governor scheduling state, automatic retry or attachment fetch was used.
+That record/parser-only revision did not implement iHome login; the bounded
+session implementation is recorded above. The pinned third-party report's
+fragment router-query/frontend-cookie description is not a CLI-produced
+session or current server lifetime. Current idle-window output is explicitly
+unknown, and legacy `php-ihome` social-platform routes do not establish modern
+attachment endpoints. Current source/history, nonempty attachment layouts and
+live account acceptance remain open; the acceptance item stays pending.
+
+## 2026-11-01: bounded Smart session implementation, offline proof only
+
+`smart session [--online]` now implements one explicit CAS login followed by
+one selected classrooms/library read. It is not full Smart service acceptance.
+Authorization, the exact `LOGIN <username> smart <service>` intent, object-only
+input and local query validation precede client/account-state construction.
+Disabled reads remain local. The original cookie/token `smart` interface remains;
+caller-supplied library CAS login is no longer an accepted read operation.
+
+The relying-party contracts were reviewed from MIT-licensed
+[`BUAASubnet/UBAA@e8a397fc`](https://github.com/BUAASubnet/UBAA/tree/e8a397fcb35a68147eee65a94c66ffb84e2f09fe):
+[`ClassroomClient.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/server/src/main/kotlin/cn/edu/ubaa/classroom/ClassroomClient.kt)
+and [`LibBookClient.kt`](https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/server/src/main/kotlin/cn/edu/ubaa/libbook/LibBookClient.kt).
+This is source evidence, not proof of the current campus deployment. The CLI
+does not adopt the reference client's best-effort error handling or auto-refresh.
+
+One existing Authentication lease spans the CAS flow, a single library
+`login/user` exchange if selected, and exactly one business read. Each profile
+has its own pinned HTTPS origins and service declaration. The library's
+query/fragment CAS is consumed once in memory; its credential URL is not fetched.
+There is no new governor/account key, session persistence, automatic refresh,
+retry, seat reservation or attendance operation. Challenges and deferrals stop
+the attempt. A server/protocol failure is not a rejected-password verdict, and
+safety-state persistence failure leaves the pending outcome intact.
+
+The final output guard retains the original password, issued token/CAS,
+transmitted cookie header and all current/retired cookie values, including
+path-excluded, expired and replaced values. Exhausting the private cookie
+history bound stops before the business read rather than evicting secrets.
+Independent source review identified and closed pending-outcome, whole-cookie
+encoding, cookie-history and positional-array admission defects. These reviews
+do not approve a future Git head or a campus account-safety policy change.
+
+Guarded offline verification passed 49 Smart library cases, including 25
+CAS profile/flow cases, and 13 native CLI cases. The TLS stand-in uses
+an ephemeral CA trusted only by its client, actual HTTPS requests to loopback,
+and isolated account state; certificate verification is never disabled.
+It exercised one credential POST, the actual final response projection,
+host-only SSO cookie confinement, one-time library exchange, 307/308 refusal,
+late body challenge, missing/invalid handoffs, deferral and credential echoes.
+Nine separate native command observations exercised disabled/refusal/legacy
+paths and emitted schema; JSON Schema validation agreed with the actual
+session input/output. These are synthetic observations, not campus requests.
+
+The complete locked offline suite then passed 1109 library tests (three
+existing ignored workers) and all 93 integration/CLI tests. That includes the
+existing classroom session, parser/privacy and account-state regressions; no
+campus access was used to turn these checks green.
+
+The subsequent locked release build passed. Its actual `help`, `schema`,
+disabled session and `capabilities` commands ran; the entire 51-capability
+manifest equalled the current source JSON with duplicate keys rejected, not
+just a selected capability or an old executable.
+
+Online acceptance is still blocked: retained preflight reached no successful
+TLS/HTTP response from the required campus applications. The separate authorized
+Campus VPN restoration was not consumed because its preflight failed; this
+feature work made no VPN, route, account-configuration or campus mutation.
+Exams, study-room and running authentication/discovery, cache behavior, rights
+and all-feature online verification remain open. Do not read this entry as a
+successful current-account login or a completed Smart acceptance item.
+
+## 2026-11-01: immutable learning-source binding and bounded online proof
+
+The all-feature online objective is still open. The observations below cover
+public documentation and local practice, not campus authentication, attendance,
+graded answers or source-wide rights.
+
+An existing Aerospace branch-tree response carried 646 entries and advertised
+`6c28cbb7679865546eace87089807944a07f1714` in its envelope. Independent
+reconstruction verified all 177 advertised subtrees, but native Git computed
+the root tree as `4eb358ae271b5ceae2aa0003999172f806a128d7`; the former ID
+was the branch commit, not that tree. The attempted root-hash exception was
+withdrawn. Every root and subtree still passes the same strict Git-object
+verification, including flat and empty trees.
+
+The shared learning reader now resolves the reviewed branch through the
+commit's tree declaration, then requests that immutable recursive tree through
+the existing cache and transport. A different valid tree cannot substitute for
+the requested tree ID. Commit and tree source bytes stay separate; malformed
+commit declarations yield safe degraded evidence and never authorize a
+response-supplied URL. Historical branch-response bytes remain untouched.
+
+Actual native commands observed:
+
+| Source | Verified inventory | Selected documentation | Independent byte proof |
+|---|---|---|---|
+| Caniformia/HangGai | 646 entries, root `4eb358ae…` | README.md, 228 bytes | Git blob `0b4aaae2…` and whole-body SHA-256 matched; offline bytes identical |
+| Micraow/WE-Learn-Answers | 3 entries, root `dc0a5574…` | README.md, 2021 bytes | Git blob `6f8071cf…` and whole-body SHA-256 matched; offline bytes identical |
+
+Aerospace search selected README.md. Inventories now emit the exact Git mode
+required to construct the existing tree/blob/mode/size-bound fetch without
+guessing. JSON Schema 4.25.1 validated the actual inventory/search/fetch outputs
+and practice inputs/results. The practice helper now publishes the real input
+schema rather than a nested command wrapper; the old incidental tests that
+had been repinned to that broken nesting were removed, not repinned again.
+
+Both modules' cloze generation, answer recording and local checking ran through
+the CLI. Aerospace's caller-supplied question-set branch also ran through that
+lifecycle. All checked results remained `local_only`, with no official grade,
+submission or completion claim. A question set carrying an answer field and an
+Aerospace fetch selecting the bundled answer database were refused. No answer
+database blob cache was created; no answer-bank content was retrieved.
+
+Independent read-only source reviews found no concrete defect in the assigned
+tree-binding and HTML/credential-admission scopes. They ran no builds, tests,
+campus requests or credential inspection and do not approve a future Git head.
+A separate coding agent fixed evaluation's Legacy variant to be a zero-field
+struct: extra keys must be rejected in line with its published schema, rather
+than changing a regression to accept serde's unit-variant behavior.
+
+The gateway vectors also received independent non-Rust verification against
+`fontlos/buaa-api@1da573856c7438e69dcf01dc3f0881465ce50049`, including
+the reference author's own XEncode vector, and agreed for both ASCII and UTF-8
+synthetic inputs. No further production crypto change was justified. This is
+protocol-source evidence, not a successful campus gateway login or proof of
+the earlier server-error attribution.
+
+Five duplicate capability `evidence` keys were merged so dated observations no
+longer hide earlier safety evidence or remaining limitations. Public CLI
+refusals, a bounded headless player process, or a missing callback alone are
+not proof of full service functionality, rendered playback, or a particular
+HTTP failure cause. The dated records below retain their original scope.
+
+The complete locked, offline test command passed 1084 library tests (three
+ignored workers) and 80 integration/CLI cases, with no failed case. Release
+build and full native `capabilities` equality against the current 51-capability
+manifest passed. Evaluation's valid Legacy request returned `unsupported`;
+the same request with an extra key returned a parse-time `blocked` result,
+matching the published input schema.
+
+Strict all-target Clippy with `-D warnings` did not pass: it reported 35 errors
+across existing style and parameter-count checks. No lint suppression or broad
+unrelated refactor was applied to turn that into a false green gate. Test and
+runtime proof above do not substitute for the outstanding static gate or
+repository publication/merge approvals.
+
+## Classroom CAS callback: evidence boundary
+
+`sso.buaa.edu.cn` is the sign-on service in the observed classroom flow;
+`yjapi.msa.buaa.edu.cn/casapi/index.php` is the classroom relying-party
+callback. Sanitized CLI receipts recorded a credential POST redirect followed
+by callback HTTP 500, without a positively verified selected-lesson session.
+The callback error cause, the deployed ticket lifetime and a password verdict
+remain unknown; an HTTP status or redirect alone does not establish them.
+
+On 2026-10-29, one newly authorized attempt ran under the shared heavy-work
+guardian and the existing v2 account governor. An explicit resume armed one
+attempt; the CLI then observed SSO HTTP 200, a credential POST redirect, and
+classroom callback HTTP 500. The login returned `auth_latched`, stored no
+session and did not positively confirm the selected lesson. After completion
+the account governor was latched, authentication was disarmed and no outcome
+was pending. The one-shot authorization was consumed; no automatic retry or
+challenge bypass was performed. These facts do not identify the HTTP 500 cause
+or establish a password verdict, media access or playback rights.
+
+Earlier ad hoc clients returned both redirects and HTTP 500 at different delays,
+but their distinct credential submissions and cookie handling were not a
+controlled same-request comparison. Those scripts did not use the production
+shared governor, and their outcomes are not admitted as online acceptance or
+proof of a ticket-expiration threshold, cookie necessity, playback permission
+or a server defect. The attempted shorter redirect interval and broader SSO
+cookie delivery were withdrawn; the existing configured governor floor,
+cooldowns and sign-on cookie isolation remain in force.
+
+[Issue #132](https://github.com/cyjin-yl/buaa-cli/issues/132) was corrected
+on 2026-10-28 to withdraw its unsupported claims about all tickets and a PHP
+defect. The issue remains open for an independently supported investigation.
+
+An ungoverned exploratory course-list response and source-code references to
+live URLs do not prove access rights, successful media delivery or real player
+output. The live goal remains open until an authorized source, a governed media
+path and actual player and subtitle observations are bound together.
+
+Open GitHub acceptance trackers now cover source-bound replay and subtitle
+synchronization ([#133](https://github.com/cyjin-yl/buaa-cli/issues/133)), iHome
+([#134](https://github.com/cyjin-yl/buaa-cli/issues/134)), aerospace study
+([#135](https://github.com/cyjin-yl/buaa-cli/issues/135)), department materials
+([#136](https://github.com/cyjin-yl/buaa-cli/issues/136)), drive reads
+([#137](https://github.com/cyjin-yl/buaa-cli/issues/137)), live playback
+([#138](https://github.com/cyjin-yl/buaa-cli/issues/138)), gateway login
+([#139](https://github.com/cyjin-yl/buaa-cli/issues/139)) and WE Learn
+([#140](https://github.com/cyjin-yl/buaa-cli/issues/140)). Further trackers
+cover shuttle ([#141](https://github.com/cyjin-yl/buaa-cli/issues/141)), smart
+services ([#142](https://github.com/cyjin-yl/buaa-cli/issues/142)), OS lab
+([#143](https://github.com/cyjin-yl/buaa-cli/issues/143)), physics selection
+and references ([#144](https://github.com/cyjin-yl/buaa-cli/issues/144),
+[#145](https://github.com/cyjin-yl/buaa-cli/issues/145)), postgraduate timetable
+([#146](https://github.com/cyjin-yl/buaa-cli/issues/146)), enrolment
+([#147](https://github.com/cyjin-yl/buaa-cli/issues/147)), contribution
+([#148](https://github.com/cyjin-yl/buaa-cli/issues/148)), evaluation
+([#149](https://github.com/cyjin-yl/buaa-cli/issues/149)), Boya
+([#150](https://github.com/cyjin-yl/buaa-cli/issues/150)), electricity
+([#151](https://github.com/cyjin-yl/buaa-cli/issues/151)), check-in
+([#152](https://github.com/cyjin-yl/buaa-cli/issues/152)) and CourseGrading
+([#153](https://github.com/cyjin-yl/buaa-cli/issues/153)). These issues record
+remaining work and prerequisites; they are not PRs or evidence of acceptance.
+
+The documentation correction is published as draft
+[#154](https://github.com/cyjin-yl/buaa-cli/pull/154), exact head
+`c34353fc5882d539dee6c42ddaf510bfa8357960`, above PR #131 in native
+[stack #155](https://github.com/cyjin-yl/buaa-cli/stack/155). The local replay
+receipt-binding layer is draft [#156](https://github.com/cyjin-yl/buaa-cli/pull/156),
+exact head `d3e9ca17cd2852f3441ace022268eaa7b5f49091`, directly above #154.
+Its five offline CLI cases and a separate inotify smoke passed; the container
+has no mpv or VLC, so this does not establish playback or media rights. Scoped
+independent source reviews found no remaining concrete issues in these two
+layers. Offline subtitle export is draft
+[#157](https://github.com/cyjin-yl/buaa-cli/pull/157), exact head
+`a613fdfcd9bbc238e7a988d86b105d779af36cf7`, directly above #156. After
+rebasing, four CLI cases and an independent SRT/WebVTT byte, permission,
+no-replace, schema and full-manifest smoke passed; the production governor
+was unchanged. None of these drafts has formal platform approval, online
+acceptance or a merge, and local export does not prove player synchronization.
+
+## Unverified integration: cached-challenge compatibility
+
+The current integration candidate adds a durable mailbox for a
+challenge discovered in cached content. The older governor in the root worktree
+does not read that mailbox. A candidate process and an older process sharing one
+account governor therefore cannot be assumed to enforce the same challenge
+observation before a request. Do not mix such binaries for campus access; a
+coordinated rollout and an independent compatibility decision are still needed.
+The candidate has completed an offline build but not behavioral tests or a
+fresh exact-source review of this compatibility boundary. This is not online
+acceptance.
+
+An independent source review also found a conditional legacy migration hazard:
+the pre-patch integration lock explicitly unlocks in the owner process, while
+a forked child can retain an old lease snapshot whose completion path does not
+re-read the on-disk format. A version bump alone therefore cannot prove that
+all old writers are fenced after the parent unlocks. This is a source-derived
+process transition, not an observation that such a child exists. A proposed
+format cutover would additionally require verified old-actor quiescence, the
+same pinned directory and account lock, known outcomes, and explicit approval;
+neither that migration nor an authentication resume has been performed.
+
+## Unverified response-admission candidate (2026-10-28)
+
+Source review found that several service readers discarded `Set-Cookie`
+before screening body output. A newly issued opaque cookie value could then
+escape through a normal data field or raw fallback; this is a synthetic
+source-level finding, not an observed campus response. The candidate service
+readers without a cookie jar now refuse such content on any `Set-Cookie`
+header. This intentionally may refuse benign cookie rotation or preferences;
+it neither adopts the cookie, retries, refreshes authentication nor treats
+issuance alone as a confirmed challenge. The department Git-source transport
+uses the same header refusal and reuses the learning-material privacy screen
+for abnormal source evidence, not for identity-verified teaching-file content.
+
+The candidate also compares submitted credentials against supported base64
+and percent/form encodings and completes response admission before releasing
+the original shared request lease. Actual HTTP authentication refusals,
+challenge observations and `Retry-After` remain independent settlement facts.
+These source changes are not a claim to recognize arbitrary secret encodings.
+
+iHome cache version 4 and department cache version 2 mark the new admission
+boundary. Earlier files omitted cookie-issuance evidence and cannot establish
+that their bodies are safe to publish. The candidate preserves those files
+but refuses replay; it does not delete them or automatically make a new
+request. Independently recognizable cached safety refusals remain observable.
+Operator-controlled private recovery or a separately authorized retrieval is
+needed; old cache bytes are not silently relabelled as newly reviewed data.
+
+The integration passed a locked native build and an offline
+help/schema/capabilities smoke before later source changes. Focused synthetic
+tests have since passed, but the full test suite and a renewed review of every
+changed source remain incomplete. Previous standalone compiler probes
+and approximate algorithm harnesses were not compliant native proof and must
+not be used as acceptance evidence. All nineteen pending capability criteria
+remain pending in `acceptance.json`; no new authentication, media request,
+session resume, rights approval or campus mutation is asserted here.
+
+The first guarded native offline build on this candidate did acquire both
+locks as UID1000 and compile the actual crate, then failed with four errors:
+a physics privacy match returned `Option` where a statement required unit;
+the learning identity stored a static error code in an owned-string field;
+a borrowed entry slice was borrowed again for iteration; and a JSON privacy
+scanner called `find` through an immutable iterator. Those four sites were
+corrected, with static error codes retained by reference. The subsequent
+guarded attempt returned 75 before Cargo started because the shared heavy
+slot was occupied again. A later guarded build compiled the library but
+failed in the CLI's oversized schema `json!` expansion. That command map was
+replaced with ordinary map construction, without raising macro recursion
+limits, and a now-unused local helper was removed. The next attempt again
+returned 75 before Cargo started. A later guarded offline build succeeded as
+UID1000 with a worktree-owned target and one compiler job. The resulting native
+binary's help and 33-command schema ran successfully; its full 51-capability
+manifest matched `acceptance.json`, the recorded 87 build inputs stayed stable,
+and the production governor snapshot was unchanged during the offline smoke.
+Subsequent full-test attempts returned 75 before Cargo started because another
+project held the shared heavy-work slot. A later attempt reached Cargo but
+failed to compile two privacy assertions because `net::Error` does not implement
+`Display`; those assertions were corrected to inspect its `Debug` fields.
+The next attempt failed while compiling the library tests with a 7,471,120-byte
+allocation failure under the 2 GiB address-space limit, before any tests ran.
+A retry with incremental compilation disabled and test debug information
+stripped also failed in LLVM from memory exhaustion while compiling the library
+tests. The same process limit and shared locks were retained. A separate CLI
+integration run executed 26 cases: 25 passed and the baseline privacy case
+failed because the chosen temporary path had group-writable workspace
+ancestors, which the existing baseline safety policy correctly rejects. That
+failure is retained. A further library-test compilation with 256 codegen units
+also exhausted the 2 GiB address-space limit before any library test ran; the
+full library suite has not passed.
+
+A separate synthetic `enrol` CLI regression ran under both locks and failed
+all six groups before repair: missing MIME challenge, malformed charset,
+credential metadata, late stylesheet, popover/button cues, and quoted MIME
+parameters. Each group stopped at its first failing assertion. These are
+offline consumer observations, not a campus response or online acceptance.
+After the first repair those six groups passed, while two new regressions
+failed: an invalid tag opener hid a late stylesheet from the tail scan, and
+adjacent button text nodes hid a challenge cue. A further source review also
+identified the need to carry cookie-issuance and credential-echo facts from
+the unbound Session before admitting structured responses. After a subsequent repair,
+ten synthetic CLI admission cases passed under both locks. A later
+bogus-comment regression also passed after repair, but two adjacent cases
+still failed: an invalid end tag and foreign-content CDATA could obscure a
+late stylesheet. These are retained synthetic failures, not campus responses;
+no new campus request or authenticated Session was exercised.
+
+A temporary, default-off offline proof feature then linked the ordinary
+library into selected integration tests rather than compiling the full unit
+test crate. Under the same locks and 2 GiB limit, all thirteen HTML/`enrol`
+CLI cases passed. The other targets reproduced four separate defects:
+learning transport/cached evidence (three failures), iHome literal-JSON safety
+facts (three), Smart reserved-marker admission (one), and electricity source
+scalar semantics (two). Their ordinary-data and independent safety controls
+passed. After the corresponding repairs, the five selected targets passed
+27 cases: 13 HTML/`enrol` CLI, 5 learning transport/cache, 4 iHome,
+2 Smart and 3 electricity cases. A separate temporary native consumer also
+exercised those four response-admission families; its source remained stable
+and the production governor was unchanged. These are synthetic observations,
+not fresh service observations, a default-feature full-suite pass or online
+acceptance. The first temporary proof interface was then removed.
+
+Independent source review subsequently identified two additional learning
+cache defects. A fixed synthetic loopback run reproduced both: an existing
+rejected original made a later degraded response fail with `cache_error`,
+and a cache reader observed a newly published two-link inode as
+`corrupt_cache`. The same guarded run passed three separate `enrol` scenarios
+using a synthetic Session: privacy facts gate probe/list/verify, and
+challenge, Retry-After and incomplete-body facts survive settlement. The
+Session supplies those facts directly; it does not validate real response
+headers, credential echoes, authentication or application binding. After the
+postcondition fixture was strengthened to use the exact target, all three
+scenarios passed again; an exact target in this synthetic HTML still cannot
+establish an authoritative selected-course postcondition. That historical
+synthetic verify surface is retired by the 2026-11-02 cutover: current IEAS
+verification refuses before any request while its authoritative contract is
+missing; list/privacy/lease coverage remains. A candidate atomic
+no-replace cache publication and separate rejected-original naming were added
+after the red run. Two guarded reruns returned 75 before Cargo started because
+the shared heavy-work slot was busy; a subsequent run passed both learning
+cases, preserving the v1/v2 rejected originals and reading the new evidence.
+Those assertions were then strengthened to require the publication callback
+and compare retained metadata and repeated originals. After a further cleanup
+change, both strengthened cases passed. Neither actual target-name exhaustion
+nor directory-fsync failure was exercised. The second temporary proof
+interface and its example were removed after the fixed native consumer ran;
+permanent unit and actual-CLI regressions remain.
+
+A separate synthetic encrypted Boya response with a literal `token: null`
+reproduced an unnecessary privacy fallback; a non-null token remained withheld.
+The historical UBAA response model includes a nullable token but is not proof
+of the current campus contract. The candidate now exempts only a `token` member
+whose JSON value is null, while retaining the other credential checks. Two
+post-fix tests passed, including escaped null and non-null credential controls.
+A scoped source review found no new concrete issue; the fixed synthetic native
+consumer also exercised the repaired path.
+
+Fresh independent review found two more synthetic privacy defects: evaluation
+could project a numeric submitted-cookie value as a task total, and shuttle
+could project a percent-encoded CSRF value as visible text. Each was reproduced
+before repair. The evaluation admission case and two shuttle CLI cases then
+passed under both locks, including ordinary-data and encoded/normalized-value
+controls. A further source review found that partially percent-encoded secrets
+containing a literal `=` can evade the shared form-field matcher. The new
+whole-candidate decoding passed two evaluation and three shuttle cases after
+repair, including literal separators, plus-sign interpretations, malformed
+escapes and invalid UTF-8. The specific mixed-separator pre-fix runs did not
+start because the shared heavy slot was busy; that earlier finding is
+source-derived, not an executed red test. Two scoped source reviews found no
+new concrete issue. A separate fixed synthetic native consumer exercised both
+paths; it did not exercise production transport or authentication. These
+fixtures are not observed campus responses.
+
+Two additional source reviews found that submitted credentials can reappear
+after JSON scalar projection even when the wire bytes do not contain the same
+spelling: a decrypted Boya boolean or number, and normalized numeric fields in
+Checkin, Drive and Smart. The fixed synthetic consumers reproduced all four
+families before repair. A shared bounded scalar matcher now checks the actual
+JSON output spelling; Smart checks its projected numbers before releasing the
+original lease. The subsequent guarded run passed 39 cases across ten targets,
+including ordinary, denial and raw-fallback controls. Independent review found
+that local fallback/status metadata, and then synthesized nulls for missing
+Boya fields, could be mistaken for source credential echoes. Those failures
+were reproduced and repaired without exempting explicit source nulls. A
+separate allocation regression reproduced per-number Running credential
+re-encoding and passed after the length guard. A separately launched fixed
+synthetic native consumer passed against stable selected source inputs. Direct
+admission fixtures do not establish transport behavior or actual lease
+settlement; these are not campus disclosures or online acceptance. Scoped
+independent source reviews found no further issue.
+
+Four physical-experiment replay cases also passed through the actual CLI, with
+operator-supplied HTML and no network. Independent review then identified a
+long numeric HTML reference that hides private vocabulary and a quoted-pair
+charset that is rejected despite spelling UTF-8. Two CLI cases reproduced
+those failures and passed after repair. Four further CLI cases demonstrated
+that numeric and legacy named references without semicolons can hide private
+markers, including references that decode to printable characters. Further
+review and CLI red tests found discarded source content, inert `srcdoc`,
+private labels in comments and an unbounded first DOM parse. After repairs,
+twenty CLI replay cases passed, including unconsumed-reference controls,
+discarded text, nested `srcdoc`, 100,000 attributes in one refused token and
+64 sets of 512 short attributes. Independent source reviews found no further
+issue. Ambiguous provenance or the configured 1 MiB/4,096-candidate limits
+withhold output; the attribute HashMap is not a worst-case-linear guarantee.
+This is not a claim that every HTML source is supported. The physics service
+remains offline and unbound.
+
+## Native verification still open (2026-10-30)
+
+The integration source was checkpointed locally as
+`9cbc4cdf08deb294c20451a1e22f9b32cf23b8ea` and rebased onto the subtitle-export
+layer as `3f4f0345246cb22b1a815c562a9f4548d279eaa2`. It is published as a
+[Gitea draft](https://doesvm.icefish-exponential.ts.net:8444/ezra/buaa-cli/pulls/158),
+but has not been deployed.
+A subsequent locked, offline default-profile build acquired the shared
+heavy-work slot but failed while creating encoded library metadata with
+`Cannot allocate memory (os error 12)` under the unchanged 2 GiB address-space
+ceiling. All 98 recorded build inputs remained unchanged. No current binary
+or full-library-test pass is established by that run. The test-only server
+dispatch deduplication has not yet established that the full library suite
+fits within the existing limit.
+
+A separate guarded host probe attempted mpv and VLC with synthetic local
+media and subtitles. Both CLI invocations exited 2, producing no replay
+receipt or screenshot. The probe placed its files below group-writable OMP
+ancestors, which do not satisfy the replay path policy, and failed to retain
+the child diagnostics. Its overall zero exit was a probe-classification bug,
+not successful playback. The corrected probe uses an exclusive directory
+below the passwd home, preserves synthetic diagnostics and requires both
+successful CLI receipts and all expected player captures. A completed
+collection will still require visual inspection and will not establish
+campus media rights, physical audio or live playback.
+
+Independent review of the published documentation prefix identified a
+conditional CI lock-path mismatch. The candidate now requires the effective
+UID's passwd home to be `/home/ezra` before checking the canonical mounted
+lock. This matches `scripts/cargo-locked`, which derives its lock from passwd
+rather than `HOME`. No successful internal CI run is claimed.
+
+## Offline history and directory admission (2026-10-30)
+
+The `announcements history` offline contract now also admits two retained
+operator-asserted sources transferred from the reviewed online-acceptance
+worktree, byte-faithful to their originals:
+
+- Math: literal `http://math.buaa.edu.cn/` root only, with `root_view` limited
+  to `news` (xwdt/xw panel) or omission/null (学院公告 notices); no protocol,
+  port, path or host alias is admitted. Dates come only from unique own-leaf
+  `div.date`/`div.date_t`/`div.date_b` or `div.time`/`span.date` elements;
+  duplicates, nested, invalid or missing dates stay null.
+- Materials (mse) GBK legacy: literal `http://mse.buaa.edu.cn/` or `:80/` as a
+  listing and `call_board_detail.php?call_board_id=<1-10 digits>` as an
+  article, only under explicit `encoding: "gb2312"` with WHATWG GBK decoding
+  (no replacement or BOM sniffing). Decoded UTF-8 is reported as derived
+  content under `interpretation`; `retrieval` still binds the original
+  supplied bytes by SHA-256. A now-redundant `encoding_rs` dependency is
+  pinned at `=0.8.35` and locked.
+
+Native offline smokes against the real binary pass all MSE checks
+(8 accepts, 33 rejections) and all Math checks (29 named cases), including
+rejections for HTTPS/port aliases, board bodies, foreign hosts, wrong `kind`,
+`root_view` on non-math sources, and utf8 default on legacy sources.
+
+Organizations directory admission hardened: fresh responses for the single
+distinguished target screen sensitive markers in **all** raw response header
+names and values (not only the ten retained header fields), refuse
+marker-bearing 304s before validator mutation, and stamp a fresh 200 that
+recovers over an Unknown-admission legacy entry as a new capture
+(`cache_status: miss`) rather than a revalidation of inadmissible provenance.
+`decode_numeric_entities` now preserves malformed and invalid-scalar
+references literally instead of duplicating the preceding text. The
+temporary synthetic proof suite (`directory_admission_proof`, feature-gated)
+reports all 6 cases / 57 subcases green against an isolated governor and
+loopback fixture; it exercises transport, persistence, admission, robots and
+governor behavior and is not a live-service observation.
+
+## Gitea primary restoration (2026-10-30)
+
+The development primary is the private, native
+[`ezra/buaa-cli`](https://doesvm.icefish-exponential.ts.net:8444/ezra/buaa-cli)
+repository. The formerly registered Gitea repository ID was no longer
+available. The existing operator recreated and enrolled the native repository
+as ID 161, leaving both prior backup repositories intact. Before restoration,
+the operator cache's 138 refs were saved in a verified private Git bundle;
+afterward all 69 previously recorded primary refs were present as equal or
+descendant refs. The shared Git `origin` now names the Gitea HTTPS URL; the
+worktree uses a repository-scoped deploy key and a pinned SSH host key for Git
+transport. The rewrite and its SSH host alias are scoped to this repository's
+URL; they do not replace the SSH command for unrelated remotes. The deploy key
+can write this Gitea repository, and Gitea `main` currently has no server-side
+branch protection. Do not push directly to `main` or infer permission to bypass
+the contributor review and acceptance gates from that absence of protection.
+GitHub remains a separate downstream, not the development origin.
+
+The new repository imported the available GitHub issue and pull-request
+metadata. The former Gitea repository ID and its issue and pull-request rows
+are absent from the current database, so no comments can be attributed through
+its current issue rows; the retained older backup repositories also have no
+issue or pull-request rows. A restorable pre-deletion database snapshot has
+not been identified. Therefore the Git and GitHub import readbacks do not
+establish whether any Gitea-only issues, comments or approvals existed or
+were recovered. The backup repositories and private ref bundle remain intact.
+
+The existing Gitea workflow is scheduled daily at 19:30 UTC, or 03:30 Beijing
+time. One manual execution of that same workflow,
+[run 641](https://doesvm.icefish-exponential.ts.net:8444/ezra/gitea-primary/actions/runs/641),
+completed successfully and used the existing dedicated GitHub credential.
+Its receipt reported 72 equal refs and two new downstream branches, without
+conflicts or force pushes. Independent readback matched Gitea and GitHub for
+`main` and both newly published development branches. This verifies that
+manual invocation and those refs; the next automatic scheduled invocation has
+not yet occurred. Run 641 did not update GitHub `main`: that ref was already
+equal, so the path for publishing a later primary `main` change has not yet
+been exercised. Every Gitea branch and tag is eligible for publication to
+the public GitHub downstream on a successful sync, including draft and
+checkpoint branches. Downstream-only refs are preserved, so deleting a Gitea
+ref does not automatically retract its published counterpart. Do not commit
+private source evidence or credentials to any branch.
+
+The two development pull requests are Gitea drafts; their numbers and reviews
+are independent of GitHub pull requests and native `gh stack` metadata.
+Neither host's checks or approvals automatically transfer to the other.
+Synchronization is not evidence of a successful build, merge, login or online
+acceptance.
+
+## Drive source-contract boundary
+
+Pinned public clients describe candidate AnyShare OAuth, listing and transfer
+requests, but they are not proof of the campus deployment or account rights.
+[Pansh](https://github.com/Fucov/Pansh/blob/a17516ff8c058bc5682727d45845d6820f426a66/src/pansh/api.py#L288-L324)
+uses `ondup=1` as its default and `2` for rename; a separate
+[AnyShare client](https://github.com/isHarryh/AnyShare-Unofficial/blob/c1b6e265ea82d227c233272d49832825b28bd5ad/anyshare_unofficial/types/enums.py#L34-L39)
+labels `1` as rename and `0` as forbid. Neither mapping is admitted as the
+current BUAA contract. The candidate rejects a contradictory `ondup=3` with
+`overwrites=false`, but its remaining structured preview only binds the
+caller's intent; it does not verify remote collision behavior or a resulting
+name. Commit is blocked. Directory-list request construction and token
+exchange also remain blocked pending their own source and security contracts.
+No online drive operation or mutation is established by this research.
+
+## Observation correction and CI migration prerequisites (2026-10-26)
+
+The bounded browser observations are archived in
+[`CAS-LOGIN-PROTOCOL.md`](CAS-LOGIN-PROTOCOL.md) and
+[`SSO-LOGIN-PROTOCOL.md`](SSO-LOGIN-PROTOCOL.md). They show a successful browser
+redirect sequence and the parent form's six-field order. They do not establish
+the cause of the CLI callback 500: the original error body and per-request
+timestamps are absent, and the deployed ticket lifetime was not observed.
+The upstream default is a hypothesis input, not the deployment's configuration.
+Browser HTTP 200/application code 200 also does not satisfy the CLI's required
+selected-lesson verification, which remains unpassed.
+
+An uncommitted candidate that removed required account protections and changed
+cache/refusal semantics was withdrawn before publication. The Rust source,
+account rules and capability catalog were restored to the previously reviewed
+`74b501e44bc7d4d8268b3fd20bb22d07d5db607f` baseline. Fresh original-runtime
+verification passed formatting, locked offline build, all-target tests
+(541 library passed, three ignored; 21 CLI passed), strict all-target clippy,
+whole 51-capability equality and actual local authorization/unknown-field
+refusals. Source and original account-state bytes remained unchanged. This
+proof made no authentication invocation and is not online acceptance.
+
+The owner requested internal Gitea development/CI with GitHub used for review
+and releases rather than CI. The installed `gitea-primary` operator performed
+the takeover with the supported migration path. The previous pull mirror was
+retained as `ezra/buaa-cli-pull-backup-20261026T141050Z` rather than deleted,
+and the repository is now the native `ezra/buaa-cli`, registered for the
+non-force per-ref fast-forward sync with the source as the checked downstream.
+The first migration request failed while fetching GitHub issue-comment
+metadata, because the container's DNS does not resolve the GitHub API host
+even though the host does. The Git objects and every branch had already
+arrived, and the operator's re-run completed the takeover and the
+registration. No repository was deleted or recreated, and no history was
+forced.
+
+The native repository's git endpoint was proved by a real clone whose fetched
+head was the current `main` commit. The clone authenticates with the
+installed operator credential adapter over HTTP. That adapter is a local
+reader of the credential file rather than a broker, so the build job must
+not use it: doing so would hand the credential file to the build processes.
+The source is therefore fetched in the operator's protected context and
+handed to the job as a verified, credential-free tree whose identity the job
+re-checks against the admitted SHA.
+
+That hand-off is not provided by the current operator tooling, which performs
+the takeover, the metadata import and the daily sync but does not prepare a
+source tree for a job. The lane therefore verifies the tree it is given and
+fails with a clear message when the required delivery has not happened.
+Delivering that tree without exposing the credential file to the build
+processes is a remaining prerequisite and is not claimed as done.
+
+The internal lane itself is not yet a working gate. It is dispatched manually
+against an operator-admitted exact source SHA, uses the canonical global build
+gate and one compiler job, and builds with Cargo's offline mode against a
+fresh exclusive target. It does not provide kernel-level network isolation:
+the job image and build environment must deny egress if that boundary is
+required. The job still needs the operator-prepared source tree, the
+canonical lock and cache mounts to be present, the job image's tool and
+cache coverage to be verified, and one successful admitted run to be
+observed. Draft workflow files and a runner's capacity setting do not prove a
+working internal gate, and no successful internal CI run is claimed.
+
+The reported proxy quota consumption remains a separate investigation. Failed
+endpoint probes, cache sizes, sparse-file logical lengths and repeated file
+descriptors cannot attribute the reported 700 GB to this project or to a
+particular application. No such attribution is established here.
+
+The dependency-network facts that were measured are recorded here so they are
+not re-derived. The public crates.io CDN does not answer from the build
+network, while a mainland registry mirror answers in under a second. The
+original runtime's Cargo cache holds the project's complete locked set of 201
+crate archives under the mirror's source namespace, and an offline metadata
+resolution against that cache succeeds with no download. The same cache also
+holds 223 archives under the upstream namespace, including seven packages the
+lock file does not require, so the two namespaces overlap rather than
+partition the dependency set. With a mirror declared only under a separate
+source name, the lock file continued to resolve against the upstream registry
+and the offline resolution failed. The project configuration therefore
+replaces the canonical `crates-io` source with the mirror, which makes the
+already cached mirror namespace the one the lock file resolves against. The
+cache directory is keyed on the registry URL rather than on the source alias,
+and the same replacement name the prebuilt job image uses is kept so both
+seats describe the registry identically.
+
+Container image tags were inspected for duplication: several tag names resolve
+to one image identifier, so extra tags consume no additional layers and no
+additional transfer. Redundant tags were removed; image size was unchanged.
+
 ## Current integration and authentication boundary (2026-10-26)
 
 PRs #125, #126, #127 and #128 are merged; native Stack #129 closed after
@@ -68,12 +980,66 @@ adapters for ihome and department materials.
 
 ## Governed classroom session acquisition
 
-Online acceptance is **not passed**. The retained 2026-10-25 attempt on
-module `2ccfb0dbba267ede0f4b241ec8644494b6fd8c724ef10a7123ee1e0e34e3a10c`
+Online acceptance for the governed session is **passed as of 2026-10-30**; see
+the dated subsection below for the exact observed chain and identity. The
+retained 2026-10-25 attempt on module
+`2ccfb0dbba267ede0f4b241ec8644494b6fd8c724ef10a7123ee1e0e34e3a10c`
 recorded initial SSO HTTP 200, credential POST HTTP 302, then classroom CAS
-callback HTTP 500. No classroom session or positive selected-lesson response
-was established. This supersedes earlier guesses that the attempt stopped
-before password submission; the sanitized attempt trail proves the POST.
+callback HTTP 500, establishing no session. That supersedes earlier guesses
+that the attempt stopped before password submission; the sanitized attempt
+trail proves the POST. Media rights, live playback, subtitle synchronization
+and attendance remain separately unverified.
+
+### Classroom session live-verified (2026-10-30)
+
+The callback HTTP 500 is no longer the blocker: the CLI now follows the CAS
+redirect chain without the request-gap sleep that let the single-use service
+ticket expire (a server-directed redirect is a continuation of the request the
+server already answered).
+
+An earlier reading held that the classroom SPA authenticates every call with
+`Authorization: Bearer <getToken()>` and that the token arrives as a `?token=`
+query parameter of the yjapi-to-classroom redirect. That is **withdrawn as
+unproven for this CLI flow**: the observed production redirect carries no
+`token` parameter, the stored session captured an empty token, and the
+`get-sub-info` probe returned application code 0 with the expected lesson
+identity on cookies alone. A conditional extractor remains in `login()` — it
+sends an `Authorization` header only when such a parameter is present, keeps it
+in a zeroizing buffer and never persists or reveals it — but nothing in the
+verified session depends on it. The earlier `{"code":5002,"未传入token"}`
+observation is not reproducible now and must not be attributed to a missing
+header.
+
+Two earlier readings were wrong and are withdrawn. First, `yjapi.msa.buaa.edu.cn`
+temporarily served a Kubernetes ingress placeholder certificate (OpenSSL verify
+code 18, self-signed); the `https_only` client correctly refused it, and that
+outage later cleared — it was never a client defect. Second, `auth_latched` is
+only an error-code string emitted by `rejected()` and `challenge()`, not a
+governor latch: commit `5148607` had already removed the durable safety latch,
+and `recordings session --offline` reports `no_latch_required`. The message that
+demanded an explicit resume before another attempt contradicted that design and
+is corrected.
+
+A deliberately authorized attempt on 2026-10-30 then established a real
+session. The chain recorded `sso.buaa.edu.cn/login 200`, credential `POST 302`,
+`yjapi.msa.buaa.edu.cn/casapi/index.php 302` twice, `classroom.msa.buaa.edu.cn/
+200`, and the positive probe `/courseapi/v3/portal-home-setting/get-sub-info
+200` with application code 0. The command reported `result: session_observed`,
+`network_access: true` and twelve cookies stored in a private owner-only file,
+reproduced twice.
+
+One `application_identity_unverified` observation used a requested lesson
+selection that did not match the application's probe; a later corrected
+selection was observed successfully. Private lesson and tenant identifiers
+are withheld. That mismatch does not establish the cause of the earlier
+callback HTTP 500 or grant permission to repeat authentication. The courseapi
+response also declares `Content-Type:
+text/html` while carrying JSON; `classroom_json_mime` already admits
+`text/html`, so no MIME change was needed.
+
+Media rights, live playback, subtitle synchronization and attendance or
+completion remain unverified; the authorization block still records
+`account_identity_verified: false` with an `operator_attestation` basis.
 
 The asserted URL-cookie cause was incorrect: the original RFC 6265 octet
 ranges already allow colons and slashes. Synthetic Chromium acceptance of a
@@ -477,6 +1443,82 @@ showed localized subtitle differences and four early gap samples did not.
 VLC root captures were black; later window captures used unmatched frames and
 remain inconclusive. Neither finite sampling nor process exit completes
 all-cue, dual-player synchronization or realtime-live acceptance.
+
+### Recording media and replay live-verified (2026-10-30)
+
+With the verified classroom session the current lesson's declared recording was
+acquired end to end. The default bounded prefix read returned
+`result: media_observed` over a real `video/mp4` with its own digest. A full
+read into a private 0700 directory returned `complete_body: true` with
+`bytes_read` equal to `declared_content_length` (415,863,736) and
+`media_bytes_verified: true`; the media file and its receipt were published
+owner-only.
+
+One defect blocked this before the change: `get-sub-detail` declares
+`content.playback.url` over plain `http` on `resource.msa.buaa.edu.cn`, and
+`admitted_media_url` required `https`, so a valid recording was refused as an
+unsupported source layout. The reviewed host serves a valid certificate, so a
+declared `http` URL on that host is now fetched over HTTPS with the identical
+host, port and path, and the change is reported as
+`media.transport_scheme_upgraded` rather than hidden. Userinfo, explicit ports,
+the `/play/` prefix, dot segments, percent-encoded separators, query, fragment,
+other hosts and other schemes still refuse.
+
+The acquired file was replayed headlessly through the installed players under a
+bounded stop: mpv and VLC both reported `stopped_by_bound` (VLC exit code 0)
+with `media.binding: local_receipt_match` against the recorded digest. Rendered
+subtitle synchronization was not exercised in that run and remains unverified.
+
+### Native subtitle online read blocked (2026-10-30)
+
+`recordings subtitles --online` with the same stored session returned
+`auth_latched` ("classroom session requires deliberate safety review"). The
+response-processing callback never ran, so the failure precedes any body read.
+Three explanations were eliminated by evidence: every stored cookie carries
+path `/`, so this is not cookie path scoping; `validate_http_metadata` already
+admits the platform's `text/html` JSON label; and the login redirect carries no
+token parameter, so no bearer header is available or required for the identity
+probe. `src/net.rs` turns any 3xx into `redirect_refused`, which a cookie-bound
+classroom request reports as `auth_latched`, so the transcript endpoint
+redirects for this cookie set. The 2026-10-23 observation of the same endpoint
+succeeded with a caller-supplied cookie, so the endpoint is reachable but the
+CLI's own login does not yield the cookie set it accepts. Resolving this needs
+an authorized browser observation of the SPA's real transcript request; no
+redirect or challenge was bypassed.
+
+## Offline capability sweep (2026-10-31)
+
+Every documented command form was invoked once offline with a minimal input on
+the release binary, and the observed result recorded. A refusal here is the
+published contract, not a defect: a command that needs a cache, a session or an
+explicit `--online` opt-in must say so instead of fabricating data.
+
+| Capability | Offline observation |
+|---|---|
+| timed-input, archive lookup, departments inventory, contribution scan, timetable-pg parse, smart, shuttle, electricity, os-lab read, physics-experiment | `invalid_input` (exit 2): input contract enforced before any I/O |
+| organizations list, welearn materials, aerospace materials | `unavailable` (exit 7): no retained cache and no opt-in |
+| ihome list | `authorization_required` (exit 4): explicit operator authorization missing |
+| enrol, checkin, boya | `blocked` (exit 0): typed result with a stated reason |
+| evaluation, drive | `blocked`/`status` object (exit 0) |
+| coursegrading unsupported | `unsupported` (exit 0): HTTP-only upstream, no fallback |
+| announcements list, fengrubei info, gateway usage, spoc surface root | cached snapshot served offline (exit 0) |
+| gateway logout-plan | `planned` (exit 0) |
+| recordings session --offline, gateway resume-auth | `no_latch_required` (exit 0) |
+| recordings search/replay/subtitles export, marks gpa, drift check, timetable ics, physics pendulum, credits calculate, announcements article/history | `invalid_input` (exit 2) |
+| marks baseline show, publication, life | `unsupported` (exit 3): subcommand form required |
+
+The sweep also exposed a stale published contract: both the classroom resume
+schema and the gateway `resume-auth` output still advertised
+`result: one_attempt_armed` and told the operator to arm an attempt, while
+`Governor::resume_authentication` had been state validation only since commit
+5148607 and the classroom command already returned `no_latch_required`. Both
+now report `no_latch_required`, and the whole `buaa schema` payload no longer
+contains the retired constant.
+
+This sweep is an offline contract check. It is not online acceptance for any
+capability that requires a campus session, and the blockers recorded above
+(transcript endpoint redirect, IPv6-only exam host, operator-supplied service
+cookies, campus VLAN for SRun) still stand.
 
 ## Bounded local player delivery
 
@@ -1696,3 +2738,281 @@ The current module SHA `d58ed3f6ecb3eb156ffb43ae487960352d0da977bc690bebe0909ddb
 Independent review of SHA `12d326a29a678f717fff2d7aa3cb8f13d575647724b92d98df20797fe48cc6eb` found template-option, range step-base, date/URL/datetime normalization, CSS color syntax, request-body CRLF, Cookie quoting/prefix, DOM-work, raw-error-text and MIME interpretation gaps. The current source applies exact browser-observed form defaults and wire normalization, excludes template-derived successful values while preserving datalist/inert-attribute entries, enforces cookie prefix flags/provenance and quoted values, and bounds DOM/text subtrees before submission. Failure classification and challenge vetoes now derive only from active DOM text facts; final JSON is not interpreted as embedded HTML. This SHA `f3f559000fdb2b535a0a1f6c089760dec67116cd11b7cbd23ea423665432d3f4` passes 65 focused session tests with stable source, unchanged governor and zero campus requests. A full native gate and fresh complete-source review remain pending; authenticated online confirmation has not yet run.
 
 Later, that exact SHA passed a full native gate (468 library, 19 CLI, three ignored workers; strict clippy/fmt/build, manifest equality and stable source/governor, zero campus requests). Its fresh review found that initial credential pages did not scan text-only active markers before POST. The current source applies the same review-only predicate to the initial page and exposes it in inspection without reporting an active challenge. SHA `12d326a29a678f717fff2d7aa3cb8f13d575647724b92d98df20797fe48cc6eb` passes all 59 session cases with stable source and unchanged governor. Its complete native gate, fresh complete-source approval and one deliberate governed authentication remain pending; no password has been submitted under the new contract.
+
+## 2026-11-02: rights-reviewed physics reference catalog and retrieval
+
+`buaa physics-reference catalog|retrieve [--online]` implements the pending
+`physics-reference` acceptance item against one public upstream revision of
+`wtdcode/BUAAPhyhelper`: commit `dd2fda76dfa61d921e5efaf84f92a44e9243f3b2`,
+tree `82655593cd3486549b5e49eec55ca9add1d3ccd4`. The commit object must name
+that commit and declare that tree, and every advertised directory plus the
+root object is reconstructed and verified before an entry is published, so a
+branch that moves or a rewritten upstream cannot substitute other bytes.
+
+Rights are decided per item rather than per repository. Of the 51 entries,
+exactly two are admitted: the author's own calculation and processing method
+write-up `README.md` (Git blob `02427435071267252f752280278fbb8af6b1919b`,
+6736 bytes) and the verbatim GNU GPL v3 notice `LICENSE` (Git blob
+`474503f3470a8b7e0e859945b2b866aeb7a3f096`, 35113 bytes). The remaining 49
+are published with their exclusion reason and are never retrievable: 25
+upstream implementation sources, 20 repository metadata or directory items,
+one separately published third-party article that the repository license does
+not clear, two textbook-derived sample data files and one link-only README
+stub. A live retrieval request for the third-party article and for an upstream
+implementation source were each refused with `authorization_required` before
+any byte request.
+
+Retrieval returns the exact original bytes of one admitted item after its Git
+object identity and declared length are verified. `README.md` returned 6736
+bytes with SHA-256
+`d18b137437a1c1f80a2b7c1fa36ad39702f30d94cc9d8531ce9d6f021247b331`, and
+independent recomputation of both that digest and the Git blob identifier over
+the returned bytes matched; the cache-only replay returned byte-identical
+content. `LICENSE` returned 35113 bytes with SHA-256
+`b4149adf6fb680f46ae787da3427841e20dcdafb1873ff0648215acc8862cf29`.
+
+Two independent source reviews of this slice found that a response whose
+bytes did not match the reviewed object could still disclose those bytes
+through the shared degraded-evidence path, and that a positional JSON array
+could reach cache or network processing. Both are repaired: a response that
+is not the reviewed object now reports only its content type, length, digest
+and reason and never encodes its bytes, and the retrieval request must be a
+JSON object. The published schemas gained the withheld-evidence shape and an
+entry-count bound. A subsequent cache-only native reproduction exposed
+last-key-wins merging of duplicate rights declarations: `false` followed by
+`true` still returned the original. Direct map-only typed deserialization now
+rejects duplicates and trailing documents before cache access; the same native
+request returns `invalid_input` with empty stdout.
+
+The handwritten partial Schema checker, synthetic success tests that replaced
+the expected blob hash, and tests depending on the host user's cache were
+removed. Permanent regressions cover selection membership, exact object/size
+admission, duplicate/array rejection, withheld blob bytes, and preservation of
+safe original evidence for a truncated inventory. Standard Draft 2020-12
+validation of the actual native contracts and cached outputs passed separately.
+Independent Git encoding reproduced all 19 tree objects (root plus 18
+directories); independent byte-length, Git-blob and SHA-256 checks matched both
+retrieved originals. This final readback made no network request and is not a
+new upstream observation. The metadata-only receipt is
+`local://buaa-physics-reference-current-proof-20261102.json`.
+
+The upstream work is GPL-3.0 while this project is MIT, so no upstream prose
+or implementation is copied into this repository. An admitted item is fetched
+at run time through the shared governor and cache, and every retrieval output
+carries the attribution, the bound license object and a
+`license_notice_required` obligation flag. Actual license text requires a
+separate `LICENSE` retrieval: metadata and a flag do not prove redistribution
+compliance or that a conveyed copy includes the required notice.
+`operator_reference` records the reviewed license object and
+`independently_verified` stays false.
+
+`src/physics_experiment.rs` keeps `physics-select` only. Its previous
+`physics-reference` operation and its rights blocker were removed because the
+capability now exists for real, and its capability and schema output point at
+the new command instead of publishing a stale blocker. The remaining
+candidate sources and every third-party document inside this tree are not
+cleared by this observation, and no campus physics service, selection or
+assessment access was established.
+
+## 2026-11-02: Campus and native subtitle observation boundaries
+
+The existing Campus supervisor is now `tunnel_up`, with 19 recorded login
+attempts and three historical authentication failures. A fresh read-only
+whitelist snapshot found its systemd service active/running, without another
+resume, credential submission or application request. Earlier recovery work
+included temporary routing probes and a username-case edit; it must not be
+described as having made no routing or credential-configuration changes. No
+causal conclusion about the lab cable, BUAA-Mobile or the old authentication
+failure follows from the restored tunnel. The metadata-only snapshot is
+`local://campus-state-reconciliation-20261102.json`.
+
+A native classroom session observation and a subsequent subtitle read are
+separate application facts. `credential_persisted: false` refers to the campus
+password, not the session cookies stored in the private session file. Neither
+a selection probe nor a tunnel proves account identity, media rights or all
+campus services. Private lesson and session identifiers are not published.
+
+The subtitle read reported HTTP 200 with `code: 10002`, `total: 0`, message
+未查询到语音数据 and a literal empty list. Both the HTTP pre-admission and the
+selection layer now recognize only that reviewed no-data tuple rather than
+mapping it to `auth_latched`. Unknown codes, inconsistent totals/messages and
+nonempty or object-shaped lists remain refused. Reqwest already handles HTTP
+chunk framing; no second dechunking step is added.
+
+`no_native_track` records an upstream-reported absence for one request, not a
+verified empty course or permanent absence. It has empty segments and null
+derivation digest/scope; requested resource identifiers are not promoted to
+native declarations. Normal tracks retain nonempty cues and their digest.
+The two outcomes have distinct provenance/completeness and result-conditioned
+schemas. A comparison of result names or required keys alone is not standard
+Schema validation.
+
+The earlier 2026-10-30 `auth_latched` observation is retained. Its unentered
+callback proves failure before that callback, not before body acquisition;
+the asserted 3xx cause was not bound to a retained HTTP status and remains
+unproven. The later 200/no-data response does not explain that earlier failure.
+No subtitle synchronization, live playback, media rights, account identity,
+complete history, attendance or completion is established by this empty reply.
+
+## 2026-11-02: exact-source response-admission proof
+
+The actual native subtitle command previously accepted a positional HTTP
+envelope from a newly owned synthetic private cache. The same input now exits
+4 with empty stdout. Both real parsing entry points use object-only typed
+deserialization and reject duplicate members and trailing documents.
+
+Separate synthetic normal-track and no-data invocations exit zero and pass
+standard Draft 2020-12 validation of the native published output schema.
+Putting cues into the no-data variant or removing them from the normal variant
+is rejected by that schema. Independent serialization matches the normal
+output's segment digest and preserves the synthetic 2000–5000 ms interval.
+Every connect syscall was forced to fail during these cache-only observations;
+they are not fresh campus requests. The metadata-only receipt is
+`local://buaa-subtitle-aerospace-native-red-green-20261102.json`.
+
+iHome's invocation-wide guard now covers cookie values issued by earlier
+pages, including later fresh/cached bodies and MIME metadata, without adopting,
+transmitting, evicting or persisting those values. Recovered fallback literals
+retain bounded nested-document inspection: exhaustion withholds the reversible
+original rather than treating parse failure as credential absence. Seventy
+iHome cases and 29 strict-TLS service cases passed, including fresh/cache echo
+boundaries, nested fallback depth controls and independent cooldown/refusal
+facts. Fourteen subtitle cases also passed. These are synthetic offline
+observations, not live iHome acceptance or a current full-suite receipt.
+
+The new lease regression initially asserted the removed durable latch field.
+That assertion was deleted, not inverted and not used to restore the latch.
+The corrected fixture proves observable settlement instead: known denial,
+challenge and HTTP refusal preserve the existing network-failure streak,
+ordinary complete HTTP 200 clears it, and every case retains Retry-After and
+performs no retry. Only a fresh isolated fixture state is seeded; production
+scheduling and safety state are untouched by this proof.
+
+## 2026-11-02: Aerospace two-item admission and native retrieval
+
+The fixed community source remains `Caniformia/HangGai` at commit
+`6c28cbb7679865546eace87089807944a07f1714`, declaring root tree
+`4eb358ae271b5ceae2aa0003999172f806a128d7`. The actual native inventory contains
+646 entries. Every original path/mode/object/size tuple matches the retained
+recursive response; independent Git encoding reconstructed all 178 tree
+objects, including the root. Exactly two entries permit retrieval, and the
+other 644 remain excluded regardless of an operator's general attestation.
+
+| Reviewed original | Bytes | Git blob | SHA-256 |
+| --- | ---: | --- | --- |
+| `README.md` | 228 | `0b4aaae22b098e2d00e603fb7ce39b95fd13905f` | `290d9823a1c0bf1e9dbff11a54d835e9f9f4f7b1436ff19820617202a3f6803f` |
+| `LICENSE` | 35149 | `f288702d2fa16d3cdf0035b15a9fcbc552cd88e7` | `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986` |
+
+Both actual fetch outputs passed the standard published schema and independent
+length, Git-blob and SHA-256 checks. README reused its existing original;
+LICENSE was an actual online cache miss. Both cache-only replays returned
+byte-identical originals with connect syscalls disabled. Native search retained
+the exact matching original path/order. Answer-bank, font and implementation
+fetches returned no bytes under the same disabled-connect proof; they remain
+outside the two-item gate. No such blob was retrieved for this verification.
+
+The actual local practice lifecycle exercised cloze generation, a caller-owned
+question set with its local key, answer recording and local checking. All four
+outputs passed the standard schema and retained `local_only`, null official
+grade, `not_submitted` and no completion claim. A valid question set with
+contradictory duplicate rights declarations returned an attested session in
+the old binary; the repaired binary exits 2 without a session. Recursive
+duplicate rejection covers nested and escape-spelled members before `Value`
+use. Eleven Aerospace cases passed, including alias/object/size refusal and
+omission of a verified-blob claim on mismatch.
+
+The source is GPL-3.0; no upstream prose or implementation is copied into this
+MIT repository. Per-item attribution, the bound license object and a notice
+obligation flag are not independent rights verification or redistribution
+compliance. Question content, source-wide rights and every assessment workflow
+remain unverified. Receipt:
+`local://buaa-aerospace-two-item-proof-20261102.json`.
+
+## 2026-11-02: separate IEAS and yjsxk contracts
+
+Historical IEAS local list/preview and the modern yjsxk existing-session reader
+are separate application contracts. No guessed secure IEAS origin or academic
+term conversion is admitted. Library `verify` retains its API but refuses
+before any selected-state request; the retired synthetic postcondition shape
+does not remain a live interface.
+
+The production yjsxk path accepts an exact five-digit term and an explicitly
+authorized existing cookie only on protected stdin, then makes one fixed HTTPS
+selected-record GET. It has no login, redirect, proxy, retry, polling, cookie
+adoption, persistence or mutation. Native `BJDM`, `XNXQDM`, `WID` and `YYZ`
+remain separate; duplicate rows and source order are preserved. Empty or
+partial observations do not establish account identity, complete selection,
+withdrawal, current rights or a final postcondition.
+
+Thirty-two module cases and thirteen existing CLI admission cases passed.
+The source exposes separate schema/dispatch, bounded recursive scalar
+credential admission and independent session-rejection facts, including when
+record shape or cookie admission fails. These fixtures do not establish
+authenticated deployment compatibility. No current yjsxk session cookie is
+available for a native authenticated read; the separately observed anonymous
+HTTPS entry downgraded to HTTP and was not followed. No new campus login,
+password probe, fallback or academic write was performed.
+
+Current manifest/status prose withholds private lesson, tenant, session and
+media-digest selectors. This is a current-tip correction, not historical Git
+object or tool-context erasure. No history rewrite or credential rotation is
+claimed by that correction.
+
+## 2026-11-02: Gitea primary read-only discovery
+
+The actual native `contribution scan` against the private primary completes:
+`scan_completed`, 27 candidates, 0 excluded, 0 blockers, no write operation,
+a credential that never appeared in stdout or stderr, and an output that
+passed the published standard schema. The run is a bounded read-only
+observation of the owner's own repository. It is not a claim, an approval or a
+merge, and no issue was created, commented on or claimed.
+
+The first two native runs blocked instead, and that is the useful part of the
+observation. Read-only structural probes of the primary established three
+upstream shapes that the unit fixtures had not modelled: an unassigned issue
+carries a null assignee list rather than an empty array; an empty list is
+serialized as JSON `null` rather than an empty array; and the advertised count
+means the overall total for the issue list but that page's own row count for
+the issue timeline. The parser, the page reader and the count oracle each
+misread one of those, and each is now repaired with a regression. The null
+assignee spelling is admitted for this provider only; the GitHub path keeps
+its own array requirement.
+
+The count oracle now reads the two meanings without conflating them. A count
+larger than the rows its response returned is an overall total: it must stay
+stable, every later page must repeat it, and the collected rows must equal it.
+A count equal to that page's own rows is that page's row count and proves
+nothing. When no overall total was established, the real empty page is the
+completeness evidence. A page carrying more rows than it advertises, a
+disagreeing overall total and a short terminal remain refusals, and the
+reader still stops at its bounds without an extra request.
+
+A cross-provider credential is refused with `invalid_input` before any
+connection. Issue numbers, titles, bodies, authors and comment text are not
+published; only counts and machine-readable outcomes are recorded. The
+metadata-only receipts are `local://buaa-gitea-native-scan-20261102.json` and
+`local://buaa-gitea-native-scan-ground-truth-20261102.json`.
+
+## 2026-11-02: Gitea primary non-force publication
+
+The owned ordered-stack leaf branch `work/gitea-review-transport-20261030`
+was advanced on the private Gitea primary by one non-force fast-forward. The
+previous remote leaf was advanced to the verified commit
+`5ac17c9459694f7ce2a48d33838ce586308191a3`, whose parent is the previous
+local head and whose tree carries the whole reviewed slice. The actual
+remote ref was read back with a direct ref query after the write rather than
+from a tracking cache.
+
+The native primary reports draft pull request 164 with base
+`work/gitea-metadata-attribution-20261030` and head
+`work/gitea-review-transport-20261030` at that commit. The stack parent pull
+request 163 and its base are unchanged, so the ordered chain still reads
+recovery boundary, then metadata attribution, then review transport. Pull
+request 164 remains a draft and is not merged.
+
+Nothing else was written: no force push, no other branch, no `main` update
+and no merge. The published difference was scanned before the write and
+contains no live credential. The primary's daily synchronization of every
+branch and tag to the public GitHub downstream is a separate downstream
+action and is not claimed here. The metadata-only receipt is
+`local://buaa-gitea-publication-20261102.json`.

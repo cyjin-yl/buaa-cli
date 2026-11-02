@@ -79,6 +79,7 @@ struct ReplayInput {
 struct MediaInput {
     path: Option<String>,
     url: Option<String>,
+    receipt_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +130,7 @@ struct FileIdentity {
 struct LocalFile {
     file: File,
     identity: FileIdentity,
+    directory: File,
 }
 
 struct TemporarySubtitle {
@@ -291,6 +293,12 @@ fn parse_input(input: &str) -> Result<ReplayInput, Error> {
     if let Some(path) = request.media.path.as_deref() {
         let _ = validate_path_text(path)?;
     }
+    if let Some(path) = request.media.receipt_path.as_deref() {
+        let _ = validate_path_text(path)?;
+        if request.media.path.is_none() {
+            return Err(invalid());
+        }
+    }
     if let Some(subtitles) = request.subtitles.as_ref() {
         let source_count =
             usize::from(subtitles.path.is_some()) + usize::from(subtitles.segments.is_some());
@@ -330,7 +338,18 @@ fn parent_and_name(path: &Path) -> Result<(File, String), Error> {
     Ok((directory, name.to_owned()))
 }
 
-fn open_local_file(path: PathBuf, max_bytes: u64) -> Result<LocalFile, Error> {
+fn receipt_refused() -> Error {
+    Error::new(
+        "invalid_input",
+        "local media receipt could not be securely verified",
+    )
+}
+
+fn open_local_file(
+    path: PathBuf,
+    max_bytes: u64,
+    require_single_link: bool,
+) -> Result<LocalFile, Error> {
     let (directory, name) = parent_and_name(&path)?;
     let file =
         crate::governor::open_child(&directory, &name, libc::O_RDONLY).map_err(|_| invalid())?;
@@ -340,10 +359,16 @@ fn open_local_file(path: PathBuf, max_bytes: u64) -> Result<LocalFile, Error> {
     if !metadata.is_file() || metadata.uid() != uid || metadata.mode() & 0o022 != 0 {
         return Err(permission());
     }
+    if require_single_link && metadata.nlink() != 1 {
+        return Err(receipt_refused());
+    }
     let mut file = file;
     let identity = digest_file(&mut file, max_bytes)?;
-    drop(directory);
-    Ok(LocalFile { file, identity })
+    Ok(LocalFile {
+        file,
+        identity,
+        directory,
+    })
 }
 
 fn digest_file(file: &mut File, max_bytes: u64) -> Result<FileIdentity, Error> {
@@ -452,7 +477,7 @@ fn prepare_subtitle(request: &ReplayInput) -> Result<Option<PreparedSubtitle>, E
     if let Some(path) = subtitles.path.as_deref() {
         let path = validate_path_text(path)?;
         let format = subtitle_format(&path)?;
-        let local = open_local_file(path, MAX_SUBTITLE_BYTES)?;
+        let local = open_local_file(path, MAX_SUBTITLE_BYTES, false)?;
         return Ok(Some(PreparedSubtitle {
             format,
             identity: local.identity.clone(),
@@ -485,7 +510,39 @@ fn prepare_media(request: &ReplayInput) -> Result<LocalFile, Error> {
         return Err(unsupported());
     }
     let path = validate_path_text(request.media.path.as_deref().ok_or_else(invalid)?)?;
-    open_local_file(path, MAX_MEDIA_BYTES)
+    open_local_file(path, MAX_MEDIA_BYTES, request.media.receipt_path.is_some())
+}
+
+fn bind_media_receipt(request: &ReplayInput, media: &LocalFile) -> Result<&'static str, Error> {
+    let Some(receipt_path) = request.media.receipt_path.as_deref() else {
+        return Ok("operator_asserted");
+    };
+    let reject = receipt_refused;
+    if media.file.metadata().map_err(|_| reject())?.nlink() != 1 {
+        return Err(reject());
+    }
+    let receipt_path = validate_path_text(receipt_path)?;
+    let (directory, receipt_name) = parent_and_name(&receipt_path).map_err(|_| reject())?;
+    let media_parent = media.directory.metadata().map_err(|_| reject())?;
+    let receipt_parent = directory.metadata().map_err(|_| reject())?;
+    if media_parent.dev() != receipt_parent.dev() || media_parent.ino() != receipt_parent.ino() {
+        return Err(reject());
+    }
+    let media_path = validate_path_text(request.media.path.as_deref().ok_or_else(invalid)?)?;
+    let media_name = media_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    super::media::verify_replay_receipt(
+        &directory,
+        &receipt_name,
+        media_name,
+        media.identity.byte_length,
+        &media.identity.sha256,
+        MAX_MEDIA_BYTES,
+    )
+    .map_err(|_| reject())?;
+    Ok("local_receipt_match")
 }
 
 fn build_argv(
@@ -899,6 +956,7 @@ fn exit_status_json(status: &ExitStatus) -> Value {
 pub fn replay(input: &str) -> Result<Value, Error> {
     let request = parse_input(input)?;
     let media = prepare_media(&request)?;
+    let binding = bind_media_receipt(&request, &media)?;
     let subtitle = prepare_subtitle(&request)?;
     // The player receives proc-fd paths backed by descriptors admitted and
     // hashed above.  The duplicates remain alive through the whole child
@@ -963,6 +1021,8 @@ pub fn replay(input: &str) -> Result<Value, Error> {
             "kind": "local_file",
             "byte_length": media.identity.byte_length,
             "sha256": media.identity.sha256,
+            "binding": binding,
+            "binding_limit": "A locally writable receipt does not prove remote origin, rights, or subtitle association; the media may change in place during hashing or playback.",
         },
         "submitted": {
             "media_descriptor": true,
@@ -983,6 +1043,9 @@ pub fn replay(input: &str) -> Result<Value, Error> {
             "subtitle_synchronization": true,
             "live_playback": true,
             "media_rights": true,
+            "remote_source": true,
+            "subtitle_association": true,
+            "media_immutability": true,
         },
     }))
 }
@@ -1013,9 +1076,9 @@ pub fn schema() -> Value {
                         "additionalProperties":false,
                         "oneOf":[
                             {"type":"object","required":["path"],"properties":{"path":{"type":"string","minLength":1,"maxLength":MAX_PATH},"url":{"type":"null"}}},
-                            {"type":"object","required":["url"],"properties":{"url":{"type":"string","minLength":1,"maxLength":MAX_URL},"path":{"type":"null"}}}
+                            {"type":"object","required":["url"],"properties":{"url":{"type":"string","minLength":1,"maxLength":MAX_URL},"path":{"type":"null"},"receipt_path":{"type":"null"}}}
                         ],
-                        "properties":{"path":{"type":["string","null"]},"url":{"type":["string","null"]}}
+                        "properties":{"path":{"type":["string","null"]},"url":{"type":["string","null"]},"receipt_path":{"type":["string","null"],"minLength":1,"maxLength":MAX_PATH,"description":"Optional private local acquisition receipt for a local path; mismatch is rejected before player launch."}}
                     },
                     "player":{"enum":["mpv","vlc"]},
                     "headless":{"type":"boolean","default":false,"description":"Use null/dummy audio/video sinks only when explicitly true."},
@@ -1046,10 +1109,10 @@ pub fn schema() -> Value {
                     "player":{"enum":["mpv","vlc"]},
                     "headless":{"type":"boolean"},
                     "subtitle":{"type":"object","additionalProperties":false,"required":["submitted","format","byte_length","sha256"],"properties":{"submitted":{"type":"boolean"},"format":{"type":["string","null"],"enum":["srt","vtt",null]},"byte_length":{"type":["integer","null"],"minimum":0},"sha256":{"anyOf":[hash,{"type":"null"}]} }},
-                    "media":{"type":"object","additionalProperties":false,"required":["kind","byte_length","sha256"],"properties":{"kind":{"const":"local_file"},"byte_length":{"type":"integer","minimum":0},"sha256":hash}},
+                    "media":{"type":"object","additionalProperties":false,"required":["kind","byte_length","sha256","binding","binding_limit"],"properties":{"kind":{"const":"local_file"},"byte_length":{"type":"integer","minimum":0},"sha256":hash,"binding":{"enum":["operator_asserted","local_receipt_match"]},"binding_limit":{"type":"string"}}},
                     "submitted":{"type":"object","additionalProperties":false,"required":["media_descriptor","subtitle_argv","seek_seconds","max_seconds"],"properties":{"media_descriptor":{"const":true},"subtitle_argv":{"type":"boolean"},"seek_seconds":{"type":"integer","minimum":0},"max_seconds":{"type":"integer","minimum":1,"maximum":3600}}},
                     "observed_exit":{"type":"object","additionalProperties":false,"required":["process_launch","status","stopped_by_bound"],"properties":{"process_launch":{"const":true},"status":{"type":"object","additionalProperties":false,"required":["code","signal","success"],"properties":{"code":{"type":["integer","null"]},"signal":{"type":["integer","null"]},"success":{"type":"boolean"}}},"stopped_by_bound":{"type":"boolean"}}},
-                    "unverified":{"type":"object","additionalProperties":false,"required":["audio_output","video_output","subtitle_rendering","subtitle_injection","subtitle_synchronization","live_playback","media_rights"],"properties":{"audio_output":{"const":true},"video_output":{"const":true},"subtitle_rendering":{"const":true},"subtitle_injection":{"const":true},"subtitle_synchronization":{"const":true},"live_playback":{"const":true},"media_rights":{"const":true}}}
+                    "unverified":{"type":"object","additionalProperties":false,"required":["audio_output","video_output","subtitle_rendering","subtitle_injection","subtitle_synchronization","live_playback","media_rights","remote_source","subtitle_association","media_immutability"],"properties":{"audio_output":{"const":true},"video_output":{"const":true},"subtitle_rendering":{"const":true},"subtitle_injection":{"const":true},"subtitle_synchronization":{"const":true},"live_playback":{"const":true},"media_rights":{"const":true},"remote_source":{"const":true},"subtitle_association":{"const":true},"media_immutability":{"const":true}}}
                 }
             },
             "limits":{"max_input_bytes":MAX_INPUT,"max_subtitle_bytes":MAX_SUBTITLE_BYTES,"max_media_bytes":MAX_MEDIA_BYTES,"max_seconds":3600},
@@ -1129,9 +1192,51 @@ mod tests {
         let path = root.0.join("media.mp4");
         let bytes = b"bounded media bytes";
         fs::write(&path, bytes).expect("media fixture");
-        let file = open_local_file(path, MAX_MEDIA_BYTES).expect("safe media");
+        let file = open_local_file(path, MAX_MEDIA_BYTES, false).expect("safe media");
         assert_eq!(file.identity.byte_length, bytes.len() as u64);
         assert_eq!(file.identity.sha256, digest_bytes(bytes));
+    }
+
+    #[test]
+    fn receipt_binding_uses_pinned_media_parent() {
+        let root = TempRoot::new();
+        let first = root.0.join("first");
+        let second = root.0.join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let url = "https://resource.msa.buaa.edu.cn/play/synthetic.mp4";
+        let key = digest_bytes(url.as_bytes());
+        let media_name = format!("recording-{key}.mp4");
+        let receipt_name = format!("recording-{key}.receipt.json");
+        let body = b"synthetic media fixture";
+        let media_path = first.join(&media_name);
+        fs::write(&media_path, body).unwrap();
+        let receipt = json!({"version":1,"url":url,"http_status":200,"content_type":"video/mp4","container":"mp4","bytes":body.len(),"sha256":digest_bytes(body),"complete_body":true});
+        let receipt_path = first.join(&receipt_name);
+        fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut request = parse_input(&json!({"authorized":true,"media":{"path":media_path,"receipt_path":receipt_path},"player":"mpv"}).to_string()).unwrap();
+        let media = prepare_media(&request).unwrap();
+        assert_eq!(
+            bind_media_receipt(&request, &media).unwrap(),
+            "local_receipt_match"
+        );
+        request.media.receipt_path = None;
+        assert_eq!(
+            bind_media_receipt(&request, &media).unwrap(),
+            "operator_asserted"
+        );
+        let other = second.join(&receipt_name);
+        fs::copy(&receipt_path, &other).unwrap();
+        request.media.receipt_path = Some(other.to_str().unwrap().to_owned());
+        assert!(bind_media_receipt(&request, &media).is_err());
+        let moved = root.0.join("moved");
+        fs::rename(&first, &moved).unwrap();
+        fs::create_dir(&first).unwrap();
+        let replaced = first.join(&receipt_name);
+        fs::copy(moved.join(&receipt_name), &replaced).unwrap();
+        request.media.receipt_path = Some(replaced.to_str().unwrap().to_owned());
+        assert!(bind_media_receipt(&request, &media).is_err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Read-only, operator-authorized lookup over a Life-compatible local catalog.
 //! This module does not retrieve media objects or authenticate to any service.
 mod catalog;
+pub mod live;
 pub mod media;
 mod model;
 mod provenance;

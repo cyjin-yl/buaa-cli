@@ -1,6 +1,7 @@
 //! Explicit native classroom subtitle selection, with separate supplied and
 //! fixed-origin governed HTTP originals. Neither path fetches recording media.
 use super::digest;
+use crate::governor;
 use crate::net::{
     CLASSROOM_ORIGIN, CLASSROOM_TRANSCRIPT_PATH, CacheMode, CacheStatus, ClassroomClient, Error,
     Response,
@@ -10,7 +11,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
+use std::ffi::CString;
 use std::io::{self, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -55,6 +61,32 @@ struct NativeData<'a> {
     code: i64,
     #[serde(borrow, default)]
     list: Option<&'a RawValue>,
+    #[serde(default)]
+    total: Option<i64>,
+    #[serde(borrow, default)]
+    msg: Option<Cow<'a, str>>,
+}
+
+/// The upstream business code that reports a lesson without a native
+/// transcript, together with its own `total:0` and empty list. It is an
+/// observed application reply, not an authentication refusal, and it is only
+/// admitted when the reply itself says there is no data.
+const NO_NATIVE_TRACK_CODE: i64 = 10002;
+
+/// Whether the reply states that the lesson carries no native transcript.
+/// The code, the zero total and the literal empty list must all agree, so an
+/// unrelated failure is never reported as an empty lesson.
+fn reports_no_native_track(data: &NativeData<'_>) -> bool {
+    data.code == NO_NATIVE_TRACK_CODE
+        && data.total == Some(0)
+        && data.msg.as_deref() == Some("未查询到语音数据")
+        // The source must literally supply an empty array, not an object that
+        // a lenient decoder could reinterpret as one. Deserialize to a real
+        // sequence type so an object member cannot masquerade as an empty
+        // list, even when raw-value decoding is enabled.
+        && data.list.is_some_and(|list| {
+            serde_json::from_str::<[serde::de::IgnoredAny; 0]>(list.get()).is_ok()
+        })
 }
 
 #[derive(Deserialize)]
@@ -249,6 +281,205 @@ pub fn export_vtt(segments: &Value) -> Result<String, Error> {
     crate::recordings::subtitle_export::vtt(segments)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportInput {
+    #[serde(default)]
+    authorized: bool,
+    format: String,
+    output: String,
+    segments: Value,
+}
+
+static EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct ExportStaging<'a> {
+    directory: &'a std::fs::File,
+    name: CString,
+    file: std::fs::File,
+    id: (u64, u64),
+}
+
+impl Drop for ExportStaging<'_> {
+    fn drop(&mut self) {
+        if export_name_is_ours(self.directory, &self.name, self.id) {
+            // SAFETY: this pinned directory/name still identify our inode.
+            unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) };
+        }
+    }
+}
+
+fn create_export_staging<'a>(
+    directory: &'a std::fs::File,
+    destination: &str,
+) -> Result<ExportStaging<'a>, Error> {
+    for _ in 0..128 {
+        let name = format!(
+            ".subtitle-export-{}-{}.part",
+            std::process::id(),
+            EXPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        if name == destination {
+            continue;
+        }
+        let file = match governor::open_child(
+            directory,
+            &name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                return Err(Error::new(
+                    "unavailable",
+                    "Cannot create subtitle staging file.",
+                ));
+            }
+        };
+        let metadata = file
+            .metadata()
+            .map_err(|_| Error::new("unavailable", "Cannot inspect subtitle staging file."))?;
+        return Ok(ExportStaging {
+            directory,
+            name: CString::new(name).map_err(|_| invalid())?,
+            file,
+            id: (metadata.dev(), metadata.ino()),
+        });
+    }
+    Err(Error::new(
+        "unavailable",
+        "Cannot create subtitle staging file.",
+    ))
+}
+
+/// Write a caller-authorized derived subtitle file, without fetching a source.
+pub fn export(input: &str) -> Result<Value, Error> {
+    if input.len() > 8 * 1024 * 1024 {
+        return Err(invalid());
+    }
+    let request: ExportInput = serde_json::from_str(input).map_err(|_| invalid())?;
+    if !request.authorized {
+        return Err(Error::new(
+            "permission",
+            "Explicit authorization for the supplied subtitles is required.",
+        ));
+    }
+    let path = Path::new(&request.output);
+    if request.output.len() > 4096 || request.output.contains('\0') || !path.is_absolute() {
+        return Err(invalid());
+    }
+    let parent = path.parent().ok_or_else(invalid)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    let name_c = CString::new(name).map_err(|_| invalid())?;
+    if request
+        .segments
+        .as_array()
+        .is_none_or(|segments| segments.is_empty())
+    {
+        return Err(invalid());
+    }
+    let body = match request.format.as_str() {
+        "srt" => export_srt(&request.segments)?,
+        "vtt" => export_vtt(&request.segments)?,
+        _ => return Err(invalid()),
+    };
+    let directory = governor::open_directory(parent, false, true).map_err(|_| {
+        Error::new("permission", "Output parent must be an existing owner-controlled 0700 directory without symlink components.")
+    })?;
+    let mut staging = create_export_staging(&directory, name)?;
+    // SAFETY: staging.file is our exclusively created live descriptor.
+    if unsafe { libc::fchmod(staging.file.as_raw_fd(), 0o600) } != 0 {
+        return Err(Error::new("unavailable", "Cannot secure subtitle output."));
+    }
+    governor::validate_private_file(&staging.file).map_err(|_| {
+        Error::new(
+            "permission",
+            "Subtitle output is not a private regular file.",
+        )
+    })?;
+    staging
+        .file
+        .write_all(body.as_bytes())
+        .map_err(|_| Error::new("unavailable", "Cannot write subtitle output."))?;
+    staging
+        .file
+        .sync_all()
+        .map_err(|_| Error::new("unavailable", "Cannot synchronize subtitle output."))?;
+    governor::validate_private_file(&staging.file).map_err(|_| {
+        Error::new(
+            "permission",
+            "Subtitle output is not a private regular file.",
+        )
+    })?;
+    if !export_name_is_ours(&directory, &staging.name, staging.id) {
+        return Err(Error::new(
+            "conflict",
+            "Subtitle staging file changed during writing.",
+        ));
+    }
+    // SAFETY: both names are single components in the same pinned directory.
+    // RENAME_NOREPLACE atomically publishes only if the destination is absent.
+    if unsafe {
+        libc::renameat2(
+            directory.as_raw_fd(),
+            staging.name.as_ptr(),
+            directory.as_raw_fd(),
+            name_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } != 0
+    {
+        return Err(
+            if io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
+                Error::new("conflict", "Subtitle output already exists.")
+            } else {
+                Error::new("unavailable", "Cannot publish subtitle output atomically.")
+            },
+        );
+    }
+    let result = if !export_name_is_ours(&directory, &name_c, staging.id) {
+        Err(Error::new(
+            "conflict",
+            "Subtitle output changed during publication.",
+        ))
+    } else {
+        directory
+            .sync_all()
+            .map_err(|_| Error::new("unavailable", "Cannot synchronize subtitle directory."))
+    };
+    if result.is_err() && export_name_is_ours(&directory, &name_c, staging.id) {
+        // SAFETY: the final name still identifies the inode we published.
+        unsafe { libc::unlinkat(directory.as_raw_fd(), name_c.as_ptr(), 0) };
+    }
+    result?;
+    Ok(
+        json!({"schema_version":1,"type":"recording_subtitle_export","result":"written_new_file",
+        "format":request.format,"bytes":body.len(),"sha256":digest(body.as_bytes()),
+        "derivation":"derived-from-caller-supplied-segments","source_verified":false,
+        "rights_verified":false,"native_track_association_verified":false,"network_access":false}),
+    )
+}
+
+fn export_name_is_ours(directory: &std::fs::File, name: &CString, id: (u64, u64)) -> bool {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: name and directory are live; successful fstatat initializes stat.
+    unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        ) == 0
+            && {
+                let stat = stat.assume_init();
+                (stat.st_dev, stat.st_ino) == id
+            }
+    }
+}
+
 fn rejected_session() -> Error {
     Error::new(
         "auth_latched",
@@ -256,10 +487,41 @@ fn rejected_session() -> Error {
     )
 }
 
+/// Preserve typed duplicate-field rejection without accepting Serde's
+/// positional-array representation of a struct as an HTTP object envelope.
+fn native_http_data(body: &[u8]) -> Result<NativeData<'_>, Error> {
+    struct ObjectOnly;
+
+    impl<'de> serde::de::Visitor<'de> for ObjectOnly {
+        type Value = NativeData<'de>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an object-shaped native subtitle response")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+            NativeData::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    let data = serde::Deserializer::deserialize_map(&mut deserializer, ObjectOnly)
+        .map_err(|_| rejected_session())?;
+    deserializer.end().map_err(|_| rejected_session())?;
+    Ok(data)
+}
+
 /// A fresh body can be an expired-session reply even when an immutable original
 /// exists. Admit its application status before comparing or retaining old bytes.
 pub(crate) fn validate_http_application(body: &[u8]) -> Result<(), Error> {
-    let data: NativeData<'_> = serde_json::from_slice(body).map_err(|_| rejected_session())?;
+    let data = native_http_data(body)?;
+    if reports_no_native_track(&data) {
+        // A lesson without a native transcript is an observed application
+        // fact, not a rejected session: let the response reach the selection
+        // layer, which publishes it as `no_native_track` rather than latching
+        // the session. Any other non-zero code still refuses here.
+        return Ok(());
+    }
     if data.code != 0 {
         return Err(rejected_session());
     }
@@ -303,8 +565,38 @@ pub(crate) fn process_http(
         response.headers.get("content-type").map(String::as_str),
         response.body.len(),
     )?;
-    let data: NativeData<'_> =
-        serde_json::from_slice(&response.body).map_err(|_| rejected_session())?;
+    let data = native_http_data(&response.body)?;
+    if reports_no_native_track(&data) {
+        // The application itself reported that this lesson carries no native
+        // transcript. That is a business fact about the lesson, not a
+        // rejected session, so it is published as such with the observed
+        // response provenance.
+        let content_type = response
+            .headers
+            .get("content-type")
+            .map(String::as_str)
+            .unwrap_or("");
+        let fetched = response.cache_status != CacheStatus::Hit;
+        let body_fetched = fetched && response.revalidation_status != Some(304);
+        return Ok(Ok(json!({
+            "schema_version":1,"type":"recording_subtitles","result":"no_native_track",
+            "authorization":{"basis":"operator_attestation","media_rights_verified":false},
+            "selection":selection,
+            "original":{"sha256":response.sha256,"bytes":response.body.len(),"hash_scope":"entire_http_response_body","storage":"private_immutable_byte_cache"},
+            // No native track was returned, so no caller-supplied resource
+            // identifier can be matched against an upstream track. Preserve
+            // the requested selection, but report the unobserved status
+            // rather than claiming a native declaration.
+            "provenance":{"status":"governed_read","format":"classroom-native-v1","capture_timestamp":null,"media_bytes_verified":false,"resource_guid_status":"no_native_track_observed"},
+            "derivation":{"sha256":null,"hash_scope":null,"time_conversion":"exact_integer_seconds_to_milliseconds","text_normalization":"none"},
+            "segments":[],
+            "upstream":{"code":data.code,"total":data.total,"message":data.msg},
+            "retrieval":{"source_url":response.url,"fetched_at_unix_ms":response.fetched_at_unix_ms,"cache_status":response.cache_status,"revalidated_at_unix_ms":response.revalidated_at_unix_ms,"revalidation_status":response.revalidation_status},
+            "response":{"http_status":response.status,"content_type":content_type,"mime_label_matches_json":content_type.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json"),"envelope":"flat","admission":"response_body_shape"},
+            "completeness":{"scope":"observed_empty_native_transcript_response","complete_history":false,"source_order_preserved":true,"unsegmented_trans_content_used":false},
+            "network_access":fetched,"source_objects_fetched":body_fetched,"source_object_scope":"native_subtitle_response_only_not_recording_media","catalog_modified":false,
+        })));
+    }
     if data.code != 0 {
         return Err(rejected_session());
     }
@@ -396,14 +688,52 @@ pub fn online(mode: CacheMode, input: &str) -> Result<Value, Error> {
 pub fn online_schema() -> Value {
     let offline = schema();
     let mut output = offline["output"].clone();
-    output["properties"]["result"] = json!({"const":"selected_track_observed"});
+    output["properties"]["result"] = json!({"enum":["selected_track_observed","no_native_track"]});
+    // A lesson without a native transcript is an observed application fact.
+    // The two output variants are described separately, because an observed
+    // track has nonempty object cues and a compact digest, while an empty
+    // lesson has no cues and no digest at all.
+    let track_segments = output["properties"]["segments"].clone();
+    let track_derivation = output["properties"]["derivation"].clone();
+    output["properties"]["segments"] = json!({"type":"array","maxItems":MAX_SEGMENTS});
+    output["properties"]["derivation"] = json!({
+        "type":"object","required":["sha256","hash_scope","time_conversion","text_normalization"]
+    });
+    let empty_segments = json!({"type":"array","maxItems":0});
+    let empty_derivation = json!({
+        "type":"object","required":["sha256","hash_scope","time_conversion","text_normalization"],"properties":{
+            "sha256":{"type":"null"},"hash_scope":{"type":"null"},
+            "time_conversion":track_derivation["properties"]["time_conversion"].clone(),
+            "text_normalization":track_derivation["properties"]["text_normalization"].clone()
+        }
+    });
+    output["oneOf"] = json!([
+        {"properties":{
+            "result":{"const":"selected_track_observed"},
+            "segments":track_segments,
+            "derivation":track_derivation,
+            "provenance":{"properties":{"resource_guid_status":{"enum":["absent_in_native_track","native_declared_not_media_verified"]}}},
+            "completeness":{"properties":{"scope":{"const":"selected_track_in_observed_response"}}},
+        }},
+        {"required":["upstream"],"properties":{
+            "result":{"const":"no_native_track"},
+            "segments":empty_segments,
+            "derivation":empty_derivation,
+            "upstream":{"properties":{"code":{"const":NO_NATIVE_TRACK_CODE},"total":{"const":0},"message":{"const":"未查询到语音数据"}}},
+            "provenance":{"properties":{"resource_guid_status":{"const":"no_native_track_observed"}}},
+            "completeness":{"properties":{"scope":{"const":"observed_empty_native_transcript_response"}}},
+        }}
+    ]);
+    output["properties"]["upstream"] = json!({"type":"object","required":["code","total","message"],"properties":{
+        "code":{"type":"integer"},"total":{"type":["integer","null"]},"message":{"type":["string","null"]}
+    }});
     output["properties"]["original"]["properties"]["hash_scope"] =
         json!({"const":"entire_http_response_body"});
     output["properties"]["original"]["properties"]["storage"] =
         json!({"const":"private_immutable_byte_cache"});
     output["properties"]["provenance"]["properties"]["status"] = json!({"const":"governed_read"});
-    output["properties"]["completeness"]["properties"]["scope"] =
-        json!({"const":"selected_track_in_observed_response"});
+    output["properties"]["provenance"]["properties"]["resource_guid_status"] = json!({"enum":["absent_in_native_track","native_declared_not_media_verified","no_native_track_observed"]});
+    output["properties"]["completeness"]["properties"]["scope"] = json!({"enum":["selected_track_in_observed_response","observed_empty_native_transcript_response"]});
     output["properties"]["network_access"] = json!({"type":"boolean"});
     output["properties"]["source_objects_fetched"] = json!({"type":"boolean"});
     output["properties"]["source_object_scope"] =
@@ -438,6 +768,18 @@ pub fn schema() -> Value {
     let id = json!({"type":"string","minLength":1,"maxLength":MAX_ID,"description":"Exact native identifier; UTF-8 byte bound applies, no control characters."});
     let resource_id = json!({"type":"string","maxLength":MAX_ID,"description":"Exact native resource_guid, including an empty string when the original track has no resource link; never inferred from another response. UTF-8 byte bound applies, no control characters."});
     json!({
+        "export":{
+            "command":"recordings subtitles export",
+            "input":{"type":"object","additionalProperties":false,"required":["authorized","format","output","segments"],"properties":{
+                "authorized":{"const":true,"description":"Caller attests authorization; rights are not verified."},
+                "format":{"enum":["srt","vtt"]},
+                "output":{"type":"string","minLength":2,"maxLength":4096,"pattern":"^/","description":"New file in an existing owner-controlled 0700 directory with no symlink path components."},
+                "segments":{"type":"array","minItems":1,"maxItems":MAX_SEGMENTS,"items":{"type":"object","required":["start_ms","end_ms","text"],"properties":{"start_ms":{"type":"integer","minimum":0},"end_ms":{"type":"integer","minimum":0},"text":{"type":"string","description":"Nonempty representable text, bounded to 8192 UTF-8 bytes; markup and control syntax are rejected."}}},"description":"Caller-supplied normalized cues; end must exceed start. Translation and other fields are not rendered."}
+            }},
+            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","format","bytes","sha256","derivation","source_verified","rights_verified","native_track_association_verified","network_access"],"properties":{
+                "schema_version":{"const":1},"type":{"const":"recording_subtitle_export"},"result":{"const":"written_new_file"},"format":{"enum":["srt","vtt"]},"bytes":{"type":"integer","minimum":1,"maximum":16777216},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"derivation":{"const":"derived-from-caller-supplied-segments"},"source_verified":{"const":false},"rights_verified":{"const":false},"native_track_association_verified":{"const":false},"network_access":{"const":false}
+            }},"stdin_max_bytes":8388608
+        },
         "input":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,
             "required":["authorized","format","body_base64","source_sha256","selection"],
             "properties":{
@@ -690,6 +1032,145 @@ mod tests {
             json!([{
                 "source_order":1,"start_ms":2000,"end_ms":3000,"text":"x","translation":""
             }])
+        );
+    }
+
+    #[test]
+    fn a_lesson_without_a_native_transcript_is_not_a_rejected_session() {
+        let body = r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":[]}"#
+            .as_bytes()
+            .to_vec();
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        let response = crate::net::Response {
+            url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+            status: 200,
+            headers,
+            sha256: digest(&body),
+            body,
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let output = process_http(&response, "42", "")
+            .expect("outer")
+            .expect("observed lesson fact");
+        assert_eq!(output["result"], "no_native_track");
+        assert_eq!(output["upstream"]["code"], 10002);
+        assert_eq!(output["upstream"]["total"], 0);
+        assert_eq!(output["segments"], json!([]));
+        assert_eq!(output["response"]["http_status"], 200);
+        validate_http_application(&response.body).unwrap();
+    }
+
+    #[test]
+    fn an_unrelated_failure_code_still_refuses_the_session() {
+        // Only the reply that itself states an empty lesson is admitted as
+        // an observed fact. Any other non-zero code stays fail-closed.
+        for body in [
+            r#"{"code":10002,"msg":"未查询到语音数据","total":5,"list":[]}"#.as_bytes(),
+            r#"{"code":10002,"msg":"未查询到语音数据","total":0}"#.as_bytes(),
+            r#"{"code":50000,"msg":"未查询到语音数据","total":0,"list":[]}"#.as_bytes(),
+            br#"{"code":10002,"msg":"session expired","total":0,"list":[]}"#.as_slice(),
+            r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":[{}]}"#.as_bytes(),
+        ] {
+            let mut headers = BTreeMap::new();
+            headers.insert("content-type".to_string(), "application/json".to_string());
+            let response = crate::net::Response {
+                url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+                status: 200,
+                headers,
+                sha256: digest(body),
+                body: body.to_vec(),
+                fetched_at_unix_ms: 1,
+                cache_status: crate::net::CacheStatus::Miss,
+                revalidated_at_unix_ms: None,
+                revalidation_status: None,
+            };
+            let error = process_http(&response, "42", "")
+                .expect_err("a refused session is the outer error");
+            assert_eq!(error.code, "auth_latched");
+            assert!(validate_http_application(&response.body).is_err());
+        }
+    }
+
+    #[test]
+    fn an_object_shaped_list_is_not_an_empty_lesson() {
+        // A lenient raw-value decoder could read an object member as a JSON
+        // array. The no-track predicate must only admit a literal empty
+        // array, so this stays a refused session.
+        let body = r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":{"$serde_json::private::RawValue":"[]"}}"#.as_bytes();
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        let response = crate::net::Response {
+            url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+            status: 200,
+            headers,
+            sha256: digest(body),
+            body: body.to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let error = process_http(&response, "42", "")
+            .expect_err("an object-shaped list is not an empty lesson");
+        assert_eq!(error.code, "auth_latched");
+    }
+
+    #[test]
+    fn native_http_envelopes_reject_arrays_duplicates_and_trailing_documents() {
+        for body in [
+            r#"[10002,[],0,"未查询到语音数据"]"#.as_bytes(),
+            br#"[0,[]]"#.as_slice(),
+            r#"{"code":-1,"code":10002,"list":[],"total":0,"msg":"未查询到语音数据"}"#.as_bytes(),
+            r#"{"code":10002,"list":[],"total":0,"msg":"未查询到语音数据"}{}"#.as_bytes(),
+        ] {
+            let response = crate::net::Response {
+                url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+                status: 200,
+                headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+                sha256: digest(body),
+                body: body.to_vec(),
+                fetched_at_unix_ms: 1,
+                cache_status: crate::net::CacheStatus::Hit,
+                revalidated_at_unix_ms: None,
+                revalidation_status: None,
+            };
+            assert_eq!(
+                validate_http_application(body).unwrap_err().code,
+                "auth_latched"
+            );
+            assert_eq!(
+                process_http(&response, "42", "").unwrap_err().code,
+                "auth_latched"
+            );
+        }
+    }
+
+    #[test]
+    fn a_caller_supplied_guid_is_not_promoted_to_a_native_declaration() {
+        let body = r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":[]}"#.as_bytes();
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        let response = crate::net::Response {
+            url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+            status: 200,
+            headers,
+            sha256: digest(body),
+            body: body.to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let output = process_http(&response, "42", "caller-supplied-guid")
+            .expect("outer")
+            .expect("observed lesson fact");
+        assert_eq!(
+            output["provenance"]["resource_guid_status"],
+            "no_native_track_observed"
         );
     }
 }

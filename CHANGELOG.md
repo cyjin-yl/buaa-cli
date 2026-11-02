@@ -2,6 +2,269 @@
 
 ## Unreleased
 
+- Separate historical IEAS preview/list from the modern yjsxk existing-session
+  selected-record reader. Keep native source roles and unknown account,
+  completeness and postcondition facts explicit; no login or academic write.
+  Retire the synthetic IEAS postcondition emitter and refuse verification
+  before transport while its authoritative contract is missing.
+- Add fixed-primary Gitea contribution discovery with provider-specific stdin
+  credentials, native empty-terminal pagination, single-fetch comments and
+  conservative reconciliation of every linked-PR signal. Screen reversible
+  token and complete Authorization-header echoes before projection.
+- Bind Aerospace retrieval to two individually reviewed immutable README and
+  LICENSE objects. Keep every other entry excluded, reject duplicate practice
+  attestations at every JSON depth, and never label a rejected blob verified.
+- Retain issued-cookie privacy guards across fresh and cached iHome pages.
+  Bounded nested-document inspection refuses exhaustion without losing
+  independently observed authentication, challenge or cooldown facts.
+- Admit the native transcript no-data response only under its exact reviewed
+  object envelope; positional arrays, duplicate fields and trailing documents
+  refuse. Publish disjoint normal-track and no-data output schemas without
+  promoting the caller's requested GUID into an upstream declaration.
+- Remove obsolete default-off directory/viewer proof features and examples
+  after their production cutover; retain unconditional admission fixes and
+  permanent test-only isolation and transport seams.
+- Preserve exact Git-valid control-bearing source names in department metadata
+  under unchanged recursive object proof. Keep operator retrieval paths strict;
+  one source name outside that input policy no longer degrades the whole tree.
+- Resolve department branches through their commit's tree declaration before
+  requesting the immutable recursive tree; keep strict root/subtree proof and
+  separate untouched historical originals. Admit only exact root public-account
+  member positions in object-shaped commit responses; other credentials and
+  non-Commit surfaces remain strict. Preserve originating Surface through
+  shared learning/Aerospace degraded inventory, search and fetch evidence.
+  Native proof covers all nine fixed inventories and selected MIT maintainer
+  documentation, with independent whole-original/cache/schema checks and the
+  full offline suite. Other material permissions are not granted.
+- Preserve iHome landing-page challenge-control cues independently of the first
+  form diagnostic, so an unrelated quirk cannot mask a later OTP/label cue.
+  Refuse unreviewed cues without claiming a confirmed CAPTCHA; leave other CAS
+  landing policies unchanged. Limit the missing-MIME empty-body exception to
+  ASCII whitespace. Seven native strict-TLS synthetic cases preserve both
+  refusal-before-business-read and normal reviewed-HTML/control behavior.
+- Review every followed iHome authentication redirect body before another hop
+  or terminal token consumption. Refuse nonempty bodies without reviewed HTML
+  MIME; preserve empty/ASCII-whitespace redirects, header/deferral precedence
+  and other CAS profiles. Strict-TLS regression and six native synthetic
+  scenarios cover challenge stops, unconfirmed MIME and one-read controls.
+- Accept Boya ciphertext wrapped in a JSON string as well as raw base64.
+  Unwrap only the quoted form into zeroizing storage; retain original wire
+  bytes, length and digest for safe fallback, with existing privacy checks.
+  Offline/native proof does not establish current campus compatibility.
+- Add `ihome session [--online]`: one explicitly authorized, in-memory CAS
+  login followed by one list page or detail under the existing Authentication
+  lease. Validate typed intent and read before I/O; narrowly upgrade only the
+  reviewed callback to HTTPS and consume the terminal fragment without fetching
+  it. No persistence, session cache, refresh, retry or business mutation.
+  Withhold final credential echoes, including username/password, current and
+  retired cookies, complete authentication Cookie headers and MIME parameters.
+  Retain headers in bounded, invocation-only zeroizing storage without copying
+  the selected snapshot; exhaustion refuses before sending. Decode UTF-16
+  surrogate pairs during original-response screening. Publish independently
+  valid session/run output schemas instead of unresolved external references.
+  Strict-TLS regressions, direct native/schema proof and the full offline suite
+  passed; current transport preflight failed before TLS/HTTP, so no real
+  credentials were submitted and campus compatibility remains unverified.
+- Preserve iHome records without inventing titles. Require the source-shaped
+  positive business envelope (`code=20000`, `success=true`) for list/detail;
+  negative or unknown envelopes retain safe original evidence instead of
+  becoming empty results. Existing authentication/challenge/echo refusals keep
+  precedence, and missing required collections do not become empty arrays.
+- Bind iHome traversal to declared page/count/total/last-page facts. Lazy page
+  acquisition stops on anomalies, duplicate IDs, changing totals or a declared
+  terminal page; anomalous/interrupted traversals retain valid records without
+  advancing an incremental cursor. A full final page can now be complete.
+- Correct legacy iHome token-read provenance: a caller token does not prove
+  acquisition or current lifetime. Current
+  idle-window fields are null rather than an asserted schedule, and no reviewed
+  modern attachment-download contract or complete attachment inventory is
+  claimed. Remove the obsolete local-hour output and clock helpers. Synthetic
+  offline/native proof does not establish current campus compatibility.
+- Add `smart session [--online]`: one explicitly authorized, in-memory CAS
+  login for classrooms or library followed by one selected read, under the
+  existing Authentication lease. Validate intent/query before opening I/O;
+  never persist, refresh or retry authentication. Remove the obsolete
+  caller-supplied library CAS login while retaining ordinary cookie/token reads.
+- Confine each CAS profile to its reviewed origins and password target;
+  consume the library's terminal CAS once without requesting its credential URL.
+  Refuse 307/308 credential replay, stop on header/body challenges or deferral,
+  and distinguish unconfirmed protocol responses from credential rejection.
+  Retain pending outcomes when safety-state persistence fails.
+- Screen final Smart output against the password, issued token/CAS, complete
+  transmitted cookie header, and current/retired cookies of every scope.
+  Cookie-history exhaustion stops the flow instead of forgetting a credential.
+  Enforce object-only session input at envelope/read/query boundaries. Strict-TLS
+  loopback and native CLI proof passed; campus compatibility remains unverified.
+- Resolve each learning-material branch through its commit's tree declaration,
+  then request and verify the immutable recursive tree. Preserve strict root
+  and subtree Git-object checks, reject a different valid tree substituted for
+  the requested object, and retain malformed commit declarations as safe
+  degraded evidence without following response-supplied URLs. Commit and tree
+  requests share the existing cache, cookie refusal and HTTP safety path.
+- Include the exact Git `mode` in learning-material inventory/search entries,
+  so a caller can construct the already-required tree/blob/mode/size-bound fetch
+  solely from the published inventory. Publish the two new resolution/binding
+  fallback reasons in the output schemas.
+- Fix WE Learn and Aerospace practice input schemas to expose the actual
+  `oneOf` request contract rather than a nested command wrapper. Remove the
+  incidental schema-shape assertions that had been changed to accept that
+  broken nesting; runtime answer-material and local-only safeguards remain.
+- Merge duplicate capability `evidence` keys so dated offline observations no
+  longer hide the earlier safety evidence and unverified limits.
+- Represent the evaluation dispatcher's Legacy command as an empty struct
+  variant, enforcing its published no-extra-fields contract instead of
+  accepting extra keys through serde's unit-variant behavior. Valid Legacy
+  requests remain unsupported; malformed requests are rejected before dispatch.
+- Admit two retained operator-asserted offline history sources in
+  `announcements history`: the literal Math HTTP root with an optional
+  `news`/`notices` root view, and the GBK-decoded legacy Materials root
+  listing and `call_board_detail` article under explicit `encoding: gb2312`.
+  Both keep original/derived bytes distinct and bind retrieval by SHA-256 of
+  the supplied bytes; a pinned `encoding_rs =0.8.35` is added for the GBK
+  decode. Admission stays literal-only: no protocol, port, path or host
+  aliases, and `root_view`/`encoding` fields are rejected for sources they do
+  not describe. No live fetch is added.
+- Harden organizations directory admission: screen sensitive markers in all
+  raw response header names and values (not only retained fields), refuse
+  marker-bearing 304s before validator mutation, and classify a fresh 200
+  that recovers over an Unknown-admission legacy entry as a new capture, not
+  a revalidation. `decode_numeric_entities` now preserves malformed and
+  invalid-scalar references literally. A temporary feature-gated synthetic
+  proof suite covering transport, persistence, admission, robots and
+  governor behavior passes 6 cases / 57 subcases offline.
+
+- Add source-bound original-PDF retrieval for Chemistry's current
+  `/xwzx/xyxw.htm` board and `/info/1013/` article contract, without reviving
+  the older undergraduate-teaching routes. Resolve only an active owned
+  viewer's literal reviewed same-host PDF URL, not derived preview names.
+  Keep directory/root/listing/article discovery cache-first and refresh only
+  the selected immutable document; admit fresh PDF MIME before cache equality.
+  Return original bytes, hashes and separate provenance, not extracted text,
+  publisher-signature or document-safety certification. SCSE retains its
+  existing input shape and PDF framing policy; SEPE documents are not added.
+  These changes have no new live-service acceptance claim.
+- Document the write-capable, repository-scoped Gitea deploy key, the lack of
+  server-side `main` protection, and the untested downstream `main` update.
+- Record that restoring Git refs and importing GitHub metadata does not prove
+  recovery of any Gitea-only issues, comments or approvals from the missing
+  former repository.
+- State explicitly that all Gitea branches and tags are eligible for public
+  GitHub synchronization, including drafts, and that approvals and checks
+  belong to the host on which they were recorded.
+- Restore the private Gitea repository as the development primary, retain its
+  previous backups and frozen refs, and keep GitHub as a checked non-force
+  downstream. One manual run of the existing daily synchronization succeeded;
+  the next scheduled run has not yet been observed.
+- Require the offline CI image's UID1000 passwd home to match the canonical
+  `/home/ezra` Cargo-lock directory before admitting a build. A mounted file
+  at that path alone does not establish which lock the wrapper will acquire.
+- Keep the shared HTML challenge assessment honest about truncated sources. A
+  retained prefix that cannot show the document-wide stylesheet or charset
+  context no longer confirms a challenge control; the whole body is scanned
+  once for those facts, with an unclosed tag or an unresolved character
+  reference keeping the uncertainty. The scan is linear, so a body that
+  repeats one attribute name cannot stall request settlement.
+- For the nine fixed-credential readers that do not maintain a cookie jar,
+  withhold content from responses with any `Set-Cookie` header rather than
+  guessing whether an opaque value is a session credential. This conservative
+  rule also refuses benign preference-cookie responses; it does not adopt or
+  refresh the cookie, retry, or classify its issuance as a challenge. iHome
+  never caches a new refused body; historical entries without retained cookie
+  headers cannot be independently classified by this change.
+- Extend submitted-credential echo checks to standard and URL-safe base64,
+  padded or unpadded, and to decoded percent/form fields. These checks are not
+  a claim to recognize every possible transformation of a credential.
+- Retain each affected request's shared lease through response admission and
+  settle it once afterward, preserving independently observed denial,
+  challenge, cooldown and body-failure facts. Some focused synthetic consumers
+  passed; comprehensive proof across all affected readers remains pending.
+- Preserve literal JSON safety facts in iHome, refuse Smart's reserved raw-value
+  marker before generic JSON projection, and retain electricity source scalar
+  types instead of treating marker objects as numbers or identifiers.
+- Require an enrol Session to distinguish absent, present and unknown cookie
+  issuance and credential-echo facts before admitting network output. A
+  synthetic Session is not proof that a production transport checks them.
+- Keep learning-material cache entries that predate cookie admission as
+  unreviewed originals instead of replaying or automatically refetching them.
+  Atomic cache publication and collision-safe rejected evidence passed focused
+  synthetic regressions and scoped source review; fsync-failure behavior was
+  not exercised.
+- Treat a literal Boya `token: null` as an empty response field rather than an
+  issued credential; keep non-null tokens and other credential fields withheld.
+  Focused synthetic encrypted-response regressions passed.
+- Refuse submitted evaluation-cookie values rendered as JSON numbers and
+  shuttle CSRF values encoded in visible text; keep ordinary synthetic
+  responses available. Decode whole mixed-encoding candidates before form
+  field splitting, retaining literal separators and plus-sign interpretations.
+  Focused post-fix synthetic regressions passed; the mixed-separator pre-fix
+  run was blocked by the shared heavy-work slot.
+- Withhold submitted credentials that reappear after Boya decryption or JSON
+  scalar normalization in Checkin, Drive and Smart. Preserve missing-versus-null
+  source fields and independent refusal metadata; avoid re-encoding credentials
+  that cannot fit in a numeric value. Synthetic regressions passed; these are
+  not authenticated service observations.
+- For physical-experiment replay, use bounded native-parser provenance before
+  admitting originals where consumed character references could split private
+  vocabulary. Inspect tokens that the tree builder discards, withhold unreviewed
+  nested `srcdoc`, and enforce work limits before the first DOM parse. Ambiguous
+  provenance or exhausted bounds withhold evidence; offline replay does not
+  verify an enrollment.
+
+- Treat an explicit ihome authentication refusal as a refusal rather than an
+  empty listing, and latch it on the original lease. A body that echoes the
+  submitted bearer token is refused, withheld and never cached, while an
+  independently observed cached HTTP rejection still latches. A refusal is
+  recognised only when the message is the refusal itself, so an ordinary
+  business sentence that mentions one no longer disarms the account.
+- Keep the physics experiment admission from inventing privacy facts: only
+  real character references are stripped, a seat count separated from its
+  continuation by replaced-widget text stays refused, a trailing media-type
+  separator without a parameter is invalid, and a confirmed sensitive control
+  keeps its own reason beside unrelated fallback text.
+- The candidate lock file lists reqwest's rustls dependencies and OpenSSL. An
+  earlier source snapshot passed a locked offline build; later source changes
+  still require their own verification.
+
+- Clarify that the classroom callback HTTP 500, ticket lifetime and playback
+  authorization remain unresolved. Withdraw an unverified change that lowered
+  configured governor intervals inside the authentication redirect chain and
+  broadened sign-on cookie delivery; retain the existing account-safety rules.
+
+- Archive bounded CAS login and guard observations separately from hypotheses.
+  Preserve the observed parent-form/visible-frame roles and six-field request
+  order, but do not infer ticket expiration or a password verdict from HTTP
+  500. Document the observer's missing timestamps, incomplete request coverage
+  and lack of a validated CLI selected-lesson session. Record safe capture
+  boundaries without publishing authentication bodies or session material.
+- Clarify that the classroom callback HTTP 500 and the deployed ticket
+  lifetime remain unresolved. Later ad hoc observations did not use the
+  shared governor or isolate one candidate factor, so their redirects and
+  errors do not establish the cause of the CLI failure.
+- Correct the gateway usage record: one authorized, governed read-only
+  observation succeeded on 2026-10-21 without sending credentials. Login,
+  logout and the account-specific AC identity remain unverified.
+- Add offline `recordings subtitles export` for caller-authorized normalized
+  cues. Write a new private SRT/WebVTT file atomically without replacing an
+  existing target; keep source, rights and native-track association unverified.
+- Move the build and test lane to the internal Gitea instance and stop
+  running CI on GitHub. The installed `gitea-primary` operator took the
+  repository over as a native one with the supported migration path and
+  retained the previous pull mirror as a timestamped backup instead of
+  deleting it; the repository is registered for the non-force per-ref
+  fast-forward sync. The lane stays manual and admitted by exact source SHA,
+  keeps the canonical global build gate and one compiler job, and builds from
+  a source tree the operator prepared in its protected context: the
+  credential helper reads the credential file locally rather than brokering
+  it, so the build job never runs it and never mounts a credential. The lane
+  uses Cargo's offline mode rather than claiming kernel-level network
+  isolation. No successful internal CI run is claimed.
+- Replace the canonical crates.io registry with a mainland mirror that the
+  build network can actually reach. Declaring the mirror under a separate
+  source name left the lock file resolving against the upstream registry
+  that does not answer here, and the offline resolution failed even though
+  the mirror namespace already held every locked archive. With the canonical
+  source replaced, the locked set resolves offline from the existing cache
+  without downloading a byte.
 - Record the merged exact-head safety/CLI verification separately from the
   single governed classroom CAS callback 500. Authentication and
   dependent online acceptance remain incomplete; retain the consumed arm,
@@ -210,6 +473,11 @@
   account-safety state.
 - Explicitly release governor flock leases in the acquiring process so inherited descriptors cannot extend completed operations; retain request-body/persistence lifetime, latches, pacing and unknown-outcome barriers. Isolate the sandbox regression through exec and add an inherited-descriptor/policy regression. Record the default-parallel offline gate and authorized original-runtime boot migration without resetting account history or granting authentication.
 - Revalidate the current native subtitle importer against all 2,455 cues of a retained authorized original and its independent pre-implementation oracle. Preserve missing media identity and separate this offline whole-track proof from fresh service access. Record the bounded full-window VLC glyph observation and its inconclusive paused-toggle control; local replay delivery is no longer described as unimplemented.
+- Allow local replay to compare the opened media's length and SHA-256 against
+  an adjacent private acquisition receipt before player launch. Reject
+  receipt-bound media already hard-linked at admission before reading it and
+  refuse mismatched receipts without falling back; a local receipt does not
+  authenticate the remote source, rights or media immutability.
 - Add bounded local `recordings replay` for installed mpv/VLC with explicit authorization, initial seek, subtitle selection and controlled child exit. Normal A/V output is the default; headless outputs are explicit. Add strict SRT/WebVTT export without changing native subtitle JSON/digest semantics. Receipts distinguish submission, observed process exit and unverified rendering; remote media/live streams remain unsupported.
 - Correct online evidence: missing local governor directories do not prove historical nonexistence or cross-runtime continuity. Exclude account network identifiers and response digests from the current public manifest without claiming historical erasure.
 - Harden the shared public HTML fallback boundary with admitted UTF-8/status/MIME/size/base checks and structural DOM attribute admission for authentication, password, CSRF, CAPTCHA and challenge pages; BME, FLD and HSS selector fallbacks now require that admission while source-admission and article-binding errors stay outside raw serialization. HSS preview metadata is lexically bounded and cannot authorize an embedded document, while HSS page selection requires explicit source ordinals and retains admitted listing bytes across downstream ordinal failures. Native build/tests, cache-only proof and online verification remain pending.

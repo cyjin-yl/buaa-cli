@@ -4,7 +4,7 @@
 //! uses only a separate HTTPS candidate for transport, binds the
 //! source-declared notice board, and only follows article URLs present in the
 //! selected board snapshot.
-use super::scse::viewer;
+use super::viewer;
 use super::{
     ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT, article_body,
     bind_college_board, college_directory_attribution, college_html, declared_jsp_attachment_hints,

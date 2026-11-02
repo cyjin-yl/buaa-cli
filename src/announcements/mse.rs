@@ -1,10 +1,14 @@
 //! Materials college: exact HTTP directory identity, separate HTTPS observation.
 use super::{
-    ArticleDocument, ListQuery, MAX_BODY_PARAGRAPHS, MAX_ENTRIES, MAX_PARAGRAPH, MAX_TEXT,
-    advertised_page_url, article_body, article_category_from_url, article_output,
-    bind_college_board, college_directory_attribution, college_html, describe_college_surface,
-    element_text, entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
+    ArticleDocument, ListQuery, MAX_ATTACHMENT_HINTS, MAX_BODY_PARAGRAPHS, MAX_ENTRIES,
+    MAX_PARAGRAPH, MAX_TEXT, advertised_page_url, article_body, article_category_from_url,
+    article_content, article_output, bind_college_board, college_directory_attribution,
+    college_html, describe_college_surface, element_text, entry_in_scope, failed_contract,
+    inert_element, invalid_article, invalid_list, is_document_href,
     parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval, unavailable,
+};
+use crate::html::{
+    MAX_SCRIPT_BYTES, MAX_SCRIPT_DEPTH, ScriptKind, script_kind, script_quoted_end, script_trivia,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, MSE_NOTICES_URL, MSE_ROOT_URL, mse_path_allowed,
@@ -375,6 +379,504 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
     }
     Ok(output)
 }
+
+/// Offline identity only. The archived declaration includes the explicit default
+/// port, which Url normalizes away; preserve that literal spelling in provenance.
+pub(super) fn legacy_history_source(raw: &str) -> bool {
+    let Some(path) = raw
+        .strip_prefix("http://mse.buaa.edu.cn/")
+        .or_else(|| raw.strip_prefix("http://mse.buaa.edu.cn:80/"))
+    else {
+        return false;
+    };
+    legacy_notice_path(path)
+}
+
+fn legacy_notice_path(path: &str) -> bool {
+    path.strip_prefix("call_board_detail.php?call_board_id=")
+        .is_some_and(|id| (1..=10).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+pub(super) fn legacy_listing_source(raw: &str) -> bool {
+    matches!(
+        raw,
+        "http://mse.buaa.edu.cn/" | "http://mse.buaa.edu.cn:80/"
+    )
+}
+
+fn legacy_charset_declared(document: &Html) -> Result<(), Error> {
+    let metas = Selector::parse("meta[charset], meta[http-equiv]").map_err(|_| unavailable())?;
+    let mut declarations = 0;
+    for meta in document.select(&metas).filter(|node| !inert_element(*node)) {
+        let charset = meta.value().attr("charset");
+        let content_type = meta
+            .value()
+            .attr("http-equiv")
+            .is_some_and(|value| value.eq_ignore_ascii_case("content-type"));
+        let label = if let Some(label) = charset {
+            if content_type {
+                return Err(unavailable());
+            }
+            label
+        } else if content_type {
+            let (mime, parameter) = meta
+                .value()
+                .attr("content")
+                .and_then(|value| value.split_once(';'))
+                .ok_or_else(unavailable)?;
+            let (name, label) = parameter.trim().split_once('=').ok_or_else(unavailable)?;
+            if !mime.trim().eq_ignore_ascii_case("text/html")
+                || !name.trim().eq_ignore_ascii_case("charset")
+            {
+                return Err(unavailable());
+            }
+            label
+        } else {
+            continue;
+        };
+        declarations += 1;
+        if !label.trim().eq_ignore_ascii_case("gb2312") || declarations != 1 {
+            return Err(unavailable());
+        }
+    }
+    if declarations != 1 {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+fn legacy_token(script: &str, offset: &mut usize, token: &str) -> Option<()> {
+    script_trivia(script.as_bytes(), offset)?;
+    if !script.get(*offset..)?.starts_with(token) {
+        return None;
+    }
+    *offset += token.len();
+    if token
+        .as_bytes()
+        .last()
+        .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
+        && script
+            .as_bytes()
+            .get(*offset)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
+    {
+        return None;
+    }
+    Some(())
+}
+
+fn legacy_identifier<'a>(script: &'a str, offset: &mut usize) -> Option<&'a str> {
+    script_trivia(script.as_bytes(), offset)?;
+    if !script
+        .as_bytes()
+        .get(*offset)
+        .is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b'$'))
+    {
+        return None;
+    }
+    let start = *offset;
+    while script
+        .as_bytes()
+        .get(*offset)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
+    {
+        *offset += 1;
+    }
+    let identifier = &script[start..*offset];
+    (identifier.len() <= MAX_TEXT).then_some(identifier)
+}
+
+/// Only the complete observed helper shape: three distinct arguments forwarded
+/// unchanged to window.open. No execution, scope inference or general JS parser.
+fn legacy_helper_declaration(script: &str, offset: &mut usize) -> Option<()> {
+    legacy_token(script, offset, "function")?;
+    legacy_token(script, offset, "MM_openBrWindow")?;
+    legacy_token(script, offset, "(")?;
+    let url = legacy_identifier(script, offset)?;
+    legacy_token(script, offset, ",")?;
+    let name = legacy_identifier(script, offset)?;
+    legacy_token(script, offset, ",")?;
+    let features = legacy_identifier(script, offset)?;
+    if url == name
+        || url == features
+        || name == features
+        || [url, name, features].contains(&"window")
+    {
+        return None;
+    }
+    legacy_token(script, offset, ")")?;
+    legacy_token(script, offset, "{")?;
+    legacy_token(script, offset, "window")?;
+    legacy_token(script, offset, ".")?;
+    legacy_token(script, offset, "open")?;
+    legacy_token(script, offset, "(")?;
+    if legacy_identifier(script, offset)? != url {
+        return None;
+    }
+    legacy_token(script, offset, ",")?;
+    if legacy_identifier(script, offset)? != name {
+        return None;
+    }
+    legacy_token(script, offset, ",")?;
+    if legacy_identifier(script, offset)? != features {
+        return None;
+    }
+    legacy_token(script, offset, ")")?;
+    legacy_token(script, offset, ";")?;
+    legacy_token(script, offset, "}")
+}
+
+/// The retained script also contains a separate reload helper/call. Scan bounded
+/// top-level declarations, not a substring or a whole-script singleton. Quoted,
+/// commented and nested helper names cannot establish this binding; reassignment
+/// or an unreviewed reference rejects rather than guessing execution semantics.
+fn legacy_popup_helpers(script: &str) -> Option<usize> {
+    if script.len() > MAX_SCRIPT_BYTES {
+        return None;
+    }
+    let bytes = script.as_bytes();
+    let mut offset = 0;
+    let mut stack = Vec::new();
+    let mut statement_start = true;
+    let mut helpers = 0;
+    loop {
+        script_trivia(bytes, &mut offset)?;
+        let Some(byte) = bytes.get(offset).copied() else {
+            break;
+        };
+        match byte {
+            b'"' | b'\'' | b'`' => {
+                script_quoted_end(bytes, &mut offset)?;
+                statement_start = false;
+            }
+            b'(' | b'[' | b'{' => {
+                if stack.len() == MAX_SCRIPT_DEPTH {
+                    return None;
+                }
+                stack.push(byte);
+                offset += 1;
+                statement_start = false;
+            }
+            b')' | b']' | b'}' => {
+                let expected = match byte {
+                    b')' => b'(',
+                    b']' => b'[',
+                    _ => b'{',
+                };
+                if stack.pop() != Some(expected) {
+                    return None;
+                }
+                offset += 1;
+                statement_start = false;
+            }
+            b';' => {
+                offset += 1;
+                statement_start = stack.is_empty();
+            }
+            b'/' => return None,
+            _ if byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$') => {
+                let start = offset;
+                let identifier = legacy_identifier(script, &mut offset)?;
+                if identifier == "function" && stack.is_empty() && statement_start {
+                    let mut name_offset = offset;
+                    if legacy_identifier(script, &mut name_offset)? == "MM_openBrWindow" {
+                        offset = start;
+                        legacy_helper_declaration(script, &mut offset)?;
+                        helpers += 1;
+                        if helpers > 1 {
+                            return None;
+                        }
+                        statement_start = true;
+                        continue;
+                    }
+                }
+                if identifier == "MM_openBrWindow" {
+                    return None;
+                }
+                statement_start = false;
+            }
+            _ => {
+                offset += 1;
+                statement_start = false;
+            }
+        }
+    }
+    stack.is_empty().then_some(helpers)
+}
+
+fn legacy_literal<'a>(script: &'a str, offset: &mut usize) -> Option<&'a str> {
+    script_trivia(script.as_bytes(), offset)?;
+    if !matches!(script.as_bytes().get(*offset), Some(b'\'' | b'"')) {
+        return None;
+    }
+    let start = *offset + 1;
+    script_quoted_end(script.as_bytes(), offset)?;
+    let literal = &script[start..*offset - 1];
+    if literal.len() > MAX_TEXT
+        || literal.contains('\\')
+        || literal
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
+    {
+        return None;
+    }
+    Some(literal)
+}
+
+fn legacy_popup_target(handler: &str) -> Option<&str> {
+    if handler.len() > MAX_PARAGRAPH {
+        return None;
+    }
+    let mut offset = 0;
+    legacy_token(handler, &mut offset, "MM_openBrWindow")?;
+    legacy_token(handler, &mut offset, "(")?;
+    let target = legacy_literal(handler, &mut offset)?;
+    legacy_token(handler, &mut offset, ",")?;
+    legacy_literal(handler, &mut offset)?;
+    legacy_token(handler, &mut offset, ",")?;
+    legacy_literal(handler, &mut offset)?;
+    legacy_token(handler, &mut offset, ")")?;
+    script_trivia(handler.as_bytes(), &mut offset)?;
+    if handler.as_bytes().get(offset) == Some(&b';') {
+        offset += 1;
+        script_trivia(handler.as_bytes(), &mut offset)?;
+    }
+    (offset == handler.len()).then_some(target)
+}
+
+pub(super) fn parse_legacy_listing(document: &Html, base: &Url) -> Result<Value, Error> {
+    legacy_charset_declared(document)?;
+    let titles = Selector::parse("head > title").map_err(|_| unavailable())?;
+    let mut titles = document
+        .select(&titles)
+        .filter(|node| !inert_element(*node));
+    let title = titles
+        .next()
+        .filter(|_| titles.next().is_none())
+        .map(element_text)
+        .filter(|title| !title.is_empty() && title.len() <= MAX_TEXT)
+        .ok_or_else(unavailable)?;
+    let scripts = Selector::parse("script").map_err(|_| unavailable())?;
+    let mut helpers = 0;
+    for script in document
+        .select(&scripts)
+        .filter(|node| !inert_element(*node))
+    {
+        if script_kind(script) != Some(ScriptKind::Classic) {
+            continue;
+        }
+        let mut text = script.text();
+        let source = text.next().unwrap_or_default();
+        if !source.contains("MM_openBrWindow") {
+            continue;
+        }
+        if script.value().attr("src").is_some() || text.next().is_some() {
+            return Err(unavailable());
+        }
+        helpers += legacy_popup_helpers(source).ok_or_else(unavailable)?;
+        if helpers > 1 {
+            return Err(unavailable());
+        }
+    }
+    if helpers != 1 {
+        return Err(unavailable());
+    }
+    let anchors = Selector::parse("a").map_err(|_| unavailable())?;
+    let mut entries = Vec::new();
+    for (index, anchor) in document
+        .select(&anchors)
+        .filter(|node| !inert_element(*node))
+        .enumerate()
+    {
+        let Some(handler) = anchor
+            .value()
+            .attr("onclick")
+            .filter(|handler| handler.contains("MM_openBrWindow"))
+        else {
+            continue;
+        };
+        let target = legacy_popup_target(handler).ok_or_else(unavailable)?;
+        // This root also opens non-notice pages with the same helper. Only the
+        // declared PHP notice namespace establishes a notice row, not the popup
+        // function name, title, position, or a guessed source date.
+        if target
+            .split(['?', '#'])
+            .next()
+            .and_then(|path| path.rsplit('/').next())
+            != Some("call_board_detail.php")
+        {
+            continue;
+        }
+        if !legacy_notice_path(target)
+            || anchor.value().attr("href") != Some("#")
+            || entries.len() == MAX_ENTRIES
+        {
+            return Err(unavailable());
+        }
+        let resolved = base.join(target).map_err(|_| unavailable())?;
+        if !legacy_history_source(resolved.as_str()) {
+            return Err(unavailable());
+        }
+        let text = element_text(anchor);
+        if text.is_empty() || text.len() > MAX_TEXT {
+            return Err(unavailable());
+        }
+        entries.push(json!({
+            "source_order":index + 1,"title":text,"date":null,"category_label":null,"summary":null,
+            "listed_href":"#","declared_popup_target":target,"resolved_http_url":resolved.as_str(),
+            "link_kind":"source_declared_popup",
+        }));
+    }
+    if entries.is_empty() {
+        return Err(unavailable());
+    }
+    Ok(json!({
+        "schema_version":1,"type":"announcements_history","result":"listing_snapshot",
+        "publisher":null,"college":"mse","listing_label":"legacy root source-declared popup notices",
+        "document_title":title,"entries":entries,
+        "completeness":{
+            "scope":"single_supplied_archive_snapshot","pagination":"not_applicable","freshness":"archived_bytes",
+            "complete_history":false,
+            "source_layout":"observed root PHP-notice anchors and one complete inline three-argument popup helper; other popup namespaces are not notices; historical applicability is operator_asserted, not verified",
+            "link_interpretation":"literal source declaration only; helper not executed and runtime navigation not verified",
+        },
+    }))
+}
+
+/// As in shared table admission, reject active text outside its retained owner;
+/// inert payloads do not establish source prose or an alternate content scope.
+fn legacy_unowned_text(scope: ElementRef<'_>, owners: &[ElementRef<'_>]) -> bool {
+    scope.descendants().any(|node| {
+        matches!(node.value(), Node::Text(text) if !text.trim().is_empty())
+            && !node.ancestors().any(|ancestor| {
+                owners.iter().any(|owner| owner.id() == ancestor.id())
+                    || ElementRef::wrap(ancestor).is_some_and(crate::html::is_inert_context)
+            })
+    })
+}
+
+/// Observed PHP notice template: layout tables, not source data tables. The
+/// unlabelled footer date is retained separately and never becomes publication.
+pub(super) fn parse_legacy_article(document: &Html) -> Result<Value, Error> {
+    legacy_charset_declared(document)?;
+    let shells = Selector::parse("body > table > tbody").map_err(|_| unavailable())?;
+    let mut shells = document
+        .select(&shells)
+        .filter(|node| !inert_element(*node));
+    let shell = shells
+        .next()
+        .filter(|_| shells.next().is_none())
+        .ok_or_else(unavailable)?;
+    let rows = Selector::parse(":scope > tr").map_err(|_| unavailable())?;
+    let mut rows = shell.select(&rows);
+    let _banner = rows.next().ok_or_else(unavailable)?;
+    let main = rows.next().ok_or_else(unavailable)?;
+    let footer = rows
+        .next()
+        .filter(|_| rows.next().is_none())
+        .ok_or_else(unavailable)?;
+    let containers = Selector::parse(":scope > td > div").map_err(|_| unavailable())?;
+    let mut containers = main.select(&containers);
+    let container = containers
+        .next()
+        .filter(|_| containers.next().is_none())
+        .ok_or_else(unavailable)?;
+    let tables = Selector::parse(":scope > table").map_err(|_| unavailable())?;
+    let mut tables = container.select(&tables);
+    let header = tables
+        .next()
+        .filter(|table| {
+            table
+                .value()
+                .has_class("underline", scraper::CaseSensitivity::CaseSensitive)
+        })
+        .ok_or_else(unavailable)?;
+    let body_table = tables
+        .next()
+        .filter(|_| tables.next().is_none())
+        .ok_or_else(unavailable)?;
+    let titles =
+        Selector::parse(":scope > tbody > tr > td.p20blue > div").map_err(|_| unavailable())?;
+    let mut titles = header.select(&titles);
+    let heading = titles
+        .next()
+        .filter(|_| titles.next().is_none())
+        .ok_or_else(unavailable)?;
+    let bodies = Selector::parse(":scope > tbody > tr > td.p20blue").map_err(|_| unavailable())?;
+    let mut bodies = body_table.select(&bodies);
+    let body = bodies
+        .next()
+        .filter(|_| bodies.next().is_none())
+        .ok_or_else(unavailable)?;
+    if legacy_unowned_text(main, &[header, body_table])
+        || legacy_unowned_text(header, &[heading])
+        || legacy_unowned_text(body_table, &[body])
+    {
+        return Err(unavailable());
+    }
+    let nested_tables = Selector::parse("table").map_err(|_| unavailable())?;
+    if body
+        .select(&nested_tables)
+        .filter(|node| !inert_element(*node))
+        .any(|table| legacy_unowned_text(table, &[]))
+    {
+        return Err(failed_contract(
+            "legacy notice contains an unreviewed nonempty nested table",
+            file!(),
+            line!(),
+        ));
+    }
+    let title = element_text(heading);
+    let body_text = element_text(body);
+    let footer_text = element_text(footer);
+    if title.is_empty()
+        || title.len() > MAX_TEXT
+        || body_text.is_empty()
+        || body_text.len() > MAX_PARAGRAPH
+        || footer_text.len() > MAX_TEXT
+    {
+        return Err(unavailable());
+    }
+    let links = Selector::parse("a[href]").map_err(|_| unavailable())?;
+    let mut attachment_hints = Vec::new();
+    let mut attachments_found = false;
+    for link in body.select(&links).filter(|node| !inert_element(*node)) {
+        let href = link.value().attr("href").ok_or_else(unavailable)?;
+        if is_document_href(href) {
+            attachments_found = true;
+            if attachment_hints.len() < MAX_ATTACHMENT_HINTS {
+                attachment_hints.push(json!({"href":href,"text":element_text(link)}));
+            }
+        }
+    }
+    let media = Selector::parse("img, iframe, object, embed, audio, video, svg, canvas")
+        .map_err(|_| unavailable())?;
+    let nontext_present = body.select(&media).any(|node| !inert_element(node));
+    let mut output = article_content(ArticleDocument {
+        title,
+        category: None,
+        published_at: None,
+        paragraphs: Vec::new(),
+        attachment_hints,
+        attachments_found,
+    });
+    output["body_text"] = Value::String(body_text);
+    output["source_footer_date"] = json!(parse_iso_date(&footer_text));
+    output["source_footer_text"] = Value::String(footer_text);
+    output["completeness"]["body_source"] = json!(
+        "legacy PHP notice: second outer layout row, direct header table.underline and separate td.p20blue body; source-ordered active text, no invented paragraphs or data-table grid"
+    );
+    output["completeness"]["footer_date_role"] =
+        json!("unverified; source footer has no publication label and is not published_at");
+    output["completeness"]["nontext_content_present"] = json!(nontext_present);
+    if nontext_present || attachments_found {
+        output["result"] = json!("partial_text");
+        output["completeness"]["missing_nonparagraph_content"] =
+            json!("image/embedded content and attachment bytes are not transcribed or fetched");
+    }
+    Ok(output)
+}
+
 
 #[cfg(test)]
 mod tests {

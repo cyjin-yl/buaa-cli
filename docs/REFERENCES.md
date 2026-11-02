@@ -8,7 +8,7 @@ These are research references, not imported implementations or verified live cam
 
 Reviewed revision: [`1da573856c7438e69dcf01dc3f0881465ce50049`](https://github.com/fontlos/buaa-api/tree/1da573856c7438e69dcf01dc3f0881465ce50049). The actual `License` text grants MIT-style permission with notice retention.
 
-Inspected `src/request.rs`, `src/context.rs`, `src/api/sso/auth.rs`, and `src/api/wifi/auth.rs`, in addition to README/API grouping documentation.
+Inspected `src/request.rs`, `src/context.rs`, `src/api/sso/auth.rs`, and `src/api/wifi/auth.rs`, in addition to README/API grouping documentation. The gateway XEncode formula, SRBX1 custom-alphabet base64, HMAC-MD5 password derivation, SHA-1 checksum ordering, and the `acid`-as-string info-JSON field shape are derived from this MIT-licensed source as protocol references. No upstream implementation was copied; an original Rust adapter was written from the observed protocol.
 
 Observed source behavior that must **not** be adopted unchanged:
 

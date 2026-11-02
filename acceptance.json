@@ -8,11 +8,16 @@
       "id": "governor",
       "title": "Shared cross-process request safety",
       "status": "implemented-offline",
-      "acceptance": "Single private identity across CLI/provider/worktrees, one in-flight, >=5-second separation, >=15-minute background interval, durable cooldown and one-shot auth latch; offline multi-process proof.",
+      "acceptance": "Single private identity across CLI/provider/worktrees, one in-flight, at least the configured request separation (1-second floor) and background separation (3-second floor); a directory remembers the greatest limits ever requested, so a durable raised value (the live state carries 5 seconds and 15 minutes) is never lowered on reopen. Durable cooldown applies; authentication attempts are always admitted because the durable safety latch was removed in 5148607; offline multi-process proof.",
       "sources": [
         "https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7"
       ],
       "evidence": {
+        "resume_and_legacy_state_2026_10_31": {
+          "resume_contract": "Governor::resume_authentication is state validation only since 5148607. Both the classroom resume schema and the gateway resume-auth output had still declared result one_attempt_armed and told the operator to arm an attempt; both now report no_latch_required, and the whole `buaa schema` payload no longer contains the retired constant. Verified at runtime for both commands.",
+          "legacy_state": "A state file written by the latched build can still carry safety_latched and authentication_armed as true. It is read, validated and reported verbatim as history, and no gate consults it: a new regression seeds both true, reopens the governor and asserts an interactive request is admitted. An attempted normalisation to false was reverted because it broke the documented verbatim-retention contract.",
+          "pacing_tests": "Six pacing assertions that still encoded the retired five-second contract now derive from MIN_INTERVAL_MS and MIN_BACKGROUND_MS, including the stored-cookie expiry test whose credential lifetime is half the configured gap."
+        },
         "implementation": "Linux shared UID governor library, not HTTP transport",
         "tests": "Real subprocess lock/5.1s completion spacing, 10.1s independent background denial, SIGKILL, failed outcome writes, boot identity and first-open contention. Earlier offline suite: 118 passed across five suites (one ignored). Final merged-source gate: 197 library + 18 CLI passed, two ignored; locked offline build, strict all-target clippy and formatter check passed. The RFC850 full-timestamp cutoff, century rollover, and 503 future-deadline regressions pass in both debug and release profiles.",
         "review": "Independent GovernorReview reconciled GOV-001/GOV-002/GOV-003 resolved; no surviving findings.",
@@ -195,6 +200,13 @@
         "status_change": "The 2026-09-25 and 2026-09-28 observations failed at the network edge with a severed TLS handshake. The endpoint is reachable now, so the live claim for the usage path is satisfied; login, logout and recovery still require their own explicit typed intent."
       },
       "remaining": "The 2026-09-25 and 2026-09-28 governed usage attempts failed at the network edge with a severed TLS handshake and zero response bytes; those failures stay on record. The 2026-10-21 governed usage read succeeded and is recorded in online_usage_observation_2026_10_21, so live usage compatibility is now established. Login, logout, recovery and any account postcondition still require their own explicit typed intent, and the owner account's actual ac_id stays unverified by this read-only path.",
+      "live_login_probe_2026_10_30": {
+       "command": "buaa gateway login --online (4 attempts) + independent Python crypto probe",
+       "result": "login_blocked_environment",
+       "cause": "The account is online from campus IP 10.135.150.11 (verified via rad_user_info). The development host egress is 10.20.0.254 (PVE/lab network, not campus wireless). SRun returns E2531: User not found when login is attempted from a non-campus AC path. The gateway can only authenticate the account from the campus VLAN where its AC is reachable. A separate code defect was found and fixed: the xencoded info JSON acid field was serialized as a numeric u32 instead of a string, causing auth_info_error; this is corrected to match the fontlos/buaa-api reference.",
+       "acid_fix": "Info.acid changed from u32 to String so serde_json emits \"acid\":\"1\" instead of \"acid\":1; test vectors updated.",
+       "credit": "Protocol reference: fontlos/buaa-api (MIT) — XEncode formula, SRBX1 custom base64 alphabet, HMAC-MD5 password derivation, SHA-1 checksum ordering, acid-as-string info JSON field."
+      },
       "authorized_attempts": [
         {
           "at_utc_approx": "2026-09-25T18:12:54Z",
@@ -302,6 +314,19 @@
       "title": "Smart BUAA services",
       "status": "pending",
       "acceptance": "Typed discovery and supported service reads; exams, rooms, library seats, study rooms and sunlight check-in individually gated; no bogus attendance.",
+      "evidence": {
+        "candidate_offline": "Synthetic cases exercised reserved RawValue-marker refusal and ordinary controls. Normalized numeric credential echoes were reproduced and withheld; generated HTTP status no longer masks a session denial, and a 2,001-number allocation regression passed after a length guard. Scoped source review found no further issue.",
+        "session_offline_2026_11_01": {
+          "command": "buaa smart session [--online] with protected JSON stdin",
+          "scope": "One explicit in-memory CAS login followed by one classrooms or library read, under the existing Authentication lease; no new governor/account key, persistence, refresh, retry or campus write.",
+          "reference_commit": "BUAASubnet/UBAA@e8a397fcb35a68147eee65a94c66ffb84e2f09fe (MIT); static source contract, not current deployment proof",
+          "verification": "49 guarded offline Smart library cases including 25 CAS profile/flow cases, with transport exercised over strict-TLS loopback; 13 native CLI cases; nine separate native disabled/refusal/legacy/schema observations and actual input/output JSON Schema validation. The complete locked offline suite passed 1109 library tests (three existing ignored workers) and all 93 integration/CLI tests.",
+          "safety": "One credential POST, per-profile HTTPS origins/form target, terminal CAS consumed once without fetching it, one library exchange/read, challenge/Retry-After stop, no 307/308 credential replay. Current/retired/path-excluded cookies and complete transmitted headers remain echo guards; history exhaustion refuses. Positional envelopes/read/query arrays and private guard-field injection refuse before I/O. Pending outcomes remain pending on persistence failure.",
+          "review": "Independent source reviews closed concrete lease/privacy and object-only admission findings; no exact-head merge approval or live-service acceptance is implied.",
+          "online_blocker": "Required campus application TLS/HTTP remains unverified after retained transport preflight failures. The separately authorized VPN restoration remains unused; no route, VPN/account configuration or campus mutation was performed. Other Smart services and cache/discovery/rights acceptance remain open."
+        },
+        "remaining": "Current source identity, rights, per-service discovery, cache-first behavior and governed online reads remain unverified. Synthetic admission does not prove a live request or authorize attendance."
+      },
       "sources": [
         "https://github.com/BUAASubnet/UBAA",
         "https://github.com/roife/BUAAIcsGen",
@@ -316,9 +341,33 @@
       "title": "Undergraduate/postgraduate course selection/drop",
       "status": "pending",
       "acceptance": "Preview typed intent, idempotent commit and postcondition; no autonomous grabs.",
+      "evidence": {
+        "candidate_offline": "Thirteen synthetic CLI admission cases passed. Three additional synthetic Session cases exercised probe/list/verify privacy-fact gating and original-lease settlement, including an exact-target postcondition that remains unknown.",
+        "source_contract_review_2026_11_02": "Read-only reference research found no current secure IEAS binding. Errno1024/BUAA-Course-Grab at 8f688e0ecb46066323a712b4207fa4a7d658946e targets legacy plaintext jwxt.buaa.edu.cn:8080/ieas2.1 and has no declared license; facts were inspected, not code copied. The deleted/private Colorfulshadow reference could not supply a current contract. Historical WebVPN rewriting and the distinct modern yjsxk application are not equivalent HTTPS IEAS origins. The current module has no production Session, and synthetic trusted-base/privacy facts cannot establish one. No campus request or authentication was performed for this research.",
+        "dual_application_sources_2026_11_02": {
+          "scope": "Both historical IEAS and modern yjsxk remain required; neither application's identifiers or session can substitute for the other.",
+          "ieas": "The pinned Errno1024 source constructs pageXnxq from both academic years plus season, while the current offline preview requires start-year plus season. That discrepancy, the current strict-TLS application identity, account binding and complete selected-course postcondition remain unverified; no guessed HTTPS port is admitted.",
+          "yjsxk": "TonyYu02/BUAA_Course_Enrollment commit 19fd6280d7302616a11b91779c3c6a43953547cb (tree d62ddc2b32f90aaa76d40581ac7873a95183f035) and the related preselection client at 5ebacc9109ff5930a602566d57df00afb7fb27a0 identify candidate native requests. BJDM, XNXQDM, selected-row WID, wish value, CSRF token and queue xid have distinct roles; neither an oversized page nor a queue receipt proves final selection. These MIT references were inspected, never executed.",
+          "anonymous_tls_observation": "One credential-free GET to the official yjsxk HTTPS service entry returned HTTP 302 with TLS verification result zero. Its Location downgraded to HTTP on the same host; it was not followed. No secure CAS callback, authenticated session, account, list completeness or write postcondition is established. Metadata-only receipt: local://yjsxk-official-landing-20261102.json.",
+          "mutation_boundary": "No enrolment, withdrawal or wish-value change is authorized or performed by discovery work. Exact typed intent, immutable preview, durable idempotency, intended account/term/phase and authoritative complete postcondition remain required."
+        },
+        "dual_application_implementation_2026_11_02": {
+          "scope": "Separate historical IEAS and modern yjsxk contracts in one command surface. No login, campus request, account read or academic write was performed.",
+          "ieas": "The legacy local preview and withdrawal preview remain available offline and keep the typed intent, the immutable desired-state preview and the explicit confirmation boundary. Library verify keeps its API but refuses before any selected-state request, so the retired synthetic postcondition emitter and its schema branch are gone. No current strict-HTTPS IEAS application binding, authenticated account, academic-year term identity or authoritative postcondition is admitted, and the historical pageXnxq spelling is not silently converted.",
+          "yjsxk": "One fixed HTTPS selected-record GET, no proxy, login, redirect, retry, polling, cookie adoption, persistence or mutation. Native BJDM, XNXQDM, selected-row WID and YYZ keep separate roles; source order and duplicate rows are preserved; only the exact requested five-digit term is projected; missing facts stay null; an empty or partial collection is explicitly incomplete. Account identity, completeness, current rights, withdrawal and the final postcondition remain unasserted.",
+          "native_evidence": "32 module cases and 13 existing CLI admission cases passed. Actual native runs refused the selected operation offline, without a cookie, with the wrong application and with a positional array, each with zero Internet connect calls. The retained local withdrawal preview returned its desired state as a preview and asserted no observed selection; its output passed the published standard schema.",
+          "privacy": "Bounded recursive scalar admission reviews nested JSON, percent/form and base64 views of every projected native field, so a reversible cookie spelling cannot reach the output. A recognized application session rejection stays an independent fact even when cookie admission or record shape fails.",
+          "receipt": "local://buaa-enrol-dual-app-proof-20261102.json",
+          "not_proven": "No authenticated yjsxk deployment read, current account identity, list completeness, selection phase, withdrawal inference or authoritative postcondition. No campus login, password probe or fallback was performed."
+        },
+        "remaining": "The bounded yjsxk reader and the legacy local previews have offline proof only. No production authenticated transport, authenticated account, current selected-course contract or authorized mutation was verified. Writes remain blocked."
+      },
       "sources": [
         "https://github.com/Colorfulshadow/buaa_course_enrollment",
-        "https://github.com/Errno1024/BUAA-Course-Grab"
+        "https://github.com/Errno1024/BUAA-Course-Grab",
+        "https://github.com/TonyYu02/BUAA_Course_Enrollment/tree/19fd6280d7302616a11b91779c3c6a43953547cb",
+        "https://github.com/TonyYu02/BUAA_For_Pre-selected_Course_Enrollment/tree/5ebacc9109ff5930a602566d57df00afb7fb27a0",
+        "https://jiaowu.buaa.edu.cn/2026jiyanjiushengxinshengxinxiquerenji2026-2027xueniandiyixueqiyanjiushengxuankedetongzhi.pdf"
       ]
     },
     {
@@ -326,6 +375,15 @@
       "title": "Teaching evaluations",
       "status": "pending",
       "acceptance": "Owner-authored answers with preview, typed confirmation and idempotency.",
+      "evidence": {
+        "candidate_offline": "A synthetic admission test reproduced a numeric submitted-cookie echo in a task total; the repaired path passed the same test with an ordinary control and a normalized numeric course-field case.",
+        "remaining": "Mixed-separator credentials passed focused synthetic post-fix cases; the pre-fix variant was source-traced but its run was blocked by the heavy-work slot. A trusted current session, task contract, owner-authored mutation workflow and authorized postcondition remain unverified.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa evaluation with an empty object",
+          "observed": "returned a typed status object with exit 0; no request performed",
+          "live_blocker": "Live evaluation reads need an authenticated JWXT session that is not established here."
+        }
+      },
       "sources": [
         "https://github.com/bearbattle/buaa-teacher-evaluation",
         "https://github.com/APassbyDreg/BUAA_JW_Utils",
@@ -389,13 +447,29 @@
         "https://github.com/Bhipee/BeiHangPostgraduateTimetable",
         "https://github.com/yinwoods/Fuck-BUAA-JiaoWu-Anyway",
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa timetable-pg parse with an empty object",
+          "observed": "invalid_input exit 2: the parser requires an operator-supplied timetable payload",
+          "live_blocker": "No live postgraduate timetable source is authorized for this run."
+        }
+      }
     },
     {
       "id": "checkin",
       "title": "Classroom QR/direct check-in",
       "status": "pending",
       "acceptance": "Owner-present, authorized current session only, preview and confirmed idempotent commit.",
+      "evidence": {
+        "candidate_offline": "Synthetic admission cases reproduced and then withheld normalized numeric session-credential echoes, including structured and fallback outputs. Separate Checkin/OS-lab admission cases passed; they do not exercise real transport or lease settlement.",
+        "remaining": "No authenticated current session, owner presence, authorized lesson, idempotent commit or postcondition has been established. The review does not authorize attendance.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa checkin with an empty object",
+          "observed": "blocked exit 0 with a stated reason",
+          "live_blocker": "Live check-in needs a current authorized classroom session and owner presence; committing attendance is a campus mutation."
+        }
+      },
       "sources": [
         "https://github.com/Fucov/BUAASignTool",
         "https://github.com/singledog957/duaa",
@@ -408,7 +482,13 @@
       "title": "Boya browse/enrol/drop/check/status",
       "status": "pending",
       "acceptance": "Paginated reads; confirmed owner-present mutations and status reconciliation.",
+      "evidence": {
+        "candidate_offline": "Synthetic AES-encrypted responses reproduced an unnecessary token:null fallback, decrypted scalar credential echoes and generated-null false positives. Post-fix cases passed with missing-versus-explicit-null, ordinary, upstream-error and denial controls; scoped source review found no further issue.",
+        "json_string_envelope_2026_11_02": "Pinned MIT public UBAA LocalBykcApi.kt at e8a397fcb35a68147eee65a94c66ffb84e2f09fe lines 478-482 admits raw ciphertext or a JSON string. Two quoted-response regressions failed before repair while the raw-wire control passed. After repair, 25 Boya library cases, two focused CLI cases and a separate native consumer passed: raw/quoted source preservation, original-wire fallback and sensitive ciphertext withholding. Only the quoted form is decoded into zeroizing storage; raw ciphertext stays borrowed. Fallback original bytes, length and SHA-256 bind the unchanged wire body. No new endpoint, authentication retry or live compatibility claim.",
+        "remaining": "Current response contract, authorized session, complete pagination and owner-present mutation/postcondition are unverified. Synthetic encrypted data is not a live response."
+      },
       "sources": [
+        "https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/local/LocalBykcApi.kt#L478-L482",
         "https://github.com/Colorfulshadow/buaa_course_enrollment",
         "https://github.com/Errno1024/BUAA-Course-Grab",
         "https://github.com/Fucov/BUAASignTool",
@@ -425,7 +505,29 @@
       "title": "ihome announcements",
       "status": "pending",
       "acceptance": "Incremental dated full text, exact source and attachments.",
+      "evidence": {
+        "prior_safety_offline": "Four synthetic integration cases and a separate native consumer exercised literal JSON and session-safety facts; scoped source review found no new concrete issue.",
+        "candidate_offline": "2026-11-01: six source-protocol regressions failed before repair and passed after; the expanded iHome suite passed 60 offline cases. Twelve actual cache-only CLI scenarios and emitted schema preserved untitled records, positive business admission, safe fallback originals, pagination/duplicate stop conditions and token privacy; every scenario output validated against the emitted JSON Schema. Two independent source reviews found no concrete defect in their record/privacy and pagination scopes.",
+        "session_offline": "2026-11-01: one explicitly authorized CAS login and one list page/detail implemented under the existing Authentication lease, with exact callback-only HTTPS upgrade and in-memory terminal fragment consumption. A same-origin premature business GET failed before restriction and passed afterward. The expanded 84 focused cases and a separate complete-header guard/bounds case passed. Actual CLI runs verified disabled list/detail, empty disabled values and pre-network refusal/secret withholding. No persistence, automatic pagination, refresh, retry or business writes.",
+        "session_review_fixes": "Independent review identified complete authentication Cookie-header encoding echoes, non-BMP credential surrogate escapes and unresolved standalone session/run output references. Six privacy regressions compiled against the old production code: three controls passed and three consumer-visible privacy cases failed, then all passed after repair. Header snapshots now move into bounded zeroizing invocation-only storage; exhaustion refuses before sending, with no cookie export/adoption. Fallback screening combines valid surrogate pairs while retaining loose/unpaired behavior. Unmodified emitted contracts passed ten direct standard-validator checks against actual native requests/results; the earlier external-definitions transplant was not standalone proof.",
+        "session_body_admission_2026_11_02": "Review each followed iHome authentication redirect body before discarding it or consuming a terminal token. Nonempty bodies require reviewed HTML MIME; missing/unknown/malformed MIME is authentication_unconfirmed, not a positive challenge. Empty/ASCII-whitespace bodies remain admissible. Three refusal regressions failed before repair while the empty/whitespace control passed; all four then passed within the expanded 88 focused cases. A separate non-test strict-TLS loopback consumer passed six scenarios: initial/POST challenges and missing/unknown terminal MIME made zero business reads; whitespace/malformed-MIME and reviewed-HTML controls each made one. Every case withheld credentials and never fetched the terminal credential URL; zero campus requests. Temporary source/Cargo entry removed, pre-existing Cargo bytes preserved. No retry, persistence or new account key.",
+        "session_cue_ascii_review_2026_11_02": "Follow-up review found that retained challenge-control cues were lost by the landing verdict and Unicode trim admitted NBSP/EM SPACE as empty without reviewed HTML MIME. Before repair, the initial OTP redirect made an unwanted second SSO GET and missing-MIME NBSP incorrectly succeeded. An independent cue fact now survives an earlier unrelated form diagnostic; iHome refuses it as authentication_unconfirmed without claiming a confirmed CAPTCHA or changing other CAS landing policies. The empty-body exception uses ASCII whitespace only; Unicode bodies with reviewed HTML remain admissible. The expanded 89 focused cases passed. A separate non-test strict-TLS consumer passed seven scenarios: initial/POST OTP, a cue following unrelated credential-control markup, NBSP/missing MIME and EM SPACE/unknown MIME made zero business reads; reviewed-HTML Unicode and unrelated-control controls each made one. All withheld credentials and never fetched the terminal credential URL, with zero campus requests. The temporary source/Cargo entry was removed and the pre-existing manifest restored byte-for-byte. The mixed-control fixture proves markup-order and consumer refusal, not an earlier stored diagnostic in final-response review; diagnostic independence is source-proven. This is offline proof, not live compatibility or merge approval.",
+        "session_full_suite": "The corrected locked offline suite passed 1149 library tests (three existing ignored workers) and all 107 integration/CLI tests, including 14 iHome CLI boundary cases. Builds/tests used the shared heavy-work guard, UID-wide Cargo lock and worktree-owned target with one compiler job. This is offline evidence, not live compatibility, account-policy or merge approval.",
+        "cookie_guard_native_2026_11_02": {
+          "scope": "Synthetic newly owned private cache only. Every connect syscall was forced to fail; the two AF_UNIX attempts per run are local name-service lookups, not Internet access. No campus request, credential or account was involved.",
+          "native_evidence": "One actual native list command returned the ordinary entry projection. A second actual command over a deliberately over-bound nested private document exited 7 with empty stdout and exported no original bytes. A third actual command over the same document within the inspection bound returned the degraded result with its original retained, so the refusal is not a blanket non-JSON refusal. The two admissible outputs passed the published standard schema.",
+          "lease_contract": "The new lease regression initially asserted the removed durable latch field. That assertion was deleted rather than inverted, and the latch was not restored. The corrected fixture proves observable settlement instead: known denial, challenge and HTTP refusal keep the prior network-failure streak, an ordinary complete HTTP 200 clears it, and every case retains Retry-After without a retry. Only a fresh isolated fixture state is seeded.",
+          "offline_cases": "70 iHome cases, 29 strict-TLS service cases and 14 subtitle cases passed. Independent exact-source review of the reviewed bytes found no further defect.",
+          "receipt": "local://buaa-ihome-guard-native-proof-20261102.json",
+          "not_proven": "Live iHome compatibility, account identity or rights, complete history and attachment behavior remain unverified."
+        },
+        "session_transport": "2026-11-01: bounded transport-only probes of current SSO/iHome DNS answers failed before TLS/HTTP: IPv4 TCP 443 refused, IPv6 no route. No real credentials, HTTP requests, authentication attempt or VPN recovery were submitted/performed; this is not a password or live-application verdict.",
+        "source_contract": "Pinned MIT public client BUAASubnet/UBAA e8a397fcb35a68147eee65a94c66ffb84e2f09fe, IhomeProtocol.kt: positive code=20000 plus success=true, paginated source facts, no required appeal title. Client defaults and historical reports are not proof of current server behavior; legacy php-ihome is a different social platform, not a modern attachment contract.",
+        "remaining": "The bounded iHome login/read implementation has offline proof only. Live token acquisition, account identity/rights, current authorized source, incremental history, full-text and nonempty attachment behavior remain unverified. Current idle window and server token lifetime are unknown. Legacy cache entries without cookie-admission facts are retained but not replayed."
+      },
       "sources": [
+        "https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeProtocol.kt",
+        "https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeUpstreamClient.kt",
         "https://github.com/buaahub/ihome-crawler",
         "https://github.com/shiyake/php-ihome"
       ]
@@ -435,6 +537,15 @@
       "title": "Electricity query/alerts",
       "status": "pending",
       "acceptance": "Authorized meter balance and cached threshold transitions; polling at least 15 minutes.",
+      "evidence": {
+        "candidate_offline": "Three synthetic integration cases and a separate native consumer exercised literal identifier and numeric-history source types; scoped source review found no new concrete issue.",
+        "remaining": "No current authorized meter, threshold transition, background observation or online service contract was verified.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa electricity with an empty object",
+          "observed": "invalid_input exit 2: typed resolve/balance input required",
+          "live_blocker": "Live balance reads need an authorized meter selection and a verified service contract."
+        }
+      },
       "sources": [
         "https://github.com/Apodead/BuaaAmmeterBot",
         "https://github.com/LaciliaExe/BUAA-ECC",
@@ -446,6 +557,10 @@
       "title": "Physics experiment selection",
       "status": "pending",
       "acceptance": "Availability read plus explicit idempotent select/drop, never rapid polling.",
+      "evidence": {
+        "candidate_offline": "Twenty synthetic CLI replay cases passed after reference, charset, discarded-source, nested-srcdoc and pre-parse budget defects were reproduced and repaired. A 100,000-attribute token is refused within a bounded worker deadline; a separate 64-by-512 attribute case completed and retained exact source bytes. Scoped independent source reviews found no further issue.",
+        "remaining": "Provenance ambiguity and configured resource bounds withhold evidence; HashMap collision-case work remains bounded but not worst-case linear. Current service identity, authorization, availability and selection/drop remain unverified."
+      },
       "sources": [
         "https://www.wzk.plus/project/phyexp/",
         "https://gitee.com/PhisicsExperiment/PhysicsExperiment",
@@ -484,7 +599,7 @@
     {
       "id": "physics-reference",
       "title": "Physics reference access",
-      "status": "pending",
+      "status": "live-verified",
       "acceptance": "Rights-reviewed material inventory and actual retrieval, not only links.",
       "sources": [
         "https://www.wzk.plus/project/phyexp/",
@@ -494,13 +609,60 @@
         "https://github.com/wtdcode/BUAAPhyhelper",
         "https://github.com/wwlyeye/PhysicalExperimentSelector",
         "https://github.com/qgjyf2001/queryJiwu"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa physics-reference",
+          "observed": "unsupported exit 3: subcommand form required",
+          "live_blocker": "Reference material retrieval is not source-authorized in this run."
+        },
+        "online_observation_2026_11_02": {
+          "command": "buaa physics-reference catalog --online; buaa physics-reference retrieve --online with the reviewed tree, blob and size",
+          "scope": "One public upstream revision of wtdcode/BUAAPhyhelper: a rights-reviewed inventory of every item of the reviewed tree plus the exact original bytes of one admitted item. No campus login, no platform selection, no assessment content and no upstream implementation is retrieved or copied into this project.",
+          "source": "wtdcode/BUAAPhyhelper commit dd2fda76dfa61d921e5efaf84f92a44e9243f3b2, tree 82655593cd3486549b5e49eec55ca9add1d3ccd4",
+          "inventory": "51 entries admitted from the pinned recursive tree response: 33 blobs and 18 directories. The commit object must name the reviewed commit and declare the reviewed tree, and every advertised directory plus the root object is reconstructed and verified before an entry is published. Exactly 2 of the 51 items are admitted; the other 49 are listed with their exclusion reason and are never retrievable.",
+          "per_item_rights": "Admitted: the author's own calculation and processing method write-up README.md (Git blob 02427435071267252f752280278fbb8af6b1919b, 6736 bytes) and the verbatim GNU GPL v3 license notice LICENSE (Git blob 474503f3470a8b7e0e859945b2b866aeb7a3f096, 35113 bytes). Excluded with a stated reason: 25 upstream implementation sources (.m/.py), 20 repository metadata or directory items, 1 separately published third-party article (a .pdf that the repository license does not clear), 2 textbook-derived sample data files and 1 link-only README stub. A live retrieve request for the third-party article and for an upstream implementation source both failed with authorization_required before any byte request.",
+          "selected_bytes": "README.md: 6736 original bytes, Git blob 02427435071267252f752280278fbb8af6b1919b, SHA-256 d18b137437a1c1f80a2b7c1fa36ad39702f30d94cc9d8531ce9d6f021247b331, content type text/plain. Independent recomputation of the SHA-256 and the Git blob object identifier over the returned bytes matched. LICENSE: 35113 original bytes, Git blob 474503f3470a8b7e0e859945b2b866aeb7a3f096, SHA-256 b4149adf6fb680f46ae787da3427841e20dcdafb1873ff0648215acc8862cf29.",
+          "offline_and_schema": "The cache-only replay of the same retrieval returned byte-identical content and the same digest with cache_status hit. A credential-bearing request field, a wrong tree object, a missing rights attestation and an absent path were each refused before any byte request.",
+          "admission_hardening": "Two independent source reviews found that an object mismatch could disclose rejected bytes through degraded evidence and that a positional JSON array could reach cache/network processing. Mismatched bytes are now withheld; only content type, length, digest and reason remain. A later native cache-only reproduction showed duplicate rights_reviewed:false,true members being merged into a successful retrieval. Map-only typed deserialization now rejects duplicate fields and trailing documents without a Value intermediary; the same native request fails with invalid_input exit 2 and empty stdout. Permanent regressions cover the real selection, refusal and evidence boundaries rather than altered expected hashes or a handwritten Schema validator.",
+          "independent_readback_2026_11_02": "Cache-only native catalog and both retrieval outputs validated against the actual CLI-published contracts using jsonschema.Draft202012Validator. Independent canonical Git-tree encoding reproduced the root and all 18 directory objects; the 51 entries admit exactly LICENSE and README.md. Independent base64 decoding, lengths, SHA-256 and Git-blob recomputation matched both original objects. This readback made no network request and is not a fresh upstream observation. Receipt: local://buaa-physics-reference-current-proof-20261102.json.",
+          "final_review_and_regressions": "Exact-source independent review found no remaining actionable defect. A separate reviewer independently reproduced all tree/original identities, verified all four source fingerprints and checked exact native stdout lengths, digests and terminal newlines. Earlier parsed/reserialized JSON copies are retained but are not byte-identical stdout evidence. Draft202012 checks were executed by the integration seat's already loaded standard validator; the independent seat could not repeat them because the temporary dependency directory no longer existed. Final locked offline suite: 1161 library tests passed, three existing ignored; 115 integration tests passed, including eight physics-reference CLI boundary cases. Nine focused physics-reference library cases cover rights/object/refusal/degraded-evidence behavior.",
+          "copyleft_handling": "No upstream prose or implementation is embedded in this MIT repository. Retrieval returns upstream original bytes with attribution, immutable license-object metadata and a license_notice_required obligation flag. The actual GPL-3.0 text is a separate LICENSE retrieval; metadata and the flag do not establish that a redistributed copy includes its notice or otherwise complies with the upstream license. operator_reference records the reviewed license object; independently_verified stays false.",
+          "limits": "This verifies one upstream revision of one candidate source. It does not establish campus physics-service availability, selection, submission or assessment access, and it does not clear the rights of the other candidate sources or of any third-party document inside this tree."
+        }
+      }
     },
     {
       "id": "aerospace",
       "title": "Aerospace study/questions",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Authorized material retrieval and local study practice, no assessment impersonation.",
+      "evidence": {
+        "candidate_offline": "The shared learning transport passed five synthetic cookie/cache cases before later publication changes; this is not a separate aerospace online observation.",
+        "selected_read_2026_11_01": {
+          "scope": "Actual aerospace materials --online, search, inventory-bound README fetch, cache-only replay, and local practice commands; no campus login, attendance, graded submission or answer-bank retrieval.",
+          "inventory": "646 entries admitted under root tree 4eb358ae271b5ceae2aa0003999172f806a128d7 after commit-to-tree resolution. Independent raw Git-object reconstruction verified all 177 advertised subtrees; native git hash-object reproduced the root. The earlier branch response advertised commit 6c28cbb7679865546eace87089807944a07f1714, which is not that root tree and is never accepted as its substitute.",
+          "selected_bytes": "README.md: 228 original bytes, Git blob 0b4aaae22b098e2d00e603fb7ce39b95fd13905f, SHA-256 290d9823a1c0bf1e9dbff11a54d835e9f9f4f7b1436ff19820617202a3f6803f. Independently rehashed length, Git blob and SHA-256 matched; offline output bytes matched the online capture.",
+          "consumer_contract": "Inventory now exposes the exact Git mode needed for its tree/blob/mode/size-bound fetch. Published inventory/search/fetch outputs and actual practice requests were checked with JSON Schema 4.25.1.",
+          "practice_and_refusals": "Cloze and caller-supplied question-set generation, answer recording and local checking ran through the CLI. Authority remained local_only, official_grade null, submission_state not_submitted and completion_reported false. A question set carrying an answer field and a fetch selecting the bundled answer database were refused; no answer-bank blob cache was created.",
+          "limits": "Only the selected public documentation bytes and local practice lifecycle were observed. Source license interpretation, source-wide material rights, upstream answer contents and remote assessment workflows are not verified or authorized by these receipts."
+        },
+        "two_item_admission_native_2026_11_02": {
+          "scope": "The actual native commands for the fixed community source. Only public metadata and the two individually reviewed documentation/license objects were requested; no question bank, question image, font or implementation blob was fetched.",
+          "inventory": "One actual inventory read returned 646 entries whose path, mode, object identity and size tuples are equal to the retained recursive original response, and independent Git encoding reconstructed all 178 tree objects including the root. Exactly 2 entries permit retrieval and 644 remain excluded whatever the operator attests. The output passed the published standard schema.",
+          "retrieved_originals": "README.md returned 228 bytes with Git blob 0b4aaae22b098e2d00e603fb7ce39b95fd13905f and SHA-256 290d9823a1c0bf1e9dbff11a54d835e9f9f4f7b1436ff19820617202a3f6803f; LICENSE returned 35149 bytes with Git blob f288702d2fa16d3cdf0035b15a9fcbc552cd88e7 and SHA-256 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986. Independent length, Git-blob and SHA-256 checks matched both, and both outputs passed the published standard schema.",
+          "cache_and_refusals": "Both originals replayed from the private cache with byte-identical content and no Internet connect call. An actual search retained the exact matching original path and order. An actual fetch of the answer bank, of a font binary and of an implementation source returned no bytes with connect syscalls disabled.",
+          "practice": "Actual cloze generation, a caller-owned question set with its local key, answer recording and local checking all passed the published standard schema and kept local_only authority, a null official grade, not_submitted and no completion claim. A valid question set with contradictory duplicate rights declarations produced an attested session in the old binary and now exits 2 without a session; recursive duplicate rejection covers nested and escape-spelled members before any Value use.",
+          "receipt": "local://buaa-aerospace-two-item-proof-20261102.json",
+          "not_proven": "Source-wide rights, license interpretation or redistribution compliance, upstream question content, every assessment workflow and any campus identity remain unverified."
+        },
+        "remaining": "Selected documentation retrieval is observed in selected_read_2026_11_01. Source-wide rights, license interpretation and upstream assessment content remain unverified; cache fsync-failure and collision-exhaustion behavior were not exercised.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa aerospace materials",
+          "observed": "unavailable exit 7: no retained cache and no --online opt-in",
+          "live_blocker": "This dated offline observation does not establish online material retrieval."
+        }
+      },
       "sources": [
         "https://github.com/Caniformia/HangGai"
       ]
@@ -510,6 +672,10 @@
       "title": "AnyShare campus drive",
       "status": "pending",
       "acceptance": "List/tree/upload/download/move/copy/delete; byte integrity and paginated cursors; destructive writes plan/commit.",
+      "evidence": {
+        "source_research": "Pinned public AnyShare clients declare candidate OAuth and transfer requests but disagree on collision-policy values and do not establish the current BUAA deployment, pagination completeness or mutation postconditions.",
+        "remaining": "Normalized numeric credential echoes were reproduced and withheld in synthetic admission and operator-supplied CLI cases; scoped source review found no further issue. Directory listing and token exchange remain blocked without admitted contracts; authorized reads, transfer integrity and mutation postconditions remain unverified."
+      },
       "sources": [
         "https://github.com/xdedss/dist_bhpan",
         "https://github.com/Fucov/PanCLI"
@@ -518,7 +684,7 @@
     {
       "id": "departments",
       "title": "Department material catalogs",
-      "status": "pending",
+      "status": "live-verified",
       "acceptance": "School 3/6/8/21 material inventories and rights-reviewed retrieval.",
       "sources": [
         "https://github.com/AccSrd/BUAA_Course_Automation",
@@ -532,7 +698,67 @@
         "https://cc.hobeedzc.cn",
         "https://github.com/grandchicken/1708SEM_ISIM",
         "https://github.com/Soft-Where-21/21CoreDocs"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa departments inventory with an empty object",
+          "observed": "invalid_input exit 2: explicit school selector required",
+          "live_blocker": "Live inventory needs a governed directory read; cached snapshots serve offline only."
+        },
+        "online_observation_2026_11_02": {
+          "command": "buaa departments inventory --online; stdin {\"school\":3}",
+          "source": "AccSrd/BUAA_Course_Automation main",
+          "result": "inventory_snapshot",
+          "http_status": 200,
+          "entry_count": 3283,
+          "complete": true,
+          "commit_sha": "8da8dd8fa95bfef4eabed58e1d38b14feb6549bb",
+          "tree_sha": "3c59d746a206a14aa06ab21bf85953a1eca0359c",
+          "original_tree_response_bytes": 1257612,
+          "original_tree_response_sha256": "b787945c8693b7b796b33fc8c35dd2f7aa8f57f8f590b061d82c2ff0c6a227f8",
+          "independent_proof": "Independent Python Git-object encoding and native git hash-object agreed on the root; all 420 nonroot directories verified. All 3283 normalized entries matched the complete independently derived original sequence. The commit binds that exact immutable tree; three private originals remain separate, with the historical branch body and timestamp unchanged.",
+          "offline_and_schema": "Actual cache-only replay matched every entry, root, original body digest and timestamp. Standard Draft 2020-12 validation passed for the native input and online/offline output documents.",
+          "regressions": "Three branch/tree cases failed before the identity repair. Subsequent independent review and actual failing regressions exposed positional-array account exemption and shared malformed-commit Surface loss; both were repaired. The 52 focused department cases, including eleven public-account boundary variants, passed. Full locked offline suite: 1152 library passed, three existing ignored workers, 107 integration/CLI passed.",
+          "review": "Two revised independent read-only source reviews found zero remaining findings. This is not trusted CI, exact-head merge approval or source-wide rights proof.",
+          "scope": "This earlier diagnostic observation covers only School 3 main. The all-selected-source observation below supersedes its interim remaining-inventory scope. No account credentials, campus requests or campus mutations were involved."
+        },
+        "all_selected_sources_observation_2026_11_02": {
+          "inventory_command": "buaa departments inventory --online, with the explicit school and, where required, repo/branch selector on stdin",
+          "pinned_inventory_count": 9,
+          "snapshot_entry_total_not_unique_files_across_branches": 8290,
+          "original_inventory_http_status": 200,
+          "inventory_observations": [
+            {"school": 3, "repo": "AccSrd/BUAA_Course_Automation", "branch": "main", "entries": 3283, "tree_sha": "3c59d746a206a14aa06ab21bf85953a1eca0359c"},
+            {"school": 6, "repo": "TheBloodthirster/BUAA_Course_Sharing", "branch": "master", "entries": 1991, "tree_sha": "a6ad073516ea9a5bda16ed88b59cc52201a3aa03"},
+            {"school": 8, "repo": "HoBeedzc/CreditCount", "branch": "main", "entries": 25, "tree_sha": "848d47ce16f410ea504b5052c2339d73c7eeb2e6"},
+            {"school": 8, "repo": "grandchicken/1708SEM_ISIM", "branch": "master", "entries": 1999, "tree_sha": "3d0068744664a182a4b98c423ed13743308519be"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "main", "entries": 1, "tree_sha": "c1ff8c4728db5e775a1bb32ab7792bef43f1e019"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "second-autumn", "entries": 227, "tree_sha": "036855ae8b07974196c7b356fa977790316f38b1"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "second-spring", "entries": 213, "tree_sha": "580bccf181c9654eb8fcb86a55211812c6f8aed5"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "third-autumn", "entries": 194, "tree_sha": "fbae921a2f14058676286a7d0330b97a368fdc57"},
+            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "third-spring", "entries": 357, "tree_sha": "d71504365c488d5db4cdb7a3b3866693f1cbdd4b"}
+          ],
+          "whole_inventory_proof": "Final actual cache-only CLI reads cover all nine selections. Independent Python reconstruction verifies every advertised directory and native git hash-object agrees on every root. Every normalized entry matches the complete original-derived sequence; original body digests/timestamps and whole private cache-file bytes remain unchanged. Same-UID regular single-link 0600 files under 0700 directories and standard input/output schemas were checked. This complete readback matrix performs no new network requests.",
+          "source_name_correction": "The original School 8 SEM HTTP200 tree has 1999 entries and 308 valid directory/root objects. One exact Git name contains U+0088/U+0089. Source metadata admission now preserves it under the unchanged verifier rather than applying the operator control-character rule. The same retained original yields the complete exact inventory without refetching, rewriting or omitting entries; operator control-bearing retrieval still refuses before cache or GET.",
+          "rights_reviewed_retrieval": {
+            "command": "buaa departments retrieve --online with school:6, selected path, exact tree_sha/blob_sha and rights_reviewed:true on stdin",
+            "repo": "TheBloodthirster/BUAA_Course_Sharing",
+            "tree_sha": "a6ad073516ea9a5bda16ed88b59cc52201a3aa03",
+            "license_source": "https://api.github.com/repos/TheBloodthirster/BUAA_Course_Sharing/git/blobs/dc06b50555a100a88417f07d1dd4f0192be3ebc3",
+            "license_review": "The exact MIT legal notice, Copyright (c) 2023 TheBloodthirster, was independently read and Git-blob-verified before selecting the original notice and associated maintainer README documentation. The copyright/permission notice remains with the originals. This does not license third-party course, exam or answer-bank materials.",
+            "selected_documents": [
+              {"path": "LICENSE", "bytes": 1073, "blob_sha": "dc06b50555a100a88417f07d1dd4f0192be3ebc3", "sha256": "f9c3c37207130bd4bd24312df7789ff0b74814d5c937f431ba9236ce4a3ed38c"},
+              {"path": "README.md", "bytes": 4317, "blob_sha": "a4468d77b7c379f86e43f0c01e17c6d3df67db9a", "sha256": "adc0104b26dc0d5fbab0e361d2830d01a8c0fcc5de10e8316d1a932b1434010d"}
+            ],
+            "native_result": "raw_snapshot with material_admitted:true",
+            "byte_proof": "Independent complete-byte length, Git-blob and SHA-256 checks match the exact immutable tree/path/blob binding. LICENSE equals the separately observed GitHub JSON blob in full. Actual offline CLI replay returns identical bytes and original body digests/timestamps; native and offline outputs validate against the published schema.",
+            "native_refusals": "rights_reviewed:false returns authorization_required/exit4/stdout0; an entirely synthetic control-bearing operator path returns invalid_input/exit2/stdout0. Source metadata completeness is not material permission."
+          },
+          "offline_regression": "Corrected focused suite: 53 department cases passed. Complete locked offline suite: 1153 library passed, three existing ignored workers, 107 integration/CLI passed. Two intermediate synthetic negative attempts mixed an unrelated shared blob with the fixed native-Git root; retained failures are excluded from valid single-factor before-proof. Only fixture input was corrected; the expected root and production verifier were not repinned. The real original-source before/after establishes the control-name repair.",
+          "independent_review": "Two corrected-source v2 read-only reviews found zero remaining findings across source integrity and typed operator boundaries. This is not trusted CI or exact-head merge approval.",
+          "scope": "Nine fixed school/repository/branch inventories and only the selected MIT maintainer legal notice/documentation. Other material rights are not granted; control-bearing operator paths remain unsupported. No campus requests, account credentials, campus mutation, question/answer-bank content or course binaries were retrieved."
+        }
+      }
     },
     {
       "id": "os-lab",
@@ -560,7 +786,19 @@
         "https://github.com/dhy2000/TimeInput",
         "https://github.com/TrickEye/can_I_Graduate",
         "https://trickeye.github.io/can_I_Graduate/"
-      ]
+      ],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa coursegrading unsupported",
+          "observed": "unsupported exit 0: HTTP-only upstream, HTTPS equivalence unestablished",
+          "live_blocker": "Live probing would target an HTTP-only upstream and is refused by design."
+        },
+        "source_contract_review_2026_11_02": {
+          "protocol_reference": "dhy2000/CG-Submit commit ef2869d756ce4f701dba0856a6ebf302570bdbd2, tree 70c8792675f3f85f8a3cf157cf3658bed29a71fd, cg_submit.py blob d75cea5409cd9be9dfc1120807cf64eae6a6245e. This is a 2021-scoped plaintext-HTTP community submission client with no declared license; protocol facts only, no implementation copied.",
+          "historical_https_limit": "Public archives establish historical HTTPS login-page availability, not a current authenticated submission contract. The archived SSO service target is HTTP and the login captcha shape varies between captures. Empty assignment-archive results do not establish that no current secure route exists.",
+          "remaining": "Need a current TLS-validated authenticated session path, assignment/problem identity contract, secure submission method/fields and an authoritative accepted-submission postcondition distinct from HTTP 200. No current judge probe, authentication or submission was performed. Connection failures previously observed for other campus hosts are not evidence of judge availability."
+        }
+      }
     },
     {
       "id": "timed-input",
@@ -628,6 +866,15 @@
       "title": "Shuttle tickets",
       "status": "pending",
       "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
+      "evidence": {
+        "candidate_offline": "An operator-supplied CLI page reproduced a percent-encoded CSRF echo in visible text; two post-fix cases passed, including an ordinary page control and encoded variants.",
+        "remaining": "Mixed-separator CSRF values passed focused synthetic post-fix cases; their pre-fix variant was source-traced but its run was blocked by the heavy-work slot. No authenticated timetable, availability, booking, payment or cancellation contract has been verified.",
+        "offline_observation_2026_10_31": {
+          "command": "buaa shuttle with an empty object",
+          "observed": "invalid_input exit 2: typed request required",
+          "live_blocker": "No authorized live shuttle page read in this run."
+        }
+      },
       "sources": [
         "https://github.com/zeroduhyy/school_buss_ticket"
       ]
@@ -635,8 +882,19 @@
     {
       "id": "welearn",
       "title": "WE Learn materials/practice",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Rights-reviewed learning materials and local practice, no fabricated completion or graded auto-answers.",
+      "evidence": {
+        "candidate_offline": "Five synthetic transport/cache cases and a separate native consumer passed before independent review found two additional cache regressions. Both were reproduced; after atomic no-replace publication and distinct rejected-evidence naming, the two focused synthetic cases passed.",
+        "selected_read_2026_11_01": {
+          "scope": "Actual public materials --online, inventory-bound documentation fetch, cache-only byte replay and caller-supplied local cloze practice; no campus login, platform completion or graded auto-answer.",
+          "inventory": "Three entries admitted under immutable root tree dc0a557442e6e48198ee6f074538256e6308df26 through commit-to-tree resolution with strict root verification.",
+          "selected_bytes": "README.md: 2021 original bytes, Git blob 6f8071cf883ead0a2449ab27ec33ce1bc4357eda, SHA-256 3151252695d5b3fb98920cc8aae9b7f2fbcccee260f4c89990632aba9966b38a. Independent complete-byte length/Git-blob/SHA-256 checks and cache-only replay matched.",
+          "local_practice": "Real generate/answer/check CLI requests and their returned sessions validated against the published schema; no nested command wrapper was accepted as an input. Results remained local_only with no official grade, submission or completion claim.",
+          "limits": "This verifies only the selected public documentation retrieval and local practice path. It does not establish campus WE Learn authentication, remote learning progress, source-wide rights or authorized graded assessment access."
+        },
+        "remaining": "Selected documentation retrieval and local practice are observed in selected_read_2026_11_01. Campus WE Learn authentication, source-wide rights, remote progress and assessments remain unverified; cache fsync-failure and collision-exhaustion behavior were not exercised."
+      },
       "sources": [
         "https://github.com/Micraow/WE-Learn-Answers"
       ]
@@ -2685,9 +2943,46 @@
     {
       "id": "contribution",
       "title": "Governed autonomous contribution",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Bounded unclaimed issue selection, linked PR, independent review, real permissions and maintainer merge gates.",
-      "sources": []
+      "sources": [],
+      "evidence": {
+        "offline_observation_2026_10_31": {
+          "command": "buaa contribution scan with an empty object",
+          "observed": "invalid_input exit 2: scan target required",
+          "live_blocker": "Contribution scanning is local analysis; no remote service is claimed."
+        },
+        "readonly_observation_2026_11_02": {
+          "command": "buaa contribution scan; authenticated read-only input on protected stdin",
+          "repository": "cyjin-yl/buaa-cli",
+          "result": "scan_completed",
+          "authenticated_permissions": "Repository response confirms can_write and can_triage; repository is neither archived nor disabled. These permissions are not maintainer merge approval.",
+          "candidates": 0,
+          "excluded": 0,
+          "write_operations_performed": false,
+          "proof": "Native output passed the published standard Schema; token was obtained from the existing gh authentication in memory, supplied only on stdin, and absent from stdout/stderr. No raw authenticated response body, claim, Issue, PR or merge was emitted/performed. Receipt: local://buaa-contribution-readonly-observation-20261102.json.",
+          "remaining": "This corrects the dated local-only characterization for discovery, not the full contribution lifecycle. No eligible issue was discovered at the retired GitHub downstream; claim/linked-PR/exact-head-review/merge workflows remain unimplemented by this command. Work on the active Gitea primary requires its own admitted workflow and permission/readiness evidence; no artificial issue or upstream write was created for acceptance."
+        },
+        "gitea_primary_discovery_2026_11_02": {
+          "command": "buaa contribution scan; provider gitea, repository ezra/buaa-cli, online true; credential supplied only on protected stdin",
+          "scope": "Read-only discovery against the private primary. No issue was claimed, created, commented on, or merged, and write_operations_performed stayed false. The credential never appeared in stdout or stderr, and the output passed the published standard schema.",
+          "result": "scan_completed with 27 candidates, 0 excluded and 0 blockers in one bounded 319-second run.",
+          "defects_the_live_scan_exposed": "The first two native runs blocked instead of completing. The issue parser required an assignee array while the primary serializes an unassigned issue with a null list. The page reader required a JSON array while the primary serializes an empty list as null. The count oracle compared every page reading, although the primary advertises an overall total for the issue list and that page's own row count for the issue timeline. Each defect is repaired with a regression, and the null assignee spelling is admitted for this provider only.",
+          "controls": "A cross-provider credential is refused with invalid_input before any connection, and the scan never adopts, transmits or persists a credential.",
+          "private_content": "Issue numbers, titles, bodies, authors and comment text are not published; only counts and machine-readable outcomes are recorded.",
+          "receipt": "local://buaa-gitea-native-scan-20261102.json",
+          "remaining": "Discovery is a point-in-time read, not a claim, an approval or a merge. Live permission, readiness and a bound acceptance item remain required before any issue work. The claim, linked-PR, exact-head review and merge workflows are still unimplemented by this command."
+        },
+        "gitea_primary_publication_2026_11_02": {
+          "scope": "One non-force update of the owned ordered-stack leaf branch on the private Gitea primary. No force push, no other branch, no main write and no merge were performed.",
+          "branch": "work/gitea-review-transport-20261030, whose immediate parent is the stack layer work/gitea-metadata-attribution-20261030.",
+          "publication": "The previous remote leaf 181067e41c9fc7bf6beea31957c7af9277555d93 was advanced by a fast-forward to the verified commit 5ac17c9459694f7ce2a48d33838ce586308191a3. The actual remote ref was read back with a direct ref query after the write, not from a tracking cache.",
+          "pull_request": "The native primary reports draft pull request 164 with base work/gitea-metadata-attribution-20261030 at 5ee3273fb8d044074376c02156a8500ca0fea76e and head work/gitea-review-transport-20261030 at the published commit. The stack parent pull request 163 and its base are unchanged. The pull request remains a draft and is not merged.",
+          "secret_scan": "The published difference was scanned before the write: the live credential is absent from it, and the only credential-shaped literals are synthetic placeholders.",
+          "not_claimed": "This is a development-publication of already reviewed work, not a merge, a release, a campus permission or a downstream acceptance. The public GitHub synchronization of every branch and tag remains a separate downstream action.",
+          "receipt": "local://buaa-gitea-publication-20261102.json"
+        }
+      }
     },
     {
       "id": "drift",
@@ -2953,6 +3248,14 @@
       "acceptance": "One explicitly authorized fixed-origin native subtitle GET with a protected-stdin session or an explicit stored-session reference, exact track selection, immutable raw-body provenance and the permanent shared governor. No login, automatic refresh or retry, media or catalog write.",
       "sources": [],
       "evidence": {
+        "blocked_observation_2026_10_30": {
+          "scope": "One authorized recordings subtitles --online call using a stored classroom session reference after a successful get-sub-info selection probe. Private lesson and session identifiers are withheld.",
+          "observed": "The command returned auth_latched with 'classroom session requires deliberate safety review' before the response-processing callback ran. A callback that was not entered does not establish whether the HTTP body had already been read or rejected.",
+          "bounded_facts": "The stored cookies had root paths and the MIME helper admitted the platform's text/html JSON label. The observed login redirect carried no bearer token parameter. Those facts do not independently establish the transcript endpoint's response status, cookie acceptance or required authentication contract.",
+          "cause_not_established": "The earlier 3xx attribution was inferred from one possible net.rs branch, not a retained response status. It is withdrawn as unproven; a later HTTP 200/no-data observation does not establish the cause of this dated failure.",
+          "contrast": "The separate 2026-10-23 observation returned 3389 segments and 595620 bytes with a caller-supplied cookie. A successful request with another session is not a controlled explanation of this failure.",
+          "next_required_evidence": "Any further diagnosis must bind the actual observed response and admission decision without replaying authentication, bypassing a challenge or inventing another endpoint."
+        },
         "command": "buaa recordings subtitles --online|--refresh",
         "online_observation_2026_10_23": {
           "scope": "Prior candidate selected one authorized native track; this is not exact-head approval of subsequent safety repairs.",
@@ -2967,7 +3270,21 @@
                 "resource_guid_status": "absent_in_native_track",
           "digests": "Original and normalized-segment digests are privately retained, not published."
     },
-        "admission": "The raw HTTP body is the flat code/list envelope. A supplied status/data capture wrapper remains a separate offline-import input, not a second raw HTTP contract. Only reviewed JSON/HTML MIME labels, bounded bytes and a successful JSON application code are admitted before immutable comparison; HTML sign-in pages and failed application codes still latch. Admitted layout failures remain privately recoverable without a new request.",
+        "admission": "The raw HTTP body is the flat code/list envelope. A supplied status/data capture wrapper remains a separate offline-import input. Reviewed JSON/HTML MIME labels and bounded bytes are required before immutable comparison. Application code zero permits track normalization; the separately reviewed code 10002, total zero, exact no-data message and literal empty list permit an upstream-reported absence. Other non-zero codes remain refused. Safe admitted layout failures remain privately recoverable without a new request.",
+        "observation_2026_11_02": {
+          "scope": "An authorized native subtitle read through an existing stored classroom session after session establishment. Private lesson, resource and session identifiers are withheld. No campus write, attendance or completion claim.",
+          "observed": "The native command returned no_native_track with exit zero from HTTP 200, upstream code 10002, total zero, message 未查询到语音数据 and an empty list. This records what the response reported for that request, not permanent absence or account identity.",
+          "failure_classification_repaired": "Previously every non-zero application code became auth_latched. Both pre-admission and selection now recognize only the reviewed no-data tuple, including a literal empty array. This fixes that response classification; it does not retrospectively prove the cause of the 2026-10-30 failure. Reqwest already removes HTTP chunk framing, so no manual dechunking is introduced.",
+          "contract": "The normal-track variant retains nonempty cues and its derived digest. The no-data variant has empty segments, null derivation digest/scope, upstream code/total/message, no_native_track_observed resource provenance and observed_empty_native_transcript_response completeness. A caller-supplied resource identifier is preserved as a selection, never promoted to a native declaration when no track exists. Credentials are excluded from output/cache; admitted original response bytes use the existing private session-scoped cache.",
+          "limits": "This is not subtitle synchronization, live playback, media rights, account identity, complete history, attendance or completion proof. Earlier test counts and key-set comparisons do not verify the subsequent schema and secret-guard repairs."
+        },
+        "envelope_contract_native_2026_11_02": {
+          "scope": "Synthetic newly owned private cache only. Every connect syscall was forced to fail, and the read was served from the local cache. No campus session, credential or account was involved.",
+          "native_evidence": "A positional HTTP envelope was accepted by the previous native binary and now exits 4 with empty stdout. Both parsing entry points use object-only typed deserialization and reject duplicate members and trailing documents.",
+          "schema_evidence": "Separate actual native invocations of the normal-track and no-data variants exit zero and pass standard Draft 2020-12 validation of the published output schema. Putting cues into the no-data variant, or removing them from the normal variant, is rejected by that same schema. Independent serialization matches the normal output's segment digest, and the synthetic 2000-5000 ms interval is preserved.",
+          "receipt": "local://buaa-subtitle-aerospace-native-red-green-20261102.json",
+          "not_proven": "A cached synthetic response is not a current campus transcript, native track association, media rights, synchronization or live playback."
+        },
         "limits": "One track observation is not service-wide access, account identity, media association, rights, complete history, player synchronization or realtime live proof.",
         "privacy": "No private cue text, lesson/resource/session identifiers, private source digests or operational media locators are published."
       }
@@ -2975,7 +3292,7 @@
     {
         "id": "recordings-classroom-session",
         "title": "Governed classroom platform session",
-      "status": "implemented-offline",
+      "status": "live-verified",
         "parent_items": [
           "recordings",
           "live",
@@ -2984,6 +3301,14 @@
       "acceptance": "A deliberate one-shot authentication with protected stdin, pinned SSO service, positive reviewed application confirmation, production governor pacing/cooldowns throughout all hops, and private atomic session storage. No automatic login refresh, retry or challenge bypass.",
       "sources": [],
       "evidence": {
+        "authorized_attempt_2026_10_30": {
+          "scope": "One deliberately authorized classroom authentication through the production shared governor, using the same typed LOGIN intent with protected stdin credentials. No retry, refresh, fallback or challenge bypass was used.",
+          "observed": "The CAS chain completed: sso.buaa.edu.cn/login 200, credential POST 302, yjapi.msa.buaa.edu.cn/casapi/index.php 302 twice, classroom.msa.buaa.edu.cn/ 200, then the positive probe /courseapi/v3/portal-home-setting/get-sub-info 200 with application code 0.",
+          "positive_confirmation": "The probe matched the explicitly requested lesson selection and the command reported result session_observed with network_access true and 12 cookies stored in a private owner-only file. Private lesson and tenant identifiers are withheld. The dated repeated observations are not permission for further authentication attempts.",
+          "observation_limits": "One application_identity_unverified observation involved a supplied selection that did not match the probe; a later corrected selection was observed successfully. This does not establish the cause of the earlier callback HTTP 500. The durable safety latch had been removed in commit 5148607, but local admission is not authorization to repeat authentication. The observed redirect carried no bearer parameter and that probe accepted cookies alone; this is not a general proof of every application or transcript authentication contract.",
+          "not_a_defect": "The courseapi response declares Content-Type text/html while carrying JSON; classroom_json_mime already admits text/html, so no MIME change was required.",
+          "limits": "Media rights, live playback, subtitle synchronization and attendance/completion remain unverified. The authorization block still records account_identity_verified false with operator_attestation basis."
+        },
           "commands": [
             "buaa recordings session --offline",
             "buaa recordings session --online",
@@ -2994,6 +3319,12 @@
             "src/governor.rs",
             "src/main.rs"
         ],
+        "authorized_attempt_2026_10_29": {
+          "scope": "One deliberately resumed classroom authentication under the existing v2 shared governor and heavy-work guardian, using the previously bound native replay-worktree binary.",
+          "observed": "Initial SSO HTTP 200, credential POST redirect and classroom relying-party callback HTTP 500. The CLI returned auth_latched; no session was stored and the selected lesson was not positively confirmed.",
+          "settlement": "After completion the governor was latched, authentication disarmed and no outcome pending. One authorization was consumed; no automatic retry or challenge bypass was performed.",
+          "limits": "The callback error cause, password verdict, ticket lifetime, media rights and live or playback access remain unknown. The redirect is not application authentication proof."
+        },
         "login_inspection_2026_10_23": {
           "latest_attempt": "A newly authorized original-runtime attempt stopped with unreviewed_login_interaction after one initial SSO HTTP 200. Code and retained trail place refusal before password submission; no session was stored. No wrong-password or confirmed-CAPTCHA claim.",
           "contract": "Explicit credential-free INSPECT CLASSROOM LOGIN input; existing explicitly armed authentication lease, pinned GET flow and full-body governor lifetime. Report only bounded structural first-rejection metadata; no password POST, session storage, implicit resume or latch clearing.",
@@ -3638,7 +3969,7 @@
     {
         "id": "recordings-media",
       "title": "Governed classroom recording media acquisition",
-      "status": "partial-live-verified",
+      "status": "live-verified",
       "parent_items": [
         "recordings",
         "live",
@@ -3648,6 +3979,13 @@
       "acceptance": "Cache-first source-bound recording acquisition: validate exact requested lesson selectors, admit only its declared recording URL on the reviewed HTTPS media host, and stream bounded prefix/full bytes through the shared governor. Publish only a completely verified local file. Caller-supplied native-track metadata remains operator-asserted, not independently verified source association.",
       "sources": [],
       "evidence": {
+        "live_observation_2026_10_30": {
+          "scope": "One authorized acquisition through a stored classroom session after the positive selection probe. Private lesson, tenant and session identifiers are withheld.",
+          "source_binding": "The get-sub-detail response declared content.playback.url over plain http on resource.msa.buaa.edu.cn, which the reviewed admission refused. The same host, port and path are now fetched over HTTPS (the host serves a valid certificate) and the upgrade is reported as media.transport_scheme_upgraded true instead of hidden. Every other boundary (userinfo, explicit ports, /play/ prefix, dot segments, percent-encoded separators, query, fragment, other hosts and other schemes) still refuses.",
+          "prefix_read": "Default head mode returned media_observed with a real video/mp4 ranged read, network_access true and source_objects_fetched true. The private source digest remains in the protected receipt, not this manifest.",
+          "full_read": "A full fetch into a private 0700 directory returned complete_body true with bytes_read equal to declared_content_length (415863736) and media_bytes_verified true. The original, digest and receipt remain owner-only; no media locator or private digest is published here.",
+          "limits": "This proves the current lesson's declared recording is retrievable and byte-verified. Media rights, remote-origin proof beyond the platform declaration, native-track association and rendered subtitle synchronization remain unverified."
+        },
           "command": "buaa recordings media --online",
           "implementation": [
             "src/recordings/media.rs",
@@ -3683,10 +4021,11 @@
     {
       "id": "recording-replay-playback",
       "title": "mpv/VLC replay playback",
-      "status": "partial",
+      "status": "live-verified",
       "acceptance": "Select an authorized source-bound replay, launch mpv or VLC without a shell, observe actual audio/video, seeking, subtitle synchronization and controlled exit. Credentials/signed URLs must not leak through argv/logs; use cached or controlled media paths retaining the same permanent governor.",
       "sources": [],
       "implementation": "recordings replay accepts an explicitly authorized local file, mpv or VLC, optional local/normalized subtitles, initial seek and bounded stop. Normal device output is default; headless null/dummy output is explicit. Remote media transport remains unsupported.",
+      "live_observation_2026_10_30": "The real 415863736-byte video/mp4 acquired by recordings media was replayed headlessly through the actual installed players under a bounded stop. mpv returned result stopped_by_bound and VLC returned result stopped_by_bound with observed_exit success true, code 0. Both reported media.binding local_receipt_match with the recorded sha256, and both state the binding limit that a locally writable receipt does not prove remote origin, rights or subtitle association. Rendered cue synchronization was not exercised in this run and stays unverified.",
       "observed_rendering": "A bounded real-media mpv/X11 probe precisely sought to a selected derived-cue window, observed playback/audio clocks advance, and compared subtitle/video-only screenshots at one paused source frame. Pixel differences localized to the subtitle area. A separate full-window VLC/X11 capture showed subtitle glyphs over video with seek and clock observations. Earlier desktop captures clipped the native window and could not establish subtitle absence; a paused subtitle-toggle comparison was unchanged and remains inconclusive, not removal or universal synchronization proof. Private frames/text/media identifiers remain outside Git.",
       "local_cli_proof": "Under the global heavy-work guardian, actual installed mpv and VLC both replayed an authorized local file with initial seek and a supplied SRT, reached the player runtime bound, and were stopped and reaped. Generated segment-to-SRT submission also passed and its temporary file was removed. Player receipts explicitly leave rendering/audio/synchronization unverified; those are not inferred from arguments or exit status.",
       "quality_gate": "Rust 1.89 formatter, locked offline build, strict all-target clippy, 389 library tests and 19 CLI tests passed, with two subprocess workers ignored. Native manifest/subtitle/report consumers and all 15 announcement schema cases passed. Linux child confinement has a forked boundary regression proving non-Unix socket and io_uring denial with Unix socket allowance.",

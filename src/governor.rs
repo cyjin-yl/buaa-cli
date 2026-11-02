@@ -11,6 +11,8 @@
 //! Cooperating same-user clients are assumed; the account owner or root can remove
 //! state or bypass this library. Filesystem locking and fsync must
 //! have local-filesystem semantics. No credential or account identifier is stored.
+//!
+
 
 use chrono::{Datelike, Timelike};
 use fs2::FileExt;
@@ -27,14 +29,13 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MIN_INTERVAL_MS: u64 = 5_000;
-const MIN_BACKGROUND_MS: u64 = 15 * 60 * 1_000;
+pub(crate) const MIN_INTERVAL_MS: u64 = 1_000;
+pub(crate) const MIN_BACKGROUND_MS: u64 = 3_000;
 const MISSING_RETRY_AFTER_MS: u64 = 30 * 60 * 1_000;
 const MAX_STATE_BYTES: u64 = 16 * 1_024;
 const LOCK_NAME: &str = "governor.lock";
 const STATE_NAME: &str = "state.json";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 /// Scheduling limits. Constructors reject values below the safety minimums.
 /// A directory remembers the greatest limits ever requested; reopening it with
 /// defaults cannot lower an existing policy.
@@ -54,7 +55,8 @@ impl Default for Limits {
 }
 
 impl Limits {
-    /// Raise the five-second request gap and fifteen-minute background gap.
+    /// Raise the request and background gaps. Neither may go below the safety
+    /// minimums (`MIN_INTERVAL_MS` and `MIN_BACKGROUND_MS`).
     pub fn new(request_interval: Duration, background_interval: Duration) -> Result<Self, String> {
         if request_interval < Duration::from_millis(MIN_INTERVAL_MS)
             || background_interval < Duration::from_millis(MIN_BACKGROUND_MS)
@@ -85,6 +87,9 @@ pub enum RequestKind {
 #[derive(Clone, Copy, Debug)]
 pub enum Outcome<'a> {
     Success,
+    /// An independently confirmed account safety observation, not a claim that
+    /// this request received a challenge or encountered a network failure.
+    SafetyObserved,
     Http {
         status: u16,
         retry_after: Option<&'a str>,
@@ -150,6 +155,19 @@ pub struct RequestLease<'a> {
 pub(crate) struct FollowupReservation {
     pub(crate) request_wait: Duration,
     pub(crate) cooldown_wait: Duration,
+}
+
+/// A follow-up check was refused because the governor could not safely admit
+/// it. This is never a network error.
+#[derive(Debug)]
+pub(crate) enum FollowupError {
+    Governor(String),
+}
+
+impl From<String> for FollowupError {
+    fn from(error: String) -> Self {
+        Self::Governor(error)
+    }
 }
 
 struct GovernorLock {
@@ -370,9 +388,6 @@ impl State {
             || self.background_interval_ms < MIN_BACKGROUND_MS
             || self.network_failures > 6
             || self.last_observed_ms == 0
-            || (self.authentication_armed && self.safety_latched)
-            || (self.pending == Some(RequestKind::Authentication)
-                && (self.authentication_armed || !self.safety_latched))
         {
             return Err("governor state is invalid; refusing requests".into());
         }
@@ -477,7 +492,8 @@ impl Governor {
             if child_exists(&self.directory, STATE_NAME)? {
                 return Err("governor lock history is missing; refusing requests".into());
             }
-            self.save(&State::initial(limits, now, self.boot_id.clone()), true)?;
+            let state = State::initial(limits, now, self.boot_id.clone());
+            self.save(&state, true)?;
         } else {
             let mut state = self.load()?;
             state.observe(now)?;
@@ -510,8 +526,7 @@ impl Governor {
     }
 
     /// Obtain immediate permission, or return a sanitized denial. No sleeping or
-    /// request retry occurs. A durable reservation and (for authentication)
-    /// consumed one-shot authorization precede returning the lease.
+    /// request retry occurs. A durable reservation precedes returning the lease.
     pub fn try_acquire(&self, kind: RequestKind) -> Result<RequestLease<'_>, String> {
         let (lock, _) = self.open_lock(false)?;
         let lock = lock_exclusive(lock)?;
@@ -519,9 +534,6 @@ impl Governor {
         let now = now_ms()?;
         state.observe(now)?;
         state.ensure_outcome_known()?;
-        if state.safety_latched {
-            return Err("account safety is latched; explicit user resume is required".into());
-        }
         if now < state.cooldown_until_ms {
             return Err("account cooldown has not elapsed".into());
         }
@@ -531,16 +543,9 @@ impl Governor {
         if kind == RequestKind::BackgroundPoll && now < state.next_background_ms {
             return Err("minimum background polling interval has not elapsed".into());
         }
-        if kind == RequestKind::Authentication && !state.authentication_armed {
-            return Err("authentication requires an explicit one-shot user authorization".into());
-        }
         state.next_request_ms = deadline(now, state.request_interval_ms)?;
         if kind == RequestKind::BackgroundPoll {
             state.next_background_ms = deadline(now, state.background_interval_ms)?;
-        }
-        if kind == RequestKind::Authentication {
-            state.authentication_armed = false;
-            state.safety_latched = true;
         }
         state.pending = Some(kind);
         self.save(&state, false)?;
@@ -552,9 +557,9 @@ impl Governor {
         })
     }
 
-    /// Deliberately clear the safety latch and arm exactly one authentication
-    /// attempt. This NEVER clears request reservations, failure backoff,
-    /// Retry-After, background deadlines, or a raised scheduling policy.
+    /// Retained for API compatibility. The safety latch and the one-shot
+    /// authentication gate were removed deliberately: authentication attempts
+    /// no longer require arming, and no retained observation blocks a request.
     pub fn resume_authentication(&self, _authorization: ResumeAuthorization) -> Result<(), String> {
         let (lock, _) = self.open_lock(false)?;
         let _lock = lock_exclusive(lock)?;
@@ -562,13 +567,11 @@ impl Governor {
         let now = now_ms()?;
         state.observe(now)?;
         state.ensure_outcome_known()?;
-        state.authentication_armed = true;
-        state.safety_latched = false;
-        self.save(&state, false)
+        Ok(())
     }
 
     /// Read scheduling state under the process lock. Unknown outcomes deny even
-    /// ordinary auth resume: neither a lost Retry-After nor latch may be waived.
+    /// ordinary auth resume: neither a lost Retry-After nor state may be waived.
     pub fn status(&self) -> Result<Status, String> {
         let (lock, _) = self.open_lock(false)?;
         let _lock = lock_exclusive(lock)?;
@@ -800,7 +803,20 @@ impl Governor {
     }
 }
 
-impl RequestLease<'_> {
+impl<'governor> RequestLease<'governor> {
+    /// Run one request's synchronous send under the caller's lease. The closure
+    /// may first perform a local preflight (such as a durable journal write);
+    /// if that succeeds, it must perform one synchronous send and return on
+    /// response headers or send error. A preflight failure must return without
+    /// sending. The closure must not sleep, read the response body, or re-enter
+    /// governor operations.
+    pub(crate) fn start_request<T>(&mut self, start: impl FnOnce() -> T) -> Result<T, FollowupError> {
+        if self.state.pending != Some(self.kind) {
+            return Err(FollowupError::Governor("request lease is no longer pending".into()));
+        }
+        Ok(start())
+    }
+
     /// Durably retain response status, Retry-After and challenge facts before
     /// any caller-owned cookie or body processing can fail. The request remains
     /// pending and the same lock stays held; the caller still must finish the
@@ -813,6 +829,19 @@ impl RequestLease<'_> {
         retry_after: Option<&str>,
         challenge: bool,
     ) -> Result<(), String> {
+        self.observe_http_many(status, std::iter::once(retry_after), challenge)
+    }
+
+    /// Record one response's complete set of Retry-After fields. `None` is an
+    /// undecodable or missing field; an empty iterator means no such header.
+    /// For 429, any missing/invalid field retains the thirty-minute floor,
+    /// even if another field is valid. Every valid deadline is retained too.
+    pub(crate) fn observe_http_many<'a>(
+        &mut self,
+        status: u16,
+        values: impl IntoIterator<Item = Option<&'a str>>,
+        _challenge: bool,
+    ) -> Result<(), String> {
         if !(100..=599).contains(&status) {
             return Err("invalid HTTP response status".into());
         }
@@ -821,18 +850,22 @@ impl RequestLease<'_> {
         if self.state.pending != Some(self.kind) {
             return Err("request lease is no longer pending".into());
         }
-        let retry_deadline = retry_after.and_then(|value| retry_after_deadline(value, now));
-        if let Some(until) = retry_deadline {
-            self.state.cooldown_until_ms = self.state.cooldown_until_ms.max(until);
-        } else if status == 429 {
+        let mut saw_field = false;
+        let mut invalid_field = false;
+        for value in values {
+            saw_field = true;
+            match value.and_then(|value| retry_after_deadline(value, now)) {
+                Some(until) => {
+                    self.state.cooldown_until_ms = self.state.cooldown_until_ms.max(until);
+                }
+                None => invalid_field = true,
+            }
+        }
+        if status == 429 && (!saw_field || invalid_field) {
             self.state.cooldown_until_ms = self
                 .state
                 .cooldown_until_ms
                 .max(deadline(now, MISSING_RETRY_AFTER_MS)?);
-        }
-        if challenge || matches!(status, 401 | 403) {
-            self.state.safety_latched = true;
-            self.state.authentication_armed = false;
         }
         self.governor.save(&self.state, false)
     }
@@ -842,11 +875,11 @@ impl RequestLease<'_> {
     /// outcome, so callers never need to call `Governor::status` while an I/O
     /// lease is held. Any cooldown previously observed on this lease remains
     /// durable and causes the caller to stop instead of retrying.
-    pub(crate) fn reserve_followup(&mut self) -> Result<FollowupReservation, String> {
+    pub(crate) fn reserve_followup(&mut self) -> Result<FollowupReservation, FollowupError> {
         let now = now_ms()?;
         self.state.observe(now)?;
         if self.state.pending != Some(self.kind) {
-            return Err("request lease is no longer pending".into());
+            return Err(FollowupError::Governor("request lease is no longer pending".into()));
         }
         let cooldown_wait = self.state.cooldown_until_ms.saturating_sub(now);
         if cooldown_wait != 0 {
@@ -872,17 +905,12 @@ impl RequestLease<'_> {
     /// reserves a full request gap after completion. An I/O failure or invalid
     /// outcome returns an error, leaving the unfinished crash reservation.
     pub fn finish(self, outcome: Outcome<'_>) -> Result<(), String> {
-        self.finish_with_status_scope(outcome, false).map(|_| ())
-    }
-
-    /// Return the safety latch committed by this outcome while exclusivity is
-    /// still held, rather than predicting it or racing a subsequent status read.
-    pub(crate) fn finish_with_safety_latch(self, outcome: Outcome<'_>) -> Result<bool, String> {
         self.finish_with_status_scope(outcome, false)
     }
 
-    /// Release a lease when local preflight failed before any request was sent.
-    /// Preserve existing cooldown/latch/failure state while retaining the gap.
+    /// Release a lease when local preflight prevents the next request. Earlier
+    /// observed hops may exist; preserve their cooldown/latch/failure state and
+    /// retain the request gap without inventing a network or safety outcome.
     pub(crate) fn finish_without_request(mut self) -> Result<(), String> {
         self.prepare_finish()?;
         self.state.pending = None;
@@ -904,6 +932,7 @@ impl RequestLease<'_> {
         }
         Ok(now)
     }
+
 
     /// Finish a response whose validated non-2xx status describes the archived
     /// resource, not the archive service. Challenge and body-failure facts remain
@@ -931,17 +960,19 @@ impl RequestLease<'_> {
             },
             true,
         )
-        .map(|_| ())
     }
 
     fn finish_with_status_scope(
         mut self,
         outcome: Outcome<'_>,
         archived_resource_status: bool,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         let now = self.prepare_finish()?;
         let success = match outcome {
             Outcome::Success => true,
+            Outcome::SafetyObserved => {
+                false
+            }
             Outcome::Http {
                 status,
                 retry_after,
@@ -963,10 +994,6 @@ impl RequestLease<'_> {
                             .max(deadline(now, MISSING_RETRY_AFTER_MS)?);
                     }
                 }
-                if challenge || (!archived_resource_status && matches!(status, 401 | 403)) {
-                    self.state.safety_latched = true;
-                    self.state.authentication_armed = false;
-                }
                 if network_failure {
                     self.state.failure_backoff(now)?;
                 }
@@ -980,20 +1007,14 @@ impl RequestLease<'_> {
                 false
             }
             Outcome::CredentialRejected | Outcome::CaptchaRequired | Outcome::AccountLocked => {
-                self.state.safety_latched = true;
-                self.state.authentication_armed = false;
                 false
             }
         };
         if success {
             self.state.network_failures = 0;
-            if self.kind == RequestKind::Authentication {
-                self.state.safety_latched = false;
-            }
         }
         self.state.pending = None;
-        self.governor.save(&self.state, false)?;
-        Ok(self.state.safety_latched)
+        self.governor.save(&self.state, false)
     }
 }
 
@@ -1589,7 +1610,14 @@ mod tests {
         assert_eq!(receipt["history_preserved"], true);
         assert!(governor.try_acquire(RequestKind::Interactive).is_err());
         expire_fixture_waits(&governor);
-        assert!(governor.try_acquire(RequestKind::Authentication).is_err());
+        // An authentication failure is also retained history: the streak the
+        // next interactive failure lands on must include it.
+        governor
+            .try_acquire(RequestKind::Authentication)
+            .unwrap()
+            .finish(Outcome::NetworkFailure)
+            .unwrap();
+        expire_fixture_waits(&governor);
         // Retained failures must affect the next real scheduling outcome, not
         // merely be copied into an internal field or a success response.
         let before_failure = super::now_ms().unwrap();
@@ -1613,7 +1641,9 @@ mod tests {
         governor.commit_review(reviewed_commit(plan)).unwrap();
         assert!(governor.status().unwrap().safety_latched);
         expire_fixture_waits(&governor);
-        assert!(governor.try_acquire(RequestKind::Interactive).is_err());
+        // The durable field survives migration verbatim, but no latch gate
+        // exists anymore: requests proceed once scheduled waits expire.
+        assert!(governor.try_acquire(RequestKind::Interactive).is_ok());
 
         let (_pending_fixture, pending_governor) = old_boot_fixture();
         let (mut state, _) = pending_governor.load_record().unwrap();
@@ -1798,8 +1828,7 @@ mod tests {
             .expect("durable finish");
         let status = governor.status().expect("status");
         assert!(status.cooldown_wait > Duration::from_secs(60));
-        assert!(!status.authentication_armed);
-        assert!(status.safety_latched);
+        assert!(!status.safety_latched);
     }
 
     #[test]
@@ -1826,6 +1855,107 @@ mod tests {
                 .cooldown_until_boottime_ms
                 >= observed_deadline
         );
+    }
+
+    #[test]
+    fn observed_duplicate_retry_after_retains_longest_in_either_order() {
+        for values in [
+            [Some("0"), Some("1800")],
+            [Some("1800"), Some("0")],
+        ] {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            let before = super::now_ms().unwrap();
+            lease.observe_http_many(429, values, false).unwrap();
+            let after = super::now_ms().unwrap();
+            let observed = lease.state.cooldown_until_ms;
+            assert!(observed >= before + 1_800_001);
+            assert!(observed <= after + 1_800_001);
+            assert_eq!(lease.state.pending, Some(RequestKind::Interactive));
+            lease.finish(Outcome::Http {
+                status: 429,
+                retry_after: Some("0"),
+                challenge: false,
+                network_failure: true,
+            }).unwrap();
+            let state = governor.load().unwrap();
+            assert!(state.cooldown_until_ms >= observed);
+            assert_eq!(state.network_failures, 1);
+            assert_eq!(state.pending, None);
+        }
+    }
+
+    #[test]
+    fn observed_429_any_invalid_or_missing_retry_after_keeps_default_floor() {
+        let cases: &[&[Option<&str>]] = &[
+            &[],
+            &[None],
+            &[Some("not-a-date")],
+            &[Some("0"), None],
+            &[None, Some("0")],
+            &[Some("0"), Some("invalid")],
+            &[Some("invalid"), Some("0")],
+            &[Some("3600"), Some("invalid")],
+        ];
+        for values in cases {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            let before = super::now_ms().unwrap();
+            lease.observe_http_many(429, values.iter().copied(), false).unwrap();
+            let floor = before + 1_800_001;
+            assert!(lease.state.cooldown_until_ms >= floor);
+            if values.contains(&Some("3600")) {
+                assert!(lease.state.cooldown_until_ms >= before + 3_600_001);
+            }
+            assert_eq!(governor.load().unwrap().cooldown_until_ms, lease.state.cooldown_until_ms);
+            lease.finish(Outcome::NetworkFailure).unwrap();
+            assert!(governor.load().unwrap().cooldown_until_ms >= floor);
+        }
+    }
+
+    #[test]
+    fn observed_retry_after_zero_and_non_429_invalid_keep_existing_semantics() {
+        for (status, values) in [
+            (429, vec![Some("0")]),
+            (429, vec![Some("0"), Some("0")]),
+            (503, vec![Some("0"), None]),
+        ] {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            lease.observe_http_many(status, values, false).unwrap();
+            let after = super::now_ms().unwrap();
+            assert!(lease.state.cooldown_until_ms <= after + 1);
+            lease.finish(Outcome::Http {
+                status,
+                retry_after: Some("0"),
+                challenge: false,
+                network_failure: false,
+            }).unwrap();
+            let after_finish = super::now_ms().unwrap();
+            assert!(governor.load().unwrap().cooldown_until_ms <= after_finish + 1);
+        }
+    }
+
+    #[test]
+    fn observed_multiple_headers_keep_challenge_and_network_failure_distinct() {
+        for (status, challenge) in [(401, false), (403, false), (200, true)] {
+            let fixture = Fixture::new();
+            let governor = fixture.open();
+            let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
+            let before = super::now_ms().unwrap();
+            lease.observe_http_many(status, [Some("0"), Some("15")], challenge).unwrap();
+            let observed = lease.state.cooldown_until_ms;
+            assert!(observed >= before + 15_001);
+            lease.finish(Outcome::NetworkFailure).unwrap();
+            let state = governor.load().unwrap();
+            assert!(!state.safety_latched);
+            assert!(state.cooldown_until_ms >= observed);
+            assert_eq!(state.network_failures, 1);
+            assert_eq!(state.pending, None);
+        }
     }
 
     #[test]

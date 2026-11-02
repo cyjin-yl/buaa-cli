@@ -11,7 +11,7 @@ Before claiming an external issue, check live repository permission, readiness, 
 - No real campus mutation is authorized by the development work order.
 - All future remote adapters, workers and skills-fs mounts must use the same process-shared governor, retaining its lease through request completion/body processing. Never construct a separate worktree-local limiter or parallel account key to increase throughput.
 - Cache first; conditional/incremental requests only when needed. One in-flight request; at least five seconds between requests; background observations at least fifteen minutes apart. Configuration may only make these limits slower.
-- Honor Retry-After. HTTP 429 without explicit delay imposes at least thirty minutes. Auth rejection, CAPTCHA and lock signals latch. One authentication attempt per deliberate operator resume; no automatic login refresh, fallback or retry. Never bypass a challenge or fabricate attendance/completion.
+- Honor Retry-After. HTTP 429 without explicit delay imposes at least thirty minutes. Auth rejection, CAPTCHA and lock signals are reported per request and recorded in the outcome history, but no durable latch exists: deliberate re-login is permitted at any time. Never bypass a challenge or fabricate attendance/completion.
 - Enrol/drop/evaluation/submission/tickets/destructive drive operations require exact typed intent, immutable preview, plan/commit separation, idempotency and authorized postcondition checks.
 - Credentials belong in a private keyring or stdin, never argv, public fixtures, diagnostic URLs, logs or repository files. Do not print authentication configuration to diagnose access.
 

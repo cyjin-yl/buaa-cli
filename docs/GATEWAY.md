@@ -1,6 +1,10 @@
 # Governed campus gateway client
 
-BUAA CLI contains a real fixed-endpoint SRun client for usage, login and logout. Development proof is entirely offline with synthetic loopback responses. **No real campus gateway request, authentication attempt or logout has been authorized or performed**, so live compatibility remains unverified.
+BUAA CLI contains a fixed-endpoint SRun client for usage, login and logout.
+Development tests use synthetic loopback responses. One separately authorized,
+governed read-only usage observation succeeded on 2026-10-21; it sent no
+credentials and did not perform a login or logout. Login, logout and the
+account-specific AC identity remain live-unverified.
 
 The adapter deliberately excludes behaviors observed in references: HTTP AC discovery, network-interface/DNS probing, credential files, password arguments, raw response errors, invalid-certificate modes, multi-dial, automatic retry, automatic login refresh and continuing past a security-risk/challenge notice.
 
@@ -45,7 +49,7 @@ The literal example values are placeholders, not a working account or discovered
 
 Challenge acquisition is one governed interactive request. Credential submission is a second request after the global completion gap and uses `RequestKind::Authentication`, consuming the one-shot permission. There is no retry/fallback loop. A final send failure, indeterminate 2xx body, credential rejection, 401/403, reliable challenge or lock signal leaves authentication latched until another deliberate `resume-auth`. The CLI zeroizes the original login stdin buffer when the command returns, and the parsed password field zeroizes on every drop path; challenge-bound derived fields live only for the bounded request and are never stored or returned.
 
-The original Rust XEncode mixer uses the pinned-reference grouping `A + (B ^ C) + D` with wrapping `u32` additions. Source revisions, license boundaries and the formula are documented in [REFERENCES](REFERENCES.md#gateway-xencode-formula-review). These are community protocol references, not an official or live compatibility guarantee; no real login has been attempted.
+The original Rust XEncode mixer uses the pinned-reference grouping `A + (B ^ C) + D` with wrapping `u32` additions. The `acid` field in the xencoded info JSON is a string (matching the reference), not a numeric `u32`. Source revisions, license boundaries and the formula are documented in [REFERENCES](REFERENCES.md#gateway-xencode-formula-review). The primary protocol reference is [fontlos/buaa-api](https://github.com/fontlos/buaa-api) (MIT).
 
 ## Logout plan and commit
 
@@ -111,4 +115,10 @@ Prior synthetic real-loopback evidence:
 
 The 2026-09-24 formula correction was manually exercised by invoking the actual `crypto::derive()` path with synthetic ASCII/normal-token and UTF-8/short-key inputs; both outputs matched a separately calculated oracle for the pinned formula. Automated tests were not run for this follow-up, so the new in-source vectors remain unexecuted.
 
-The prior loopback tests establish the surrounding client behavior, not current campus endpoint readiness, `ac_id` correctness, owner account permission or a successful live session. The manual XEncode smoke exercised only synthetic values and does not establish live compatibility. The aggregate gateway acceptance remains partial because bounded live usage/login/logout observations are still missing. No development prompt alone authorizes those observations.
+The prior loopback tests establish the surrounding client behavior, not
+`ac_id` correctness, owner account permission or a successful live session.
+The manual XEncode smoke exercised only synthetic values and does not establish
+live compatibility. The separate 2026-10-21 usage observation is recorded in
+`acceptance.json`; it does not prove login or logout. Aggregate gateway
+acceptance remains partial, and new authentication or account mutations still
+require their own explicit authorization and typed intent.

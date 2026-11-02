@@ -10,6 +10,28 @@ implementation includes local calculators and bounded, cache-first read slices;
 network observations are deliberately opt-in and remain subject to the shared
 governor.
 
+## Repository and publication boundary
+
+Development uses the private [Gitea primary](https://doesvm.icefish-exponential.ts.net:8444/ezra/buaa-cli).
+Its existing daily synchronization considers **every branch and tag** for
+non-force publication to the public GitHub downstream. A successful sync can
+therefore publish pushed drafts and checkpoints as well as `main`; deletion
+from Gitea does not automatically delete a downstream ref. Treat every push
+as public publication and never commit credentials, private responses, or
+other non-public material. A private Gitea visibility setting is not an
+exclusion from this synchronization. Removing a published downstream ref
+requires a separately authorized GitHub-side action; deletion does not prove
+that already distributed content has been erased.
+
+Gitea and GitHub pull requests have separate numbers, reviews and checks.
+An approval or successful check on one host is not evidence of an approval or
+check on the other. Use `gh stack` for the ordered local branches required by
+the contributor contract, and review the Gitea pull-request chain on the
+primary. A Gitea draft does not itself register a GitHub native stack or
+authorize a merge. Do not merge the GitHub downstream as a substitute for
+integrating the primary; integrate on Gitea only after the exact-head review
+and acceptance gates are satisfied.
+
 ## Status boundary
 
 Implemented or available as bounded slices:
@@ -18,9 +40,15 @@ Implemented or available as bounded slices:
 - **Cache-first reads:** exact-URL archive lookup/capture, the pinned Fengrubei release, the official organization directory, selected announcement/document sources, public SPOC surface metadata, and authorized local recording-catalog search.
 - **Gateway client:** usage, login/logout planning, and recovery contracts are implemented and loopback-tested; live campus compatibility and account operations are **unverified**.
 
-These slices do not complete the broader catalog. Full adapter coverage, general safe raw-response fallback, and end-to-end online verification remain unfinished. No campus authentication, campus mutation, live grade read, remote recording retrieval, all-college announcement history, or authenticated SPOC course/material adapter is claimed. Native subtitle normalization is not player delivery or synchronized playback.
+These slices do not complete the broader catalog. Full adapter coverage, general safe raw-response fallback, and end-to-end online verification remain unfinished. Dated authorized session and recording observations in the status evidence are bounded reads, not general campus compatibility. Campus mutation, live grade reads, all-college announcement history, and authenticated SPOC course/material coverage remain unverified. Native subtitle normalization is not player delivery or synchronized playback.
 
 The machine-readable status projection is [`acceptance.json`](acceptance.json). See [`docs/STATUS.md`](docs/STATUS.md) for evidence and blockers; neither links nor a status entry are a substitute for an implemented command.
+
+CAS development notes are archived in
+[`docs/CAS-LOGIN-PROTOCOL.md`](docs/CAS-LOGIN-PROTOCOL.md), with the bounded
+BUAA observation in
+[`docs/SSO-LOGIN-PROTOCOL.md`](docs/SSO-LOGIN-PROTOCOL.md). Browser observations
+do not establish a CLI session or prove the cause of a callback error.
 
 ## Build and discover
 
@@ -34,7 +62,7 @@ cargo build --locked --offline
 ./target/debug/buaa schema
 ```
 
-`help` describes the command surface, `capabilities` emits the acceptance manifest, and `schema` emits the input/output contracts and error codes. Pending or deferred capabilities are not available commands. The public [devcontainer definition](.devcontainer/README.md) describes a pinned, credential-free environment; the definition alone does not prove a successful image build.
+`help` describes the command surface, `capabilities` emits the acceptance manifest, and `schema` emits the input/output contracts and error codes. Pending or deferred capabilities are incomplete; some expose bounded partial or blocked commands, which do not establish acceptance. The public [devcontainer definition](.devcontainer/README.md) describes a pinned, credential-free environment; the definition alone does not prove a successful image build.
 
 ## Command overview
 
@@ -49,11 +77,126 @@ cargo build --locked --offline
 | Directory | `organizations list [--online\|--refresh]` | Reads one fixed official teaching/research directory; it does not crawl linked colleges. See [`docs/ORGANIZATIONS.md`](docs/ORGANIZATIONS.md). |
 | Announcements | `announcements list\|article\|document\|history`; `announcements college-source <college> [root\|notices\|public-notices]` | Selected source-bound pages and documents only; broader adapters, attachments, and history remain partial. |
 | Public SPOC | `spoc surface [root\|entry]`; `spoc script` | Sanitized public-surface metadata only; this is not authenticated course/material access. See [`docs/SPOC.md`](docs/SPOC.md). |
+| Smart reads | `smart [--online]`; `smart session [--online]` | Existing cookie/token reads, or one explicit in-memory CAS login followed by one classrooms/library read. Strict-TLS loopback and local CLI proof only; no live campus acceptance, persistence, automatic refresh or attendance mutation. |
+| iHome appeals | `ihome list\|detail [--online]`; `ihome session [--online]` | Caller-token reads, or one explicit in-memory CAS login followed by one list page/detail. No session persistence, retry or attachment fetching. Offline/native proof only; no live campus acceptance. |
+| Course selection | `enrol [--online]` | Separate historical IEAS local list/preview and modern yjsxk existing-session selected-record read. No login, enrolment, withdrawal or authoritative postcondition. See the application boundary below. |
+| Aerospace study | `aerospace materials\|search\|fetch\|practice [--online]` | Pinned community inventory; only the exact reviewed root README and LICENSE are retrievable. Question bank, question images, fonts, implementation and aliases remain excluded. Practice uses authorized local input only. |
+| Contribution discovery | `contribution scan` | Protected-stdin GitHub or fixed-primary Gitea read. `online: true` is the explicit network gate; no issue claim, PR creation, merge or campus permission is granted. |
 | Gateway and governor | `gateway usage` and explicit operation flows; `governor boot-review-plan\|boot-review-commit --offline` | Cache-first gateway usage and local safety flows; no live account operation is claimed. See [`docs/GATEWAY.md`](docs/GATEWAY.md). |
 | Defect reporting | `report` | Explicitly writes a GitHub Issue from operator-sanitized input through an installed, authenticated `gh`; authentication failures and uncertain writer outcomes remain explicit. The command does not redact private content: never attach credentials or raw private responses. |
 
 For exact argument shapes, supported college values, output fields, and bounds,
 use `./target/debug/buaa schema` rather than relying on a summary table.
+
+### Explicit Smart session
+
+`smart session --online` accepts JSON only through protected stdin: `authorized`,
+`username`, `password`, `intent` and `read`. The intent must be exactly
+`LOGIN <username> smart <service>`, where the service is `classrooms` or `library`.
+The object-only `read` selects an enabled flag and either classrooms'
+`campus_id`/`date`, or a library `premises`, `areas`, `times` or `seats` query.
+The complete contracts are `commands.smart.session.input` and `.output` in
+`buaa schema`. Caller-supplied cookies, tokens, CAS values and write operations
+are not accepted in this session read. The original `smart` cookie/token
+contract remains separate; its obsolete caller-supplied library login is removed.
+
+A disabled read performs no network or account-state I/O. An enabled read
+requires explicit authorization, the exact intent, a valid local query and
+`--online` before transport is opened. One existing Authentication lease spans
+the selected CAS flow, the library's one-time exchange when selected, and the
+single business read. Cookies and tokens remain private to the invocation;
+there is no stored-session reuse, automatic login refresh or retry. Challenges,
+deferrals and unconfirmed authentication stop the flow. A complete HTTP failure
+is not presented as a password verdict. Authentication responses are never raw
+read evidence; credential echoes in the final response are withheld.
+
+### Source-faithful iHome reads
+
+`ihome list`, `ihome detail` and `ihome session` accept JSON only through
+stdin; `buaa schema` publishes all three contracts. Legacy list/detail accept
+a caller-supplied bearer. Their optional `token_source` remains a caller
+declaration, not proof of token acquisition or current lifetime.
+
+`ihome session [--online]` requires `authorized: true`, `username`, `password`,
+the exact intent `LOGIN <username> ihome`, and a `read` object selecting
+`operation: "list"` or `"detail"` with `enabled: true`. A list selects one page
+(`limit` 1–100, default 20; `page` defaults to 1); detail requires an unsigned
+`id`. Valid disabled reads check shape but not credential values or permission,
+and perform no account-state or network I/O. Enabled reads validate locally
+before constructing the client. Caller tokens, cookies, URLs and writes are
+not session inputs.
+
+One existing Authentication lease covers the fixed CAS flow and exactly one
+HTTPS business GET. The exact reviewed HTTP callback is upgraded to HTTPS;
+the terminal `/web/` fragment token is consumed without fetching its URL.
+No authentication response, token or read response is persisted or cached;
+there is no automatic pagination, refresh or retry. Final responses are checked
+against all held credential material before projection or safe fallback.
+A token or positive public listing does not establish account identity or
+full rights. Strict-TLS loopback and actual local CLI proof are not live-campus
+acceptance.
+
+Records without a title remain untitled; supplied titles and dates are copied,
+not reconstructed. HTTP 200 alone is not business success: numeric `code=20000`
+and Boolean `success=true` are required. Negative or unknown business envelopes
+return degraded evidence with safe original bytes rather than an empty result.
+
+Pagination must match the requested page/limit and declared total/last page.
+Missing or inconsistent metadata, repeated IDs, changing totals and later read
+failures preserve valid records but stop traversal without advancing a cursor.
+A consistent bounded window may return `has_more`; advance incremental cursors
+only after completing its traversal. Unknown idle-window and attachment
+contracts remain unknown; declared URLs are neither fetched nor a verified
+complete attachment inventory. No current-campus iHome acceptance is claimed.
+
+Issued response cookies are not adopted or transmitted. Their values remain in
+a bounded, invocation-only privacy guard across the whole legacy list traversal,
+including later fresh and cached bodies and MIME metadata. Cookie-issuing
+responses are not cached. Inspection exhaustion withholds evidence rather than
+exporting a reversible fallback; independently observed challenge, rejection
+and Retry-After facts still govern settlement.
+
+### Separate course-selection applications
+
+IEAS is the default application. Its local preview is not a live application
+binding: historical academic-year `pageXnxq` and local `page_xnxq` spellings are
+not interchangeable. A current independently trusted strict-HTTPS IEAS origin,
+authenticated account/term scope and complete postcondition remain missing.
+Online IEAS operations and library postcondition verification remain blocked;
+supplying a synthetic Session does not establish those facts.
+
+The separate protected-stdin contract for a yjsxk observation is
+`application: "yjsxk"`, `operation: "selected"`, an exact five-digit `xnxqdm`,
+`authorized: true` and an existing `session_cookie`. The command must also have
+`--online`. Obtain the complete object-only contract from `buaa schema`; do not
+put the cookie in argv, shell history, examples or the repository.
+
+This reader makes one fixed HTTPS GET, without proxies, login, redirects,
+retry, polling, cookie adoption or persistence. The requested term filters
+native `XNXQDM`; `BJDM`, selected-row `WID` and `YYZ` keep separate roles.
+Source order and duplicate rows remain intact, and missing facts remain null.
+Neither an empty list nor an observed row establishes authenticated account
+identity, complete selection, withdrawal, current rights or a final
+postcondition. No current authenticated yjsxk deployment acceptance is claimed.
+Enrolment, withdrawal and wish-value writes remain blocked.
+
+### Forge-specific contribution discovery
+
+`contribution scan` defaults to GitHub. Selecting `provider: "gitea"` admits
+only `repository: "ezra/buaa-cli"` on the fixed HTTPS primary; it requires
+`gitea_token` through protected JSON stdin. The GitHub provider uses
+`github_token`; cross-provider credentials are refused. Offline scans perform
+no requests or credential lookup. Online reads require `online: true` in that
+same stdin object, not a command-line token.
+
+Gitea issues and timeline events are enumerated to a real empty page, within
+the published bounds. `X-Total-Count` detects disagreement, not termination.
+Comments are fetched once and require a matching count and unique identities.
+Unknown, foreign, contradictory or incomplete PR/claim evidence excludes an
+issue rather than making it eligible. Discovery is a point-in-time observation:
+refresh live permission, discussion, claim and PR state before any separately
+authorized write. Gitea evidence does not create a GitHub stack or transfer
+approvals between hosts.
 
 ## Examples
 
