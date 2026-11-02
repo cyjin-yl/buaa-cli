@@ -123,6 +123,29 @@ impl CookieGuard<'_> {
                 }
             }
         }
+        // Composite carriers: a base64 payload embedded after an ordinary
+        // prefix must not bypass inspection. Decode every contiguous
+        // base64-alphabet run of at least eight characters under the same
+        // review budget. A run that fails to decode is not a valid
+        // encoding and is treated like the plain-identifier contract; a run
+        // that decodes enters the same echo and nested-grammar review as
+        // the whole-scalar path.
+        for run in value
+            .as_bytes()
+            .split(|byte| {
+                !(byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_'))
+            })
+            .filter(|run| run.len() >= 8 && run.len() % 4 != 1)
+        {
+            let url_alphabet = run.iter().any(|&byte| matches!(byte, b'-' | b'_'));
+            let engine = if url_alphabet { &URL_SAFE_NO_PAD } else { &STANDARD_NO_PAD };
+            let mut decoded = Zeroizing::new(Vec::with_capacity(run.len() / 4 * 3 + 3));
+            if engine.decode_vec(run, &mut decoded).is_ok()
+                && self.review_decoded(&decoded, depth + 1, remaining)
+            {
+                return true;
+            }
+        }
         if matches!(trimmed.as_bytes().first(), Some(b'{' | b'[' | b'"')) {
             // Visit every occurrence, including duplicate members. Building a
             // Value first could discard a credential hidden in an earlier one.
@@ -1133,6 +1156,25 @@ mod tests {
         let admission = synthetic(&body.to_string(), "sid=abc_123");
         assert_eq!(admission.output["result"], "blocked");
         assert_eq!(admission.output["evidence"]["body_withheld"], true);
+
+        // A composite carrier: an ordinary prefix plus a base64 payload must
+        // not bypass the scalar review, or it could hide a reversibly encoded
+        // credential the whole-scalar path cannot see.
+        let composite = format!(
+            "note:{}",
+            STANDARD.encode(r#"{"v":"abc_123"}"#)
+        );
+        let body = json!({"xkjgList":[{"XNXQDM":"20261","BJDM":composite}]});
+        let admission = synthetic(&body.to_string(), "sid=abc_123");
+        assert_eq!(admission.output["result"], "blocked");
+        assert_eq!(admission.output["evidence"]["body_withheld"], true);
+        // The ordinary composite control keeps its plain projection.
+        let body = json!({"xkjgList":[{"XNXQDM":"20261","BJDM":"note:plain"}]});
+        let admission = synthetic(&body.to_string(), "sid=abc_123");
+        assert_eq!(admission.output["result"], "completed");
+        assert_eq!(
+            admission.output["data"]["records"][0]["BJDM"], "note:plain"
+        );
     }
 
     #[test]

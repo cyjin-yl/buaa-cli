@@ -1795,7 +1795,12 @@ fn gitea_event_link(item: &Value) -> EventLink {
                 Some(_) => EventLink::Unknown,
             },
             // The reference target itself is unreadable: potentially linked.
-            _ => from_url(url_evidence),
+            // Reference metadata absent: the URL signal carries the event.
+            None => from_url(url_evidence),
+            // A present but unreadable reference target keeps the event
+            // unresolved: malformed primary evidence is never dismissed by
+            // a valid secondary URL.
+            Some(_) => EventLink::Unknown,
         },
         // Any other event carrying a PR URL is potentially linked evidence.
         _ => match url_evidence {
@@ -3779,6 +3784,31 @@ mod tests {
             ));
             assert!(pages.0.borrow().is_empty());
         }
+
+        // A present but malformed ref_issue (non-object) stays unresolved
+        // even when a valid secondary pull_request_url resolves elsewhere:
+        // primary evidence is never dismissed by a secondary signal. Before
+        // the fix the issue was published as a candidate after a NoLink.
+        let malformed_primary = json!({
+            "id": 904, "type": "pull_ref",
+            "ref_issue": "garbage",
+            "pull_request_url": format!("{GITEA_BASE}/pulls/42")
+        });
+        let pages = gpages(
+            [repository_page()]
+                .into_iter()
+                .chain(issue_pages())
+                .chain(timeline_pages(malformed_primary))
+                .collect(),
+        );
+        let output = gitea_scan_or_panic(scan_with_reader(&gitea_request(), &pages));
+        assert_eq!(
+            output["excluded"][0]["reasons"],
+            json!(["linked_pr_status_unknown"])
+        );
+        assert_eq!(output["candidates"], json!([]));
+        // No pull request read is performed for the unresolved link.
+        assert!(pages.0.borrow().is_empty());
     }
 
     #[test]
