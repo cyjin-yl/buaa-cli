@@ -129,18 +129,30 @@ impl CookieGuard<'_> {
         // review budget. A run that fails to decode is not a valid
         // encoding and is treated like the plain-identifier contract; a run
         // that decodes enters the same echo and nested-grammar review as
-        // the whole-scalar path.
+        // the whole-scalar path. ASCII whitespace stays inside a run and is
+        // stripped before decoding, matching the folded-base64 handling of
+        // the whole-scalar path; splitting folded groups into short runs
+        // would drop a credential-bearing payload between them.
         for run in value
             .as_bytes()
             .split(|byte| {
-                !(byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_'))
+                !(byte.is_ascii_alphanumeric()
+                    || byte.is_ascii_whitespace()
+                    || matches!(byte, b'+' | b'/' | b'-' | b'_'))
             })
-            .filter(|run| run.len() >= 8 && run.len() % 4 != 1)
+            .filter_map(|run| {
+                let compact = run
+                    .iter()
+                    .copied()
+                    .filter(|byte| !byte.is_ascii_whitespace())
+                    .collect::<Vec<u8>>();
+                (compact.len() >= 8 && compact.len() % 4 != 1).then_some(compact)
+            })
         {
             let url_alphabet = run.iter().any(|&byte| matches!(byte, b'-' | b'_'));
             let engine = if url_alphabet { &URL_SAFE_NO_PAD } else { &STANDARD_NO_PAD };
             let mut decoded = Zeroizing::new(Vec::with_capacity(run.len() / 4 * 3 + 3));
-            if engine.decode_vec(run, &mut decoded).is_ok()
+            if engine.decode_vec(&run, &mut decoded).is_ok()
                 && self.review_decoded(&decoded, depth + 1, remaining)
             {
                 return true;
@@ -1165,6 +1177,22 @@ mod tests {
             STANDARD.encode(r#"{"v":"abc_123"}"#)
         );
         let body = json!({"xkjgList":[{"XNXQDM":"20261","BJDM":composite}]});
+        let admission = synthetic(&body.to_string(), "sid=abc_123");
+        assert_eq!(admission.output["result"], "blocked");
+        assert_eq!(admission.output["evidence"]["body_withheld"], true);
+        // The same carrier folded into space-separated groups must also be
+        // refused: whitespace folding does not make a credential reversible.
+        let composite_folded = format!(
+            "note:{}",
+            STANDARD
+                .encode(r#"{"v":"abc_123"}"#)
+                .as_bytes()
+                .chunks(4)
+                .map(|bytes| std::str::from_utf8(bytes).unwrap())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let body = json!({"xkjgList":[{"XNXQDM":"20261","BJDM":composite_folded}]});
         let admission = synthetic(&body.to_string(), "sid=abc_123");
         assert_eq!(admission.output["result"], "blocked");
         assert_eq!(admission.output["evidence"]["body_withheld"], true);
