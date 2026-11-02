@@ -457,19 +457,6 @@ pub(crate) fn list_with_client(client: &ArchiveClient) -> Result<Value, Error> {
     client.get_with_admission(&url, false, normalize)
 }
 
-#[cfg(all(feature = "directory-admission-proof", not(feature = "directory-admission-proof-candidate")))]
-pub(crate) fn normalize_for_proof(response: &Response) -> Result<Value, Error> {
-    normalize(response, CookieAdmission::Unknown)
-}
-
-#[cfg(feature = "directory-admission-proof-candidate")]
-pub(crate) fn normalize_for_proof(
-    response: &Response,
-    admission: crate::net::CookieAdmission,
-) -> Result<Value, Error> {
-    normalize(response, admission)
-}
-
 pub fn schema() -> Value {
     let mut schema = json!({"list": {
         "input": {"type":"null","description":"No stdin. Default is private cache only; --online and --refresh are explicit options."},

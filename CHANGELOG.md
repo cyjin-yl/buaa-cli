@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Separate historical IEAS preview/list from the modern yjsxk existing-session
+  selected-record reader. Keep native source roles and unknown account,
+  completeness and postcondition facts explicit; no login or academic write.
+  Retire the synthetic IEAS postcondition emitter and refuse verification
+  before transport while its authoritative contract is missing.
+- Add fixed-primary Gitea contribution discovery with provider-specific stdin
+  credentials, native empty-terminal pagination, single-fetch comments and
+  conservative reconciliation of every linked-PR signal. Screen reversible
+  token and complete Authorization-header echoes before projection.
+- Bind Aerospace retrieval to two individually reviewed immutable README and
+  LICENSE objects. Keep every other entry excluded, reject duplicate practice
+  attestations at every JSON depth, and never label a rejected blob verified.
+- Retain issued-cookie privacy guards across fresh and cached iHome pages.
+  Bounded nested-document inspection refuses exhaustion without losing
+  independently observed authentication, challenge or cooldown facts.
+- Admit the native transcript no-data response only under its exact reviewed
+  object envelope; positional arrays, duplicate fields and trailing documents
+  refuse. Publish disjoint normal-track and no-data output schemas without
+  promoting the caller's requested GUID into an upstream declaration.
+- Remove obsolete default-off directory/viewer proof features and examples
+  after their production cutover; retain unconditional admission fixes and
+  permanent test-only isolation and transport seams.
 - Preserve exact Git-valid control-bearing source names in department metadata
   under unchanged recursive object proof. Keep operator retrieval paths strict;
   one source name outside that input policy no longer degrades the whole tree.

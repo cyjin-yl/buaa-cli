@@ -1179,9 +1179,9 @@ pub struct ArchiveClient {
     mode: CacheMode,
     profile: SourceProfile,
     directory: File,
-    #[cfg(any(test, feature = "directory-admission-proof"))]
+    #[cfg(test)]
     test_route: Option<std::net::SocketAddr>,
-    #[cfg(any(test, feature = "directory-admission-proof"))]
+    #[cfg(test)]
     test_governor: Option<std::path::PathBuf>,
 }
 
@@ -1248,9 +1248,9 @@ impl ClassroomClient {
                 mode,
                 profile: SourceProfile::Classroom,
                 directory,
-                #[cfg(any(test, feature = "directory-admission-proof"))]
+                #[cfg(test)]
                 test_route: None,
-                #[cfg(any(test, feature = "directory-admission-proof"))]
+                #[cfg(test)]
                 test_governor: None,
             },
             cookie: RequestCookie {
@@ -1444,9 +1444,9 @@ impl ArchiveClient {
             mode,
             directory,
             profile,
-            #[cfg(any(test, feature = "directory-admission-proof"))]
+            #[cfg(test)]
             test_route: None,
-            #[cfg(any(test, feature = "directory-admission-proof"))]
+            #[cfg(test)]
             test_governor: None,
         })
     }
@@ -1561,7 +1561,7 @@ impl ArchiveClient {
     }
 
     fn open_governor(&self) -> Result<Governor, Error> {
-        #[cfg(any(test, feature = "directory-admission-proof"))]
+        #[cfg(test)]
         match (&self.test_governor, self.test_route) {
             (Some(path), Some(address)) if address.ip().is_loopback() => {
                 return Governor::isolated_for_test(path).map_err(|_| governor_error());
@@ -1587,9 +1587,9 @@ impl ArchiveClient {
             .pool_max_idle_per_host(0)
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10));
-        #[cfg(not(any(test, feature = "directory-admission-proof")))]
+        #[cfg(not(test))]
         let builder = builder.https_only(true);
-        #[cfg(any(test, feature = "directory-admission-proof"))]
+        #[cfg(test)]
         let builder = builder.https_only(self.test_route.is_none());
         builder.build().map_err(|_| {
             Error::new(
@@ -2029,7 +2029,7 @@ impl ArchiveClient {
     }
 
     fn request_url(&self, url: &Url) -> Url {
-        #[cfg(any(test, feature = "directory-admission-proof"))]
+        #[cfg(test)]
         if let Some(address) = self.test_route {
             let mut routed = url.clone();
             routed.set_scheme("http").expect("test HTTP scheme");
@@ -2427,6 +2427,31 @@ pub(crate) fn issues_session_cookie(headers: &reqwest::header::HeaderMap) -> boo
     headers.contains_key(reqwest::header::SET_COOKIE)
 }
 
+/// Decode one percent/form view into caller-owned storage without allocating.
+/// Credential reviewers keep that storage zeroizing and bounded.
+pub(crate) fn percent_decode_into(input: &[u8], plus_as_space: bool, out: &mut Vec<u8>) {
+    fn hex(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' && index + 2 < input.len()
+            && let (Some(high), Some(low)) = (hex(input[index + 1]), hex(input[index + 2]))
+        {
+            out.push((high << 4) | low);
+            index += 3;
+            continue;
+        }
+        out.push(if plus_as_space && input[index] == b'+' { b' ' } else { input[index] });
+        index += 1;
+    }
+}
+
 /// Compare the reversible forms supported by these readers: literal and
 /// JSON-escaped text, standard/URL-safe base64 with or without padding, and
 /// form/percent-decoded fields. JSON token decoding stays with each caller.
@@ -2477,37 +2502,15 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
     // A visible string is not necessarily a form field. Decode the entire
     // candidate before splitting on `=` or `&`, retaining both literal-plus
     // and form-plus interpretations. Each view starts from the original bytes.
-    fn decode_whole(input: &[u8], plus_as_space: bool, out: &mut Vec<u8>) {
-        fn hex(byte: u8) -> Option<u8> {
-            match byte {
-                b'0'..=b'9' => Some(byte - b'0'),
-                b'a'..=b'f' => Some(byte - b'a' + 10),
-                b'A'..=b'F' => Some(byte - b'A' + 10),
-                _ => None,
-            }
-        }
-        let mut index = 0;
-        while index < input.len() {
-            if input[index] == b'%' && index + 2 < input.len()
-                && let (Some(high), Some(low)) = (hex(input[index + 1]), hex(input[index + 2]))
-            {
-                out.push((high << 4) | low);
-                index += 3;
-                continue;
-            }
-            out.push(if plus_as_space && input[index] == b'+' { b' ' } else { input[index] });
-            index += 1;
-        }
-    }
     let mut decoded = Zeroizing::new(Vec::with_capacity(candidate.len()));
     if has_percent {
-        decode_whole(candidate, false, &mut decoded);
+        percent_decode_into(candidate, false, &mut decoded);
         if matches(&decoded) { return true; }
     }
     if has_plus {
         decoded.fill(0);
         decoded.clear();
-        decode_whole(candidate, true, &mut decoded);
+        percent_decode_into(candidate, true, &mut decoded);
         if matches(&decoded) { return true; }
     }
     url::form_urlencoded::parse(candidate).any(|(mut key, mut value)| {
@@ -2655,189 +2658,6 @@ fn invalid_url() -> Error {
         "egress_denied",
         "only approved HTTPS public-source routes are supported",
     )
-}
-
-/// Temporary native-library proof interface. Absent from default builds.
-/// No parsing/admission alternatives: these wrappers only select isolated
-/// resources or forward to the actual directory and attribution code.
-#[cfg(feature = "directory-admission-proof")]
-pub mod directory_proof {
-    use super::*;
-    use serde_json::Value;
-    use std::os::unix::fs::DirBuilderExt;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    /// Owns one newly created private root. No HOME/XDG/passwd-home lookup.
-    pub struct ProofFixture(PathBuf);
-
-    impl ProofFixture {
-        pub fn new() -> Self {
-            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-            for _ in 0..32 {
-                let path = PathBuf::from("/tmp").join(format!(
-                    "buaa-directory-proof-{}-{}",
-                    std::process::id(),
-                    SEQUENCE.fetch_add(1, Ordering::Relaxed)
-                ));
-                match std::fs::DirBuilder::new().mode(0o700).create(&path) {
-                    Ok(()) => return Self(path),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(error) => panic!("cannot create private directory proof root: {error}"),
-                }
-            }
-            panic!("cannot allocate a fresh directory proof root");
-        }
-
-        pub fn root(&self) -> &Path {
-            &self.0
-        }
-
-        pub fn cache_directory(&self) -> PathBuf {
-            self.0.join("organizations-cache")
-        }
-
-        pub fn governor_lock_path(&self) -> PathBuf {
-            self.0.join("governor/governor.lock")
-        }
-
-        /// Matches Fixture::organization_client: both overrides are mandatory,
-        /// the cache is private and the route is loopback with a nonzero port.
-        pub fn organizations_client(
-            &self,
-            mode: CacheMode,
-            address: std::net::SocketAddr,
-        ) -> Result<ArchiveClient, Error> {
-            if !address.ip().is_loopback() || address.port() == 0 || !self.0.is_absolute() {
-                return Err(Error::new("invalid_input", "invalid isolated directory fixture"));
-            }
-            let _root = governor::open_directory(&self.0, false, true)
-                .map_err(|_| cache_error())?;
-            Ok(ArchiveClient {
-                mode,
-                profile: SourceProfile::Organizations,
-                directory: governor::open_directory(&self.cache_directory(), true, true)
-                    .map_err(|_| cache_error())?,
-                test_route: Some(address),
-                test_governor: Some(self.0.join("governor")),
-            })
-        }
-
-        /// Uses the existing safety defaults, never shortened policy.
-        pub fn isolated_governor(&self) -> Result<Governor, Error> {
-            Governor::isolated_for_test(&self.0.join("governor"))
-                .map_err(|_| governor_error())
-        }
-    }
-
-    impl Drop for ProofFixture {
-        fn drop(&mut self) {
-            if let Err(error) = std::fs::remove_dir_all(&self.0) {
-                if std::thread::panicking() {
-                    eprintln!("directory proof cleanup failed: {error}");
-                } else {
-                    panic!("directory proof cleanup failed: {error}");
-                }
-            }
-        }
-    }
-
-    /// Only robots is seeded via the real save(). Never seed the target body
-    /// for transport/persistence proof. Legacy target records are written by
-    /// the external consumer in their literal version-1 representation.
-    pub fn seed_robots(client: &ArchiveClient, body: &[u8]) -> Result<(), Error> {
-        require_isolated(client)?;
-        client.save(&Entry {
-            #[cfg(feature = "directory-admission-proof-candidate")]
-            admission: CookieAdmission::Unknown,
-            response: Response {
-                url: ORGANIZATIONS_ROBOTS_URL.to_owned(),
-                status: 200,
-                headers: BTreeMap::new(),
-                body: body.to_vec(),
-                sha256: hash(body),
-                fetched_at_unix_ms: unix_ms()?,
-                cache_status: CacheStatus::Miss,
-                revalidated_at_unix_ms: None,
-                revalidation_status: None,
-            },
-            immutable: false,
-            etag: None,
-            last_modified: None,
-        })
-    }
-
-    pub fn directory_url() -> Result<Url, Error> {
-        Url::parse(ORGANIZATIONS_URL).map_err(|_| invalid_url())
-    }
-
-    fn require_isolated(client: &ArchiveClient) -> Result<(), Error> {
-        if client.profile != SourceProfile::Organizations
-            || !client.test_route.is_some_and(|address| {
-                address.ip().is_loopback() && address.port() != 0
-            })
-            || !client.test_governor.as_ref().is_some_and(|path| path.is_absolute())
-        {
-            return Err(Error::new("invalid_input", "not an isolated directory fixture"));
-        }
-        Ok(())
-    }
-
-    pub fn list(client: &ArchiveClient) -> Result<Value, Error> {
-        require_isolated(client)?;
-        crate::organizations::list_with_client(client)
-    }
-
-    // Opaque proof-only carrier prevents exposing the production crate-private
-    // CookieAdmission enum. RED has no such production fact; GREEN wraps the
-    // actual value supplied by get_with_admission without inventing one.
-    #[cfg(not(feature = "directory-admission-proof-candidate"))]
-    pub struct Admission;
-    #[cfg(feature = "directory-admission-proof-candidate")]
-    pub struct Admission(CookieAdmission);
-
-    #[cfg(not(feature = "directory-admission-proof-candidate"))]
-    pub fn normalize_response(response: &Response, _admission: Admission) -> Result<Value, Error> {
-        crate::organizations::normalize_for_proof(response)
-    }
-
-    #[cfg(feature = "directory-admission-proof-candidate")]
-    pub fn normalize_response(response: &Response, admission: Admission) -> Result<Value, Error> {
-        crate::organizations::normalize_for_proof(response, admission.0)
-    }
-
-    #[cfg(not(feature = "directory-admission-proof-candidate"))]
-    pub fn get_for_proof<T>(
-        client: &ArchiveClient,
-        url: &Url,
-        process: impl FnOnce(&Response, Admission) -> Result<T, Error>,
-    ) -> Result<T, Error> {
-        require_isolated(client)?;
-        client.get(url, false, move |response| process(response, Admission))
-    }
-
-    #[cfg(feature = "directory-admission-proof-candidate")]
-    pub fn get_for_proof<T>(
-        client: &ArchiveClient,
-        url: &Url,
-        process: impl FnOnce(&Response, Admission) -> Result<T, Error>,
-    ) -> Result<T, Error> {
-        require_isolated(client)?;
-        client.get_with_admission(url, false, move |response, admission| {
-            process(response, Admission(admission))
-        })
-    }
-
-    pub fn attribute(
-        directory: &Value,
-        name: &str,
-        listed_root: &str,
-        resolved_root: &str,
-    ) -> Result<Value, Error> {
-        crate::announcements::college_directory_attribution_for_proof(
-            directory, name, listed_root, resolved_root,
-        )
-    }
 }
 
 #[cfg(test)]

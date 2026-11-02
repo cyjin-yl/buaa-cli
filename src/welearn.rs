@@ -1246,18 +1246,16 @@ pub(crate) mod learning {
 
     }
 
-    /// The material class of one inventory entry. `AnswerMaterial` is never
-    /// retrievable and never mirrorable; `AssessmentContent` carries question
-    /// stems without answers and is never mirrorable in bulk.
+    /// The shared learning classifier's material classes. `AnswerMaterial`
+    /// is never retrievable or mirrorable. Specialized surfaces own their
+    /// stricter per-item classifiers rather than constructing unused variants.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum MaterialClass {
         CourseMaterial,
         Documentation,
         License,
         AnswerMaterial,
-        AssessmentContent,
         SourceCode,
-        Asset,
         Other,
     }
 
@@ -1268,15 +1266,13 @@ pub(crate) mod learning {
                 Self::Documentation => "documentation",
                 Self::License => "license",
                 Self::AnswerMaterial => "answer_material",
-                Self::AssessmentContent => "assessment_content",
                 Self::SourceCode => "source_code",
-                Self::Asset => "asset",
                 Self::Other => "other",
             }
         }
 
         pub(crate) fn mirror_allowed(self) -> bool {
-            !matches!(self, Self::AnswerMaterial | Self::AssessmentContent)
+            !matches!(self, Self::AnswerMaterial)
         }
 
         pub(crate) fn retrieval_allowed(self) -> bool {

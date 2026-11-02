@@ -61,6 +61,32 @@ struct NativeData<'a> {
     code: i64,
     #[serde(borrow, default)]
     list: Option<&'a RawValue>,
+    #[serde(default)]
+    total: Option<i64>,
+    #[serde(borrow, default)]
+    msg: Option<Cow<'a, str>>,
+}
+
+/// The upstream business code that reports a lesson without a native
+/// transcript, together with its own `total:0` and empty list. It is an
+/// observed application reply, not an authentication refusal, and it is only
+/// admitted when the reply itself says there is no data.
+const NO_NATIVE_TRACK_CODE: i64 = 10002;
+
+/// Whether the reply states that the lesson carries no native transcript.
+/// The code, the zero total and the literal empty list must all agree, so an
+/// unrelated failure is never reported as an empty lesson.
+fn reports_no_native_track(data: &NativeData<'_>) -> bool {
+    data.code == NO_NATIVE_TRACK_CODE
+        && data.total == Some(0)
+        && data.msg.as_deref() == Some("未查询到语音数据")
+        // The source must literally supply an empty array, not an object that
+        // a lenient decoder could reinterpret as one. Deserialize to a real
+        // sequence type so an object member cannot masquerade as an empty
+        // list, even when raw-value decoding is enabled.
+        && data.list.is_some_and(|list| {
+            serde_json::from_str::<[serde::de::IgnoredAny; 0]>(list.get()).is_ok()
+        })
 }
 
 #[derive(Deserialize)]
@@ -461,10 +487,41 @@ fn rejected_session() -> Error {
     )
 }
 
+/// Preserve typed duplicate-field rejection without accepting Serde's
+/// positional-array representation of a struct as an HTTP object envelope.
+fn native_http_data(body: &[u8]) -> Result<NativeData<'_>, Error> {
+    struct ObjectOnly;
+
+    impl<'de> serde::de::Visitor<'de> for ObjectOnly {
+        type Value = NativeData<'de>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an object-shaped native subtitle response")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+            NativeData::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    let data = serde::Deserializer::deserialize_map(&mut deserializer, ObjectOnly)
+        .map_err(|_| rejected_session())?;
+    deserializer.end().map_err(|_| rejected_session())?;
+    Ok(data)
+}
+
 /// A fresh body can be an expired-session reply even when an immutable original
 /// exists. Admit its application status before comparing or retaining old bytes.
 pub(crate) fn validate_http_application(body: &[u8]) -> Result<(), Error> {
-    let data: NativeData<'_> = serde_json::from_slice(body).map_err(|_| rejected_session())?;
+    let data = native_http_data(body)?;
+    if reports_no_native_track(&data) {
+        // A lesson without a native transcript is an observed application
+        // fact, not a rejected session: let the response reach the selection
+        // layer, which publishes it as `no_native_track` rather than latching
+        // the session. Any other non-zero code still refuses here.
+        return Ok(());
+    }
     if data.code != 0 {
         return Err(rejected_session());
     }
@@ -508,8 +565,38 @@ pub(crate) fn process_http(
         response.headers.get("content-type").map(String::as_str),
         response.body.len(),
     )?;
-    let data: NativeData<'_> =
-        serde_json::from_slice(&response.body).map_err(|_| rejected_session())?;
+    let data = native_http_data(&response.body)?;
+    if reports_no_native_track(&data) {
+        // The application itself reported that this lesson carries no native
+        // transcript. That is a business fact about the lesson, not a
+        // rejected session, so it is published as such with the observed
+        // response provenance.
+        let content_type = response
+            .headers
+            .get("content-type")
+            .map(String::as_str)
+            .unwrap_or("");
+        let fetched = response.cache_status != CacheStatus::Hit;
+        let body_fetched = fetched && response.revalidation_status != Some(304);
+        return Ok(Ok(json!({
+            "schema_version":1,"type":"recording_subtitles","result":"no_native_track",
+            "authorization":{"basis":"operator_attestation","media_rights_verified":false},
+            "selection":selection,
+            "original":{"sha256":response.sha256,"bytes":response.body.len(),"hash_scope":"entire_http_response_body","storage":"private_immutable_byte_cache"},
+            // No native track was returned, so no caller-supplied resource
+            // identifier can be matched against an upstream track. Preserve
+            // the requested selection, but report the unobserved status
+            // rather than claiming a native declaration.
+            "provenance":{"status":"governed_read","format":"classroom-native-v1","capture_timestamp":null,"media_bytes_verified":false,"resource_guid_status":"no_native_track_observed"},
+            "derivation":{"sha256":null,"hash_scope":null,"time_conversion":"exact_integer_seconds_to_milliseconds","text_normalization":"none"},
+            "segments":[],
+            "upstream":{"code":data.code,"total":data.total,"message":data.msg},
+            "retrieval":{"source_url":response.url,"fetched_at_unix_ms":response.fetched_at_unix_ms,"cache_status":response.cache_status,"revalidated_at_unix_ms":response.revalidated_at_unix_ms,"revalidation_status":response.revalidation_status},
+            "response":{"http_status":response.status,"content_type":content_type,"mime_label_matches_json":content_type.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json"),"envelope":"flat","admission":"response_body_shape"},
+            "completeness":{"scope":"observed_empty_native_transcript_response","complete_history":false,"source_order_preserved":true,"unsegmented_trans_content_used":false},
+            "network_access":fetched,"source_objects_fetched":body_fetched,"source_object_scope":"native_subtitle_response_only_not_recording_media","catalog_modified":false,
+        })));
+    }
     if data.code != 0 {
         return Err(rejected_session());
     }
@@ -601,14 +688,52 @@ pub fn online(mode: CacheMode, input: &str) -> Result<Value, Error> {
 pub fn online_schema() -> Value {
     let offline = schema();
     let mut output = offline["output"].clone();
-    output["properties"]["result"] = json!({"const":"selected_track_observed"});
+    output["properties"]["result"] = json!({"enum":["selected_track_observed","no_native_track"]});
+    // A lesson without a native transcript is an observed application fact.
+    // The two output variants are described separately, because an observed
+    // track has nonempty object cues and a compact digest, while an empty
+    // lesson has no cues and no digest at all.
+    let track_segments = output["properties"]["segments"].clone();
+    let track_derivation = output["properties"]["derivation"].clone();
+    output["properties"]["segments"] = json!({"type":"array","maxItems":MAX_SEGMENTS});
+    output["properties"]["derivation"] = json!({
+        "type":"object","required":["sha256","hash_scope","time_conversion","text_normalization"]
+    });
+    let empty_segments = json!({"type":"array","maxItems":0});
+    let empty_derivation = json!({
+        "type":"object","required":["sha256","hash_scope","time_conversion","text_normalization"],"properties":{
+            "sha256":{"type":"null"},"hash_scope":{"type":"null"},
+            "time_conversion":track_derivation["properties"]["time_conversion"].clone(),
+            "text_normalization":track_derivation["properties"]["text_normalization"].clone()
+        }
+    });
+    output["oneOf"] = json!([
+        {"properties":{
+            "result":{"const":"selected_track_observed"},
+            "segments":track_segments,
+            "derivation":track_derivation,
+            "provenance":{"properties":{"resource_guid_status":{"enum":["absent_in_native_track","native_declared_not_media_verified"]}}},
+            "completeness":{"properties":{"scope":{"const":"selected_track_in_observed_response"}}},
+        }},
+        {"required":["upstream"],"properties":{
+            "result":{"const":"no_native_track"},
+            "segments":empty_segments,
+            "derivation":empty_derivation,
+            "upstream":{"properties":{"code":{"const":NO_NATIVE_TRACK_CODE},"total":{"const":0},"message":{"const":"未查询到语音数据"}}},
+            "provenance":{"properties":{"resource_guid_status":{"const":"no_native_track_observed"}}},
+            "completeness":{"properties":{"scope":{"const":"observed_empty_native_transcript_response"}}},
+        }}
+    ]);
+    output["properties"]["upstream"] = json!({"type":"object","required":["code","total","message"],"properties":{
+        "code":{"type":"integer"},"total":{"type":["integer","null"]},"message":{"type":["string","null"]}
+    }});
     output["properties"]["original"]["properties"]["hash_scope"] =
         json!({"const":"entire_http_response_body"});
     output["properties"]["original"]["properties"]["storage"] =
         json!({"const":"private_immutable_byte_cache"});
     output["properties"]["provenance"]["properties"]["status"] = json!({"const":"governed_read"});
-    output["properties"]["completeness"]["properties"]["scope"] =
-        json!({"const":"selected_track_in_observed_response"});
+    output["properties"]["provenance"]["properties"]["resource_guid_status"] = json!({"enum":["absent_in_native_track","native_declared_not_media_verified","no_native_track_observed"]});
+    output["properties"]["completeness"]["properties"]["scope"] = json!({"enum":["selected_track_in_observed_response","observed_empty_native_transcript_response"]});
     output["properties"]["network_access"] = json!({"type":"boolean"});
     output["properties"]["source_objects_fetched"] = json!({"type":"boolean"});
     output["properties"]["source_object_scope"] =
@@ -907,6 +1032,145 @@ mod tests {
             json!([{
                 "source_order":1,"start_ms":2000,"end_ms":3000,"text":"x","translation":""
             }])
+        );
+    }
+
+    #[test]
+    fn a_lesson_without_a_native_transcript_is_not_a_rejected_session() {
+        let body = r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":[]}"#
+            .as_bytes()
+            .to_vec();
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        let response = crate::net::Response {
+            url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+            status: 200,
+            headers,
+            sha256: digest(&body),
+            body,
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let output = process_http(&response, "42", "")
+            .expect("outer")
+            .expect("observed lesson fact");
+        assert_eq!(output["result"], "no_native_track");
+        assert_eq!(output["upstream"]["code"], 10002);
+        assert_eq!(output["upstream"]["total"], 0);
+        assert_eq!(output["segments"], json!([]));
+        assert_eq!(output["response"]["http_status"], 200);
+        validate_http_application(&response.body).unwrap();
+    }
+
+    #[test]
+    fn an_unrelated_failure_code_still_refuses_the_session() {
+        // Only the reply that itself states an empty lesson is admitted as
+        // an observed fact. Any other non-zero code stays fail-closed.
+        for body in [
+            r#"{"code":10002,"msg":"未查询到语音数据","total":5,"list":[]}"#.as_bytes(),
+            r#"{"code":10002,"msg":"未查询到语音数据","total":0}"#.as_bytes(),
+            r#"{"code":50000,"msg":"未查询到语音数据","total":0,"list":[]}"#.as_bytes(),
+            br#"{"code":10002,"msg":"session expired","total":0,"list":[]}"#.as_slice(),
+            r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":[{}]}"#.as_bytes(),
+        ] {
+            let mut headers = BTreeMap::new();
+            headers.insert("content-type".to_string(), "application/json".to_string());
+            let response = crate::net::Response {
+                url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+                status: 200,
+                headers,
+                sha256: digest(body),
+                body: body.to_vec(),
+                fetched_at_unix_ms: 1,
+                cache_status: crate::net::CacheStatus::Miss,
+                revalidated_at_unix_ms: None,
+                revalidation_status: None,
+            };
+            let error = process_http(&response, "42", "")
+                .expect_err("a refused session is the outer error");
+            assert_eq!(error.code, "auth_latched");
+            assert!(validate_http_application(&response.body).is_err());
+        }
+    }
+
+    #[test]
+    fn an_object_shaped_list_is_not_an_empty_lesson() {
+        // A lenient raw-value decoder could read an object member as a JSON
+        // array. The no-track predicate must only admit a literal empty
+        // array, so this stays a refused session.
+        let body = r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":{"$serde_json::private::RawValue":"[]"}}"#.as_bytes();
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        let response = crate::net::Response {
+            url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+            status: 200,
+            headers,
+            sha256: digest(body),
+            body: body.to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let error = process_http(&response, "42", "")
+            .expect_err("an object-shaped list is not an empty lesson");
+        assert_eq!(error.code, "auth_latched");
+    }
+
+    #[test]
+    fn native_http_envelopes_reject_arrays_duplicates_and_trailing_documents() {
+        for body in [
+            r#"[10002,[],0,"未查询到语音数据"]"#.as_bytes(),
+            br#"[0,[]]"#.as_slice(),
+            r#"{"code":-1,"code":10002,"list":[],"total":0,"msg":"未查询到语音数据"}"#.as_bytes(),
+            r#"{"code":10002,"list":[],"total":0,"msg":"未查询到语音数据"}{}"#.as_bytes(),
+        ] {
+            let response = crate::net::Response {
+                url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+                status: 200,
+                headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+                sha256: digest(body),
+                body: body.to_vec(),
+                fetched_at_unix_ms: 1,
+                cache_status: crate::net::CacheStatus::Hit,
+                revalidated_at_unix_ms: None,
+                revalidation_status: None,
+            };
+            assert_eq!(
+                validate_http_application(body).unwrap_err().code,
+                "auth_latched"
+            );
+            assert_eq!(
+                process_http(&response, "42", "").unwrap_err().code,
+                "auth_latched"
+            );
+        }
+    }
+
+    #[test]
+    fn a_caller_supplied_guid_is_not_promoted_to_a_native_declaration() {
+        let body = r#"{"code":10002,"msg":"未查询到语音数据","total":0,"list":[]}"#.as_bytes();
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        let response = crate::net::Response {
+            url: "https://classroom.msa.buaa.edu.cn/courseapi".to_string(),
+            status: 200,
+            headers,
+            sha256: digest(body),
+            body: body.to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let output = process_http(&response, "42", "caller-supplied-guid")
+            .expect("outer")
+            .expect("observed lesson fact");
+        assert_eq!(
+            output["provenance"]["resource_guid_status"],
+            "no_native_track_observed"
         );
     }
 }

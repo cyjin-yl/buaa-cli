@@ -616,7 +616,10 @@ Session supplies those facts directly; it does not validate real response
 headers, credential echoes, authentication or application binding. After the
 postcondition fixture was strengthened to use the exact target, all three
 scenarios passed again; an exact target in this synthetic HTML still cannot
-establish an authoritative selected-course postcondition. A candidate atomic
+establish an authoritative selected-course postcondition. That historical
+synthetic verify surface is retired by the 2026-11-02 cutover: current IEAS
+verification refuses before any request while its authoritative contract is
+missing; list/privacy/lease coverage remains. A candidate atomic
 no-replace cache publication and separate rejected-original naming were added
 after the red run. Two guarded reruns returned 75 before Cargo started because
 the shared heavy-work slot was busy; a subsequent run passed both learning
@@ -1025,11 +1028,12 @@ session. The chain recorded `sso.buaa.edu.cn/login 200`, credential `POST 302`,
 `network_access: true` and twelve cookies stored in a private owner-only file,
 reproduced twice.
 
-The remaining cause of the earlier `application_identity_unverified` rejection
-was an identity mismatch, not a transport or token problem: the supplied
-`verification.course_id` was `12` while the account's selected lesson is
-`course_id 33` with `sub_id 34` and `tenant_code 21`. With the correct identity
-the same flow succeeds. The courseapi response also declares `Content-Type:
+One `application_identity_unverified` observation used a requested lesson
+selection that did not match the application's probe; a later corrected
+selection was observed successfully. Private lesson and tenant identifiers
+are withheld. That mismatch does not establish the cause of the earlier
+callback HTTP 500 or grant permission to repeat authentication. The courseapi
+response also declares `Content-Type:
 text/html` while carrying JSON; `classroom_json_mime` already admits
 `text/html`, so no MIME change was needed.
 
@@ -2809,3 +2813,182 @@ the new command instead of publishing a stale blocker. The remaining
 candidate sources and every third-party document inside this tree are not
 cleared by this observation, and no campus physics service, selection or
 assessment access was established.
+
+## 2026-11-02: Campus and native subtitle observation boundaries
+
+The existing Campus supervisor is now `tunnel_up`, with 19 recorded login
+attempts and three historical authentication failures. A fresh read-only
+whitelist snapshot found its systemd service active/running, without another
+resume, credential submission or application request. Earlier recovery work
+included temporary routing probes and a username-case edit; it must not be
+described as having made no routing or credential-configuration changes. No
+causal conclusion about the lab cable, BUAA-Mobile or the old authentication
+failure follows from the restored tunnel. The metadata-only snapshot is
+`local://campus-state-reconciliation-20261102.json`.
+
+A native classroom session observation and a subsequent subtitle read are
+separate application facts. `credential_persisted: false` refers to the campus
+password, not the session cookies stored in the private session file. Neither
+a selection probe nor a tunnel proves account identity, media rights or all
+campus services. Private lesson and session identifiers are not published.
+
+The subtitle read reported HTTP 200 with `code: 10002`, `total: 0`, message
+未查询到语音数据 and a literal empty list. Both the HTTP pre-admission and the
+selection layer now recognize only that reviewed no-data tuple rather than
+mapping it to `auth_latched`. Unknown codes, inconsistent totals/messages and
+nonempty or object-shaped lists remain refused. Reqwest already handles HTTP
+chunk framing; no second dechunking step is added.
+
+`no_native_track` records an upstream-reported absence for one request, not a
+verified empty course or permanent absence. It has empty segments and null
+derivation digest/scope; requested resource identifiers are not promoted to
+native declarations. Normal tracks retain nonempty cues and their digest.
+The two outcomes have distinct provenance/completeness and result-conditioned
+schemas. A comparison of result names or required keys alone is not standard
+Schema validation.
+
+The earlier 2026-10-30 `auth_latched` observation is retained. Its unentered
+callback proves failure before that callback, not before body acquisition;
+the asserted 3xx cause was not bound to a retained HTTP status and remains
+unproven. The later 200/no-data response does not explain that earlier failure.
+No subtitle synchronization, live playback, media rights, account identity,
+complete history, attendance or completion is established by this empty reply.
+
+## 2026-11-02: exact-source response-admission proof
+
+The actual native subtitle command previously accepted a positional HTTP
+envelope from a newly owned synthetic private cache. The same input now exits
+4 with empty stdout. Both real parsing entry points use object-only typed
+deserialization and reject duplicate members and trailing documents.
+
+Separate synthetic normal-track and no-data invocations exit zero and pass
+standard Draft 2020-12 validation of the native published output schema.
+Putting cues into the no-data variant or removing them from the normal variant
+is rejected by that schema. Independent serialization matches the normal
+output's segment digest and preserves the synthetic 2000–5000 ms interval.
+Every connect syscall was forced to fail during these cache-only observations;
+they are not fresh campus requests. The metadata-only receipt is
+`local://buaa-subtitle-aerospace-native-red-green-20261102.json`.
+
+iHome's invocation-wide guard now covers cookie values issued by earlier
+pages, including later fresh/cached bodies and MIME metadata, without adopting,
+transmitting, evicting or persisting those values. Recovered fallback literals
+retain bounded nested-document inspection: exhaustion withholds the reversible
+original rather than treating parse failure as credential absence. Seventy
+iHome cases and 29 strict-TLS service cases passed, including fresh/cache echo
+boundaries, nested fallback depth controls and independent cooldown/refusal
+facts. Fourteen subtitle cases also passed. These are synthetic offline
+observations, not live iHome acceptance or a current full-suite receipt.
+
+The new lease regression initially asserted the removed durable latch field.
+That assertion was deleted, not inverted and not used to restore the latch.
+The corrected fixture proves observable settlement instead: known denial,
+challenge and HTTP refusal preserve the existing network-failure streak,
+ordinary complete HTTP 200 clears it, and every case retains Retry-After and
+performs no retry. Only a fresh isolated fixture state is seeded; production
+scheduling and safety state are untouched by this proof.
+
+## 2026-11-02: Aerospace two-item admission and native retrieval
+
+The fixed community source remains `Caniformia/HangGai` at commit
+`6c28cbb7679865546eace87089807944a07f1714`, declaring root tree
+`4eb358ae271b5ceae2aa0003999172f806a128d7`. The actual native inventory contains
+646 entries. Every original path/mode/object/size tuple matches the retained
+recursive response; independent Git encoding reconstructed all 178 tree
+objects, including the root. Exactly two entries permit retrieval, and the
+other 644 remain excluded regardless of an operator's general attestation.
+
+| Reviewed original | Bytes | Git blob | SHA-256 |
+| --- | ---: | --- | --- |
+| `README.md` | 228 | `0b4aaae22b098e2d00e603fb7ce39b95fd13905f` | `290d9823a1c0bf1e9dbff11a54d835e9f9f4f7b1436ff19820617202a3f6803f` |
+| `LICENSE` | 35149 | `f288702d2fa16d3cdf0035b15a9fcbc552cd88e7` | `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986` |
+
+Both actual fetch outputs passed the standard published schema and independent
+length, Git-blob and SHA-256 checks. README reused its existing original;
+LICENSE was an actual online cache miss. Both cache-only replays returned
+byte-identical originals with connect syscalls disabled. Native search retained
+the exact matching original path/order. Answer-bank, font and implementation
+fetches returned no bytes under the same disabled-connect proof; they remain
+outside the two-item gate. No such blob was retrieved for this verification.
+
+The actual local practice lifecycle exercised cloze generation, a caller-owned
+question set with its local key, answer recording and local checking. All four
+outputs passed the standard schema and retained `local_only`, null official
+grade, `not_submitted` and no completion claim. A valid question set with
+contradictory duplicate rights declarations returned an attested session in
+the old binary; the repaired binary exits 2 without a session. Recursive
+duplicate rejection covers nested and escape-spelled members before `Value`
+use. Eleven Aerospace cases passed, including alias/object/size refusal and
+omission of a verified-blob claim on mismatch.
+
+The source is GPL-3.0; no upstream prose or implementation is copied into this
+MIT repository. Per-item attribution, the bound license object and a notice
+obligation flag are not independent rights verification or redistribution
+compliance. Question content, source-wide rights and every assessment workflow
+remain unverified. Receipt:
+`local://buaa-aerospace-two-item-proof-20261102.json`.
+
+## 2026-11-02: separate IEAS and yjsxk contracts
+
+Historical IEAS local list/preview and the modern yjsxk existing-session reader
+are separate application contracts. No guessed secure IEAS origin or academic
+term conversion is admitted. Library `verify` retains its API but refuses
+before any selected-state request; the retired synthetic postcondition shape
+does not remain a live interface.
+
+The production yjsxk path accepts an exact five-digit term and an explicitly
+authorized existing cookie only on protected stdin, then makes one fixed HTTPS
+selected-record GET. It has no login, redirect, proxy, retry, polling, cookie
+adoption, persistence or mutation. Native `BJDM`, `XNXQDM`, `WID` and `YYZ`
+remain separate; duplicate rows and source order are preserved. Empty or
+partial observations do not establish account identity, complete selection,
+withdrawal, current rights or a final postcondition.
+
+Thirty-two module cases and thirteen existing CLI admission cases passed.
+The source exposes separate schema/dispatch, bounded recursive scalar
+credential admission and independent session-rejection facts, including when
+record shape or cookie admission fails. These fixtures do not establish
+authenticated deployment compatibility. No current yjsxk session cookie is
+available for a native authenticated read; the separately observed anonymous
+HTTPS entry downgraded to HTTP and was not followed. No new campus login,
+password probe, fallback or academic write was performed.
+
+Current manifest/status prose withholds private lesson, tenant, session and
+media-digest selectors. This is a current-tip correction, not historical Git
+object or tool-context erasure. No history rewrite or credential rotation is
+claimed by that correction.
+
+## 2026-11-02: Gitea primary read-only discovery
+
+The actual native `contribution scan` against the private primary completes:
+`scan_completed`, 27 candidates, 0 excluded, 0 blockers, no write operation,
+a credential that never appeared in stdout or stderr, and an output that
+passed the published standard schema. The run is a bounded read-only
+observation of the owner's own repository. It is not a claim, an approval or a
+merge, and no issue was created, commented on or claimed.
+
+The first two native runs blocked instead, and that is the useful part of the
+observation. Read-only structural probes of the primary established three
+upstream shapes that the unit fixtures had not modelled: an unassigned issue
+carries a null assignee list rather than an empty array; an empty list is
+serialized as JSON `null` rather than an empty array; and the advertised count
+means the overall total for the issue list but that page's own row count for
+the issue timeline. The parser, the page reader and the count oracle each
+misread one of those, and each is now repaired with a regression. The null
+assignee spelling is admitted for this provider only; the GitHub path keeps
+its own array requirement.
+
+The count oracle now reads the two meanings without conflating them. A count
+larger than the rows its response returned is an overall total: it must stay
+stable, every later page must repeat it, and the collected rows must equal it.
+A count equal to that page's own rows is that page's row count and proves
+nothing. When no overall total was established, the real empty page is the
+completeness evidence. A page carrying more rows than it advertises, a
+disagreeing overall total and a short terminal remain refusals, and the
+reader still stops at its bounds without an extra request.
+
+A cross-provider credential is refused with `invalid_input` before any
+connection. Issue numbers, titles, bodies, authors and comment text are not
+published; only counts and machine-readable outcomes are recorded. The
+metadata-only receipts are `local://buaa-gitea-native-scan-20261102.json` and
+`local://buaa-gitea-native-scan-ground-truth-20261102.json`.

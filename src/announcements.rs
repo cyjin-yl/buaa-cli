@@ -41,10 +41,6 @@ pub(crate) mod rse;
 pub(crate) mod sa;
 pub(crate) mod sce;
 mod scse;
-#[cfg(feature = "viewer-admission-proof")]
-pub fn proof_scse_article(response: &Response) -> Result<Value, Error> {
-    scse::normalize_article(response)
-}
 pub(crate) mod sem;
 pub(crate) mod sepe;
 pub(crate) mod shenyuan;
@@ -1583,16 +1579,6 @@ fn college_directory_attribution(
     Ok(
         json!({"member":member,"directory_retrieval":directory["retrieval"],"reference_policy":"retained_authoritative_directory; refresh organizations list separately"}),
     )
-}
-
-#[cfg(feature = "directory-admission-proof")]
-pub(crate) fn college_directory_attribution_for_proof(
-    directory: &Value,
-    name: &str,
-    listed_root: &str,
-    resolved_root: &str,
-) -> Result<Value, Error> {
-    college_directory_attribution(directory, name, listed_root, resolved_root)
 }
 
 fn describe_college_surface(

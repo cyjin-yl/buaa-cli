@@ -47,6 +47,12 @@
 //!   projected, no raw bytes are exported and the body is not cached.
 //!   Session output additionally guards the username, password, transmitted
 //!   cookie headers and current/retired cookie values, including MIME echoes.
+//!   The complete invocation additionally guards the credential values of
+//!   every fresh response's `Set-Cookie` headers: they are reviewed from the
+//!   raw header map before collection discards them, retained across pages
+//!   to screen later fresh and cached bodies and MIME, and never adopted or
+//!   transmitted. An unreviewable value refuses projection, and no
+//!   cookie-issuing response is written to the replayable cache.
 //!   Responses whose nested token inspection exceeds its bound are withheld as
 //!   unreviewed, without claiming an echo or an authentication refusal.
 //! * An explicit application-level authentication refusal (a root-level
@@ -203,13 +209,16 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// One screening predicate over raw response bytes: the sign-on material and
+/// the issued-cookie values that must never reach a projection.
+type Screening<'a> = &'a dyn Fn(&[u8]) -> bool;
 
 // Construct literal JSON values ourselves: serde_json's Value visitor treats
 // a reserved first member as RawValue when that feature is enabled. Inspect
 // every member before last-member-wins insertion, including duplicates.
 struct TokenInspection<'a> {
     token: &'a str,
-    authentication: Option<&'a dyn Fn(&[u8]) -> bool>,
+    authentication: Option<Screening<'a>>,
     scan_decoded: bool,
     echo: bool,
     incomplete: bool,
@@ -230,7 +239,9 @@ impl TokenInspection<'_> {
     }
 
     fn inspect(&mut self, text: &str, embedded_depth: usize, allow_embedded: bool) {
-        if self.token.is_empty() && self.authentication.is_none() { return; }
+        if self.token.is_empty() && self.authentication.is_none() {
+            return;
+        }
         if self.scan_decoded && !self.echo {
             self.echo = self.carries_secret(text.as_bytes());
         }
@@ -245,81 +256,195 @@ impl TokenInspection<'_> {
             let prior = self.echo;
             let mut decoder = serde_json::Deserializer::from_str(trimmed);
             use serde::de::DeserializeSeed;
-            let valid = LiteralSeed { inspection: self, embedded_depth: embedded_depth + 1, build: false }
-                .deserialize(&mut decoder).is_ok() && decoder.end().is_ok();
-            if !valid { self.echo = prior; }
+            let valid = LiteralSeed {
+                inspection: self,
+                embedded_depth: embedded_depth + 1,
+                remaining_containers: MAX_LITERAL_CONTAINERS,
+                build: false,
+            }
+            .deserialize(&mut decoder)
+            .is_ok()
+                && decoder.end().is_ok();
+            if !valid {
+                // Ordinary prose may fail JSON syntax, but an exhausted
+                // inspection budget is independent evidence. Keep the
+                // visitor/decoder-boundary `incomplete` fact even when this
+                // optional document's echo observation is discarded.
+                self.echo = prior;
+            }
         }
     }
 }
 
+// Match serde_json's normal recursion allowance: 127 enclosing containers
+// may still contain a scalar, but entering the next container exhausts its
+// default 128-entry guard. Keep this budget separate from the 32 embedded
+// documents so arrays/maps cannot hide an incomplete inspection. The seed
+// also records a decoder failure at the boundary: serde_json can reject the
+// next container before invoking our visitor.
+const MAX_LITERAL_CONTAINERS: usize = 127;
+
 struct LiteralSeed<'a, 't> {
     inspection: &'a mut TokenInspection<'t>,
     embedded_depth: usize,
+    remaining_containers: usize,
     build: bool,
 }
 
 impl<'de> serde::de::DeserializeSeed<'de> for LiteralSeed<'_, '_> {
     type Value = Value;
     fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-        deserializer.deserialize_any(self)
+        let Self {
+            inspection,
+            embedded_depth,
+            remaining_containers,
+            build,
+        } = self;
+        let result = deserializer.deserialize_any(LiteralSeed {
+            inspection: &mut *inspection,
+            embedded_depth,
+            remaining_containers,
+            build,
+        });
+        if remaining_containers == 0 && result.is_err() {
+            // Typed traversal provenance, not an error-message match. A
+            // boundary failure cannot prove that every nested value was
+            // inspected, even if an optional embedded parse is discarded.
+            inspection.incomplete = true;
+        }
+        result
     }
 }
 impl<'de> serde::de::Visitor<'de> for LiteralSeed<'_, '_> {
     type Value = Value;
-    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("a literal JSON value") }
-    fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> { Ok(Value::Null) }
-    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Value, E> { Ok(Value::Bool(v)) }
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a literal JSON value")
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Value, E> {
+        Ok(Value::Bool(v))
+    }
     fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Value, E> {
-        let value = Value::from(v); self.inspection.scalar(&value); Ok(value)
+        let value = Value::from(v);
+        self.inspection.scalar(&value);
+        Ok(value)
     }
     fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Value, E> {
-        let value = Value::from(v); self.inspection.scalar(&value); Ok(value)
+        let value = Value::from(v);
+        self.inspection.scalar(&value);
+        Ok(value)
     }
     fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Value, E> {
-        let value = Value::from(v); self.inspection.scalar(&value); Ok(value)
+        let value = Value::from(v);
+        self.inspection.scalar(&value);
+        Ok(value)
     }
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Value, E> {
         self.inspection.inspect(v, self.embedded_depth, true);
-        Ok(if self.build { Value::String(v.to_owned()) } else { Value::Null })
+        Ok(if self.build {
+            Value::String(v.to_owned())
+        } else {
+            Value::Null
+        })
     }
     fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Value, E> {
         self.inspection.inspect(&v, self.embedded_depth, true);
-        Ok(if self.build { Value::String(v) } else { Value::Null })
+        Ok(if self.build {
+            Value::String(v)
+        } else {
+            Value::Null
+        })
     }
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+        let Some(remaining_containers) = self.remaining_containers.checked_sub(1) else {
+            self.inspection.incomplete = true;
+            return Err(serde::de::Error::custom(
+                "response container nesting exceeds safe inspection",
+            ));
+        };
         let mut values = Vec::new();
-        while let Some(value) = seq.next_element_seed(LiteralSeed { inspection: &mut *self.inspection, embedded_depth: self.embedded_depth, build: self.build })? {
-            if self.build { values.push(value); }
+        while let Some(value) = seq.next_element_seed(LiteralSeed {
+            inspection: &mut *self.inspection,
+            embedded_depth: self.embedded_depth,
+            remaining_containers,
+            build: self.build,
+        })? {
+            if self.build {
+                values.push(value);
+            }
         }
-        Ok(if self.build { Value::Array(values) } else { Value::Null })
+        Ok(if self.build {
+            Value::Array(values)
+        } else {
+            Value::Null
+        })
     }
     fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        let Some(remaining_containers) = self.remaining_containers.checked_sub(1) else {
+            self.inspection.incomplete = true;
+            return Err(serde::de::Error::custom(
+                "response container nesting exceeds safe inspection",
+            ));
+        };
         let mut values = Map::new();
         while let Some(key) = map.next_key::<String>()? {
             self.inspection.inspect(&key, self.embedded_depth, false);
-            let value = map.next_value_seed(LiteralSeed { inspection: &mut *self.inspection, embedded_depth: self.embedded_depth, build: self.build })?;
-            if self.build { values.insert(key, value); }
+            let value = map.next_value_seed(LiteralSeed {
+                inspection: &mut *self.inspection,
+                embedded_depth: self.embedded_depth,
+                remaining_containers,
+                build: self.build,
+            })?;
+            if self.build {
+                values.insert(key, value);
+            }
         }
-        Ok(if self.build { Value::Object(values) } else { Value::Null })
+        Ok(if self.build {
+            Value::Object(values)
+        } else {
+            Value::Null
+        })
     }
 }
 
 fn literal_document(bytes: &[u8], inspection: &mut TokenInspection<'_>) -> Option<Value> {
     use serde::de::DeserializeSeed;
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    let value = (LiteralSeed { inspection, embedded_depth: 0, build: true }).deserialize(&mut decoder).ok()?;
+    let value = (LiteralSeed {
+        inspection,
+        embedded_depth: 0,
+        remaining_containers: MAX_LITERAL_CONTAINERS,
+        build: true,
+    })
+    .deserialize(&mut decoder)
+    .ok()?;
     decoder.end().ok()?;
     Some(value)
 }
 
 fn token_inspection(token: &str) -> TokenInspection<'_> {
-    TokenInspection { token, authentication: None, scan_decoded: true, echo: false, incomplete: false }
+    TokenInspection {
+        token,
+        authentication: None,
+        scan_decoded: true,
+        echo: false,
+        incomplete: false,
+    }
 }
 
-/// Does any JSON string literal of this body carry the token once decoded?
-/// Duplicate members are all inspected: a parsed document keeps only the
-/// last member, so the raw literals are the complete evidence.
-fn decoded_strings_carry_secret(body: &[u8], inspection: &TokenInspection<'_>) -> bool {
+/// Does any JSON string literal of this body carry a guarded secret once
+/// decoded? Duplicate members are all inspected: a parsed document keeps
+/// only the last member, so the raw literals are the complete evidence.
+/// A recovered literal is screened exactly like a parsed string: its decoded
+/// text is checked, and a literal that is itself an embedded JSON document
+/// goes through the same bounded `TokenInspection` recursion as the primary
+/// parse. Double-escaping therefore cannot hide a bearer token, sign-on
+/// credential or issued cookie value inside a raw-fallback body. Recursion
+/// that exceeds the depth budget marks the response unreviewed (fail closed)
+/// instead of exporting unscreened bytes.
+fn decoded_strings_carry_secret(body: &[u8], inspection: &mut TokenInspection<'_>) -> bool {
     let mut index = 0;
     while index < body.len() {
         if body[index] != b'"' {
@@ -330,7 +455,8 @@ fn decoded_strings_carry_secret(body: &[u8], inspection: &TokenInspection<'_>) -
             index += 1;
             continue;
         };
-        if inspection.carries_secret(literal.as_bytes()) {
+        inspection.inspect(&literal, 0, true);
+        if inspection.echo {
             return true;
         }
         index = next;
@@ -378,7 +504,9 @@ fn decode_json_string_literal(body: &[u8], start: usize) -> Option<(Zeroizing<St
                             None
                         };
                         match point {
-                            Some(point) => decoded.push(char::from_u32(point).expect("combined surrogate")),
+                            Some(point) => {
+                                decoded.push(char::from_u32(point).expect("combined surrogate"))
+                            }
                             None => decoded.push(char::from_u32(code).unwrap_or('\u{fffd}')),
                         }
                     }
@@ -446,7 +574,7 @@ fn analyze_body(body: &[u8], token: &str) -> ResponseFacts {
 fn analyze_authenticated_body(
     body: &[u8],
     token: &str,
-    authentication: Option<&dyn Fn(&[u8]) -> bool>,
+    authentication: Option<Screening<'_>>,
 ) -> ResponseFacts {
     let mut facts = ResponseFacts {
         token_echo: false,
@@ -463,15 +591,53 @@ fn analyze_authenticated_body(
     inspection.authentication = authentication;
     let raw_echo = inspection.carries_secret(body);
     inspection.echo = raw_echo;
-    inspection.scan_decoded = !raw_echo && (!token.is_empty() || authentication.is_some()) && body.contains(&b'\\');
+    inspection.scan_decoded =
+        !raw_echo && (!token.is_empty() || authentication.is_some()) && body.contains(&b'\\');
     let document = literal_document(body, &mut inspection);
-    facts.token_echo = raw_echo || (document.is_some() && inspection.echo)
-        || (document.is_none() && inspection.scan_decoded && decoded_strings_carry_secret(body, &inspection));
+    // When the body is not one complete JSON document, recovered literals
+    // are screened with the same bounded embedded-document recursion. An
+    // echo observed before a parse failure is still real decoded evidence,
+    // so it withholds the body even without a parsed document.
+    let fallback_echo = document.is_none()
+        && inspection.scan_decoded
+        && decoded_strings_carry_secret(body, &mut inspection);
+    facts.token_echo = raw_echo || inspection.echo || fallback_echo;
     facts.inspection_incomplete = inspection.incomplete;
     if let Some(document) = document {
         facts.session_denied = session_denied_document(&document);
         facts.document = Some(document);
     }
+    facts
+}
+
+/// Screen one response body and its projected MIME with the caller's bearer
+/// token, the invocation's accumulated issued-cookie guard and any sign-on
+/// authentication material. Fresh and cached responses share this exact
+/// analysis, so a cookie issued by an earlier page of the same invocation
+/// also withholds a later fresh or cached body that echoes it, and a cached
+/// `Content-Type` carrying such a value is never projected either.
+fn screened_body_facts(
+    response: &Response,
+    token: &str,
+    issued: &IssuedCookies,
+    authentication: Option<Screening<'_>>,
+) -> ResponseFacts {
+    let contains =
+        |bytes: &[u8]| issued.carries(bytes) || authentication.is_some_and(|screen| screen(bytes));
+    let combined: Option<Screening<'_>> = if issued.is_empty() && authentication.is_none() {
+        None
+    } else {
+        Some(&contains)
+    };
+    let mut facts = analyze_authenticated_body(&response.body, token, combined);
+    facts.content_type_echo = combined.is_some_and(|contains| {
+        response.headers.get("content-type").is_some_and(|value| {
+            credential_value_carries_token(value, token)
+                || contains(value.as_bytes())
+                || contains(value.to_ascii_lowercase().as_bytes())
+        })
+    });
+    facts.token_echo |= facts.content_type_echo;
     facts
 }
 
@@ -619,12 +785,20 @@ struct KnownItem {
     reply_count: u32,
 }
 impl<'de> Deserialize<'de> for KnownItem {
-    fn deserialize<D:serde::Deserializer<'de>>(deserializer:D)->Result<Self,D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Raw {id:u64,status:String,reply_count:u32}
-        let raw:Raw=deserialize_object(deserializer)?;
-        Ok(Self{id:raw.id,status:raw.status,reply_count:raw.reply_count})
+        struct Raw {
+            id: u64,
+            status: String,
+            reply_count: u32,
+        }
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            id: raw.id,
+            status: raw.status,
+            reply_count: raw.reply_count,
+        })
     }
 }
 
@@ -642,7 +816,7 @@ struct ListInput {
     download_attachments: Option<bool>,
 }
 impl<'de> Deserialize<'de> for ListInput {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self,D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         // A positional array is not admitted by the documented object contract.
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -660,8 +834,20 @@ impl<'de> Deserialize<'de> for ListInput {
             refresh: Option<bool>,
             download_attachments: Option<bool>,
         }
-        let raw:Raw=deserialize_object(deserializer)?;
-        Ok(Self{token:raw.token,operation:raw.operation,token_source:raw.token_source,limit:raw.limit,page:raw.page,max_pages:raw.max_pages,since_id:raw.since_id,since_time:raw.since_time,known:raw.known,refresh:raw.refresh,download_attachments:raw.download_attachments})
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            token: raw.token,
+            operation: raw.operation,
+            token_source: raw.token_source,
+            limit: raw.limit,
+            page: raw.page,
+            max_pages: raw.max_pages,
+            since_id: raw.since_id,
+            since_time: raw.since_time,
+            known: raw.known,
+            refresh: raw.refresh,
+            download_attachments: raw.download_attachments,
+        })
     }
 }
 
@@ -674,16 +860,27 @@ struct DetailInput {
     download_attachments: Option<bool>,
 }
 impl<'de> Deserialize<'de> for DetailInput {
-    fn deserialize<D:serde::Deserializer<'de>>(deserializer:D)->Result<Self,D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Raw {
-            #[serde(default,deserialize_with="deserialize_optional_secret")]
-            token:Option<Zeroizing<String>>,operation:Option<Operation>,token_source:Option<TokenSource>,
-            id:u64,refresh:Option<bool>,download_attachments:Option<bool>,
+            #[serde(default, deserialize_with = "deserialize_optional_secret")]
+            token: Option<Zeroizing<String>>,
+            operation: Option<Operation>,
+            token_source: Option<TokenSource>,
+            id: u64,
+            refresh: Option<bool>,
+            download_attachments: Option<bool>,
         }
-        let raw:Raw=deserialize_object(deserializer)?;
-        Ok(Self{token:raw.token,operation:raw.operation,token_source:raw.token_source,id:raw.id,refresh:raw.refresh,download_attachments:raw.download_attachments})
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            token: raw.token,
+            operation: raw.operation,
+            token_source: raw.token_source,
+            id: raw.id,
+            refresh: raw.refresh,
+            download_attachments: raw.download_attachments,
+        })
     }
 }
 
@@ -722,16 +919,26 @@ impl<'de> Deserialize<'de> for SessionInput {
             read: SessionRead,
         }
         let raw: Raw = deserialize_object(deserializer)?;
-        Ok(Self { operation: raw.operation, authorized: raw.authorized, username: raw.username,
-            password: raw.password, intent: raw.intent, read: raw.read })
+        Ok(Self {
+            operation: raw.operation,
+            authorized: raw.authorized,
+            username: raw.username,
+            password: raw.password,
+            intent: raw.intent,
+            read: raw.read,
+        })
     }
 }
 
-fn deserialize_secret<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Zeroizing<String>, D::Error> {
+fn deserialize_secret<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Zeroizing<String>, D::Error> {
     String::deserialize(deserializer).map(Zeroizing::new)
 }
 
-fn deserialize_session_operation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Operation>, D::Error> {
+fn deserialize_session_operation<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Operation>, D::Error> {
     Operation::deserialize(deserializer).map(Some)
 }
 
@@ -745,11 +952,18 @@ enum SessionRead {
         #[serde(default = "default_session_page")]
         page: u32,
     },
-    Detail { enabled: bool, id: u64 },
+    Detail {
+        enabled: bool,
+        id: u64,
+    },
 }
 
-fn default_session_limit() -> u32 { DEFAULT_LIMIT }
-fn default_session_page() -> u32 { 1 }
+fn default_session_limit() -> u32 {
+    DEFAULT_LIMIT
+}
+fn default_session_page() -> u32 {
+    1
+}
 
 // Ignored fields are consumed by serde's IgnoredAny path, not materialized
 // into Value or copied into a serialized request. The second typed parse
@@ -758,23 +972,32 @@ struct OperationSelector {
     operation: Operation,
 }
 impl<'de> Deserialize<'de> for OperationSelector {
-    fn deserialize<D:serde::Deserializer<'de>>(deserializer:D)->Result<Self,D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
-        struct Raw {operation:Operation}
-        let raw:Raw=deserialize_object(deserializer)?;
-        Ok(Self{operation:raw.operation})
+        struct Raw {
+            operation: Operation,
+        }
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            operation: raw.operation,
+        })
     }
 }
 
 /// Enforce object shape before typed field decoding; Raw helpers, not the
 /// outer types, are delegated through MapAccessDeserializer to avoid recursion.
-fn deserialize_object<'de,D,T>(deserializer:D)->Result<T,D::Error>
-where D:serde::Deserializer<'de>, T:Deserialize<'de> {
+fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
     struct Object<T>(std::marker::PhantomData<T>);
-    impl<'de,T:Deserialize<'de>> serde::de::Visitor<'de> for Object<T> {
-        type Value=T;
-        fn expecting(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {f.write_str("a JSON object")}
-        fn visit_map<A:serde::de::MapAccess<'de>>(self,map:A)->Result<T,A::Error> {
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
             T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
         }
     }
@@ -827,7 +1050,10 @@ fn parse_list_input(input: &str) -> Result<ListRequest, Error> {
     }
     let mut parsed: ListInput =
         serde_json::from_str(input).map_err(|_| invalid_input("the ihome request is invalid"))?;
-    if parsed.operation.is_some_and(|operation| operation != Operation::List) {
+    if parsed
+        .operation
+        .is_some_and(|operation| operation != Operation::List)
+    {
         return Err(invalid_input("the ihome operation must be list"));
     }
     let token = parsed.token.take().ok_or_else(token_required)?;
@@ -843,7 +1069,9 @@ fn parse_list_input(input: &str) -> Result<ListRequest, Error> {
     }
     let page = parsed.page.unwrap_or(1);
     if !(1..=MAX_PAGE).contains(&page) {
-        return Err(invalid_input("page is outside the supported pagination range"));
+        return Err(invalid_input(
+            "page is outside the supported pagination range",
+        ));
     }
     let max_pages = parsed.max_pages.unwrap_or(DEFAULT_PAGES);
     if !(1..=MAX_PAGES).contains(&max_pages) {
@@ -887,7 +1115,10 @@ fn parse_detail_input(input: &str) -> Result<DetailRequest, Error> {
     }
     let mut parsed: DetailInput =
         serde_json::from_str(input).map_err(|_| invalid_input("the ihome request is invalid"))?;
-    if parsed.operation.is_some_and(|operation| operation != Operation::Detail) {
+    if parsed
+        .operation
+        .is_some_and(|operation| operation != Operation::Detail)
+    {
         return Err(invalid_input("the ihome operation must be detail"));
     }
     let token = parsed.token.take().ok_or_else(token_required)?;
@@ -940,7 +1171,9 @@ fn allowed_url(url: &Url) -> bool {
     if path == IHOME_API_PATH {
         return true;
     }
-    let Some(id) = path.strip_prefix(IHOME_DETAIL_PREFIX) else { return false; };
+    let Some(id) = path.strip_prefix(IHOME_DETAIL_PREFIX) else {
+        return false;
+    };
     !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())
 }
 
@@ -973,8 +1206,8 @@ impl ResponseCache {
         let _home = governor::open_directory(&home, false, false).map_err(|_| cache_error())?;
         let base = home.join(CACHE_DIR);
         let _base = governor::open_directory(&base, true, true).map_err(|_| cache_error())?;
-        let directory = governor::open_directory(&base.join(scope), true, true)
-            .map_err(|_| cache_error())?;
+        let directory =
+            governor::open_directory(&base.join(scope), true, true).map_err(|_| cache_error())?;
         Ok(Self { directory })
     }
 
@@ -1014,9 +1247,10 @@ impl ResponseCache {
             || !(100..=999).contains(&cached.status)
             || !valid_sha256(&cached.sha256)
             || cached.body_base64.len() > MAX_BODY.div_ceil(3) * 4
-            || cached.headers.iter().any(|(name, value)| {
-                !HEADER_NAMES.contains(&name.as_str()) || !valid_header(value)
-            })
+            || cached
+                .headers
+                .iter()
+                .any(|(name, value)| !HEADER_NAMES.contains(&name.as_str()) || !valid_header(value))
         {
             return Err(corrupt_cache());
         }
@@ -1026,7 +1260,11 @@ impl ResponseCache {
         if body.len() > MAX_BODY || sha256(&body) != cached.sha256 {
             return Err(corrupt_cache());
         }
-        let body_assessment = assess_response_body(&body, cached.headers.get("content-type").map(String::as_str), true);
+        let body_assessment = assess_response_body(
+            &body,
+            cached.headers.get("content-type").map(String::as_str),
+            true,
+        );
         // Version 2's broad substring flag did not retain whether a header or
         // body caused it. Preserve its refusal, not an unproved CAPTCHA claim.
         let challenge = if cached.challenge && cached.version >= 3 {
@@ -1053,9 +1291,15 @@ impl ResponseCache {
             // but do not publish its body or automatically re-fetch it.
             let facts = analyze_body(&response.body, "");
             if cached_rejection(&response, &challenge, &facts) {
-                return Err(Error::new("safety_latched", "a retained safety observation prevents this result"));
+                return Err(Error::new(
+                    "safety_latched",
+                    "a retained safety observation prevents this result",
+                ));
             }
-            return Err(Error::new("cached_response_unreviewed", "retained response predates cookie admission; original preserved and body withheld"));
+            return Err(Error::new(
+                "cached_response_unreviewed",
+                "retained response predates cookie admission; original preserved and body withheld",
+            ));
         }
         Ok(Some((response, challenge)))
     }
@@ -1128,9 +1372,7 @@ impl ResponseCache {
         let name = Self::name(url);
         let target = CString::new(name).map_err(|_| cache_error())?;
         // SAFETY: both names are single components in this pinned directory.
-        if unsafe {
-            libc::unlinkat(self.directory.as_raw_fd(), target.as_ptr(), 0)
-        } != 0
+        if unsafe { libc::unlinkat(self.directory.as_raw_fd(), target.as_ptr(), 0) } != 0
             && std::io::Error::last_os_error().raw_os_error() != Some(libc::ENOENT)
         {
             return Err(cache_error());
@@ -1146,6 +1388,7 @@ impl ResponseCache {
         token: &str,
         online: bool,
         refresh: bool,
+        issued: &mut IssuedCookies,
         process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts) -> Result<T, Error>,
     ) -> Result<T, Error> {
         if refresh && !online {
@@ -1153,9 +1396,12 @@ impl ResponseCache {
         }
         if !refresh {
             if let Some((response, challenge)) = self.load(url)? {
-                let facts = analyze_body(&response.body, token);
+                // A cached body is screened with the whole invocation's
+                // accumulated cookie guard, not just this page's headers.
+                let facts = screened_body_facts(&response, token, issued, None);
                 if facts.token_echo {
-                    // A cached body that echoes the submitted token is never
+                    // A cached body that echoes the submitted token or any
+                    // credential issued during this invocation is never
                     // published and never kept on disk.
                     self.remove(url)?;
                 }
@@ -1163,10 +1409,16 @@ impl ResponseCache {
                     // A cached HTTP authentication rejection and a cached
                     // application-level refusal must never be replayed as an
                     // ordinary result.
-                    return Err(Error::new("safety_latched", "a retained safety observation prevents this result"));
+                    return Err(Error::new(
+                        "safety_latched",
+                        "a retained safety observation prevents this result",
+                    ));
                 }
                 if facts.inspection_incomplete {
-                    return Err(Error::new("response_unreviewed", "response content withheld because token inspection was incomplete"));
+                    return Err(Error::new(
+                        "response_unreviewed",
+                        "response content withheld because token inspection was incomplete",
+                    ));
                 }
                 return process(&response, &challenge, &facts);
             }
@@ -1177,10 +1429,8 @@ impl ResponseCache {
                 "the ihome response is not in the private cache",
             ));
         }
-        Transport::open()?.fetch(self, url, token, refresh, process)
+        Transport::open()?.fetch(self, url, token, refresh, issued, process)
     }
-
-
 }
 
 fn valid_header(value: &str) -> bool {
@@ -1203,14 +1453,20 @@ struct Transport {
 impl Transport {
     fn open() -> Result<Self, Error> {
         let governor = Governor::open().map_err(|_| governor_error())?;
-        Ok(Self { governor, http: Self::client()? })
+        Ok(Self {
+            governor,
+            http: Self::client()?,
+        })
     }
 
     /// Unit-process fixture transport bound to an isolated governor directory.
     /// No request is sent unless the bounded cache misses.
     #[cfg(test)]
     fn open_isolated(governor: Governor) -> Result<Self, Error> {
-        Ok(Self { governor, http: Self::client()? })
+        Ok(Self {
+            governor,
+            http: Self::client()?,
+        })
     }
 
     fn client() -> Result<Client, Error> {
@@ -1230,10 +1486,12 @@ impl Transport {
             .timeout(Duration::from_secs(45))
             .user_agent("buaa-cli/0.1 ihome")
             .build()
-            .map_err(|_| Error::new(
-                "transport_unavailable",
-                "cannot initialize the ihome transport",
-            ))?;
+            .map_err(|_| {
+                Error::new(
+                    "transport_unavailable",
+                    "cannot initialize the ihome transport",
+                )
+            })?;
         Ok(http)
     }
 
@@ -1246,6 +1504,7 @@ impl Transport {
         url: &Url,
         token: &str,
         refresh: bool,
+        issued: &mut IssuedCookies,
         process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let request = read_request(&self.http, url, token)?;
@@ -1253,45 +1512,193 @@ impl Transport {
         if !refresh {
             match cache.load(url) {
                 Ok(Some((response, challenge))) => {
-                    let facts = analyze_body(&response.body, token);
+                    let facts = screened_body_facts(&response, token, issued, None);
                     if facts.token_echo {
-                        // A cached body that echoes the submitted token is
-                        // never published and never kept on disk.
+                        // A cached body that echoes the submitted token or an
+                        // invocation-issued cookie is never published and
+                        // never kept on disk.
                         cache.remove(url).map_err(|_| governor_error())?;
                     }
                     // The cached hit carries the request to completion with no
                     // network access; settle the lease without a request.
-                    lease.finish_without_request().map_err(|_| governor_error())?;
+                    lease
+                        .finish_without_request()
+                        .map_err(|_| governor_error())?;
                     if facts.inspection_incomplete {
-                        return Err(Error::new("response_unreviewed", "response content withheld because token inspection was incomplete"));
+                        return Err(Error::new(
+                            "response_unreviewed",
+                            "response content withheld because token inspection was incomplete",
+                        ));
                     }
                     return process(&response, &challenge, &facts);
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    lease.finish_without_request().map_err(|_| governor_error())?;
+                    lease
+                        .finish_without_request()
+                        .map_err(|_| governor_error())?;
                     return Err(error);
                 }
             }
         }
-        execute_read(request, url, token, lease, None, |response, challenge, facts, issues_cookie| {
-            admit_response(cache, response, challenge, facts, issues_cookie, process)
-        })
+        execute_read(
+            request,
+            url,
+            token,
+            lease,
+            None,
+            issued,
+            |response, challenge, facts, issues_cookie| {
+                admit_response(cache, response, challenge, facts, issues_cookie, process)
+            },
+        )
     }
 }
 
-fn read_request(client: &Client, url: &Url, token: &str) -> Result<reqwest::blocking::RequestBuilder, Error> {
-    if !allowed_url(url) { return Err(invalid_url()); }
+fn read_request(
+    client: &Client,
+    url: &Url,
+    token: &str,
+) -> Result<reqwest::blocking::RequestBuilder, Error> {
+    if !allowed_url(url) {
+        return Err(invalid_url());
+    }
     let credential = Zeroizing::new(format!("Bearer {token}"));
     let mut authorization = reqwest::header::HeaderValue::from_bytes(credential.as_bytes())
         .map_err(|_| invalid_input("the bearer token cannot be sent as a header"))?;
     authorization.set_sensitive(true);
-    Ok(client.get(url.clone())
+    Ok(client
+        .get(url.clone())
         .header("Accept-Encoding", "identity")
         .header("Accept", "application/json")
         .header("Referer", IHOME_REFERER)
         .header(reqwest::header::AUTHORIZATION, authorization)
         .timeout(Duration::from_secs(45)))
+}
+
+/// The credential values issued by `Set-Cookie` headers during one complete
+/// public list/detail/session invocation. `collect_headers` does not retain
+/// `Set-Cookie`, and this reader maintains no cookie jar: an issued value is
+/// never persisted or transmitted, but an echo of it inside any later response
+/// of the same invocation is still a credential disclosure. The guard is
+/// created once per invocation, accumulates every fresh response's values
+/// without resetting or evicting between pages, and also screens cached
+/// bodies and their projected MIME. It is zeroized with the invocation.
+#[derive(Default)]
+struct IssuedCookies {
+    /// Every nonempty first-pair value, stored exactly as the server sent
+    /// it, quotes included. Matching also covers the unquoted spelling.
+    values: Vec<Zeroizing<String>>,
+    bytes: usize,
+}
+
+/// One invocation may accumulate only so much credential material before it
+/// can no longer review it; exceeding the guard refuses the response rather
+/// than screening a subset or forgetting an earlier page's credential.
+const MAX_ISSUED_COOKIE_VALUES: usize = 64;
+const MAX_ISSUED_COOKIE_BYTES: usize = 64 * 1024;
+
+/// A cookie value that cannot be reviewed cannot be screened. Refuse the
+/// whole response rather than guess which spelling upstream will echo.
+fn issued_cookie_refusal() -> Error {
+    Error::new(
+        "invalid_headers",
+        "the ihome response issued a cookie that cannot be reviewed",
+    )
+}
+
+impl IssuedCookies {
+    /// Review one response's `Set-Cookie` values while the raw header map is
+    /// still available, before `collect_headers` discards it, and retain them
+    /// for the rest of the invocation. Only the first `name=value` pair is
+    /// credential material; attributes are not screened. A header that
+    /// cannot be parsed on its own terms (a missing name, a missing `=`, a
+    /// control byte, or ambiguous quoting) refuses the response. An empty
+    /// value is a deletion, not a transmitting secret, so it is not retained.
+    fn absorb(&mut self, headers: &reqwest::header::HeaderMap) -> Result<(), Error> {
+        for value in headers.get_all(reqwest::header::SET_COOKIE) {
+            let text = value.to_str().map_err(|_| issued_cookie_refusal())?;
+            let Some(pair) = text.split(';').next() else {
+                return Err(issued_cookie_refusal());
+            };
+            let Some((name, value)) = pair.split_once('=') else {
+                return Err(issued_cookie_refusal());
+            };
+            let name = name.trim();
+            let value = value.trim();
+            // Use the same cookie-name grammar as the authentication jar.
+            // Invalid names or folded first pairs cannot establish which
+            // value must remain private, so they refuse instead of guessing.
+            if name.is_empty()
+                || name.len() > 256
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+            {
+                return Err(issued_cookie_refusal());
+            }
+            // A quoted value must parse on its own terms: either both DQUOTEs
+            // wrap it or neither does, and the unquoted spelling never
+            // carries a bare quote.
+            let unquoted = if value.starts_with('"') || value.ends_with('"') {
+                value
+                    .strip_prefix('"')
+                    .and_then(|inner| inner.strip_suffix('"'))
+                    .ok_or_else(issued_cookie_refusal)?
+            } else {
+                value
+            };
+            // RFC cookie-octets, also used by the authentication jar: quotes
+            // only delimit the whole value. Spaces, backslashes and commas
+            // inside it are malformed or ambiguous, not values to skip.
+            if !unquoted.bytes().all(|byte| {
+                matches!(byte,
+                0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e)
+            }) {
+                return Err(issued_cookie_refusal());
+            }
+            if unquoted.is_empty() {
+                // `name=` or `name=""`: upstream is deleting this cookie, so
+                // there is no transmitting secret to screen.
+                continue;
+            }
+            // The bounds are cumulative across the whole invocation: the
+            // guard never resets or evicts an earlier page's secret.
+            if self.values.len() >= MAX_ISSUED_COOKIE_VALUES
+                || self.bytes.saturating_add(value.len()) > MAX_ISSUED_COOKIE_BYTES
+            {
+                return Err(issued_cookie_refusal());
+            }
+            self.bytes += value.len();
+            self.values.push(Zeroizing::new(value.to_string()));
+        }
+        Ok(())
+    }
+
+    /// A standalone guard for one header map, used by focused tests.
+    #[cfg(test)]
+    fn review(headers: &reqwest::header::HeaderMap) -> Result<Self, Error> {
+        let mut issued = IssuedCookies::default();
+        issued.absorb(headers)?;
+        Ok(issued)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Whether `bytes` echoes any issued credential value, in any of the
+    /// reversible spellings the token guard already supports. Both the raw
+    /// value and its unquoted spelling are credential carriers.
+    fn carries(&self, bytes: &[u8]) -> bool {
+        self.values.iter().any(|value| {
+            net::carries_secret(bytes, value)
+                || value
+                    .strip_prefix('"')
+                    .and_then(|inner| inner.strip_suffix('"'))
+                    .is_some_and(|unquoted| net::carries_secret(bytes, unquoted))
+        })
+    }
 }
 
 /// The existing response/body admission and settlement, shared by a legacy
@@ -1302,107 +1709,121 @@ fn execute_read<T>(
     url: &Url,
     token: &str,
     mut lease: governor::RequestLease<'_>,
-    authentication: Option<&dyn Fn(&[u8]) -> bool>,
+    authentication: Option<Screening<'_>>,
+    issued: &mut IssuedCookies,
     process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts, bool) -> Result<T, Error>,
 ) -> Result<T, Error> {
-        let mut raw = match lease.start_request(||request.send()) {
-            Ok(Ok(response)) => response,
-            Ok(Err(_)) => {
-                lease
-                    .finish(Outcome::NetworkFailure)
-                    .map_err(|_| governor_error())?;
-                return Err(network_error());
-            }
-            Err(governor::FollowupError::Governor(_)) => return Err(governor_error()),
-        };
-        let status = raw.status().as_u16();
-        let issues_session_cookie = net::issues_session_cookie(raw.headers());
-        let retry_after = raw
-            .headers()
-            .get("retry-after")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let header_challenge = raw
-            .headers()
-            .iter()
-            .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
-        // Persist every observed cooldown before header collection or body
-        // handling can fail; retain the same pending request and original lock.
-        observe_response_headers(&mut lease,status,raw.headers(),header_challenge)?;
-        let mut challenge = if header_challenge {
+    let mut raw = match lease.start_request(|| request.send()) {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) => {
+            lease
+                .finish(Outcome::NetworkFailure)
+                .map_err(|_| governor_error())?;
+            return Err(network_error());
+        }
+        Err(governor::FollowupError::Governor(_)) => return Err(governor_error()),
+    };
+    let status = raw.status().as_u16();
+    let issues_session_cookie = net::issues_session_cookie(raw.headers());
+    let retry_after = raw
+        .headers()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let header_challenge = raw
+        .headers()
+        .iter()
+        .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
+    // Persist every observed cooldown before header collection or body
+    // handling can fail; retain the same pending request and original lock.
+    observe_response_headers(&mut lease, status, raw.headers(), header_challenge)?;
+    let mut challenge = if header_challenge {
+        ChallengeAssessment::Detected
+    } else {
+        ChallengeAssessment::Unreviewed
+    };
+    let mut facts = ResponseFacts {
+        token_echo: false,
+        content_type_echo: false,
+        inspection_incomplete: false,
+        session_denied: false,
+        document: None,
+    };
+    let result = (|| {
+        if raw
+            .content_length()
+            .is_some_and(|length| length > MAX_BODY as u64)
+        {
+            return Err(body_limit());
+        }
+        // Absorb the cookies this response issues into the invocation's
+        // guard before `collect_headers` discards their values. A response
+        // that cannot be reviewed is refused outright; a reviewable one
+        // extends the guard so an echo of a newly issued value is withheld
+        // like the bearer token, on this and every later page.
+        // Keep an admission failure pending until the original body has
+        // supplied its independent challenge/session-denial facts. The
+        // refusal still precedes all projection and cache writes.
+        let cookie_review = issued.absorb(raw.headers());
+        let headers = collect_headers(raw.headers())?;
+        let mut body = Vec::new();
+        let read = raw
+            .by_ref()
+            .take(MAX_BODY as u64 + 1)
+            .read_to_end(&mut body);
+        let assessment = assess_response_body(
+            &body,
+            headers.get("content-type").map(String::as_str),
+            read.is_ok() && body.len() <= MAX_BODY,
+        );
+        challenge = if header_challenge {
             ChallengeAssessment::Detected
         } else {
-            ChallengeAssessment::Unreviewed
+            assessment
         };
-        let mut facts = ResponseFacts {
-            token_echo: false,
-            content_type_echo: false,
-            inspection_incomplete: false,
-            session_denied: false,
-            document: None,
+        read.map_err(|_| network_error())?;
+        if body.len() > MAX_BODY {
+            return Err(body_limit());
+        }
+        let response = Response {
+            url: url.as_str().to_owned(),
+            status,
+            headers,
+            sha256: sha256(&body),
+            body,
+            fetched_at_unix_ms: unix_ms()?,
+            cache_status: CacheStatus::Miss,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
         };
-        let result = (|| {
-            if raw
-                .content_length()
-                .is_some_and(|length| length > MAX_BODY as u64)
-            {
-                return Err(body_limit());
-            }
-            let headers = collect_headers(raw.headers())?;
-            let mut body = Vec::new();
-            let read = raw.by_ref()
-                .take(MAX_BODY as u64 + 1)
-                .read_to_end(&mut body);
-            let assessment = assess_response_body(
-                &body,
-                headers.get("content-type").map(String::as_str),
-                read.is_ok() && body.len() <= MAX_BODY,
-            );
-            challenge = if header_challenge { ChallengeAssessment::Detected } else { assessment };
-            read.map_err(|_| network_error())?;
-            if body.len() > MAX_BODY {
-                return Err(body_limit());
-            }
-            let response = Response {
-                url: url.as_str().to_owned(),
-                status,
-                headers,
-                sha256: sha256(&body),
-                body,
-                fetched_at_unix_ms: unix_ms()?,
-                cache_status: CacheStatus::Miss,
-                revalidated_at_unix_ms: None,
-                revalidation_status: None,
-            };
-            facts = analyze_authenticated_body(&response.body, token, authentication);
-            facts.content_type_echo = authentication.is_some_and(|contains|
-                response.headers.get("content-type").is_some_and(|value|
-                    credential_value_carries_token(value, token)
-                        || contains(value.as_bytes()) || contains(value.to_ascii_lowercase().as_bytes())));
-            facts.token_echo |= facts.content_type_echo;
-            process(&response, &challenge, &facts, issues_session_cookie)
-        })();
-        let network_failure = result
-            .as_ref()
-            .is_err_and(|error| error.code == "network_error");
-        drop(raw);
-        // An explicit application-level authentication refusal is a credential
-        // rejection, not an ordinary HTTP success. The already-observed
-        // Retry-After stays durable in the lease state.
-        let outcome = if facts.session_denied {
-            Outcome::CredentialRejected
-        } else {
-            Outcome::Http {
-                status,
-                retry_after: retry_after.as_deref(),
-                challenge: matches!(challenge, ChallengeAssessment::Detected),
-                network_failure,
-            }
-        };
-        lease
-            .finish(outcome)
-            .map_err(|_| governor_error())?;
-        result
+        // One combined guard screens the body once: the caller's bearer
+        // token, the sign-on authentication material, and every cookie
+        // value issued so far in this invocation. A newly issued value is
+        // session material, so its echo is a credential echo even when
+        // the response carries no other credential.
+        facts = screened_body_facts(&response, token, issued, authentication);
+        cookie_review?;
+        process(&response, &challenge, &facts, issues_session_cookie)
+    })();
+    let network_failure = result
+        .as_ref()
+        .is_err_and(|error| error.code == "network_error");
+    drop(raw);
+    // An explicit application-level authentication refusal is a credential
+    // rejection, not an ordinary HTTP success. The already-observed
+    // Retry-After stays durable in the lease state.
+    let outcome = if facts.session_denied {
+        Outcome::CredentialRejected
+    } else {
+        Outcome::Http {
+            status,
+            retry_after: retry_after.as_deref(),
+            challenge: matches!(challenge, ChallengeAssessment::Detected),
+            network_failure,
+        }
+    };
+    lease.finish(outcome).map_err(|_| governor_error())?;
+    result
 }
 
 // Only a cookie-reviewed original reaches the version-4 writer. Older cache
@@ -1415,8 +1836,12 @@ fn admit_response<T>(
     issues_session_cookie: bool,
     process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    let processed = admit_body(response, challenge, facts, issues_session_cookie, process)?;
-    if !facts.token_echo {
+    let processed = admit_body(response, challenge, facts, process)?;
+    // A response that carried a session cookie is never written to the
+    // replayable cache: the cookie is session material. The business entries
+    // it carries are still projected, because they are read through the
+    // caller's bearer token and are screened for credential echoes below.
+    if !facts.token_echo && !issues_session_cookie {
         cache.save(response, challenge)?;
     }
     Ok(processed)
@@ -1426,24 +1851,38 @@ fn admit_body<T>(
     response: &Response,
     challenge: &ChallengeAssessment,
     facts: &ResponseFacts,
-    issues_session_cookie: bool,
     process: impl FnOnce(&Response, &ChallengeAssessment, &ResponseFacts) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    if issues_session_cookie {
-        return Err(Error::new("session_cookie_issued", "response content withheld because upstream issued a session cookie"));
-    }
     if facts.inspection_incomplete {
-        return Err(Error::new("response_unreviewed", "response content withheld because token inspection was incomplete"));
+        return Err(Error::new(
+            "response_unreviewed",
+            "response content withheld because token inspection was incomplete",
+        ));
     }
     process(response, challenge, facts)
 }
 
-fn observe_response_headers(lease:&mut governor::RequestLease<'_>,status:u16,headers:&reqwest::header::HeaderMap,challenge:bool)->Result<(),Error> {
-    lease.observe_http_many(status,headers.get_all("retry-after").iter().map(|value|value.to_str().ok()),challenge)
-        .map_err(|_|governor_error())
+fn observe_response_headers(
+    lease: &mut governor::RequestLease<'_>,
+    status: u16,
+    headers: &reqwest::header::HeaderMap,
+    challenge: bool,
+) -> Result<(), Error> {
+    lease
+        .observe_http_many(
+            status,
+            headers
+                .get_all("retry-after")
+                .iter()
+                .map(|value| value.to_str().ok()),
+            challenge,
+        )
+        .map_err(|_| governor_error())
 }
 
-fn collect_headers(headers: &reqwest::header::HeaderMap) -> Result<BTreeMap<String, String>, Error> {
+fn collect_headers(
+    headers: &reqwest::header::HeaderMap,
+) -> Result<BTreeMap<String, String>, Error> {
     let mut collected = BTreeMap::new();
     let mut total = 0usize;
     for name in HEADER_NAMES {
@@ -1467,11 +1906,9 @@ fn collect_headers(headers: &reqwest::header::HeaderMap) -> Result<BTreeMap<Stri
                 "the ihome response headers are invalid",
             ));
         }
-        total = total
-            .checked_add(name.len() + value.len())
-            .ok_or_else(|| {
-                Error::new("invalid_headers", "the ihome response headers are invalid")
-            })?;
+        total = total.checked_add(name.len() + value.len()).ok_or_else(|| {
+            Error::new("invalid_headers", "the ihome response headers are invalid")
+        })?;
         if total > MAX_HEADERS {
             return Err(Error::new(
                 "invalid_headers",
@@ -1486,14 +1923,14 @@ fn collect_headers(headers: &reqwest::header::HeaderMap) -> Result<BTreeMap<Stri
 /// Header collection retains duplicate fields privately as a comma-joined
 /// value. Such a Content-Type cannot establish body admission, including on
 /// cache replay. A positive shared challenge observation still takes priority.
-fn assess_response_body(bytes:&[u8], mime:Option<&str>, complete:bool)->ChallengeAssessment {
-    if mime.is_some_and(|value|value.contains(',')) {
-        return match assess_challenge_body(bytes,None,complete) {
-            ChallengeAssessment::Detected=>ChallengeAssessment::Detected,
-            _=>ChallengeAssessment::Unreviewed,
+fn assess_response_body(bytes: &[u8], mime: Option<&str>, complete: bool) -> ChallengeAssessment {
+    if mime.is_some_and(|value| value.contains(',')) {
+        return match assess_challenge_body(bytes, None, complete) {
+            ChallengeAssessment::Detected => ChallengeAssessment::Detected,
+            _ => ChallengeAssessment::Unreviewed,
         };
     }
-    assess_challenge_body(bytes,mime,complete)
+    assess_challenge_body(bytes, mime, complete)
 }
 
 /// An upstream header value that is projected into output is withheld when it
@@ -1518,7 +1955,16 @@ fn content_type(response: &Response, token: &str) -> Option<String> {
     }
     let essence = raw.split(';').next()?.trim();
     let (kind, subtype) = essence.split_once('/')?;
-    let token = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b,b'!'|b'#'|b'$'|b'&'|b'^'|b'_'|b'.'|b'+'|b'-'));
+    let token = |part: &str| {
+        !part.is_empty()
+            && part.bytes().all(|b| {
+                b.is_ascii_alphanumeric()
+                    || matches!(
+                        b,
+                        b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-'
+                    )
+            })
+    };
     (token(kind) && token(subtype)).then(|| essence.to_ascii_lowercase())
 }
 
@@ -1537,16 +1983,30 @@ fn credential_key(key: &str) -> bool {
     let normalized: String = key
         .bytes()
         .filter(u8::is_ascii_alphanumeric)
-        .map(|byte|byte.to_ascii_lowercase() as char)
+        .map(|byte| byte.to_ascii_lowercase() as char)
         .collect();
-    ["password","passwd","token","cookie","authorization","secret","session","ticket","execution","credential","csrf","jwt"]
-        .iter()
-        .any(|marker| normalized.contains(marker))
+    [
+        "password",
+        "passwd",
+        "token",
+        "cookie",
+        "authorization",
+        "secret",
+        "session",
+        "ticket",
+        "execution",
+        "credential",
+        "csrf",
+        "jwt",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
 }
 
 fn credential_url(url: &Url) -> bool {
-    !url.username().is_empty() || url.password().is_some()
-        || url.query_pairs().any(|(key,_)|credential_key(&key))
+    !url.username().is_empty()
+        || url.password().is_some()
+        || url.query_pairs().any(|(key, _)| credential_key(&key))
         || url.fragment().is_some()
 }
 
@@ -1587,9 +2047,10 @@ fn bearer_credential_present(bytes: &[u8]) -> bool {
         return false;
     };
     let mut cursor = source.as_bytes();
-    while let Some(position) = cursor.windows(7).position(|window| {
-        window.eq_ignore_ascii_case(b"bearer ")
-    }) {
+    while let Some(position) = cursor
+        .windows(7)
+        .position(|window| window.eq_ignore_ascii_case(b"bearer "))
+    {
         let rest = &cursor[position + 7..];
         let token: String = rest
             .iter()
@@ -1615,54 +2076,78 @@ fn looks_like_bearer_credential(token: &str) -> bool {
 
 // Streaming inspection visits every duplicate map member and decodes escaped
 // keys before classification; Value would silently discard duplicate members.
-struct JsonSafetySeed { depth: usize }
+struct JsonSafetySeed {
+    depth: usize,
+}
 impl<'de> serde::de::DeserializeSeed<'de> for JsonSafetySeed {
     type Value = bool;
-    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<bool,D::Error> {
-        if self.depth > 32 { return Err(serde::de::Error::custom("response nesting exceeds safe inspection")); }
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<bool, D::Error> {
+        if self.depth > 32 {
+            return Err(serde::de::Error::custom(
+                "response nesting exceeds safe inspection",
+            ));
+        }
         deserializer.deserialize_any(self)
     }
 }
 impl<'de> serde::de::Visitor<'de> for JsonSafetySeed {
     type Value = bool;
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { formatter.write_str("a JSON response value") }
-    fn visit_bool<E: serde::de::Error>(self,_: bool)->Result<bool,E>{Ok(false)}
-    fn visit_i64<E: serde::de::Error>(self,_: i64)->Result<bool,E>{Ok(false)}
-    fn visit_u64<E: serde::de::Error>(self,_: u64)->Result<bool,E>{Ok(false)}
-    fn visit_f64<E: serde::de::Error>(self,_: f64)->Result<bool,E>{Ok(false)}
-    fn visit_unit<E: serde::de::Error>(self)->Result<bool,E>{Ok(false)}
-    fn visit_str<E: serde::de::Error>(self,value: &str)->Result<bool,E>{
-        let text=value.trim();
-        if text.starts_with(['{','[']) {
-            return Ok(json_contains_credentials(text.as_bytes(),self.depth+1));
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON response value")
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<bool, E> {
+        Ok(false)
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<bool, E> {
+        Ok(false)
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<bool, E> {
+        Ok(false)
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<bool, E> {
+        Ok(false)
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<bool, E> {
+        Ok(false)
+    }
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<bool, E> {
+        let text = value.trim();
+        if text.starts_with(['{', '[']) {
+            return Ok(json_contains_credentials(text.as_bytes(), self.depth + 1));
         }
         // A JSON string can itself be another complete JSON document. Recurse
         // under the same depth budget so escaping cannot hide credential keys.
         if text.starts_with('"') {
-            return Ok(json_contains_credentials(text.as_bytes(),self.depth+1));
+            return Ok(json_contains_credentials(text.as_bytes(), self.depth + 1));
         }
         Ok(credential_reference(text))
     }
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(self,mut seq:A)->Result<bool,A::Error>{
-        let mut unsafe_value=false;
-        while let Some(nested)=seq.next_element_seed(JsonSafetySeed{depth:self.depth+1})? { unsafe_value |= nested; }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<bool, A::Error> {
+        let mut unsafe_value = false;
+        while let Some(nested) = seq.next_element_seed(JsonSafetySeed {
+            depth: self.depth + 1,
+        })? {
+            unsafe_value |= nested;
+        }
         Ok(unsafe_value)
     }
-    fn visit_map<A: serde::de::MapAccess<'de>>(self,mut map:A)->Result<bool,A::Error>{
-        let mut unsafe_value=false;
-        while let Some(key)=map.next_key::<String>()? {
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<bool, A::Error> {
+        let mut unsafe_value = false;
+        while let Some(key) = map.next_key::<String>()? {
             unsafe_value |= credential_key(&key);
-            unsafe_value |= map.next_value_seed(JsonSafetySeed{depth:self.depth+1})?;
+            unsafe_value |= map.next_value_seed(JsonSafetySeed {
+                depth: self.depth + 1,
+            })?;
         }
         Ok(unsafe_value)
     }
 }
-fn json_contains_credentials(bytes:&[u8],depth:usize)->bool {
+fn json_contains_credentials(bytes: &[u8], depth: usize) -> bool {
     use serde::de::DeserializeSeed;
-    let mut decoder=serde_json::Deserializer::from_slice(bytes);
-    match (JsonSafetySeed{depth}).deserialize(&mut decoder) {
-        Ok(unsafe_value)=>unsafe_value || decoder.end().is_err(),
-        Err(_)=>true,
+    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    match (JsonSafetySeed { depth }).deserialize(&mut decoder) {
+        Ok(unsafe_value) => unsafe_value || decoder.end().is_err(),
+        Err(_) => true,
     }
 }
 
@@ -1713,7 +2198,10 @@ impl FallbackReason {
     }
 }
 
-fn response_refusal(response: &Response, challenge: &ChallengeAssessment) -> Option<FallbackReason> {
+fn response_refusal(
+    response: &Response,
+    challenge: &ChallengeAssessment,
+) -> Option<FallbackReason> {
     if matches!(challenge, ChallengeAssessment::Detected) || matches!(response.status, 401 | 403) {
         return Some(FallbackReason::SafetyLatched);
     }
@@ -1729,9 +2217,11 @@ fn response_refusal(response: &Response, challenge: &ChallengeAssessment) -> Opt
     if response.status != 200 {
         return Some(FallbackReason::HttpRejected);
     }
-    if response.headers.get("content-encoding").is_some_and(|encoding| {
-        !encoding.eq_ignore_ascii_case("identity")
-    }) {
+    if response
+        .headers
+        .get("content-encoding")
+        .is_some_and(|encoding| !encoding.eq_ignore_ascii_case("identity"))
+    {
         return Some(FallbackReason::UnsupportedEncoding);
     }
     None
@@ -1755,7 +2245,9 @@ fn json_mime(value: &str) -> bool {
     let mime = value.split(';').next().unwrap_or("").trim();
     mime.eq_ignore_ascii_case("application/json")
         || mime.eq_ignore_ascii_case("text/json")
-        || mime.as_bytes().get(mime.len().saturating_sub(5)..)
+        || mime
+            .as_bytes()
+            .get(mime.len().saturating_sub(5)..)
             .is_some_and(|suffix| suffix.eq_ignore_ascii_case(b"+json"))
 }
 
@@ -1805,10 +2297,7 @@ fn required_array<'a>(
 
 fn parse_department(value: &Value) -> Result<(u64, String), FallbackReason> {
     let map = value.as_object().ok_or(FallbackReason::UpstreamShape)?;
-    Ok((
-        required_u64(map, "id")?,
-        required_str(map, "name")?,
-    ))
+    Ok((required_u64(map, "id")?, required_str(map, "name")?))
 }
 
 fn parse_reply(value: &Value) -> Result<Reply, FallbackReason> {
@@ -1848,7 +2337,9 @@ fn collect_declared_urls(value: &Value, out: &mut Vec<String>, depth: usize) {
                 return;
             }
             if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                if let Some(decoded) = literal_document(trimmed.as_bytes(), &mut token_inspection("")) {
+                if let Some(decoded) =
+                    literal_document(trimmed.as_bytes(), &mut token_inspection(""))
+                {
                     collect_declared_urls(&decoded, out, depth + 1);
                     return;
                 }
@@ -1856,7 +2347,10 @@ fn collect_declared_urls(value: &Value, out: &mut Vec<String>, depth: usize) {
             let Ok(url) = Url::parse(trimmed) else {
                 return;
             };
-            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() || credential_url(&url) {
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || credential_url(&url)
+            {
                 return;
             }
             if !out.iter().any(|existing| existing.as_str() == trimmed) {
@@ -1936,12 +2430,11 @@ fn envelope_data<'a>(
         return Err(FallbackReason::BusinessRejected);
     }
     match root.get("success") {
-        Some(Value::Bool(true)) => {},
+        Some(Value::Bool(true)) => {}
         Some(Value::Bool(false)) => return Err(FallbackReason::BusinessRejected),
         _ => return Err(FallbackReason::UpstreamShape),
     }
-    root
-        .get("data")
+    root.get("data")
         .and_then(Value::as_object)
         .ok_or(FallbackReason::UpstreamShape)
 }
@@ -1994,7 +2487,8 @@ fn parse_detail_envelope(
         Some(Value::Array(items)) if items.len() == 1 => &items[0],
         Some(Value::Array(items)) if items.is_empty() => return Ok(None),
         Some(value @ Value::Object(_)) => value,
-        None if data.contains_key("id") => document.and_then(|root| root.get("data"))
+        None if data.contains_key("id") => document
+            .and_then(|root| root.get("data"))
             .ok_or(FallbackReason::UpstreamShape)?,
         _ => return Err(FallbackReason::UpstreamShape),
     };
@@ -2006,7 +2500,11 @@ fn parse_detail_envelope(
 // ---------------------------------------------------------------------------
 
 fn reply_summary(reply: &Reply) -> Value {
-    let preview: String = reply.content.chars().take(MAX_REPLY_PREVIEW_CHARS).collect();
+    let preview: String = reply
+        .content
+        .chars()
+        .take(MAX_REPLY_PREVIEW_CHARS)
+        .collect();
     let truncated = preview.chars().count() < reply.content.chars().count();
     json!({
         "id": reply.id,
@@ -2063,29 +2561,36 @@ fn project_entry(entry: &Entry, response: &Response) -> Value {
 /// reason the structure could not be built.
 fn evidence(reason: FallbackReason, response: &Response, token: &str) -> Value {
     let leading = response.body.trim_ascii_start();
-    let json_source = response.headers.get("content-type").is_some_and(|mime|json_mime(mime))
-        || leading.starts_with(b"{") || leading.starts_with(b"[") || leading.starts_with(b"\"");
-    let credential_json = json_source && json_contains_credentials(&response.body,0);
+    let json_source = response
+        .headers
+        .get("content-type")
+        .is_some_and(|mime| json_mime(mime))
+        || leading.starts_with(b"{")
+        || leading.starts_with(b"[")
+        || leading.starts_with(b"\"");
+    let credential_json = json_source && json_contains_credentials(&response.body, 0);
     let credential_bearer = bearer_credential_present(&response.body);
-    let credential_form = std::str::from_utf8(&response.body).ok().is_some_and(|source| {
-        let document = scraper::Html::parse_document(source);
-        let controls = scraper::Selector::parse("input,textarea,select,script").unwrap();
-        if document.select(&controls).next().is_some() {
-            return true;
-        }
-        // HTML metadata is document scope: a credential-marked meta is
-        // credential-bearing wherever upstream placed it. The declared name
-        // classifies it by the same key rules as JSON members; ordinary meta
-        // names like description or viewport keep the raw body admissible.
-        let metas = scraper::Selector::parse("meta").unwrap();
-        document.select(&metas).any(|meta| {
-            ["name", "http-equiv", "property", "itemprop"]
-                .iter()
-                .copied()
-                .filter_map(|attr| meta.value().attr(attr))
-                .any(credential_key)
-        })
-    });
+    let credential_form = std::str::from_utf8(&response.body)
+        .ok()
+        .is_some_and(|source| {
+            let document = scraper::Html::parse_document(source);
+            let controls = scraper::Selector::parse("input,textarea,select,script").unwrap();
+            if document.select(&controls).next().is_some() {
+                return true;
+            }
+            // HTML metadata is document scope: a credential-marked meta is
+            // credential-bearing wherever upstream placed it. The declared name
+            // classifies it by the same key rules as JSON members; ordinary meta
+            // names like description or viewport keep the raw body admissible.
+            let metas = scraper::Selector::parse("meta").unwrap();
+            document.select(&metas).any(|meta| {
+                ["name", "http-equiv", "property", "itemprop"]
+                    .iter()
+                    .copied()
+                    .filter_map(|attr| meta.value().attr(attr))
+                    .any(credential_key)
+            })
+        });
     // A refusal body and a body that echoes the submitted token are never
     // exported, not even through the reversible base64 channel.
     let raw_safe = !credential_json
@@ -2135,7 +2640,12 @@ struct PageOutcome {
     pagination: Option<Pagination>,
 }
 
-fn refused_page(response: &Response, token: &str, reason: FallbackReason, success: Option<bool>) -> PageOutcome {
+fn refused_page(
+    response: &Response,
+    token: &str,
+    reason: FallbackReason,
+    success: Option<bool>,
+) -> PageOutcome {
     PageOutcome {
         meta: page_meta(response, 0, token),
         success,
@@ -2170,15 +2680,30 @@ fn cursor_is_incomparable(request: &ListRequest, entries: &[Entry]) -> bool {
     })
 }
 
-fn pagination_issue(pagination: Option<Pagination>, page: u32, limit: u32, count: usize) -> Option<&'static str> {
-    let Some(pagination) = pagination else { return Some("pagination_unconfirmed"); };
+fn pagination_issue(
+    pagination: Option<Pagination>,
+    page: u32,
+    limit: u32,
+    count: usize,
+) -> Option<&'static str> {
+    let Some(pagination) = pagination else {
+        return Some("pagination_unconfirmed");
+    };
     if pagination.current_page != page {
         return Some("page_mismatch");
     }
-    let last = if pagination.total == 0 { 1 } else { (pagination.total - 1) / u64::from(limit) + 1 };
+    let last = if pagination.total == 0 {
+        1
+    } else {
+        (pagination.total - 1) / u64::from(limit) + 1
+    };
     let preceding = u64::from(page - 1) * u64::from(limit);
-    let expected = pagination.total.saturating_sub(preceding).min(u64::from(limit));
-    if pagination.current_page == 0 || pagination.current_page > pagination.last_page
+    let expected = pagination
+        .total
+        .saturating_sub(preceding)
+        .min(u64::from(limit));
+    if pagination.current_page == 0
+        || pagination.current_page > pagination.last_page
         || u64::from(pagination.last_page) != last
         || u64::try_from(count).ok() != Some(expected)
     {
@@ -2219,11 +2744,7 @@ struct Counts {
 
 /// Emit unseen records after the supplied cursor, or previously seen records
 /// whose status or reply count has changed since the supplied baseline.
-fn classify(
-    request: &ListRequest,
-    entry: &mut Value,
-    counts: &mut Counts,
-) -> Option<&'static str> {
+fn classify(request: &ListRequest, entry: &mut Value, counts: &mut Counts) -> Option<&'static str> {
     let (id, created_at, status, reply_count) = {
         let map = entry.as_object()?;
         (
@@ -2285,7 +2806,11 @@ fn classify(
         counts.kept_changed += 1;
     }
     set_field(entry, "change", json!(change));
-    set_field(entry, "created_at_comparable", json!(parse_timestamp(&created_at).is_some()));
+    set_field(
+        entry,
+        "created_at_comparable",
+        json!(parse_timestamp(&created_at).is_some()),
+    );
     Some(change)
 }
 
@@ -2346,10 +2871,19 @@ fn build_list_envelope(
             degraded_evidence = Some(found);
             break;
         }
-        incomplete = pagination_issue(page.pagination, expected_page, request.limit, page.entries.len());
-        if incomplete.is_none() && previous_pagination.zip(page.pagination).is_some_and(|(before, after)| {
-            before.total != after.total || before.last_page != after.last_page
-        }) {
+        incomplete = pagination_issue(
+            page.pagination,
+            expected_page,
+            request.limit,
+            page.entries.len(),
+        );
+        if incomplete.is_none()
+            && previous_pagination
+                .zip(page.pagination)
+                .is_some_and(|(before, after)| {
+                    before.total != after.total || before.last_page != after.last_page
+                })
+        {
             incomplete = Some("pagination_changed");
         }
         for mut entry in page.entries {
@@ -2367,13 +2901,20 @@ fn build_list_envelope(
                     let replace = match parse_timestamp(created_at) {
                         Some(candidate) => match &max_created_at {
                             Some(current) => match parse_timestamp(current.as_str())
-                                .and_then(|previous| compare_timestamps(&candidate, &previous)) {
+                                .and_then(|previous| compare_timestamps(&candidate, &previous))
+                            {
                                 Some(ordering) => ordering == Ordering::Greater,
-                                None => { incomparable_dates = true; false },
+                                None => {
+                                    incomparable_dates = true;
+                                    false
+                                }
                             },
                             None => true,
                         },
-                        None => { incomparable_dates = true; false },
+                        None => {
+                            incomparable_dates = true;
+                            false
+                        }
                     };
                     if replace {
                         max_created_at = Some(created_at.to_owned());
@@ -2401,7 +2942,9 @@ fn build_list_envelope(
         max_created_at = None;
     }
     let pages_fetched = page_records.len();
-    let next_page = request.page.saturating_add(u32::try_from(pages_fetched).unwrap_or(0));
+    let next_page = request
+        .page
+        .saturating_add(u32::try_from(pages_fetched).unwrap_or(0));
     let complete = degraded_evidence.is_none() && reached_terminal;
     let provenance = match page_records.last().and_then(Value::as_object) {
         Some(meta) => json!({
@@ -2498,8 +3041,12 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
 /// One explicit CAS attempt followed by one listing page or one detail.
 /// Authentication material and response bytes never enter the response cache.
 pub fn session(input: &str, online: bool) -> Result<Value, Error> {
-    session_with_network(input, online, || Ok((cas::http_client()?,
-        Governor::open().map_err(|_| governor_error())?)))
+    session_with_network(input, online, || {
+        Ok((
+            cas::http_client()?,
+            Governor::open().map_err(|_| governor_error())?,
+        ))
+    })
 }
 
 pub(crate) fn session_with_network(
@@ -2507,34 +3054,55 @@ pub(crate) fn session_with_network(
     online: bool,
     network: impl FnOnce() -> Result<(Client, Governor), Error>,
 ) -> Result<Value, Error> {
-    if input.len() > 65536 { return Err(invalid_input("the ihome session request is too large")); }
+    if input.len() > 65536 {
+        return Err(invalid_input("the ihome session request is too large"));
+    }
     let input: SessionInput = serde_json::from_str(input)
         .map_err(|_| invalid_input("the ihome session request is invalid"))?;
-    if input.operation.is_some_and(|operation| operation != Operation::Session) {
+    if input
+        .operation
+        .is_some_and(|operation| operation != Operation::Session)
+    {
         return Err(invalid_input("the ihome operation must be session"));
     }
     let (enabled, url) = match &input.read {
-        SessionRead::List { enabled, limit, page } => {
+        SessionRead::List {
+            enabled,
+            limit,
+            page,
+        } => {
             if !(1..=MAX_LIMIT).contains(limit) || !(1..=MAX_PAGE).contains(page) {
-                return Err(invalid_input("the ihome list limit or page is outside its supported range"));
+                return Err(invalid_input(
+                    "the ihome list limit or page is outside its supported range",
+                ));
             }
             (*enabled, list_url(*limit, *page)?)
         }
         SessionRead::Detail { enabled, id } => (*enabled, detail_url(*id)?),
     };
     if !enabled {
-        return Ok(json!({"schema_version":1,"type":"ihome_session","result":"disabled",
-            "network_performed":false,"write_operations_performed":false}));
+        return Ok(
+            json!({"schema_version":1,"type":"ihome_session","result":"disabled",
+            "network_performed":false,"write_operations_performed":false}),
+        );
     }
     if !input.authorized {
-        return Err(Error::new("permission", "explicit authorization for one ihome authentication attempt is required"));
+        return Err(Error::new(
+            "permission",
+            "explicit authorization for one ihome authentication attempt is required",
+        ));
     }
     let credentials = SsoCredentials::new(&input.username, &input.password)?;
     if *input.intent != format!("LOGIN {} ihome", &*input.username) {
-        return Err(invalid_input("the ihome authentication intent does not match"));
+        return Err(invalid_input(
+            "the ihome authentication intent does not match",
+        ));
     }
     if !online {
-        return Err(Error::new("online_required", "ihome sessions require explicit online permission; no authentication was attempted"));
+        return Err(Error::new(
+            "online_required",
+            "ihome sessions require explicit online permission; no authentication was attempted",
+        ));
     }
     let (client, governor) = network()?;
     let mut lease = net::acquire_kind(&governor, governor::RequestKind::Authentication)?;
@@ -2542,12 +3110,18 @@ pub(crate) fn session_with_network(
         .and_then(|mut session| {
             let token = session.take_service_credential()?;
             if !valid_token(&token) {
-                return Err(Error::new("authentication_unconfirmed", "the ihome handoff did not supply an admissible bearer token; no read was sent"));
+                return Err(Error::new(
+                    "authentication_unconfirmed",
+                    "the ihome handoff did not supply an admissible bearer token; no read was sent",
+                ));
             }
             let request = read_request(&client, &url, &token)?;
             let reservation = lease.reserve_followup().map_err(|_| governor_error())?;
             if !reservation.cooldown_wait.is_zero() {
-                return Err(Error::new("cooldown", "the ihome read was deferred; no retry was performed"));
+                return Err(Error::new(
+                    "cooldown",
+                    "the ihome read was deferred; no retry was performed",
+                ));
             }
             if !reservation.request_wait.is_zero() {
                 std::thread::sleep(reservation.request_wait);
@@ -2557,7 +3131,10 @@ pub(crate) fn session_with_network(
     let (session, token, request) = match prepared {
         Ok(prepared) => prepared,
         Err(failure) => {
-            if matches!(failure.code, "governor_denied" | "governor_error" | "governor_unavailable") {
+            if matches!(
+                failure.code,
+                "governor_denied" | "governor_error" | "governor_unavailable"
+            ) {
                 // Persistence uncertainty retains the original pending attempt.
                 return Err(failure);
             }
@@ -2566,31 +3143,74 @@ pub(crate) fn session_with_network(
                 "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
                 "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
                 _ => lease.finish_without_request(),
-            }.map_err(|_| governor_error())?;
+            }
+            .map_err(|_| governor_error())?;
             return Err(failure);
         }
     };
-    let contains = |bytes: &[u8]| net::carries_secret(bytes, &input.password)
-        || net::carries_secret(bytes, &input.username) || session.contains_secret_bytes(bytes);
-    enum SelectedRead { List(ListRequest), Detail(DetailRequest) }
+    let contains = |bytes: &[u8]| {
+        net::carries_secret(bytes, &input.password)
+            || net::carries_secret(bytes, &input.username)
+            || session.contains_secret_bytes(bytes)
+    };
+    enum SelectedRead {
+        List(ListRequest),
+        Detail(DetailRequest),
+    }
     let selected = match input.read {
         SessionRead::List { limit, page, .. } => SelectedRead::List(ListRequest {
-            token, token_source: Some(TokenSource::RedirectFragmentToken), limit, page,
-            max_pages: 1, since_id: None, since_time_raw: None, since_time: None,
-            known: BTreeMap::new(), refresh: false }),
+            token,
+            token_source: Some(TokenSource::RedirectFragmentToken),
+            limit,
+            page,
+            max_pages: 1,
+            since_id: None,
+            since_time_raw: None,
+            since_time: None,
+            known: BTreeMap::new(),
+            refresh: false,
+        }),
         SessionRead::Detail { id, .. } => SelectedRead::Detail(DetailRequest {
-            token, token_source: Some(TokenSource::RedirectFragmentToken), id, refresh: false }),
+            token,
+            token_source: Some(TokenSource::RedirectFragmentToken),
+            id,
+            refresh: false,
+        }),
     };
     let token = match &selected {
         SelectedRead::List(read) => read.token.as_str(),
         SelectedRead::Detail(read) => read.token.as_str(),
     };
-    execute_read(request, &url, token, lease, Some(&contains), |response, challenge, facts, issues_cookie| {
-        admit_body(response, challenge, facts, issues_cookie, |response, challenge, facts| match &selected {
-            SelectedRead::List(read) => build_list_envelope(read, [Ok(list_page(read, response, challenge, facts))]),
-            SelectedRead::Detail(read) => Ok(build_detail_envelope(read, detail_page(read, response, challenge, facts))),
-        })
-    })
+    // The session's single read still uses one invocation-scoped guard: its
+    // issued values are never adopted, transmitted or cached.
+    let mut issued = IssuedCookies::default();
+    execute_read(
+        request,
+        &url,
+        token,
+        lease,
+        Some(&contains),
+        &mut issued,
+        |response, challenge, facts, issues_cookie| {
+            // The one-shot session never caches its response, so a session cookie
+            // in the read response is not retained here either.
+            let _ = issues_cookie;
+            admit_body(
+                response,
+                challenge,
+                facts,
+                |response, challenge, facts| match &selected {
+                    SelectedRead::List(read) => {
+                        build_list_envelope(read, [Ok(list_page(read, response, challenge, facts))])
+                    }
+                    SelectedRead::Detail(read) => Ok(build_detail_envelope(
+                        read,
+                        detail_page(read, response, challenge, facts),
+                    )),
+                },
+            )
+        },
+    )
 }
 
 /// Read one bounded window of the appeal listing.
@@ -2604,7 +3224,10 @@ pub fn list(input: &str, online: bool) -> Result<Value, Error> {
     }
     let scope = sha256(request.token.as_bytes());
     let cache = ResponseCache::open(&scope)?;
-    list_with_cache(&request, &cache, online)
+    // One guard covers the complete traversal: a cookie issued by any page
+    // screens every later fresh or cached page of this invocation.
+    let mut issued = IssuedCookies::default();
+    list_with_cache(&request, &cache, online, &mut issued)
 }
 
 /// The listing traversal over one credential-scoped cache.
@@ -2612,23 +3235,66 @@ fn list_with_cache(
     request: &ListRequest,
     cache: &ResponseCache,
     online: bool,
+    issued: &mut IssuedCookies,
+) -> Result<Value, Error> {
+    collect_list_pages(request, |url| {
+        cache.get(
+            url,
+            request.token.as_str(),
+            online,
+            request.refresh,
+            &mut *issued,
+            |response, challenge, facts| {
+                Ok::<PageOutcome, Error>(list_page(request, response, challenge, facts))
+            },
+        )
+    })
+}
+
+fn collect_list_pages(
+    request: &ListRequest,
+    mut read: impl FnMut(&Url) -> Result<PageOutcome, Error>,
 ) -> Result<Value, Error> {
     // Lazy acquisition lets the collector stop before asking for another
     // page on a terminal, inconsistent, repeated or refused source response.
     let pages = (0..request.max_pages).map(|offset| {
         let page = request.page.saturating_add(offset);
         let url = list_url(request.limit, page)?;
-        cache.get(
-            &url,
-            request.token.as_str(),
-            online,
-            request.refresh,
-            |response, challenge, facts| {
-                Ok::<PageOutcome, Error>(list_page(request, response, challenge, facts))
-            },
-        )
+        read(&url)
     });
     build_list_envelope(request, pages)
+}
+
+/// Strict-TLS service fixtures use the production traversal, cache handling,
+/// raw-header admission and lease settlement with a pinned synthetic client
+/// and isolated governor. This seam does not exist in a non-test build.
+#[cfg(test)]
+pub(crate) fn list_with_test_network(
+    input: &str,
+    cache_directory: &std::path::Path,
+    client: Client,
+    governor: Governor,
+) -> Result<Value, Error> {
+    let request = parse_list_input(input)?;
+    let cache = ResponseCache {
+        directory: governor::open_directory(cache_directory, false, true)
+            .map_err(|_| cache_error())?,
+    };
+    let transport = Transport {
+        governor,
+        http: client,
+    };
+    let mut issued = IssuedCookies::default();
+    collect_list_pages(&request, |url| {
+        transport.fetch(
+            &cache,
+            url,
+            request.token.as_str(),
+            request.refresh,
+            &mut issued,
+            |response, challenge, facts| Ok(list_page(&request, response, challenge, facts)),
+        )
+    })
 }
 
 /// Structure one listing page. A refusal, an echoed token and an explicit
@@ -2646,33 +3312,64 @@ fn list_page(
         return credential_echo_page(response, request.token.as_str(), facts.content_type_echo);
     }
     if facts.inspection_incomplete {
-        return refused_page(response, request.token.as_str(), FallbackReason::InspectionUnreviewed, None);
+        return refused_page(
+            response,
+            request.token.as_str(),
+            FallbackReason::InspectionUnreviewed,
+            None,
+        );
     }
     if let Some(reason) = response_refusal(response, challenge) {
         return refused_page(response, request.token.as_str(), reason, None);
     }
     if facts.session_denied {
         // An explicit session denial is not an empty listing.
-        return refused_page(response, request.token.as_str(), FallbackReason::AuthenticationRefused, Some(false));
+        return refused_page(
+            response,
+            request.token.as_str(),
+            FallbackReason::AuthenticationRefused,
+            Some(false),
+        );
     }
     let mime = response.headers.get("content-type").map(String::as_str);
     match parse_envelope(mime, facts.document.as_ref()) {
         Ok((pagination, entries)) if entries.len() > request.limit as usize => PageOutcome {
             meta: page_meta(response, entries.len(), request.token.as_str()),
             success: Some(true),
-            evidence: Some(evidence(FallbackReason::UpstreamShape, response, request.token.as_str())),
-            entries: Vec::new(), pagination,
-        },
-        Ok((_, entries)) if cursor_is_incomparable(request, &entries) =>
-            refused_page(response, request.token.as_str(), FallbackReason::IncomparableTimestamp, Some(true)),
-        Ok((pagination, entries)) => PageOutcome {
-            meta: page_meta(response, entries.len(), request.token.as_str()),
-            success: Some(true), evidence: None,
-            entries: entries.iter().map(|entry| project_entry(entry, response)).collect(),
+            evidence: Some(evidence(
+                FallbackReason::UpstreamShape,
+                response,
+                request.token.as_str(),
+            )),
+            entries: Vec::new(),
             pagination,
         },
-        Err(reason) => refused_page(response, request.token.as_str(), reason,
-            facts.document.as_ref().and_then(|root| root.get("success")).and_then(Value::as_bool)),
+        Ok((_, entries)) if cursor_is_incomparable(request, &entries) => refused_page(
+            response,
+            request.token.as_str(),
+            FallbackReason::IncomparableTimestamp,
+            Some(true),
+        ),
+        Ok((pagination, entries)) => PageOutcome {
+            meta: page_meta(response, entries.len(), request.token.as_str()),
+            success: Some(true),
+            evidence: None,
+            entries: entries
+                .iter()
+                .map(|entry| project_entry(entry, response))
+                .collect(),
+            pagination,
+        },
+        Err(reason) => refused_page(
+            response,
+            request.token.as_str(),
+            reason,
+            facts
+                .document
+                .as_ref()
+                .and_then(|root| root.get("success"))
+                .and_then(Value::as_bool),
+        ),
     }
 }
 
@@ -2685,11 +3382,13 @@ pub fn detail(input: &str, online: bool) -> Result<Value, Error> {
     let scope = sha256(request.token.as_bytes());
     let cache = ResponseCache::open(&scope)?;
     let url = detail_url(request.id)?;
+    let mut issued = IssuedCookies::default();
     let outcome = cache.get(
         &url,
         request.token.as_str(),
         online,
         request.refresh,
+        &mut issued,
         |response, challenge, facts| {
             Ok::<PageOutcome, Error>(detail_page(&request, response, challenge, facts))
         },
@@ -2742,26 +3441,55 @@ fn detail_page(
         return credential_echo_page(response, request.token.as_str(), facts.content_type_echo);
     }
     if facts.inspection_incomplete {
-        return refused_page(response, request.token.as_str(), FallbackReason::InspectionUnreviewed, None);
+        return refused_page(
+            response,
+            request.token.as_str(),
+            FallbackReason::InspectionUnreviewed,
+            None,
+        );
     }
     if let Some(reason) = response_refusal(response, challenge) {
         return refused_page(response, request.token.as_str(), reason, None);
     }
     if facts.session_denied {
-        return refused_page(response, request.token.as_str(), FallbackReason::AuthenticationRefused, Some(false));
+        return refused_page(
+            response,
+            request.token.as_str(),
+            FallbackReason::AuthenticationRefused,
+            Some(false),
+        );
     }
     let mime = response.headers.get("content-type").map(String::as_str);
     match parse_detail_envelope(mime, facts.document.as_ref()) {
-        Ok(Some(entry)) if entry.id != request.id =>
-            refused_page(response, request.token.as_str(), FallbackReason::UpstreamShape, Some(true)),
+        Ok(Some(entry)) if entry.id != request.id => refused_page(
+            response,
+            request.token.as_str(),
+            FallbackReason::UpstreamShape,
+            Some(true),
+        ),
         Ok(entry) => PageOutcome {
-            meta: page_meta(response, usize::from(entry.is_some()), request.token.as_str()),
-            success: Some(true), evidence: None,
-            entries: entry.map(|entry| vec![project_entry(&entry, response)]).unwrap_or_default(),
+            meta: page_meta(
+                response,
+                usize::from(entry.is_some()),
+                request.token.as_str(),
+            ),
+            success: Some(true),
+            evidence: None,
+            entries: entry
+                .map(|entry| vec![project_entry(&entry, response)])
+                .unwrap_or_default(),
             pagination: None,
         },
-        Err(reason) => refused_page(response, request.token.as_str(), reason,
-            facts.document.as_ref().and_then(|root| root.get("success")).and_then(Value::as_bool)),
+        Err(reason) => refused_page(
+            response,
+            request.token.as_str(),
+            reason,
+            facts
+                .document
+                .as_ref()
+                .and_then(|root| root.get("success"))
+                .and_then(Value::as_bool),
+        ),
     }
 }
 
@@ -3218,15 +3946,20 @@ mod session_preflight {
         let input = json!({"authorized":true,"username":"synthetic-operator-4b7",
             "password":"synthetic-password-9q2","intent":"LOGIN synthetic-operator-4b7 ihome",
             "read":{"operation":"list","enabled":true}});
-        for read in [json!({"operation":"list","enabled":false}),
-            json!({"operation":"detail","enabled":false,"id":42})] {
+        for read in [
+            json!({"operation":"list","enabled":false}),
+            json!({"operation":"detail","enabled":false,"id":42}),
+        ] {
             let mut disabled = input.clone();
             disabled["read"] = read;
             disabled["authorized"] = json!(false);
             disabled["username"] = json!("");
             disabled["password"] = json!("");
             disabled["intent"] = json!("");
-            let output = session_with_network(&disabled.to_string(), true, || panic!("disabled read opened network resources")).unwrap();
+            let output = session_with_network(&disabled.to_string(), true, || {
+                panic!("disabled read opened network resources")
+            })
+            .unwrap();
             assert_eq!(output["result"], "disabled");
             assert_eq!(output["network_performed"], false);
         }
@@ -3236,11 +3969,16 @@ mod session_preflight {
         mismatched["intent"] = json!("LOGIN another-operator ihome");
         let mut out_of_range = input.clone();
         out_of_range["read"]["limit"] = json!(101);
-        for (input, online, expected) in [(unauthorized, true, "permission"),
-            (mismatched, true, "invalid_input"), (out_of_range, true, "invalid_input"),
-            (input, false, "online_required")] {
-            let failure = session_with_network(&input.to_string(), online,
-                || panic!("unapproved read opened authentication resources")).unwrap_err();
+        for (input, online, expected) in [
+            (unauthorized, true, "permission"),
+            (mismatched, true, "invalid_input"),
+            (out_of_range, true, "invalid_input"),
+            (input, false, "online_required"),
+        ] {
+            let failure = session_with_network(&input.to_string(), online, || {
+                panic!("unapproved read opened authentication resources")
+            })
+            .unwrap_err();
             assert_eq!(failure.code, expected);
         }
     }
@@ -3270,12 +4008,22 @@ mod rawvalue_regressions {
         let response = response(body);
         let facts = analyze_body(body, token);
         let list = ListRequest {
-            token: Zeroizing::new(token.to_owned()), token_source: None,
-            limit: 20, page: 1, max_pages: 1, since_id: None,
-            since_time_raw: None, since_time: None, known: BTreeMap::new(), refresh: false,
+            token: Zeroizing::new(token.to_owned()),
+            token_source: None,
+            limit: 20,
+            page: 1,
+            max_pages: 1,
+            since_id: None,
+            since_time_raw: None,
+            since_time: None,
+            known: BTreeMap::new(),
+            refresh: false,
         };
         let detail = DetailRequest {
-            token: Zeroizing::new(token.to_owned()), token_source: None, id: 41, refresh: false,
+            token: Zeroizing::new(token.to_owned()),
+            token_source: None,
+            id: 41,
+            refresh: false,
         };
         let listing = list_page(&list, &response, &ChallengeAssessment::Clear, &facts);
         let detail = detail_page(&detail, &response, &ChallengeAssessment::Clear, &facts);
@@ -3285,7 +4033,10 @@ mod rawvalue_regressions {
     fn assert_refusal(page: &PageOutcome, reason: &str) {
         assert!(page.entries.is_empty());
         let evidence = page.evidence.as_ref().expect("refusal evidence");
-        assert!(evidence.get("raw_response_base64").is_none(), "reversible raw response leaked");
+        assert!(
+            evidence.get("raw_response_base64").is_none(),
+            "reversible raw response leaked"
+        );
         assert_eq!(evidence["evidence_kind"], "upstream_http_metadata");
         assert_eq!(evidence["fallback_reason"], reason);
     }
@@ -3304,7 +4055,10 @@ mod rawvalue_regressions {
     fn echo_and_denial() {
         let body = br#"{"$serde_json::private::RawValue":"","success":false,"message":"unauthorized","echo":"abc_123"}"#;
         let (facts, listing, detail) = pages(body, "abc_123");
-        assert!(facts.session_denied, "explicit denial must survive the marker");
+        assert!(
+            facts.session_denied,
+            "explicit denial must survive the marker"
+        );
         assert!(facts.token_echo, "short exact token must be detected");
         // Credential privacy takes precedence in projection, while the denial
         // fact remains available independently for governor settlement.
@@ -3314,7 +4068,8 @@ mod rawvalue_regressions {
 
     #[test]
     fn denial() {
-        let body = br#"{"$serde_json::private::RawValue":"","success":false,"message":"unauthorized"}"#;
+        let body =
+            br#"{"$serde_json::private::RawValue":"","success":false,"message":"unauthorized"}"#;
         let (facts, listing, detail) = pages(body, "abc_123");
         assert!(facts.session_denied);
         assert!(!facts.token_echo);
@@ -3326,7 +4081,10 @@ mod rawvalue_regressions {
 
     #[test]
     fn controls() {
-        let (facts, listing, detail) = pages(br#"{"code":20000,"success":true,"data":{"data":[]}}"#, "abc_123");
+        let (facts, listing, detail) = pages(
+            br#"{"code":20000,"success":true,"data":{"data":[]}}"#,
+            "abc_123",
+        );
         assert!(!facts.token_echo && !facts.session_denied);
         for page in [&listing, &detail] {
             assert_eq!(page.success, Some(true));
@@ -3335,7 +4093,10 @@ mod rawvalue_regressions {
 
         for (body, token) in [
             (br#"{"message":"abc_123"}"#.as_slice(), "abc_123"),
-            (br#"{"message":"prefix abc_1234 suffix"}"#.as_slice(), "abc_1234"),
+            (
+                br#"{"message":"prefix abc_1234 suffix"}"#.as_slice(),
+                "abc_1234",
+            ),
         ] {
             let (facts, listing, detail) = pages(body, token);
             assert!(facts.token_echo);
@@ -3347,16 +4108,25 @@ mod rawvalue_regressions {
         let (facts, listing, _) = pages(body, "abc_123");
         assert!(!facts.session_denied && !facts.token_echo);
         assert_eq!(listing.success, Some(true));
-        let (facts, listing, _) = pages(br#"{"$serde_json::private::RawValue":"ordinary"}"#, "abc_123");
+        let (facts, listing, _) = pages(
+            br#"{"$serde_json::private::RawValue":"ordinary"}"#,
+            "abc_123",
+        );
         assert!(!facts.token_echo && !facts.session_denied);
         let fallback = listing.evidence.as_ref().unwrap();
         assert_eq!(fallback["evidence_kind"], "upstream_http_body");
         assert!(fallback.get("raw_response_base64").is_some());
-        let (facts, _, _) = pages(br#"{"$serde_json::private::RawValue":"1234567"}"#, "1234567");
+        let (facts, _, _) = pages(
+            br#"{"$serde_json::private::RawValue":"1234567"}"#,
+            "1234567",
+        );
         assert!(facts.token_echo);
         let (facts, _, _) = pages(br#"{"echo":"abc_123","echo":"safe","success":false,"message":"unauthorized","success":true}"#, "abc_123");
         assert!(facts.token_echo && !facts.session_denied);
-        let (facts, _, _) = pages(br#"{"nested":"{\"$serde_json::private::RawValue\":\"\\u0061bc_123\"}"}"#, "abc_123");
+        let (facts, _, _) = pages(
+            br#"{"nested":"{\"$serde_json::private::RawValue\":\"\\u0061bc_123\"}"}"#,
+            "abc_123",
+        );
         assert!(facts.token_echo);
 
         let (facts, _, _) = pages(br#"{"value":"\ud83d\ude00"}"#, "😀");
@@ -3365,9 +4135,20 @@ mod rawvalue_regressions {
         assert!(facts.token_echo);
 
         let mut urls = Vec::new();
-        collect_declared_urls(&Value::String(r#"{"$serde_json::private::RawValue":"\"https://example.invalid/file\""}"#.to_owned()), &mut urls, 0);
+        collect_declared_urls(
+            &Value::String(
+                r#"{"$serde_json::private::RawValue":"\"https://example.invalid/file\""}"#
+                    .to_owned(),
+            ),
+            &mut urls,
+            0,
+        );
         assert!(urls.is_empty());
-        collect_declared_urls(&Value::String(r#"{"url":"https://example.invalid/file"}"#.to_owned()), &mut urls, 0);
+        collect_declared_urls(
+            &Value::String(r#"{"url":"https://example.invalid/file"}"#.to_owned()),
+            &mut urls,
+            0,
+        );
         assert_eq!(urls, ["https://example.invalid/file"]);
     }
 }
@@ -3467,8 +4248,12 @@ mod tests {
         match parse_envelope(observed.as_deref(), facts.document.as_ref()) {
             Ok((pagination, entries)) => PageOutcome {
                 meta: page_meta(&original, entries.len(), "synthetic-token-value"),
-                success: Some(true), evidence: None,
-                entries: entries.iter().map(|entry| project_entry(entry, &original)).collect(),
+                success: Some(true),
+                evidence: None,
+                entries: entries
+                    .iter()
+                    .map(|entry| project_entry(entry, &original))
+                    .collect(),
                 pagination,
             },
             Err(reason) => refused_page(&original, "synthetic-token-value", reason, None),
@@ -3487,11 +4272,16 @@ mod tests {
                     "departments": [], "appeal_reply": []
                 })).collect::<Vec<_>>()
             }
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     fn source_outcome(request: &ListRequest, page: u32, body: &[u8]) -> PageOutcome {
-        let original = response(&list_url(request.limit, page).unwrap(), body, Some("application/json"));
+        let original = response(
+            &list_url(request.limit, page).unwrap(),
+            body,
+            Some("application/json"),
+        );
         let facts = analyze_body(body, request.token.as_str());
         list_page(request, &original, &ChallengeAssessment::Clear, &facts)
     }
@@ -3499,10 +4289,19 @@ mod tests {
     #[test]
     fn source_protocol_preserves_untitled_list_and_detail_records() {
         let mut document: Value = serde_json::from_slice(&source_page(1, 1, 1, &[41])).unwrap();
-        document["data"]["data"][0].as_object_mut().unwrap().remove("title");
+        document["data"]["data"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("title");
         let body = serde_json::to_vec(&document).unwrap();
         let request = list_request(20);
-        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![source_outcome(&request, 1, &body)])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["result"], "entries");
         assert_eq!(envelope["entries"][0]["id"], 41);
         assert_eq!(envelope["entries"][0]["content"], "Synthetic appeal body");
@@ -3511,10 +4310,20 @@ mod tests {
 
         let detail_body = serde_json::to_vec(&json!({
             "code": 20000, "success": true, "data": document["data"]["data"][0]
-        })).unwrap();
-        let original = response(&detail_url(41).unwrap(), &detail_body, Some("application/json"));
+        }))
+        .unwrap();
+        let original = response(
+            &detail_url(41).unwrap(),
+            &detail_body,
+            Some("application/json"),
+        );
         let facts = analyze_body(&detail_body, request.token.as_str());
-        let detail = DetailRequest {token: Zeroizing::new(request.token.to_string()), token_source: None, id: 41, refresh: false};
+        let detail = DetailRequest {
+            token: Zeroizing::new(request.token.to_string()),
+            token_source: None,
+            id: 41,
+            refresh: false,
+        };
         let outcome = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
         assert!(outcome.evidence.is_none());
         assert_eq!(outcome.entries[0]["content"], "Synthetic appeal body");
@@ -3524,22 +4333,58 @@ mod tests {
     #[test]
     fn source_protocol_requires_positive_business_code_and_success() {
         let request = list_request(20);
-        let detail = DetailRequest {token: Zeroizing::new(request.token.to_string()), token_source: None, id: 41, refresh: false};
+        let detail = DetailRequest {
+            token: Zeroizing::new(request.token.to_string()),
+            token_source: None,
+            id: 41,
+            refresh: false,
+        };
         for (body, reason) in [
-            (br#"{"code":40001,"success":false,"message":"ordinary business rejection"}"#.as_slice(), "business_rejected"),
-            (br#"{"code":40001,"success":"","message":"ordinary business rejection"}"#.as_slice(), "business_rejected"),
-            (br#"{"code":20000,"success":false,"data":{"data":[]}}"#.as_slice(), "business_rejected"),
-            (br#"{"code":40001,"success":true,"data":{"data":[]}}"#.as_slice(), "business_rejected"),
-            (br#"{"success":true,"data":{"data":[]}}"#.as_slice(), "upstream_shape"),
-            (br#"{"code":"20000","success":true,"data":{"data":[]}}"#.as_slice(), "upstream_shape"),
+            (
+                br#"{"code":40001,"success":false,"message":"ordinary business rejection"}"#
+                    .as_slice(),
+                "business_rejected",
+            ),
+            (
+                br#"{"code":40001,"success":"","message":"ordinary business rejection"}"#
+                    .as_slice(),
+                "business_rejected",
+            ),
+            (
+                br#"{"code":20000,"success":false,"data":{"data":[]}}"#.as_slice(),
+                "business_rejected",
+            ),
+            (
+                br#"{"code":40001,"success":true,"data":{"data":[]}}"#.as_slice(),
+                "business_rejected",
+            ),
+            (
+                br#"{"success":true,"data":{"data":[]}}"#.as_slice(),
+                "upstream_shape",
+            ),
+            (
+                br#"{"code":"20000","success":true,"data":{"data":[]}}"#.as_slice(),
+                "upstream_shape",
+            ),
         ] {
             let facts = analyze_body(body, request.token.as_str());
             assert!(!facts.session_denied && !facts.token_echo);
             let original = response(&detail_url(41).unwrap(), body, Some("application/json"));
-            for page in [source_outcome(&request, 1, body), detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts)] {
-                let found = page.evidence.as_ref().expect("business rejection must not become an empty result");
+            for page in [
+                source_outcome(&request, 1, body),
+                detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts),
+            ] {
+                let found = page
+                    .evidence
+                    .as_ref()
+                    .expect("business rejection must not become an empty result");
                 assert_eq!(found["fallback_reason"], reason);
-                assert_eq!(STANDARD.decode(found["raw_response_base64"].as_str().unwrap()).unwrap(), body);
+                assert_eq!(
+                    STANDARD
+                        .decode(found["raw_response_base64"].as_str().unwrap())
+                        .unwrap(),
+                    body
+                );
                 assert!(page.entries.is_empty());
             }
         }
@@ -3549,15 +4394,33 @@ mod tests {
     fn source_protocol_does_not_complete_missing_or_mismatched_pagination() {
         let request = list_request(20);
         for (mut document, reason) in [
-            (serde_json::from_slice::<Value>(&source_page(1, 1, 1, &[41])).unwrap(), "pagination_unconfirmed"),
-            (serde_json::from_slice::<Value>(&source_page(2, 2, 21, &[41])).unwrap(), "page_mismatch"),
-            (serde_json::from_slice::<Value>(&source_page(1, 1, 21, &[41])).unwrap(), "pagination_inconsistent"),
+            (
+                serde_json::from_slice::<Value>(&source_page(1, 1, 1, &[41])).unwrap(),
+                "pagination_unconfirmed",
+            ),
+            (
+                serde_json::from_slice::<Value>(&source_page(2, 2, 21, &[41])).unwrap(),
+                "page_mismatch",
+            ),
+            (
+                serde_json::from_slice::<Value>(&source_page(1, 1, 21, &[41])).unwrap(),
+                "pagination_inconsistent",
+            ),
         ] {
             if reason == "pagination_unconfirmed" {
-                document["data"].as_object_mut().unwrap().remove("current_page");
+                document["data"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("current_page");
             }
             let body = serde_json::to_vec(&document).unwrap();
-            let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+            let envelope = build_list_envelope(
+                &request,
+                (vec![source_outcome(&request, 1, &body)])
+                    .into_iter()
+                    .map(Ok),
+            )
+            .unwrap();
             assert_eq!(envelope["result"], "partial");
             assert_eq!(envelope["entries"][0]["id"], 41);
             assert_eq!(envelope["upstream"]["complete"], false);
@@ -3570,7 +4433,13 @@ mod tests {
     fn source_protocol_short_page_is_not_terminal_without_matching_totals() {
         let request = list_request(20);
         let body = source_page(1, 2, 21, &[41]);
-        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![source_outcome(&request, 1, &body)])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["result"], "partial");
         assert_eq!(envelope["upstream"]["complete"], false);
         assert_eq!(envelope["next_cursor"], Value::Null);
@@ -3580,12 +4449,24 @@ mod tests {
     fn source_protocol_full_last_page_is_complete_and_empty_total_is_empty() {
         let request = list_request(2);
         let body = source_page(1, 1, 2, &[41, 42]);
-        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![source_outcome(&request, 1, &body)])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["upstream"]["complete"], true);
         assert_eq!(envelope["next_cursor"]["has_more"], false);
         assert_eq!(envelope["next_cursor"]["max_id"], 42);
         let body = source_page(1, 1, 0, &[]);
-        let envelope = build_list_envelope(&request, (vec![source_outcome(&request, 1, &body)]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![source_outcome(&request, 1, &body)])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["result"], "empty");
         assert_eq!(envelope["upstream"]["complete"], true);
     }
@@ -3598,15 +4479,24 @@ mod tests {
             if field == "title" {
                 document["data"]["data"][0][field] = Value::Null;
             } else {
-                document["data"]["data"][0].as_object_mut().unwrap().remove(field);
+                document["data"]["data"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
             }
             let body = serde_json::to_vec(&document).unwrap();
-            let envelope = build_list_envelope(&request, [Ok(source_outcome(&request, 1, &body))]).unwrap();
+            let envelope =
+                build_list_envelope(&request, [Ok(source_outcome(&request, 1, &body))]).unwrap();
             assert_eq!(envelope["result"], "degraded");
             assert_eq!(envelope["next_cursor"], Value::Null);
             let found = &envelope["upstream_evidence"];
             assert_eq!(found["fallback_reason"], "upstream_shape");
-            assert_eq!(STANDARD.decode(found["raw_response_base64"].as_str().unwrap()).unwrap(), body);
+            assert_eq!(
+                STANDARD
+                    .decode(found["raw_response_base64"].as_str().unwrap())
+                    .unwrap(),
+                body
+            );
         }
     }
 
@@ -3614,13 +4504,24 @@ mod tests {
     fn source_protocol_changing_totals_prevent_incremental_cursor_advancement() {
         let request = list_request(2);
         let pages = [
-            Ok(source_outcome(&request, 1, &source_page(1, 2, 3, &[41, 42]))),
-            Ok(source_outcome(&request, 2, &source_page(2, 2, 4, &[43, 44]))),
+            Ok(source_outcome(
+                &request,
+                1,
+                &source_page(1, 2, 3, &[41, 42]),
+            )),
+            Ok(source_outcome(
+                &request,
+                2,
+                &source_page(2, 2, 4, &[43, 44]),
+            )),
         ];
         let envelope = build_list_envelope(&request, pages).unwrap();
         assert_eq!(envelope["result"], "partial");
         assert_eq!(envelope["entry_count"], 4);
-        assert_eq!(envelope["upstream"]["incomplete_reason"], "pagination_changed");
+        assert_eq!(
+            envelope["upstream"]["incomplete_reason"],
+            "pagination_changed"
+        );
         assert_eq!(envelope["upstream"]["complete"], false);
         assert_eq!(envelope["next_cursor"], Value::Null);
     }
@@ -3629,28 +4530,61 @@ mod tests {
     fn source_protocol_more_records_than_requested_retains_safe_original_without_cursor() {
         let request = list_request(1);
         let body = source_page(1, 1, 2, &[41, 42]);
-        let envelope = build_list_envelope(&request, [Ok(source_outcome(&request, 1, &body))]).unwrap();
+        let envelope =
+            build_list_envelope(&request, [Ok(source_outcome(&request, 1, &body))]).unwrap();
         assert_eq!(envelope["result"], "degraded");
         assert_eq!(envelope["upstream"]["complete"], false);
         assert_eq!(envelope["next_cursor"], Value::Null);
-        assert_eq!(STANDARD.decode(envelope["upstream_evidence"]["raw_response_base64"].as_str().unwrap()).unwrap(), body);
+        assert_eq!(
+            STANDARD
+                .decode(
+                    envelope["upstream_evidence"]["raw_response_base64"]
+                        .as_str()
+                        .unwrap()
+                )
+                .unwrap(),
+            body
+        );
     }
 
     #[test]
     fn source_protocol_valid_traversal_stops_at_declared_full_last_page() {
-        let directory = std::env::temp_dir().join(format!("buaa-ihome-terminal-pages-{}-{}", std::process::id(), SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)));
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
-        let cache = ResponseCache {directory: governor::open_directory(&directory, false, true).unwrap()};
+        let directory = std::env::temp_dir().join(format!(
+            "buaa-ihome-terminal-pages-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let cache = ResponseCache {
+            directory: governor::open_directory(&directory, false, true).unwrap(),
+        };
         for (page, ids) in [(1, [41, 42]), (2, [43, 44]), (3, [45, 46])] {
             let body = source_page(page, 2, 4, &ids);
-            cache.save(&response(&list_url(2, page).unwrap(), &body, Some("application/json")), &ChallengeAssessment::Clear).unwrap();
+            cache
+                .save(
+                    &response(&list_url(2, page).unwrap(), &body, Some("application/json")),
+                    &ChallengeAssessment::Clear,
+                )
+                .unwrap();
         }
         let mut request = list_request(2);
         request.max_pages = 3;
-        let envelope = list_with_cache(&request, &cache, false).unwrap();
+        let envelope =
+            list_with_cache(&request, &cache, false, &mut IssuedCookies::default()).unwrap();
         assert_eq!(envelope["upstream"]["complete"], true);
         assert_eq!(envelope["upstream"]["pages"].as_array().unwrap().len(), 2);
-        assert_eq!(envelope["entries"].as_array().unwrap().iter().map(|entry| entry["id"].as_u64().unwrap()).collect::<Vec<_>>(), [41, 42, 43, 44]);
+        assert_eq!(
+            envelope["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [41, 42, 43, 44]
+        );
         assert_eq!(envelope["next_cursor"]["has_more"], false);
         assert_eq!(envelope["next_cursor"]["max_id"], 44);
         drop(cache);
@@ -3659,21 +4593,51 @@ mod tests {
 
     #[test]
     fn source_protocol_repeated_ids_stop_before_the_following_cached_page() {
-        let directory = std::env::temp_dir().join(format!("buaa-ihome-source-pages-{}-{}", std::process::id(), SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)));
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
-        let cache = ResponseCache {directory: governor::open_directory(&directory, false, true).unwrap()};
+        let directory = std::env::temp_dir().join(format!(
+            "buaa-ihome-source-pages-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let cache = ResponseCache {
+            directory: governor::open_directory(&directory, false, true).unwrap(),
+        };
         for page in 1..=3 {
             let body = source_page(page, 3, 6, if page == 3 { &[43, 44] } else { &[41, 42] });
-            cache.save(&response(&list_url(2, page).unwrap(), &body, Some("application/json")), &ChallengeAssessment::Clear).unwrap();
+            cache
+                .save(
+                    &response(&list_url(2, page).unwrap(), &body, Some("application/json")),
+                    &ChallengeAssessment::Clear,
+                )
+                .unwrap();
         }
         let mut request = list_request(2);
         request.max_pages = 3;
-        let envelope = list_with_cache(&request, &cache, false).unwrap();
-        assert_eq!(envelope["upstream"]["pages"].as_array().unwrap().len(), 2, "a repeated page must stop traversal before page three");
-        assert_eq!(envelope["upstream"]["incomplete_reason"], "duplicate_entry_id");
+        let envelope =
+            list_with_cache(&request, &cache, false, &mut IssuedCookies::default()).unwrap();
+        assert_eq!(
+            envelope["upstream"]["pages"].as_array().unwrap().len(),
+            2,
+            "a repeated page must stop traversal before page three"
+        );
+        assert_eq!(
+            envelope["upstream"]["incomplete_reason"],
+            "duplicate_entry_id"
+        );
         assert_eq!(envelope["upstream"]["complete"], false);
         assert_eq!(envelope["next_cursor"], Value::Null);
-        assert_eq!(envelope["entries"].as_array().unwrap().iter().map(|entry| entry["id"].as_u64().unwrap()).collect::<Vec<_>>(), [41, 42]);
+        assert_eq!(
+            envelope["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [41, 42]
+        );
         drop(cache);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -3681,8 +4645,13 @@ mod tests {
     #[test]
     fn listing_is_normalized_with_declared_attachments_only() {
         let request = list_request(20);
-        let envelope =
-            build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![page_from(LIST_BODY, Some("application/json"))])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["result"], "entries");
         assert_eq!(envelope["entry_count"], 2);
         let first = &envelope["entries"][0];
@@ -3729,8 +4698,7 @@ mod tests {
         let original = response(&url, body, Some("application/json"));
         let observed = content_type(&original, "synthetic-token-value");
         let facts = analyze_body(&original.body, "synthetic-token-value");
-        let entry =
-            parse_detail_envelope(observed.as_deref(), facts.document.as_ref()).unwrap();
+        let entry = parse_detail_envelope(observed.as_deref(), facts.document.as_ref()).unwrap();
         let entry = entry.unwrap();
         assert_eq!(entry.id, 41);
         assert_eq!(entry.created_at, "2026-10-20 08:30:00");
@@ -3752,8 +4720,13 @@ mod tests {
     fn an_empty_page_is_reported_as_empty_with_a_cursor() {
         let body = br#"{"code":20000,"success":true,"data":{"data":[],"current_page":1,"last_page":1,"total":0}}"#;
         let request = list_request(20);
-        let envelope =
-            build_list_envelope(&request, (vec![page_from(body, Some("application/json"))]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![page_from(body, Some("application/json"))])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["result"], "empty");
         assert_eq!(envelope["next_cursor"]["max_id"], Value::Null);
         assert_eq!(envelope["next_cursor"]["has_more"], false);
@@ -3781,17 +4754,15 @@ mod tests {
             &Url::parse("https://i.buaa.edu.cn/api/appeal/7/extra").unwrap()
         ));
 
-        let request = parse_list_input(
-            r#"{"token":"synthetic-token","limit":0,"page":1,"max_pages":1}"#,
-        )
-        .err()
-        .unwrap();
+        let request =
+            parse_list_input(r#"{"token":"synthetic-token","limit":0,"page":1,"max_pages":1}"#)
+                .err()
+                .unwrap();
         assert_eq!(request.code, "invalid_input");
-        let pages = parse_list_input(
-            r#"{"token":"synthetic-token","limit":20,"page":1,"max_pages":21}"#,
-        )
-        .err()
-        .unwrap();
+        let pages =
+            parse_list_input(r#"{"token":"synthetic-token","limit":20,"page":1,"max_pages":21}"#)
+                .err()
+                .unwrap();
         assert_eq!(pages.code, "invalid_input");
     }
 
@@ -3816,8 +4787,13 @@ mod tests {
             )]),
             refresh: false,
         };
-        let envelope =
-            build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![page_from(LIST_BODY, Some("application/json"))])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["entry_count"], 1);
         assert_eq!(envelope["entries"][0]["id"], 42);
         assert_eq!(envelope["entries"][0]["change"], "status_changed");
@@ -3852,8 +4828,13 @@ mod tests {
             )]),
             refresh: false,
         };
-        let envelope =
-            build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            (vec![page_from(LIST_BODY, Some("application/json"))])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["entry_count"], 1);
         assert_eq!(envelope["entries"][0]["id"], 41);
         assert_eq!(envelope["dedup"]["skipped_unchanged"], 1);
@@ -3864,8 +4845,21 @@ mod tests {
     fn changed_known_record_is_not_hidden_by_an_id_cursor() {
         let mut request = list_request(20);
         request.since_id = Some(100);
-        request.known.insert(41, KnownItem { id: 41, status: "Pending".into(), reply_count: 1 });
-        let envelope = build_list_envelope(&request, (vec![page_from(LIST_BODY, Some("application/json"))]).into_iter().map(Ok)).unwrap();
+        request.known.insert(
+            41,
+            KnownItem {
+                id: 41,
+                status: "Pending".into(),
+                reply_count: 1,
+            },
+        );
+        let envelope = build_list_envelope(
+            &request,
+            (vec![page_from(LIST_BODY, Some("application/json"))])
+                .into_iter()
+                .map(Ok),
+        )
+        .unwrap();
         assert_eq!(envelope["entry_count"], 1);
         assert_eq!(envelope["entries"][0]["id"], 41);
         assert_eq!(envelope["entries"][0]["change"], "status_changed");
@@ -3886,14 +4880,20 @@ mod tests {
 
     #[test]
     fn a_since_time_cursor_preserves_floating_vs_offset_domains() {
-        let floating = parse_list_input(
-            r#"{"token":"synthetic-token","since_time":"2026-10-20 08:30:00"}"#,
-        ).unwrap();
+        let floating =
+            parse_list_input(r#"{"token":"synthetic-token","since_time":"2026-10-20 08:30:00"}"#)
+                .unwrap();
         let accepted = parse_list_input(
             r#"{"token":"synthetic-token","since_time":"2026-10-20T08:30:00+08:00"}"#,
         )
         .unwrap();
-        assert!(compare_timestamps(floating.since_time.as_ref().unwrap(), accepted.since_time.as_ref().unwrap()).is_none());
+        assert!(
+            compare_timestamps(
+                floating.since_time.as_ref().unwrap(),
+                accepted.since_time.as_ref().unwrap()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -3910,17 +4910,25 @@ mod tests {
 
     #[test]
     fn typed_optional_tokens_use_zeroizing_storage() {
-        let mut list: ListInput = serde_json::from_str(
-            r#"{"token":"synthetic-secret","operation":"list"}"#,
-        ).unwrap();
+        let mut list: ListInput =
+            serde_json::from_str(r#"{"token":"synthetic-secret","operation":"list"}"#).unwrap();
         let secret: Zeroizing<String> = list.token.take().unwrap();
         assert_eq!(secret.as_str(), "synthetic-secret");
-        let detail: DetailInput = serde_json::from_str(
-            r#"{"token":"synthetic-secret","id":41}"#,
-        ).unwrap();
+        let detail: DetailInput =
+            serde_json::from_str(r#"{"token":"synthetic-secret","id":41}"#).unwrap();
         let _: &Zeroizing<String> = detail.token.as_ref().unwrap();
-        assert!(serde_json::from_str::<ListInput>(r#"{"token":null}"#).unwrap().token.is_none());
-        assert!(serde_json::from_str::<ListInput>("{}").unwrap().token.is_none());
+        assert!(
+            serde_json::from_str::<ListInput>(r#"{"token":null}"#)
+                .unwrap()
+                .token
+                .is_none()
+        );
+        assert!(
+            serde_json::from_str::<ListInput>("{}")
+                .unwrap()
+                .token
+                .is_none()
+        );
     }
 
     #[test]
@@ -3931,22 +4939,25 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<ListInput>(input).is_err());
             assert!(serde_json::from_str::<DetailInput>(input).is_err());
-            assert_eq!(run(input,false).err().unwrap().code,"invalid_input");
+            assert_eq!(run(input, false).err().unwrap().code, "invalid_input");
         }
         assert!(serde_json::from_str::<OperationSelector>(r#"["list"]"#).is_err());
         for input in [
             r#"{"operation":"list","token":"synthetic-secret","known":[[41,"Pending",0]]}"#,
             r#"{"operation":"list","token":"synthetic-secret","known":[{"id":41,"status":"Pending","reply_count":0},[42,"Pending",0]]}"#,
         ] {
-            let error=run(input,false).err().unwrap();
-            assert_eq!(error.code,"invalid_input");
+            let error = run(input, false).err().unwrap();
+            assert_eq!(error.code, "invalid_input");
             assert!(!error.message.contains("synthetic-secret"));
         }
         // The collection remains an array, but each member must be an object.
         let accepted=parse_list_input(r#"{"operation":"list","token":"synthetic-secret","known":[{"id":41,"status":"Pending","reply_count":0}]}"#).unwrap();
-        assert_eq!(accepted.known.len(),1);
-        assert_eq!(accepted.known[&41].reply_count,0);
-        assert!(parse_detail_input(r#"{"operation":"detail","token":"synthetic-secret","id":41}"#).is_ok());
+        assert_eq!(accepted.known.len(), 1);
+        assert_eq!(accepted.known[&41].reply_count, 0);
+        assert!(
+            parse_detail_input(r#"{"operation":"detail","token":"synthetic-secret","id":41}"#)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -3972,7 +4983,10 @@ mod tests {
             r#"{"token":"synthetic-secret","id":41"#,
         ] {
             assert!(serde_json::from_str::<DetailInput>(input).is_err());
-            assert_eq!(parse_detail_input(input).err().unwrap().code, "invalid_input");
+            assert_eq!(
+                parse_detail_input(input).err().unwrap().code,
+                "invalid_input"
+            );
         }
         for input in [
             r#"{"operation":"list","token":"synthetic-secret","unknown":true}"#,
@@ -3987,10 +5001,9 @@ mod tests {
 
     #[test]
     fn an_attachment_download_request_is_unsupported() {
-        let error =
-            parse_list_input(r#"{"token":"synthetic-token","download_attachments":true}"#)
-                .err()
-                .unwrap();
+        let error = parse_list_input(r#"{"token":"synthetic-token","download_attachments":true}"#)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "unsupported");
         let detail = parse_detail_input(
             r#"{"token":"synthetic-token","id":41,"download_attachments":true}"#,
@@ -4022,26 +5035,36 @@ mod tests {
     #[test]
     fn private_cache_rereads_exact_degraded_body_and_content_type_offline() {
         let directory = std::env::temp_dir().join(format!(
-            "buaa-ihome-fixture-{}-{}", std::process::id(),
+            "buaa-ihome-fixture-{}-{}",
+            std::process::id(),
             SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
         ));
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-                    };
+        };
         let url = list_url(20, 1).unwrap();
         let bytes = b"<html>synthetic refusal\0\xff</html>";
         let mut original = response(&url, bytes, Some("text/html; charset=UTF-8"));
         original.status = 403;
-        cache.save(&original, &ChallengeAssessment::Detected).unwrap();
+        cache
+            .save(&original, &ChallengeAssessment::Detected)
+            .unwrap();
         let (saved, challenge) = cache.load(&url).unwrap().unwrap();
         assert!(matches!(challenge, ChallengeAssessment::Detected));
         assert_eq!(saved.status, 403);
         assert_eq!(saved.body.as_slice(), &bytes[..]);
-        let raw = evidence(response_refusal(&saved, &challenge).unwrap(), &saved, "synthetic-token-value");
+        let raw = evidence(
+            response_refusal(&saved, &challenge).unwrap(),
+            &saved,
+            "synthetic-token-value",
+        );
         assert_eq!(raw["fallback_reason"], "safety_latched");
         assert_eq!(raw["content_type"], "text/html");
-        assert_eq!(raw["content_type_parameters_withheld"],true);
+        assert_eq!(raw["content_type_parameters_withheld"], true);
         assert!(raw.get("raw_response_base64").is_none());
         assert_eq!(raw["evidence_kind"], "upstream_http_metadata");
         assert_eq!(raw["byte_length"], bytes.len());
@@ -4071,7 +5094,10 @@ mod tests {
         assert_eq!(envelope["result"], "degraded");
         assert_eq!(envelope["entry_count"], 0);
         assert_eq!(envelope["upstream"]["complete"], false);
-        assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "authentication_refused");
+        assert_eq!(
+            envelope["upstream_evidence"]["fallback_reason"],
+            "authentication_refused"
+        );
     }
 
     #[test]
@@ -4140,20 +5166,41 @@ mod tests {
         for (token, title) in cases {
             let token_json = serde_json::to_string(token).unwrap();
             let request = parse_list_input(&format!(r#"{{"token":{token_json}}}"#)).unwrap();
-            let detail = parse_detail_input(&format!(r#"{{"token":{token_json},"id":41}}"#)).unwrap();
-            let entry = format!(r#"{{"id":41,"title":{title},"content":"ordinary","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}}"#);
+            let detail =
+                parse_detail_input(&format!(r#"{{"token":{token_json},"id":41}}"#)).unwrap();
+            let entry = format!(
+                r#"{{"id":41,"title":{title},"content":"ordinary","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}}"#
+            );
             let list_body = format!(r#"{{"success":true,"data":{{"data":[{entry}]}}}}"#);
-            let original = response(&list_url(20, 1).unwrap(), list_body.as_bytes(), Some("application/json"));
+            let original = response(
+                &list_url(20, 1).unwrap(),
+                list_body.as_bytes(),
+                Some("application/json"),
+            );
             let facts = analyze_body(&original.body, token);
             let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
             let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
-            assert_eq!(envelope["result"], "degraded", "token={token} title={title}");
+            assert_eq!(
+                envelope["result"], "degraded",
+                "token={token} title={title}"
+            );
             assert_eq!(envelope["entry_count"], 0);
-            assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
-            assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
+            assert_eq!(
+                envelope["upstream_evidence"]["fallback_reason"],
+                "credential_echo"
+            );
+            assert!(
+                envelope["upstream_evidence"]
+                    .get("raw_response_base64")
+                    .is_none()
+            );
 
             let detail_body = format!(r#"{{"success":true,"data":{entry}}}"#);
-            let original = response(&detail_url(41).unwrap(), detail_body.as_bytes(), Some("application/json"));
+            let original = response(
+                &detail_url(41).unwrap(),
+                detail_body.as_bytes(),
+                Some("application/json"),
+            );
             let facts = analyze_body(&original.body, token);
             let page = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
             assert!(page.entries.is_empty(), "token={token} title={title}");
@@ -4173,8 +5220,15 @@ mod tests {
         let list = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
         let envelope = build_list_envelope(&request, (vec![list]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "degraded");
-        assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
-        assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
+        assert_eq!(
+            envelope["upstream_evidence"]["fallback_reason"],
+            "credential_echo"
+        );
+        assert!(
+            envelope["upstream_evidence"]
+                .get("raw_response_base64")
+                .is_none()
+        );
         let page = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
         assert!(page.entries.is_empty());
         let evidence = page.evidence.expect("withheld detail evidence");
@@ -4182,8 +5236,14 @@ mod tests {
         assert!(evidence.get("raw_response_base64").is_none());
 
         let entry = r#"{"id":41,"title":"Quiet hallway","content":"ordinary","created_at":"2026-10-20 08:30:00","publish_status_text":"s","departments":[],"appeal_reply":[]}"#;
-        let list_body = format!(r#"{{"code":20000,"success":true,"data":{{"data":[{entry}],"current_page":1,"last_page":1,"total":1}}}}"#);
-        let original = response(&list_url(20, 1).unwrap(), list_body.as_bytes(), Some("application/json"));
+        let list_body = format!(
+            r#"{{"code":20000,"success":true,"data":{{"data":[{entry}],"current_page":1,"last_page":1,"total":1}}}}"#
+        );
+        let original = response(
+            &list_url(20, 1).unwrap(),
+            list_body.as_bytes(),
+            Some("application/json"),
+        );
         let facts = analyze_body(&original.body, "abc");
         let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
         let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
@@ -4192,7 +5252,11 @@ mod tests {
         assert!(envelope["upstream_evidence"].is_null());
 
         let detail_body = format!(r#"{{"code":20000,"success":true,"data":{entry}}}"#);
-        let original = response(&detail_url(41).unwrap(), detail_body.as_bytes(), Some("application/json"));
+        let original = response(
+            &detail_url(41).unwrap(),
+            detail_body.as_bytes(),
+            Some("application/json"),
+        );
         let facts = analyze_body(&original.body, "abc");
         let page = detail_page(&detail, &original, &ChallengeAssessment::Clear, &facts);
         assert!(page.evidence.is_none());
@@ -4201,22 +5265,30 @@ mod tests {
 
     #[test]
     fn encoded_submitted_tokens_never_reach_listing_or_raw_fallback() {
-        let url=list_url(20,1).unwrap();
-        let request=list_request(20);
-        for token in ["opaque-token-value","abc_123"] {
-            let padded=STANDARD.encode(token);
-            let unpadded=padded.trim_end_matches('=').to_owned();
-            for encoded in [&padded,&unpadded] {
-                let body=format!(r#"{{"success":false,"message":"\u{:04x}{}"}}"#,encoded.as_bytes()[0],&encoded[1..]);
-                let original=response(&url,body.as_bytes(),Some("application/json"));
-                let facts=analyze_body(&original.body,token);
+        let url = list_url(20, 1).unwrap();
+        let request = list_request(20);
+        for token in ["opaque-token-value", "abc_123"] {
+            let padded = STANDARD.encode(token);
+            let unpadded = padded.trim_end_matches('=').to_owned();
+            for encoded in [&padded, &unpadded] {
+                let body = format!(
+                    r#"{{"success":false,"message":"\u{:04x}{}"}}"#,
+                    encoded.as_bytes()[0],
+                    &encoded[1..]
+                );
+                let original = response(&url, body.as_bytes(), Some("application/json"));
+                let facts = analyze_body(&original.body, token);
                 assert!(facts.token_echo);
-                let page=list_page(&request,&original,&ChallengeAssessment::Clear,&facts);
+                let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
                 assert!(page.entries.is_empty());
-                let evidence=page.evidence.as_ref().unwrap();
-                assert_eq!(evidence["fallback_reason"],"credential_echo");
+                let evidence = page.evidence.as_ref().unwrap();
+                assert_eq!(evidence["fallback_reason"], "credential_echo");
                 assert!(evidence.get("raw_response_base64").is_none());
-                assert!(!serde_json::to_string(evidence).unwrap().contains(encoded.as_str()));
+                assert!(
+                    !serde_json::to_string(evidence)
+                        .unwrap()
+                        .contains(encoded.as_str())
+                );
             }
         }
     }
@@ -4274,15 +5346,460 @@ mod tests {
     }
 
     #[test]
-    fn cookie_issuing_originals_are_refused_before_projection_and_cache() {
+    fn a_newly_issued_cookie_value_is_not_projected_when_echoed() {
+        // A response may issue a fresh session cookie and echo its value in
+        // the body. That value is session material, so it must be treated as
+        // an echo and never reach a projection or a raw-evidence fallback.
+        // The guard reviews the raw header map: `collect_headers` never
+        // retains Set-Cookie, so a post-collection screening cannot work.
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=new-private-value; Path=/".parse().unwrap(),
+        );
+        let issued = IssuedCookies::review(&raw).unwrap();
+        assert!(!issued.is_empty());
+        assert_eq!(
+            collect_headers(&raw)
+                .unwrap()
+                .keys()
+                .filter(|name| name.eq_ignore_ascii_case("set-cookie"))
+                .count(),
+            0,
+            "collection discards the header the guard reviewed"
+        );
+        assert!(issued.carries(br#"{"success":true,"value":"sid=new-private-value"}"#));
+        assert!(issued.carries(br#"{"success":true,"value":"new-private-value"}"#));
+        // The reversible spellings of an issued value are credential
+        // carriers too: base64, percent-decoded and JSON-escaped echoes are
+        // all withheld.
+        assert!(issued.carries(br#"{"value":"bmV3LXByaXZhdGUtdmFsdWU"}"#));
+        assert!(issued.carries(br#"{"value":"new%2Dprivate%2Dvalue"}"#));
+        let quoted_cookie = br#"{"value":"quoted-private-value"}"#;
+        let mut quoted_raw = reqwest::header::HeaderMap::new();
+        quoted_raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=\"quoted-private-value\"; Path=/".parse().unwrap(),
+        );
+        let quoted = IssuedCookies::review(&quoted_raw).unwrap();
+        assert!(quoted.carries(quoted_cookie));
+        assert!(quoted.carries(br#"{"value":"\"quoted-private-value\""}"#));
+        let ordinary = br#"{"success":true,"value":"unrelated"}"#;
+        assert!(!issued.carries(ordinary));
+        // An ordinary body carrying an authentication cookie echo is a
+        // credential echo of the session material, not a business success.
+        let facts = analyze_authenticated_body(
+            br#"{"success":true,"value":"new-private-value"}"#,
+            "synthetic-bearer",
+            Some(&|bytes| issued.carries(bytes)),
+        );
+        assert!(facts.token_echo);
+        assert!(!facts.session_denied);
+        let facts = analyze_authenticated_body(
+            br#"{"success":true,"value":"unrelated"}"#,
+            "synthetic-bearer",
+            Some(&|bytes| issued.carries(bytes)),
+        );
+        assert!(!facts.token_echo);
+    }
+
+    #[test]
+    fn unreviewable_or_bounded_cookie_issuance_refuses_the_response() {
+        // The guard may never screen a subset: a Set-Cookie that cannot be
+        // parsed on its own terms refuses the whole response, including a
+        // missing '=', an empty name, non-UTF-8 bytes and ambiguous quoting.
+        for header in [
+            "no-equals-sign",
+            "=orphaned-value; Path=/",
+            "invalid name=private; Path=/",
+            "sid=first,other=second; Path=/",
+            "sid=\"ambiguous value\"; Path=/",
+            "sid=\"unbalanced; Path=/",
+            "sid=va\"l\"ue; Path=/",
+        ] {
+            let mut raw = reqwest::header::HeaderMap::new();
+            raw.insert(reqwest::header::SET_COOKIE, header.parse().unwrap());
+            // `IssuedCookies` deliberately has no Debug: formatting a guard
+            // must never expose the secrets it retains.
+            let error = IssuedCookies::review(&raw)
+                .err()
+                .expect("an unparseable cookie must refuse");
+            assert_eq!(error.code, "invalid_headers", "{header}");
+        }
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_bytes(b"sid=n\x80nutf8; Path=/").unwrap(),
+        );
+        let error = IssuedCookies::review(&raw)
+            .err()
+            .expect("non-UTF-8 cookie material must refuse");
+        assert_eq!(error.code, "invalid_headers");
+        // The credential history is bounded: more than the admitted values
+        // or bytes refuses rather than evicting an older secret.
+        let mut issued = IssuedCookies::default();
+        for index in 0..MAX_ISSUED_COOKIE_VALUES {
+            let mut raw = reqwest::header::HeaderMap::new();
+            raw.insert(
+                reqwest::header::SET_COOKIE,
+                format!("sid{index}=private-issued-value-{index}")
+                    .parse()
+                    .unwrap(),
+            );
+            issued.absorb(&raw).unwrap();
+        }
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=one-too-many".parse().unwrap(),
+        );
+        let error = issued
+            .absorb(&raw)
+            .err()
+            .expect("the invocation-wide value bound must refuse");
+        assert_eq!(error.code, "invalid_headers");
+        assert!(
+            issued.carries(b"private-issued-value-0"),
+            "bound exhaustion must not evict old values"
+        );
+        let mut raw = reqwest::header::HeaderMap::new();
+        for _ in 0..9 {
+            raw.append(
+                reqwest::header::SET_COOKIE,
+                format!("sid={}", "v".repeat(8190)).parse().unwrap(),
+            );
+        }
+        let error = IssuedCookies::review(&raw)
+            .err()
+            .expect("the byte bound must refuse");
+        assert_eq!(error.code, "invalid_headers");
+        // An empty value is a deletion, not a transmitting secret: it is
+        // admitted without joining the guard, and a mixed response still
+        // screens the remaining issued value.
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.append(
+            reqwest::header::SET_COOKIE,
+            "gone=; Path=/; Max-Age=0".parse().unwrap(),
+        );
+        raw.append(
+            reqwest::header::SET_COOKIE,
+            "empty=\"\"; Path=/".parse().unwrap(),
+        );
+        raw.append(
+            reqwest::header::SET_COOKIE,
+            "sid=kept-private-value; Path=/".parse().unwrap(),
+        );
+        let issued = IssuedCookies::review(&raw).unwrap();
+        assert_eq!(issued.values.len(), 1);
+        assert!(issued.carries(br#"{"value":"kept-private-value"}"#));
+        assert!(!issued.carries(br#"{"value":""}"#));
+    }
+
+    #[test]
+    fn invocation_cookie_guard_screens_cached_pages_and_mime() {
+        // A cached page never carries Set-Cookie, so only the invocation's
+        // accumulated guard can withhold a cached body or MIME that echoes a
+        // value issued by an earlier response of the same invocation.
         let directory = std::env::temp_dir().join(format!(
-            "buaa-ihome-cookie-admission-{}-{}", std::process::id(),
+            "buaa-ihome-cached-guard-{}-{}",
+            std::process::id(),
             SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
         ));
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-                    };
+        };
+        let mut request = list_request(2);
+        request.max_pages = 2;
+        let first_url = list_url(2, 1).unwrap();
+        cache
+            .save(
+                &response(
+                    &first_url,
+                    &source_page(1, 2, 3, &[41, 42]),
+                    Some("application/json"),
+                ),
+                &ChallengeAssessment::Clear,
+            )
+            .unwrap();
+        let second_url = list_url(2, 2).unwrap();
+        let mut document: Value = serde_json::from_slice(&source_page(2, 2, 3, &[43])).unwrap();
+        document["data"]["data"][0]["content"] = json!("cached-page-private");
+        let body = serde_json::to_vec(&document).unwrap();
+        let second = response(&second_url, &body, Some("application/json"));
+        cache.save(&second, &ChallengeAssessment::Clear).unwrap();
+
+        let mut issued = IssuedCookies::default();
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=cached-page-private; Path=/; Secure".parse().unwrap(),
+        );
+        issued.absorb(&raw).unwrap();
+        let envelope = list_with_cache(&request, &cache, false, &mut issued).unwrap();
+        assert_eq!(envelope["result"], "degraded");
+        assert_eq!(
+            envelope["upstream_evidence"]["fallback_reason"],
+            "credential_echo"
+        );
+        assert!(
+            envelope["upstream_evidence"]
+                .get("raw_response_base64")
+                .is_none()
+        );
+        // The already-admitted safe page is preserved; the echoed page is not.
+        assert_eq!(envelope["entry_count"], 2);
+        assert!(!envelope.to_string().contains("cached-page-private"));
+        assert!(
+            cache.load(&second_url).unwrap().is_none(),
+            "an echoed cached body is evicted"
+        );
+
+        // Ordinary control: without the issued secret in this invocation's
+        // guard, the very same cached pages project normally.
+        cache.save(&second, &ChallengeAssessment::Clear).unwrap();
+        let control =
+            list_with_cache(&request, &cache, false, &mut IssuedCookies::default()).unwrap();
+        assert_eq!(control["result"], "entries");
+        assert_eq!(control["entry_count"], 3);
+        assert_eq!(control["upstream"]["complete"], true);
+
+        // A cached Content-Type that echoes an invocation-issued value is
+        // withheld from page metadata and evidence alike.
+        let mime_url = list_url(2, 9).unwrap();
+        let stored = response(
+            &mime_url,
+            &source_page(9, 9, 1, &[50]),
+            Some("application/json; profile=\"mime-cached-private\""),
+        );
+        cache.save(&stored, &ChallengeAssessment::Clear).unwrap();
+        let mut issued = IssuedCookies::default();
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=mime-cached-private; Path=/; Secure".parse().unwrap(),
+        );
+        issued.absorb(&raw).unwrap();
+        let outcome = cache
+            .get(
+                &mime_url,
+                request.token.as_str(),
+                false,
+                false,
+                &mut issued,
+                |saved, challenge, facts| {
+                    assert!(facts.content_type_echo);
+                    Ok::<PageOutcome, Error>(list_page(&request, saved, challenge, facts))
+                },
+            )
+            .unwrap();
+        assert!(outcome.meta["content_type"].is_null());
+        assert_eq!(outcome.meta["content_type_parameters_withheld"], true);
+        let evidence = outcome.evidence.expect("MIME echo evidence");
+        assert_eq!(evidence["fallback_reason"], "credential_echo");
+        assert!(evidence["content_type"].is_null());
+        assert!(evidence.get("raw_response_base64").is_none());
+        assert!(
+            !serde_json::to_string(&outcome.meta)
+                .unwrap()
+                .contains("mime-cached-private")
+        );
+        assert!(cache.load(&mime_url).unwrap().is_none());
+        drop(cache);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn recovered_fallback_literals_recurse_into_embedded_documents() {
+        // A non-JSON body has no parsed document, so its raw string literals
+        // are the complete evidence. A recovered literal can itself be an
+        // embedded document: screening only its decoded text once would miss
+        // a secret hidden behind a second layer of JSON escaping, and the raw
+        // base64 fallback would then export it.
+        let url = list_url(20, 1).unwrap();
+        let request = list_request(20);
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=secret; Path=/".parse().unwrap(),
+        );
+        let issued = IssuedCookies::review(&raw).unwrap();
+        let inner = r#"{"note":"secr\u0065t"}"#;
+        for (name, body) in [
+            (
+                "one-layer",
+                format!("leading {} trailing", serde_json::to_string(inner).unwrap()),
+            ),
+            (
+                "two-layers",
+                format!(
+                    "leading {} trailing",
+                    serde_json::to_string(&serde_json::to_string(inner).unwrap()).unwrap()
+                ),
+            ),
+        ] {
+            let original = response(&url, body.as_bytes(), Some("text/plain"));
+            let facts = screened_body_facts(&original, "synthetic-token", &issued, None);
+            assert!(facts.document.is_none(), "{name}");
+            assert!(
+                facts.token_echo,
+                "{name}: embedded escaping must not hide an issued value"
+            );
+            assert!(!facts.inspection_incomplete, "{name}");
+            let outcome = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+            let evidence = outcome.evidence.expect("withheld fallback evidence");
+            assert_eq!(evidence["fallback_reason"], "credential_echo", "{name}");
+            assert!(evidence.get("raw_response_base64").is_none(), "{name}");
+            let projected = serde_json::to_string(&evidence).unwrap()
+                + &serde_json::to_string(&outcome.meta).unwrap();
+            assert!(!projected.contains("secret"), "{name}");
+            assert!(
+                !projected.contains(STANDARD.encode(body.as_bytes()).as_str()),
+                "{name}"
+            );
+        }
+
+        // The same recursion protects the submitted bearer token and the
+        // sign-on authentication material, not just issued cookie values.
+        let bearer_body = format!(
+            "leading {} trailing",
+            serde_json::to_string(r#"{"note":"synthetic-tok\u0065n"}"#).unwrap()
+        );
+        let bearer = response(&url, bearer_body.as_bytes(), Some("text/plain"));
+        let facts =
+            screened_body_facts(&bearer, "synthetic-token", &IssuedCookies::default(), None);
+        assert!(
+            facts.token_echo,
+            "an embedded escaped bearer token is withheld"
+        );
+        let auth_body = format!(
+            "leading {} trailing",
+            serde_json::to_string(r#"{"note":"auth-priv\u0061te"}"#).unwrap()
+        );
+        let auth = response(&url, auth_body.as_bytes(), Some("text/plain"));
+        let authentication = |bytes: &[u8]| net::carries_secret(bytes, "auth-private");
+        let facts = screened_body_facts(
+            &auth,
+            "synthetic-token",
+            &IssuedCookies::default(),
+            Some(&authentication),
+        );
+        assert!(
+            facts.token_echo,
+            "an embedded escaped authentication value is withheld"
+        );
+
+        // Ordinary control: the same recovered-literal shape without any
+        // guarded secret keeps its admissible raw fallback.
+        let control_body = format!(
+            "leading {} trailing",
+            serde_json::to_string(r#"{"note":"ordinary"}"#).unwrap()
+        );
+        let control = response(&url, control_body.as_bytes(), Some("text/plain"));
+        let facts = screened_body_facts(&control, "synthetic-token", &issued, None);
+        assert!(!facts.token_echo);
+        assert!(!facts.inspection_incomplete);
+        let outcome = list_page(&request, &control, &ChallengeAssessment::Clear, &facts);
+        let evidence = outcome.evidence.expect("ordinary fallback evidence");
+        assert_eq!(
+            evidence["raw_response_base64"],
+            STANDARD.encode(control_body.as_bytes())
+        );
+
+        // The embedded-document budget fails closed: a literal nested beyond
+        // the reviewed depth is unreviewed, never an unscreened export.
+        let mut inspection = token_inspection("synthetic-token");
+        inspection.scan_decoded = true;
+        inspection.inspect("{\"note\":\"secret\"}", 32, true);
+        assert!(inspection.incomplete);
+        assert!(!inspection.echo);
+    }
+
+    #[test]
+    fn recovered_fallback_container_exhaustion_is_unreviewed_not_exportable() {
+        let url = list_url(20, 1).unwrap();
+        let request = list_request(20);
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=secret; Path=/".parse().unwrap(),
+        );
+        let issued = IssuedCookies::review(&raw).unwrap();
+        for (kind, open, close) in [("array", "[", "]"), ("object", "{\"note\":", "}")] {
+            for (name, depth, leaf, unreviewed, echoed) in [
+                ("over-limit", 129, r#""secr\u0065t""#, true, false),
+                ("ordinary-boundary", 127, r#""ordinary""#, false, false),
+                ("echo-boundary", 127, r#""secr\u0065t""#, false, true),
+            ] {
+                // This is one JSON string literal inside non-JSON prose, not
+                // a complete JSON body. Inspecting the recovered literal
+                // reaches the decoder's container limit before its escaped
+                // credential, so failure must retain incomplete provenance.
+                let inner = format!("{}{}{}", open.repeat(depth), leaf, close.repeat(depth));
+                let body = format!("prefix {} suffix", serde_json::to_string(&inner).unwrap());
+                let original = response(&url, body.as_bytes(), Some("text/plain"));
+                let facts = screened_body_facts(&original, "synthetic-token", &issued, None);
+                assert!(facts.document.is_none(), "{kind}/{name}");
+                assert_eq!(facts.inspection_incomplete, unreviewed, "{kind}/{name}");
+                assert_eq!(facts.token_echo, echoed, "{kind}/{name}");
+                let page = list_page(&request, &original, &ChallengeAssessment::Clear, &facts);
+                let output = build_list_envelope(&request, [Ok(page)]).unwrap();
+                let evidence = &output["upstream_evidence"];
+                assert_eq!(output["result"], "degraded", "{kind}/{name}");
+                if unreviewed || echoed {
+                    assert_eq!(
+                        evidence["fallback_reason"],
+                        if unreviewed {
+                            "inspection_unreviewed"
+                        } else {
+                            "credential_echo"
+                        },
+                        "{kind}/{name}"
+                    );
+                    assert_eq!(
+                        evidence["evidence_kind"], "upstream_http_metadata",
+                        "{kind}/{name}"
+                    );
+                    assert!(
+                        evidence.get("raw_response_base64").is_none(),
+                        "{kind}/{name}"
+                    );
+                    assert!(!output.to_string().contains("secret"), "{kind}/{name}");
+                } else {
+                    // Preserve the existing decoder budget and ordinary
+                    // non-JSON fallback: 127 enclosing containers may still
+                    // hold an admissible scalar rather than being refused.
+                    assert_eq!(
+                        evidence["fallback_reason"], "unexpected_content",
+                        "{kind}/{name}"
+                    );
+                    assert_eq!(
+                        evidence["raw_response_base64"],
+                        STANDARD.encode(body.as_bytes()),
+                        "{kind}/{name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cookie_issuing_originals_are_projected_but_never_cached() {
+        let directory = std::env::temp_dir().join(format!(
+            "buaa-ihome-cookie-admission-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let cache = ResponseCache {
+            directory: governor::open_directory(&directory, false, true).unwrap(),
+        };
         let url = list_url(20, 1).unwrap();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::SET_COOKIE, "x=q".parse().unwrap());
@@ -4292,21 +5809,59 @@ mod tests {
         ] {
             let original = response(&url, body, Some("application/json"));
             let facts = analyze_body(body, "synthetic-bearer");
-            let denied = body == "{\"success\":false,\"message\":\"未登录\",\"value\":\"q\"}".as_bytes();
+            let denied =
+                body == "{\"success\":false,\"message\":\"未登录\",\"value\":\"q\"}".as_bytes();
             assert_eq!(facts.session_denied, denied);
-            let result = admit_response(&cache, &original, &ChallengeAssessment::Clear,
-                &facts, net::issues_session_cookie(&headers), |_, _, _| -> Result<(), Error> {
-                    panic!("cookie-bearing original reached projection");
-                });
-            assert_eq!(result.unwrap_err().code, "session_cookie_issued");
+            // A session cookie is session material, so such an original never
+            // reaches the replayable cache. The business body itself is still
+            // read, because the caller authenticates with its own bearer
+            // token and any credential echo is screened separately.
+            let projected = admit_response(
+                &cache,
+                &original,
+                &ChallengeAssessment::Clear,
+                &facts,
+                net::issues_session_cookie(&headers),
+                |_, _, _| -> Result<(), Error> { Ok(()) },
+            );
+            assert!(projected.is_ok());
             assert!(cache.load(&url).unwrap().is_none());
             assert_eq!(facts.session_denied, denied);
         }
-        let original = response(&url, br#"{"success":true,"data":[]}"#, Some("application/json"));
+        // A body that echoes the submitted bearer token is never cached,
+        // whatever the headers say. The page layer refuses it separately.
+        let echo = response(
+            &url,
+            br#"{"success":true,"value":"synthetic-bearer"}"#,
+            Some("application/json"),
+        );
+        let echo_facts = analyze_body(&echo.body, "synthetic-bearer");
+        assert!(echo_facts.token_echo);
+        admit_response(
+            &cache,
+            &echo,
+            &ChallengeAssessment::Clear,
+            &echo_facts,
+            net::issues_session_cookie(&headers),
+            |_, _, _| -> Result<(), Error> { Ok(()) },
+        )
+        .unwrap();
+        assert!(cache.load(&url).unwrap().is_none());
+        let original = response(
+            &url,
+            br#"{"success":true,"data":[]}"#,
+            Some("application/json"),
+        );
         let facts = analyze_body(&original.body, "synthetic-bearer");
-        let length = admit_response(&cache, &original, &ChallengeAssessment::Clear,
-            &facts, net::issues_session_cookie(&reqwest::header::HeaderMap::new()),
-            |response, _, _| Ok(response.body.len())).unwrap();
+        let length = admit_response(
+            &cache,
+            &original,
+            &ChallengeAssessment::Clear,
+            &facts,
+            net::issues_session_cookie(&reqwest::header::HeaderMap::new()),
+            |response, _, _| Ok(response.body.len()),
+        )
+        .unwrap();
         assert_eq!(length, original.body.len());
         assert!(cache.load(&url).unwrap().is_some());
         drop(cache);
@@ -4315,30 +5870,73 @@ mod tests {
 
     #[test]
     fn legacy_cache_is_preserved_but_not_published_without_cookie_admission() {
-        for version in [2,3] {
-            for rejected in [false,true] {
-                let root=std::env::temp_dir().join(format!("buaa-ihome-legacy-cookie-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
-                std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-                let directory=root.join("cache");let governor_directory=root.join("governor");
-                std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
-                std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
-                let cache=ResponseCache {directory:governor::open_directory(&directory,false,true).unwrap()};
-                let url=list_url(20,1).unwrap();
-                let mut original=response(&url,br#"{"name":"opaque-short"}"#,Some("application/json"));
-                if rejected {original.status=403;}
-                cache.save(&original,&ChallengeAssessment::Clear).unwrap();
-                let path=directory.join(ResponseCache::name(&url));
-                let mut legacy:Cached=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-                legacy.version=version;
-                let bytes=serde_json::to_vec(&legacy).unwrap();
-                std::fs::write(&path,&bytes).unwrap();
-                let error=cache.get(&url,"different-submitted-token",false,false,|_,_,_|->Result<(),Error>{panic!("unreviewed legacy body reached output")}).unwrap_err();
-                assert_eq!(error.code, if rejected { "safety_latched" } else { "cached_response_unreviewed" });
+        for version in [2, 3] {
+            for rejected in [false, true] {
+                let root = std::env::temp_dir().join(format!(
+                    "buaa-ihome-legacy-cookie-{}-{}",
+                    std::process::id(),
+                    SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+                ));
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&root)
+                    .unwrap();
+                let directory = root.join("cache");
+                let governor_directory = root.join("governor");
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&directory)
+                    .unwrap();
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&governor_directory)
+                    .unwrap();
+                let cache = ResponseCache {
+                    directory: governor::open_directory(&directory, false, true).unwrap(),
+                };
+                let url = list_url(20, 1).unwrap();
+                let mut original = response(
+                    &url,
+                    br#"{"name":"opaque-short"}"#,
+                    Some("application/json"),
+                );
+                if rejected {
+                    original.status = 403;
+                }
+                cache.save(&original, &ChallengeAssessment::Clear).unwrap();
+                let path = directory.join(ResponseCache::name(&url));
+                let mut legacy: Cached =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                legacy.version = version;
+                let bytes = serde_json::to_vec(&legacy).unwrap();
+                std::fs::write(&path, &bytes).unwrap();
+                let error = cache
+                    .get(
+                        &url,
+                        "different-submitted-token",
+                        false,
+                        false,
+                        &mut IssuedCookies::default(),
+                        |_, _, _| -> Result<(), Error> {
+                            panic!("unreviewed legacy body reached output")
+                        },
+                    )
+                    .unwrap_err();
+                assert_eq!(
+                    error.code,
+                    if rejected {
+                        "safety_latched"
+                    } else {
+                        "cached_response_unreviewed"
+                    }
+                );
                 assert!(!error.message.contains("opaque-short"));
-                assert_eq!(std::fs::read(&path).unwrap(),bytes);
-                let governor=Governor::isolated_for_test(&governor_directory).unwrap();
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                let governor = Governor::isolated_for_test(&governor_directory).unwrap();
                 assert_eq!(governor.status().unwrap().safety_latched, false);
-                drop(governor);drop(cache);std::fs::remove_dir_all(root).unwrap();
+                drop(governor);
+                drop(cache);
+                std::fs::remove_dir_all(root).unwrap();
             }
         }
     }
@@ -4350,11 +5948,20 @@ mod tests {
             std::process::id(),
             SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
         ));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
         let cache_directory = root.join("cache");
         let governor_directory = root.join("governor");
-        std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&cache_directory)
+            .unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&governor_directory)
+            .unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&cache_directory, false, true).unwrap(),
         };
@@ -4362,13 +5969,22 @@ mod tests {
         // A cached HTTP 403 with an ordinary JSON body has no challenge
         // assessment, so it used to be replayed without any safety
         // observation at all.
-        let mut original = response(&url, br#"{"message":"forbidden"}"#, Some("application/json"));
+        let mut original = response(
+            &url,
+            br#"{"message":"forbidden"}"#,
+            Some("application/json"),
+        );
         original.status = 403;
         cache.save(&original, &ChallengeAssessment::Clear).unwrap();
         let error = cache
-            .get(&url, "synthetic-token-value", false, false, |_, _, _| {
-                Ok::<(), Error>(())
-            })
+            .get(
+                &url,
+                "synthetic-token-value",
+                false,
+                false,
+                &mut IssuedCookies::default(),
+                |_, _, _| Ok::<(), Error>(()),
+            )
             .unwrap_err();
         assert_eq!(error.code, "safety_latched");
         drop(cache);
@@ -4382,11 +5998,20 @@ mod tests {
             std::process::id(),
             SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
         ));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
         let cache_directory = root.join("cache");
         let governor_directory = root.join("governor");
-        std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&cache_directory)
+            .unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&governor_directory)
+            .unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&cache_directory, false, true).unwrap(),
         };
@@ -4398,9 +6023,14 @@ mod tests {
         );
         cache.save(&original, &ChallengeAssessment::Clear).unwrap();
         let error = cache
-            .get(&url, "synthetic-token-value", false, false, |_, _, _| {
-                Ok::<(), Error>(())
-            })
+            .get(
+                &url,
+                "synthetic-token-value",
+                false,
+                false,
+                &mut IssuedCookies::default(),
+                |_, _, _| Ok::<(), Error>(()),
+            )
             .unwrap_err();
         assert_eq!(error.code, "safety_latched");
         drop(cache);
@@ -4414,19 +6044,33 @@ mod tests {
             std::process::id(),
             SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
         ));
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-                    };
+        };
         let url = list_url(20, 1).unwrap();
-        let original = response(&url, br#"{"message":"opaque-token-value"}"#, Some("application/json"));
+        let original = response(
+            &url,
+            br#"{"message":"opaque-token-value"}"#,
+            Some("application/json"),
+        );
         cache.save(&original, &ChallengeAssessment::Clear).unwrap();
         let outcome = cache
-            .get(&url, "opaque-token-value", false, false, |response, _, facts| {
-                assert!(facts.token_echo);
-                assert!(!response.body.is_empty());
-                Ok::<(), Error>(())
-            })
+            .get(
+                &url,
+                "opaque-token-value",
+                false,
+                false,
+                &mut IssuedCookies::default(),
+                |response, _, facts| {
+                    assert!(facts.token_echo);
+                    assert!(!response.body.is_empty());
+                    Ok::<(), Error>(())
+                },
+            )
             .unwrap();
         assert_eq!(outcome, ());
         // The echoed body is not kept on disk.
@@ -4439,7 +6083,14 @@ mod tests {
     fn an_incomplete_traversal_keeps_the_admitted_pages_and_advances_no_cursor() {
         let request = list_request(2);
         let page = source_outcome(&request, 1, &source_page(1, 2, 3, &[41, 42]));
-        let envelope = build_list_envelope(&request, [Ok(page), Err(Error::new("offline_miss", "synthetic missing page"))]).unwrap();
+        let envelope = build_list_envelope(
+            &request,
+            [
+                Ok(page),
+                Err(Error::new("offline_miss", "synthetic missing page")),
+            ],
+        )
+        .unwrap();
         assert_eq!(envelope["result"], "partial");
         assert_eq!(envelope["entry_count"], 2);
         assert_eq!(envelope["upstream"]["complete"], false);
@@ -4453,183 +6104,365 @@ mod tests {
 
     #[test]
     fn fallback_inspection_covers_relative_urls_string_bodies_and_leading_text() {
-        let url=list_url(20,1).unwrap();
-        for (mime,body) in [
-            ("application/json",br#"{"redirect":"/web/?token=synthetic-secret"}"#.as_slice()),
-            ("application/json",br#"{"payload":"\"Bearer synthetic-secret\""}"#.as_slice()),
-            ("application/json",br#"{"url":"//files.invalid/?secret=synthetic-secret"}"#.as_slice()),
-            ("text/plain",br#""Bearer synthetic-secret""#.as_slice()),
-            ("text/html; charset=UTF-8",b"Sign in<input name=\"token\" value=\"synthetic-secret\">".as_slice()),
+        let url = list_url(20, 1).unwrap();
+        for (mime, body) in [
+            (
+                "application/json",
+                br#"{"redirect":"/web/?token=synthetic-secret"}"#.as_slice(),
+            ),
+            (
+                "application/json",
+                br#"{"payload":"\"Bearer synthetic-secret\""}"#.as_slice(),
+            ),
+            (
+                "application/json",
+                br#"{"url":"//files.invalid/?secret=synthetic-secret"}"#.as_slice(),
+            ),
+            ("text/plain", br#""Bearer synthetic-secret""#.as_slice()),
+            (
+                "text/html; charset=UTF-8",
+                b"Sign in<input name=\"token\" value=\"synthetic-secret\">".as_slice(),
+            ),
         ] {
-            let original=response(&url,body,Some(mime));
-            let found=evidence(FallbackReason::UpstreamShape,&original,"synthetic-token-value");
+            let original = response(&url, body, Some(mime));
+            let found = evidence(
+                FallbackReason::UpstreamShape,
+                &original,
+                "synthetic-token-value",
+            );
             assert!(found.get("raw_response_base64").is_none());
-            assert_eq!(found["evidence_kind"],"upstream_http_metadata");
-            assert_eq!(found["sha256"],sha256(body));
+            assert_eq!(found["evidence_kind"], "upstream_http_metadata");
+            assert_eq!(found["sha256"], sha256(body));
         }
-        let ordinary=br#"{"message":"maintenance","count":2}"#;
-        let original=response(&url,ordinary,Some("application/json"));
-        assert_eq!(evidence(FallbackReason::UpstreamShape,&original,"synthetic-token-value")["raw_response_base64"],STANDARD.encode(ordinary));
-        let plain=b"ordinary notice";
-        let original=response(&url,plain,Some("text/plain"));
-        assert_eq!(evidence(FallbackReason::UpstreamParse,&original,"synthetic-token-value")["raw_response_base64"],STANDARD.encode(plain));
-        let html=b"<p>ordinary notice</p>";
-        let original=response(&url,html,Some("text/html"));
-        assert_eq!(evidence(FallbackReason::UpstreamParse,&original,"synthetic-token-value")["raw_response_base64"],STANDARD.encode(html));
+        let ordinary = br#"{"message":"maintenance","count":2}"#;
+        let original = response(&url, ordinary, Some("application/json"));
+        assert_eq!(
+            evidence(
+                FallbackReason::UpstreamShape,
+                &original,
+                "synthetic-token-value"
+            )["raw_response_base64"],
+            STANDARD.encode(ordinary)
+        );
+        let plain = b"ordinary notice";
+        let original = response(&url, plain, Some("text/plain"));
+        assert_eq!(
+            evidence(
+                FallbackReason::UpstreamParse,
+                &original,
+                "synthetic-token-value"
+            )["raw_response_base64"],
+            STANDARD.encode(plain)
+        );
+        let html = b"<p>ordinary notice</p>";
+        let original = response(&url, html, Some("text/html"));
+        assert_eq!(
+            evidence(
+                FallbackReason::UpstreamParse,
+                &original,
+                "synthetic-token-value"
+            )["raw_response_base64"],
+            STANDARD.encode(html)
+        );
     }
 
     #[test]
     fn all_retry_after_fields_survive_original_lease_body_failure() {
-        let root=std::env::temp_dir().join(format!("buaa-ihome-headers-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let governor=Governor::isolated_for_test(&root.join("shared")).unwrap();
-        let mut lease=governor.try_acquire(governor::RequestKind::Interactive).unwrap();
-        let mut headers=reqwest::header::HeaderMap::new();
-        headers.append("retry-after",reqwest::header::HeaderValue::from_static("60"));
-        headers.append("retry-after",reqwest::header::HeaderValue::from_static("7200"));
-        headers.append("retry-after",reqwest::header::HeaderValue::from_static("invalid"));
-        observe_response_headers(&mut lease,429,&headers,true).unwrap();
-        lease.finish(Outcome::Http {status:429,retry_after:Some("60"),challenge:false,network_failure:true}).unwrap();
-        let state=governor.status().unwrap();
-        assert!(state.cooldown_wait.as_secs()>7100);
+        let root = std::env::temp_dir().join(format!(
+            "buaa-ihome-headers-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let governor = Governor::isolated_for_test(&root.join("shared")).unwrap();
+        let mut lease = governor
+            .try_acquire(governor::RequestKind::Interactive)
+            .unwrap();
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append(
+            "retry-after",
+            reqwest::header::HeaderValue::from_static("60"),
+        );
+        headers.append(
+            "retry-after",
+            reqwest::header::HeaderValue::from_static("7200"),
+        );
+        headers.append(
+            "retry-after",
+            reqwest::header::HeaderValue::from_static("invalid"),
+        );
+        observe_response_headers(&mut lease, 429, &headers, true).unwrap();
+        lease
+            .finish(Outcome::Http {
+                status: 429,
+                retry_after: Some("60"),
+                challenge: false,
+                network_failure: true,
+            })
+            .unwrap();
+        let state = governor.status().unwrap();
+        assert!(state.cooldown_wait.as_secs() > 7100);
         assert!(!state.safety_latched);
-        assert_eq!(state.consecutive_network_failures,1);
-        drop(governor); std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(state.consecutive_network_failures, 1);
+        drop(governor);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn duplicate_content_types_never_establish_clear_body_admission() {
-        for types in [["application/json","text/html"],["text/html","application/json"],["text/plain","text/plain"]] {
-            let mut headers=reqwest::header::HeaderMap::new();
-            for value in types {headers.append("content-type",reqwest::header::HeaderValue::from_str(value).unwrap());}
-            let collected=collect_headers(&headers).unwrap();
-            let assessment=assess_response_body(br#"{"success":false}"#,collected.get("content-type").map(String::as_str),true);
-            assert!(matches!(assessment,ChallengeAssessment::Unreviewed));
+        for types in [
+            ["application/json", "text/html"],
+            ["text/html", "application/json"],
+            ["text/plain", "text/plain"],
+        ] {
+            let mut headers = reqwest::header::HeaderMap::new();
+            for value in types {
+                headers.append(
+                    "content-type",
+                    reqwest::header::HeaderValue::from_str(value).unwrap(),
+                );
+            }
+            let collected = collect_headers(&headers).unwrap();
+            let assessment = assess_response_body(
+                br#"{"success":false}"#,
+                collected.get("content-type").map(String::as_str),
+                true,
+            );
+            assert!(matches!(assessment, ChallengeAssessment::Unreviewed));
             assert!(collected["content-type"].contains(", "));
         }
-        assert!(matches!(assess_response_body(br#"{"success":false}"#,Some("application/json"),true),ChallengeAssessment::Clear));
+        assert!(matches!(
+            assess_response_body(br#"{"success":false}"#, Some("application/json"), true),
+            ChallengeAssessment::Clear
+        ));
     }
 
     #[test]
     fn cached_confirmed_challenge_refuses_without_touching_production() {
-        let root=std::env::temp_dir().join(format!("buaa-ihome-marker-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let cache_directory=root.join("cache");
-        let governor_directory=root.join("governor");
-        std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        std::fs::DirBuilder::new().mode(0o700).create(&governor_directory).unwrap();
-        let cache=ResponseCache {directory:governor::open_directory(&cache_directory,false,true).unwrap()};
-        let url=list_url(20,1).unwrap();
-        let body=b"<html>cached refusal</html>";
-        let original=response(&url,body,Some("text/html"));
-        cache.save(&original,&ChallengeAssessment::Detected).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "buaa-ihome-marker-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let cache_directory = root.join("cache");
+        let governor_directory = root.join("governor");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&cache_directory)
+            .unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&governor_directory)
+            .unwrap();
+        let cache = ResponseCache {
+            directory: governor::open_directory(&cache_directory, false, true).unwrap(),
+        };
+        let url = list_url(20, 1).unwrap();
+        let body = b"<html>cached refusal</html>";
+        let original = response(&url, body, Some("text/html"));
+        cache
+            .save(&original, &ChallengeAssessment::Detected)
+            .unwrap();
         // A cache hit on a confirmed challenge refuses without any request.
-        let error=cache.get(&url,"synthetic-token",false,false,|_,_challenge,_facts|{
-            Ok::<(),Error>(())
-        }).unwrap_err();
-        assert_eq!(error.code,"safety_latched");
-        let governor=Governor::isolated_for_test(&governor_directory).unwrap();
+        let error = cache
+            .get(
+                &url,
+                "synthetic-token",
+                false,
+                false,
+                &mut IssuedCookies::default(),
+                |_, _challenge, _facts| Ok::<(), Error>(()),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "safety_latched");
+        let governor = Governor::isolated_for_test(&governor_directory).unwrap();
         assert!(!governor.status().unwrap().safety_latched);
-        drop(cache); drop(governor);
+        drop(cache);
+        drop(governor);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn cache_race_under_a_held_lease_settles_the_same_lock() {
-        let root=std::env::temp_dir().join(format!("buaa-ihome-race-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
-        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let cache_directory=root.join("cache");
-        std::fs::DirBuilder::new().mode(0o700).create(&cache_directory).unwrap();
-        let cache=ResponseCache {directory:governor::open_directory(&cache_directory,false,true).unwrap()};
-        let url=list_url(20,1).unwrap();
-        let body=b"<html>cached refusal</html>";
-        let original=response(&url,body,Some("text/html"));
-        cache.save(&original,&ChallengeAssessment::Detected).unwrap();
-        let governor=Governor::isolated_for_test(&root.join("shared")).unwrap();
-        let transport=Transport::open_isolated(governor).unwrap();
-        let outcome=transport.fetch(&cache,&url,"synthetic-token",false,|_,challenge,_facts|{
-            assert!(matches!(challenge,ChallengeAssessment::Detected));
-            Ok::<(),Error>(())
-        });
+        let root = std::env::temp_dir().join(format!(
+            "buaa-ihome-race-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let cache_directory = root.join("cache");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&cache_directory)
+            .unwrap();
+        let cache = ResponseCache {
+            directory: governor::open_directory(&cache_directory, false, true).unwrap(),
+        };
+        let url = list_url(20, 1).unwrap();
+        let body = b"<html>cached refusal</html>";
+        let original = response(&url, body, Some("text/html"));
+        cache
+            .save(&original, &ChallengeAssessment::Detected)
+            .unwrap();
+        let governor = Governor::isolated_for_test(&root.join("shared")).unwrap();
+        let transport = Transport::open_isolated(governor).unwrap();
+        let outcome = transport.fetch(
+            &cache,
+            &url,
+            "synthetic-token",
+            false,
+            &mut IssuedCookies::default(),
+            |_, challenge, _facts| {
+                assert!(matches!(challenge, ChallengeAssessment::Detected));
+                Ok::<(), Error>(())
+            },
+        );
         // The cache race settles the held lease without sending a request, so
         // no network access is possible in this regression.
         assert!(outcome.is_ok());
-        let status=transport.governor.status().unwrap();
+        let status = transport.governor.status().unwrap();
         assert!(!status.safety_latched);
-        drop(transport); drop(cache);
+        drop(transport);
+        drop(cache);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn credential_json_is_withheld_without_collapsing_duplicate_or_escaped_keys() {
-        let url=list_url(20,1).unwrap();
+        let url = list_url(20, 1).unwrap();
         for body in [
             br#"{"token":"synthetic-secret","password":"synthetic-password"}"#.as_slice(),
             br#"{"outer":[{"to\u006ben":"synthetic-secret"}]}"#.as_slice(),
             br#"{"outer":{"token":"synthetic-secret"},"outer":{"message":"safe"}}"#.as_slice(),
             br#"{"nested":"{\"cookie\":\"synthetic-secret\"}"}"#.as_slice(),
-            br#"{"link":"https://files.example.invalid/a?access%5Ftoken=synthetic-secret"}"#.as_slice(),
+            br#"{"link":"https://files.example.invalid/a?access%5Ftoken=synthetic-secret"}"#
+                .as_slice(),
         ] {
-            let original=response(&url,body,Some("application/json"));
-            let found=evidence(FallbackReason::UpstreamShape,&original,"synthetic-token-value");
+            let original = response(&url, body, Some("application/json"));
+            let found = evidence(
+                FallbackReason::UpstreamShape,
+                &original,
+                "synthetic-token-value",
+            );
             assert!(found.get("raw_response_base64").is_none());
-            assert_eq!(found["evidence_kind"],"upstream_http_metadata");
-            assert_eq!(found["sha256"],sha256(body));
-            assert_eq!(page_meta(&original,0,"synthetic-token-value")["response_body_sha256"],sha256(body));
+            assert_eq!(found["evidence_kind"], "upstream_http_metadata");
+            assert_eq!(found["sha256"], sha256(body));
+            assert_eq!(
+                page_meta(&original, 0, "synthetic-token-value")["response_body_sha256"],
+                sha256(body)
+            );
         }
-        let safe=br#"{"message":"ordinary server maintenance","nested":[{"code":7}]}"#;
-        let original=response(&url,safe,Some("application/json"));
-        assert_eq!(evidence(FallbackReason::UpstreamShape,&original,"synthetic-token-value")["raw_response_base64"],STANDARD.encode(safe));
+        let safe = br#"{"message":"ordinary server maintenance","nested":[{"code":7}]}"#;
+        let original = response(&url, safe, Some("application/json"));
+        assert_eq!(
+            evidence(
+                FallbackReason::UpstreamShape,
+                &original,
+                "synthetic-token-value"
+            )["raw_response_base64"],
+            STANDARD.encode(safe)
+        );
     }
 
     #[test]
     fn credential_urls_are_not_projected_as_attachments() {
-        let mut urls=Vec::new();
+        let mut urls = Vec::new();
         for text in [
             "https://reader:synthetic-password@files.example.invalid/photo.jpg",
             "https://files.example.invalid/photo.jpg?access%5ftoken=synthetic-secret",
             "https://files.example.invalid/photo.jpg#token=synthetic-secret",
-        ] { collect_declared_urls(&json!(text),&mut urls,0); }
+        ] {
+            collect_declared_urls(&json!(text), &mut urls, 0);
+        }
         assert!(urls.is_empty());
-        collect_declared_urls(&json!("https://files.example.invalid/photo.jpg?size=large"),&mut urls,0);
-        assert_eq!(urls,vec!["https://files.example.invalid/photo.jpg?size=large"]);
+        collect_declared_urls(
+            &json!("https://files.example.invalid/photo.jpg?size=large"),
+            &mut urls,
+            0,
+        );
+        assert_eq!(
+            urls,
+            vec!["https://files.example.invalid/photo.jpg?size=large"]
+        );
     }
 
     #[test]
     fn cached_private_originals_keep_hashes_without_exporting_credentials_or_mime_parameters() {
-        let directory=std::env::temp_dir().join(format!("buaa-ihome-private-fixture-{}-{}",std::process::id(),SEQUENCE.fetch_add(1,AtomicOrdering::Relaxed)));
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
-        let cache=ResponseCache {directory:governor::open_directory(&directory,false,true).unwrap()};
-        let url=list_url(20,1).unwrap();
-        let body=br#"{"nested":{"password":"synthetic-secret"}}"#;
-        let original=response(&url,body,Some("application/json; sessionid=synthetic-secret"));
-        cache.save(&original,&ChallengeAssessment::Clear).unwrap();
-        let (saved,assessment)=cache.load(&url).unwrap().unwrap();
-        assert!(matches!(assessment,ChallengeAssessment::Clear));
-        assert_eq!(saved.body,body);
-        assert_eq!(saved.headers["content-type"],"application/json; sessionid=synthetic-secret");
-        let found=evidence(FallbackReason::UpstreamShape,&saved,"synthetic-token-value");
+        let directory = std::env::temp_dir().join(format!(
+            "buaa-ihome-private-fixture-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let cache = ResponseCache {
+            directory: governor::open_directory(&directory, false, true).unwrap(),
+        };
+        let url = list_url(20, 1).unwrap();
+        let body = br#"{"nested":{"password":"synthetic-secret"}}"#;
+        let original = response(
+            &url,
+            body,
+            Some("application/json; sessionid=synthetic-secret"),
+        );
+        cache.save(&original, &ChallengeAssessment::Clear).unwrap();
+        let (saved, assessment) = cache.load(&url).unwrap().unwrap();
+        assert!(matches!(assessment, ChallengeAssessment::Clear));
+        assert_eq!(saved.body, body);
+        assert_eq!(
+            saved.headers["content-type"],
+            "application/json; sessionid=synthetic-secret"
+        );
+        let found = evidence(
+            FallbackReason::UpstreamShape,
+            &saved,
+            "synthetic-token-value",
+        );
         assert!(found.get("raw_response_base64").is_none());
-        assert_eq!(found["content_type"],"application/json");
-        assert_eq!(found["content_type_parameters_withheld"],true);
-        assert_eq!(found["sha256"],sha256(body));
-        assert_eq!(page_meta(&saved,0,"synthetic-token-value")["cache_status"],"hit");
-        assert!(!page_meta(&saved,0,"synthetic-token-value").to_string().contains("synthetic-secret"));
-        drop(cache); std::fs::remove_dir_all(directory).unwrap();
+        assert_eq!(found["content_type"], "application/json");
+        assert_eq!(found["content_type_parameters_withheld"], true);
+        assert_eq!(found["sha256"], sha256(body));
+        assert_eq!(
+            page_meta(&saved, 0, "synthetic-token-value")["cache_status"],
+            "hit"
+        );
+        assert!(
+            !page_meta(&saved, 0, "synthetic-token-value")
+                .to_string()
+                .contains("synthetic-secret")
+        );
+        drop(cache);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn unreviewed_challenge_is_not_a_captcha_claim_and_withholds_raw_body() {
-        let url=list_url(20,1).unwrap();
-        let original=response(&url,b"<html>private-token</html>",Some("application/xhtml+xml"));
-        let assessment=assess_challenge_body(&original.body,Some("application/xhtml+xml"),true);
-        let reason=response_refusal(&original,&assessment).unwrap();
-        assert_eq!(reason,FallbackReason::ChallengeUnreviewed);
-        let value=evidence(reason,&original,"synthetic-token-value");
-        assert_eq!(value["fallback_reason"],"challenge_unreviewed");
+        let url = list_url(20, 1).unwrap();
+        let original = response(
+            &url,
+            b"<html>private-token</html>",
+            Some("application/xhtml+xml"),
+        );
+        let assessment = assess_challenge_body(&original.body, Some("application/xhtml+xml"), true);
+        let reason = response_refusal(&original, &assessment).unwrap();
+        assert_eq!(reason, FallbackReason::ChallengeUnreviewed);
+        let value = evidence(reason, &original, "synthetic-token-value");
+        assert_eq!(value["fallback_reason"], "challenge_unreviewed");
         assert!(value.get("raw_response_base64").is_none());
-        assert_eq!(value["sha256"],sha256(&original.body));
-        assert!(!matches!(assessment,ChallengeAssessment::Detected));
+        assert_eq!(value["sha256"], sha256(&original.body));
+        assert!(!matches!(assessment, ChallengeAssessment::Detected));
     }
 
     #[test]
@@ -4673,7 +6506,10 @@ mod tests {
         let earlier = parse_timestamp("2026-10-20T08:30:00+08:00").unwrap();
         assert_eq!(compare_timestamps(&earlier, &zoned), Some(Ordering::Less));
         let fractional = parse_timestamp("2026-10-20T08:30:00.123Z").unwrap();
-        assert_eq!(compare_timestamps(&fractional, &zoned), Some(Ordering::Greater));
+        assert_eq!(
+            compare_timestamps(&fractional, &zoned),
+            Some(Ordering::Greater)
+        );
         assert!(parse_timestamp("not a timestamp").is_none());
         assert!(parse_timestamp("2026-10-20").is_none());
         assert!(parse_timestamp("2026-02-30 08:00:00").is_none());
@@ -4686,12 +6522,22 @@ mod tests {
         let token = "synthetic-bearer";
         let body = br#"{"code":20000,"success":true,"data":{"data":[],"current_page":1,"last_page":1,"total":0,"notice":"ordinary maintenance"}}"#;
         let list = ListRequest {
-            token: Zeroizing::new(token.to_owned()), token_source: None,
-            limit: 20, page: 1, max_pages: 1, since_id: None,
-            since_time_raw: None, since_time: None, known: BTreeMap::new(), refresh: false,
+            token: Zeroizing::new(token.to_owned()),
+            token_source: None,
+            limit: 20,
+            page: 1,
+            max_pages: 1,
+            since_id: None,
+            since_time_raw: None,
+            since_time: None,
+            known: BTreeMap::new(),
+            refresh: false,
         };
         let detail = DetailRequest {
-            token: Zeroizing::new(token.to_owned()), token_source: None, id: 41, refresh: false,
+            token: Zeroizing::new(token.to_owned()),
+            token_source: None,
+            id: 41,
+            refresh: false,
         };
         // The submitted token is a token-shaped MIME subtype, a parameter and a
         // percent or case-mangled spelling: every projection of that header
@@ -4705,15 +6551,29 @@ mod tests {
             let facts = analyze_body(body, token);
             assert!(!facts.token_echo, "ordinary body is not an echo");
             for outcome in [
-                list_page(&list, &response(&page_url, body, Some(header)), &ChallengeAssessment::Clear, &facts),
-                detail_page(&detail, &response(&entry_url, body, Some(header)), &ChallengeAssessment::Clear, &facts),
+                list_page(
+                    &list,
+                    &response(&page_url, body, Some(header)),
+                    &ChallengeAssessment::Clear,
+                    &facts,
+                ),
+                detail_page(
+                    &detail,
+                    &response(&entry_url, body, Some(header)),
+                    &ChallengeAssessment::Clear,
+                    &facts,
+                ),
             ] {
                 let evidence = outcome.evidence.as_ref().expect("degraded evidence");
                 assert_eq!(evidence["fallback_reason"], "unexpected_content");
                 assert_eq!(evidence["content_type"], Value::Null);
                 assert_eq!(evidence["content_type_parameters_withheld"], true);
                 assert!(!serde_json::to_string(evidence).unwrap().contains(token));
-                assert!(!serde_json::to_string(&outcome.meta).unwrap().contains(token));
+                assert!(
+                    !serde_json::to_string(&outcome.meta)
+                        .unwrap()
+                        .contains(token)
+                );
                 assert_eq!(outcome.meta["content_type"], Value::Null);
                 assert_eq!(outcome.meta["content_type_parameters_withheld"], true);
             }
@@ -4729,24 +6589,39 @@ mod tests {
         // A header that merely names the token shape is the same withholding on
         // cache replay: the cached original is never republished as observed.
         let directory = std::env::temp_dir().join(format!(
-            "buaa-ihome-mime-{}-{}", std::process::id(),
+            "buaa-ihome-mime-{}-{}",
+            std::process::id(),
             SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
         ));
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
         let cache = ResponseCache {
             directory: governor::open_directory(&directory, false, true).unwrap(),
-                    };
+        };
         let stored = response(&page_url, body, Some("application/synthetic-bearer"));
         cache.save(&stored, &ChallengeAssessment::Clear).unwrap();
         let outcome = cache
-            .get(&page_url, token, false, false, |saved, challenge, facts| {
-                assert_eq!(saved.cache_status, CacheStatus::Hit);
-                Ok::<PageOutcome, Error>(list_page(&list, saved, challenge, facts))
-            })
+            .get(
+                &page_url,
+                token,
+                false,
+                false,
+                &mut IssuedCookies::default(),
+                |saved, challenge, facts| {
+                    assert_eq!(saved.cache_status, CacheStatus::Hit);
+                    Ok::<PageOutcome, Error>(list_page(&list, saved, challenge, facts))
+                },
+            )
             .unwrap();
         assert_eq!(outcome.meta["content_type"], Value::Null);
         assert_eq!(outcome.meta["content_type_parameters_withheld"], true);
-        assert!(!serde_json::to_string(&outcome.meta).unwrap().contains(token));
+        assert!(
+            !serde_json::to_string(&outcome.meta)
+                .unwrap()
+                .contains(token)
+        );
         let evidence = outcome.evidence.as_ref().expect("degraded evidence");
         assert_eq!(evidence["content_type"], Value::Null);
         assert!(!serde_json::to_string(evidence).unwrap().contains(token));
@@ -4796,11 +6671,12 @@ mod tests {
         // document is the new regression.
         let controls = b"<html><body><input name=\"token\" value=\"x\"></body></html>";
         let original = response(&url, controls, Some("text/html"));
-        assert!(evidence(FallbackReason::UpstreamParse, &original, token)
-            .get("raw_response_base64")
-            .is_none());
+        assert!(
+            evidence(FallbackReason::UpstreamParse, &original, token)
+                .get("raw_response_base64")
+                .is_none()
+        );
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -4886,16 +6762,31 @@ mod ihome_review_regressions {
         let found = page.evidence.as_ref().expect("withheld list evidence");
         assert_eq!(found["fallback_reason"], "credential_echo");
         assert_eq!(found["evidence_kind"], "upstream_http_metadata");
-        assert!(found.get("raw_response_base64").is_none(), "reversible raw response leaked");
+        assert!(
+            found.get("raw_response_base64").is_none(),
+            "reversible raw response leaked"
+        );
         let envelope = build_list_envelope(&request, (vec![page]).into_iter().map(Ok)).unwrap();
         assert_eq!(envelope["result"], "degraded");
         assert_eq!(envelope["entry_count"], 0);
-        assert_eq!(envelope["upstream_evidence"]["fallback_reason"], "credential_echo");
-        assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
+        assert_eq!(
+            envelope["upstream_evidence"]["fallback_reason"],
+            "credential_echo"
+        );
+        assert!(
+            envelope["upstream_evidence"]
+                .get("raw_response_base64")
+                .is_none()
+        );
         assert!(!serde_json::to_string(&envelope).unwrap().contains("ud83d"));
         // The detail read refuses the same body.
         let detail_request = review_detail_request();
-        let detail = detail_page(&detail_request, &original, &ChallengeAssessment::Clear, &facts);
+        let detail = detail_page(
+            &detail_request,
+            &original,
+            &ChallengeAssessment::Clear,
+            &facts,
+        );
         assert!(detail.entries.is_empty());
         let found = detail.evidence.as_ref().expect("withheld detail evidence");
         assert_eq!(found["fallback_reason"], "credential_echo");
