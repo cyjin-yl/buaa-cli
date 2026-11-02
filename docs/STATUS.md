@@ -2992,3 +2992,27 @@ connection. Issue numbers, titles, bodies, authors and comment text are not
 published; only counts and machine-readable outcomes are recorded. The
 metadata-only receipts are `local://buaa-gitea-native-scan-20261102.json` and
 `local://buaa-gitea-native-scan-ground-truth-20261102.json`.
+
+## 2026-11-02: Gitea primary non-force publication
+
+The owned ordered-stack leaf branch `work/gitea-review-transport-20261030`
+was advanced on the private Gitea primary by one non-force fast-forward. The
+previous remote leaf was advanced to the verified commit
+`5ac17c9459694f7ce2a48d33838ce586308191a3`, whose parent is the previous
+local head and whose tree carries the whole reviewed slice. The actual
+remote ref was read back with a direct ref query after the write rather than
+from a tracking cache.
+
+The native primary reports draft pull request 164 with base
+`work/gitea-metadata-attribution-20261030` and head
+`work/gitea-review-transport-20261030` at that commit. The stack parent pull
+request 163 and its base are unchanged, so the ordered chain still reads
+recovery boundary, then metadata attribution, then review transport. Pull
+request 164 remains a draft and is not merged.
+
+Nothing else was written: no force push, no other branch, no `main` update
+and no merge. The published difference was scanned before the write and
+contains no live credential. The primary's daily synchronization of every
+branch and tag to the public GitHub downstream is a separate downstream
+action and is not claimed here. The metadata-only receipt is
+`local://buaa-gitea-publication-20261102.json`.

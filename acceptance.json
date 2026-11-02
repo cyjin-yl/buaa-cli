@@ -2972,6 +2972,15 @@
           "private_content": "Issue numbers, titles, bodies, authors and comment text are not published; only counts and machine-readable outcomes are recorded.",
           "receipt": "local://buaa-gitea-native-scan-20261102.json",
           "remaining": "Discovery is a point-in-time read, not a claim, an approval or a merge. Live permission, readiness and a bound acceptance item remain required before any issue work. The claim, linked-PR, exact-head review and merge workflows are still unimplemented by this command."
+        },
+        "gitea_primary_publication_2026_11_02": {
+          "scope": "One non-force update of the owned ordered-stack leaf branch on the private Gitea primary. No force push, no other branch, no main write and no merge were performed.",
+          "branch": "work/gitea-review-transport-20261030, whose immediate parent is the stack layer work/gitea-metadata-attribution-20261030.",
+          "publication": "The previous remote leaf 181067e41c9fc7bf6beea31957c7af9277555d93 was advanced by a fast-forward to the verified commit 5ac17c9459694f7ce2a48d33838ce586308191a3. The actual remote ref was read back with a direct ref query after the write, not from a tracking cache.",
+          "pull_request": "The native primary reports draft pull request 164 with base work/gitea-metadata-attribution-20261030 at 5ee3273fb8d044074376c02156a8500ca0fea76e and head work/gitea-review-transport-20261030 at the published commit. The stack parent pull request 163 and its base are unchanged. The pull request remains a draft and is not merged.",
+          "secret_scan": "The published difference was scanned before the write: the live credential is absent from it, and the only credential-shaped literals are synthetic placeholders.",
+          "not_claimed": "This is a development-publication of already reviewed work, not a merge, a release, a campus permission or a downstream acceptance. The public GitHub synchronization of every branch and tag remains a separate downstream action.",
+          "receipt": "local://buaa-gitea-publication-20261102.json"
         }
       }
     },
