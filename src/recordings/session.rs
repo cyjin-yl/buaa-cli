@@ -3401,6 +3401,16 @@ pub(crate) fn http_client() -> Result<Client, Error> {
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
         .https_only(true)
+        // The library CAS relying party presents only its leaf certificate and
+        // omits its issuing intermediate, while rustls does not perform AIA
+        // fetching. Embed that reviewed intermediate as an additional anchor so
+        // the incomplete server chain still verifies to a Mozilla trust root.
+        // sha256 fingerprint 762538439509C411C437D3C567563E1378671281FC4A1464ADD031870843676E;
+        // subject GlobalSign GCC R3 DV TLS CA 2020, issuer GlobalSign Root CA - R3.
+        .add_root_certificate(
+            reqwest::Certificate::from_der(include_bytes!("gsgccr3dv_ca2020.der"))
+                .map_err(|_| unavailable())?,
+        )
         .build()
         .map_err(|_| unavailable())
 }

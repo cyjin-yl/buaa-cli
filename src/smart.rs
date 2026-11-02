@@ -262,11 +262,21 @@ fn build_read(builder: reqwest::blocking::RequestBuilder) -> Result<reqwest::blo
 }
 
 fn next_request(lease: &mut RequestLease<'_>) -> Result<(), Error> {
+    admit_request(lease, true)
+}
+
+/// Book the follow-up slot under the shared governor. A cooldown is still a
+/// durable refusal. When `continuation` is false the request is the server-
+/// directed continuation of a CAS sign-on whose single-use credential expires
+/// in seconds: sleeping the pacing gap makes it fail deterministically, so the
+/// reservation books the slot without sleeping, exactly like the redirect
+/// exemption inside the shared CAS send loop.
+fn admit_request(lease: &mut RequestLease<'_>, paced: bool) -> Result<(), Error> {
     let reservation = lease.reserve_followup().map_err(|_|error("governor_error","cannot admit Smart follow-up"))?;
     if !reservation.cooldown_wait.is_zero() {
         return Err(error("cooldown","Smart authentication was deferred; no follow-up or retry was sent"));
     }
-    if !reservation.request_wait.is_zero() { std::thread::sleep(reservation.request_wait); }
+    if paced && !reservation.request_wait.is_zero() { std::thread::sleep(reservation.request_wait); }
     Ok(())
 }
 
@@ -286,7 +296,9 @@ fn library_login(client: &Client, lease: &mut RequestLease<'_>, session: &mut Se
     if let Some(cookie) = &cookie { builder = builder.header("Cookie",cookie.as_str()); }
     let mut request = builder.build().map_err(|_|invalid())?;
     if let Some(value) = request.headers_mut().get_mut("cookie") { value.set_sensitive(true); }
-    next_request(lease)?;
+    // The exchange consumes the just-issued single-use CAS credential; pacing
+    // must not delay it past its seconds-scale lifetime.
+    admit_request(lease, false)?;
     let mut response = match lease.start_request(|| {
         if expiry.is_some_and(|expiry|std::time::SystemTime::now() >= expiry) { None }
         else { Some(client.execute(request)) }
