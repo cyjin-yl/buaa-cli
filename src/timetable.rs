@@ -19,8 +19,26 @@
 //! The ICS uses floating local date-times (the times exactly as supplied, with
 //! no timezone offset applied), which RFC 5545 permits. Lines are folded to at
 //! most 75 octets (excluding CRLF) and the document uses CRLF line endings.
+//!
+//! A separate `session` entry point performs, on explicit authorization and
+//! `--online`, one in-memory CAS sign-on to the graduate timetable service
+//! followed by exactly one `loadXskbData.do` read in the same invocation. It
+//! never retries, refreshes, caches or adopts upstream cookies, and credential
+//! material never leaves the invocation.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use reqwest::blocking::Client;
+use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::io::Read;
+use zeroize::Zeroizing;
+
+use crate::{
+    governor::{Governor, Outcome, RequestKind, RequestLease},
+    net::{self, Error},
+    recordings::session::{self as cas, CasService, SsoCredentials},
+};
 
 const MAX_COURSES: usize = 512;
 const MAX_WEEKS: u32 = 104;
@@ -464,9 +482,511 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Graduate timetable session: one explicit in-memory CAS login to GSMIS
+// followed by exactly one loadXskbData.do read. Secrets are stdin-only inputs;
+// they are never persisted, logged or placed inside a generic Value tree. The
+// read performs no writes, retries, refreshes, pagination or cookie adoption.
+
+const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
+const SESSION_MAX_INPUT: usize = 65536;
+const TIMETABLE_URL: &str =
+    "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do";
+const TIMETABLE_REFERER: &str =
+    "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
+
+fn error(code: &'static str, message: &'static str) -> Error {
+    Error::new(code, message)
+}
+
+fn session_invalid() -> Error {
+    error(
+        "invalid_input",
+        "timetable session input does not match the xskb contract",
+    )
+}
+
+fn deserialize_secret<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Zeroizing<String>, D::Error> {
+    String::deserialize(deserializer).map(Zeroizing::new)
+}
+
+// Serde's struct derives also accept positional sequences. This boundary
+// admits JSON objects only, without a credential-bearing Value tree.
+fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Object<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Object(std::marker::PhantomData))
+}
+
+struct SessionInput {
+    authorized: bool,
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
+    intent: Zeroizing<String>,
+    read: SessionRead,
+}
+
+impl<'de> Deserialize<'de> for SessionInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            authorized: bool,
+            #[serde(deserialize_with = "deserialize_secret")]
+            username: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_secret")]
+            password: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_secret")]
+            intent: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_object")]
+            read: SessionRead,
+        }
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            authorized: raw.authorized,
+            username: raw.username,
+            password: raw.password,
+            intent: raw.intent,
+            read: raw.read,
+        })
+    }
+}
+
+struct SessionRead {
+    enabled: bool,
+    xnxqdm: String,
+}
+
+impl<'de> Deserialize<'de> for SessionRead {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+        enum Raw {
+            Xskb { enabled: bool, xnxqdm: String },
+        }
+        let (enabled, xnxqdm) = match deserialize_object(deserializer)? {
+            Raw::Xskb { enabled, xnxqdm } => (enabled, xnxqdm),
+        };
+        Ok(Self { enabled, xnxqdm })
+    }
+}
+
+/// The requested term filter is the exact five-digit XNXQDM code, matching the
+/// shared yjsxk session contract.
+fn valid_term_code(term: &str) -> bool {
+    let bytes = term.as_bytes();
+    bytes.len() == 5 && bytes.iter().all(u8::is_ascii_digit)
+}
+
+fn xskb_request(client: &Client, cookie: &str, term: &str) -> reqwest::blocking::RequestBuilder {
+    client
+        .post(TIMETABLE_URL)
+        .form(&[("ZC", ""), ("XNXQDM", term), ("XH", ""), ("XQDM", "")])
+        .header("Cookie", cookie)
+        .header("Accept", "application/json, text/javascript, */*; q=0.01")
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Referer", TIMETABLE_REFERER)
+}
+
+/// Book the follow-up read slot under the shared governor. A cooldown is a
+/// durable refusal; pacing sleeps before transmission, never during a CAS
+/// redirect chain (handled inside the authentication itself).
+fn admit_session_read(lease: &mut RequestLease<'_>) -> Result<(), Error> {
+    let reservation = lease
+        .reserve_followup()
+        .map_err(|_| error("governor_error", "cannot admit timetable follow-up"))?;
+    if !reservation.cooldown_wait.is_zero() {
+        return Err(error(
+            "cooldown",
+            "timetable authentication was deferred; no read or retry was sent",
+        ));
+    }
+    if !reservation.request_wait.is_zero() {
+        std::thread::sleep(reservation.request_wait);
+    }
+    Ok(())
+}
+
+fn with_provenance(mut output: Value, network: bool) -> Value {
+    output["service"] = json!("gsmis");
+    output["source"] = json!(if network { "network" } else { "disabled" });
+    output["network_performed"] = json!(network);
+    output["write_operations_performed"] = json!(false);
+    output
+}
+
+/// A degraded read result carries the unmodified body as private caller-owned
+/// evidence. It is only emitted after the credential echo and challenge
+/// screens have cleared the body.
+fn degraded(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'static str) -> Value {
+    json!({
+        "schema_version": 1,
+        "type": "timetable_pg",
+        "result": "degraded",
+        "fallback_reason": reason,
+        "http_status": status,
+        "content_type": content_type,
+        "raw_response_base64": STANDARD.encode(bytes),
+        "raw_response_sha256": format!("{:x}", Sha256::digest(bytes)),
+        "body_byte_length": bytes.len(),
+    })
+}
+
+/// A withheld read result retains only safe metadata: no body bytes and only a
+/// reviewed MIME essence, never the full Content-Type parameters.
+fn withheld(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'static str) -> Value {
+    let essence = content_type
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'+' | b'-' | b'_'))
+        });
+    json!({
+        "schema_version": 1,
+        "type": "timetable_pg",
+        "result": "sensitive_response_withheld",
+        "fallback_reason": reason,
+        "http_status": status,
+        "raw_evidence_withheld": true,
+        "content_type": essence,
+        "content_type_parameters_withheld": content_type.is_some_and(|value| Some(value) != essence),
+        "body_byte_length": bytes.len(),
+        "raw_response_sha256": format!("{:x}", Sha256::digest(bytes)),
+    })
+}
+
+fn contains_cookie(bytes: &[u8], cookie: &str) -> bool {
+    net::carries_secret(bytes, cookie)
+        || cookie
+            .split(';')
+            .filter_map(|part| part.split_once('='))
+            .any(|(_, value)| {
+                let value = value.trim();
+                net::carries_secret(bytes, value)
+                    || value
+                        .strip_prefix('"')
+                        .and_then(|inner| inner.strip_suffix('"'))
+                        .is_some_and(|unquoted| net::carries_secret(bytes, unquoted))
+            })
+}
+
+/// JSON escapes hide a credential echo from a raw-byte scan; inspect decoded
+/// strings and scalar re-encodings inside a parsed body.
+fn value_contains_secret(value: &Value, contains: &dyn Fn(&[u8]) -> bool) -> bool {
+    match value {
+        Value::String(text) => contains(text.as_bytes()),
+        Value::Array(values) => values.iter().any(|value| value_contains_secret(value, contains)),
+        Value::Object(fields) => fields
+            .values()
+            .any(|value| value_contains_secret(value, contains)),
+        Value::Number(_) | Value::Bool(_) | Value::Null => {
+            net::json_scalar_matches(value, contains)
+        }
+    }
+}
+
+/// A recognized JSON session denial is authoritative even when its shape is
+/// otherwise unadmitted: the read never presents it as timetable data.
+fn session_denied(bytes: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        return false;
+    };
+    let message = value
+        .get("message")
+        .or_else(|| value.get("msg"))
+        .or_else(|| value.get("m"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    ["登录失效", "请重新登录", "未登录"]
+        .iter()
+        .any(|marker| message.contains(marker))
+}
+
+/// One explicit in-memory CAS login to the graduate timetable service followed
+/// by exactly one `loadXskbData.do` read. The session never persists, refreshes
+/// or retries; the issued cookie is used for the single read only.
+pub fn session(input: &str, online: bool) -> Result<Value, Error> {
+    session_with_network(input, online, || {
+        Ok((
+            cas::http_client()?,
+            Governor::open()
+                .map_err(|_| error("governor_error", "shared request admission unavailable"))?,
+        ))
+    })
+}
+
+pub(crate) fn session_with_network(
+    input: &str,
+    online: bool,
+    network: impl FnOnce() -> Result<(Client, Governor), Error>,
+) -> Result<Value, Error> {
+    if input.len() > SESSION_MAX_INPUT {
+        return Err(session_invalid());
+    }
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let input: SessionInput = deserialize_object(&mut deserializer).map_err(|_| session_invalid())?;
+    deserializer.end().map_err(|_| session_invalid())?;
+    if !input.read.enabled {
+        return Ok(with_provenance(
+            json!({"result": "disabled"}),
+            false,
+        ));
+    }
+    if !valid_term_code(&input.read.xnxqdm) {
+        return Err(session_invalid());
+    }
+    if !input.authorized {
+        return Err(error(
+            "permission",
+            "explicit authorization for one GSMIS authentication attempt is required",
+        ));
+    }
+    let credentials = SsoCredentials::new(&input.username, &input.password)?;
+    if *input.intent != format!("LOGIN {} timetable", &*input.username) {
+        return Err(session_invalid());
+    }
+    if !online {
+        return Err(error(
+            "online_required",
+            "timetable sessions require explicit online permission; no authentication was attempted",
+        ));
+    }
+    let (client, governor) = network()?;
+    let mut lease = net::acquire_kind(&governor, RequestKind::Authentication)?;
+    let prepared = cas::authenticate_service(&mut lease, &client, CasService::Gsmis, credentials)
+        .and_then(|session| {
+            let url = url::Url::parse(TIMETABLE_URL).map_err(|_| session_invalid())?;
+            let (cookie, expiry) = session.cookie_header(&url)?;
+            let cookie = cookie.ok_or_else(|| {
+                error(
+                    "auth_latched",
+                    "the timetable session cookie is missing; no read was sent",
+                )
+            })?;
+            let builder = xskb_request(&client, &cookie, &input.read.xnxqdm);
+            let mut request = builder
+                .timeout(std::time::Duration::from_secs(45))
+                .header("Accept-Encoding", "identity")
+                .build()
+                .map_err(|_| session_invalid())?;
+            if let Some(value) = request.headers_mut().get_mut("cookie") {
+                value.set_sensitive(true);
+            }
+            admit_session_read(&mut lease)?;
+            Ok((session, cookie, expiry, request))
+        });
+    let (session, cookie, cookie_expiry, request) = match prepared {
+        Ok(prepared) => prepared,
+        Err(failure) => {
+            if matches!(
+                failure.code,
+                "governor_error" | "governor_denied" | "governor_unavailable"
+            ) {
+                // Persistence failure after a send is not a local refusal.
+                // Drop without finishing: retain the pending outcome for review.
+                return Err(failure);
+            }
+            let settled = match failure.code {
+                "auth_latched" => lease.finish(Outcome::CredentialRejected),
+                "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ => lease.finish_without_request(),
+            };
+            settled.map_err(|_| {
+                error("governor_error", "cannot settle timetable authentication attempt")
+            })?;
+            return Err(failure);
+        }
+    };
+    // The one-shot read guards on the transmitted cookie and the issued jar:
+    // a response that echoes either is withheld, never base64-exported.
+    let contains = |candidate: &[u8]| {
+        net::carries_secret(candidate, &input.username)
+            || net::carries_secret(candidate, &input.password)
+            || contains_cookie(candidate, &cookie)
+            || session.contains_secret_bytes(candidate)
+    };
+    let mut response = match lease.start_request(|| {
+        if cookie_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+            None
+        } else {
+            Some(client.execute(request))
+        }
+    }) {
+        Ok(Some(Ok(response))) => response,
+        Ok(Some(Err(_))) => {
+            lease
+                .finish(Outcome::NetworkFailure)
+                .map_err(|_| error("governor_error", "cannot settle timetable request"))?;
+            return Err(error(
+                "network_error",
+                "timetable request failed; no automatic retry",
+            ));
+        }
+        Ok(None) => {
+            lease
+                .finish_without_request()
+                .map_err(|_| error("governor_error", "cannot release timetable request"))?;
+            return Err(error(
+                "scoped_cookie_unusable",
+                "the timetable cookie expired before transmission; no further request was sent",
+            ));
+        }
+        Err(crate::governor::FollowupError::Governor(_)) => {
+            return Err(error(
+                "governor_error",
+                "request safety admission failed; pending outcome retained",
+            ));
+        }
+    };
+    let status = response.status().as_u16();
+    let issues_session_cookie = net::issues_session_cookie(response.headers());
+    let retry_after = response
+        .headers()
+        .get_all("retry-after")
+        .iter()
+        .find_map(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let content_types = response.headers().get_all("content-type");
+    let mut content_types = content_types.iter();
+    let content_type = match (content_types.next(), content_types.next()) {
+        (Some(value), None) => value.to_str().ok().map(str::to_owned),
+        _ => None,
+    };
+    let header_challenge = response
+        .headers()
+        .iter()
+        .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
+    // Commit header facts before consuming a body that may fail or be cut short.
+    lease
+        .observe_http_many(
+            status,
+            response
+                .headers()
+                .get_all("retry-after")
+                .iter()
+                .map(|value| value.to_str().ok()),
+            header_challenge,
+        )
+        .map_err(|_| error("governor_error", "cannot persist timetable response headers"))?;
+    let mut bytes = Zeroizing::new(Vec::new());
+    let read_result = response
+        .by_ref()
+        .take(SESSION_BODY_LIMIT + 1)
+        .read_to_end(&mut bytes);
+    let incomplete = read_result.is_err() || bytes.len() as u64 > SESSION_BODY_LIMIT;
+    let assessment = crate::html::assess_challenge_body(&bytes, content_type.as_deref(), !incomplete);
+    let challenge =
+        header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
+    let metadata_echo = content_type
+        .as_deref()
+        .is_some_and(|value| contains(value.as_bytes()));
+    let safe_content_type = if metadata_echo { None } else { content_type.as_deref() };
+    let echo = contains(&bytes)
+        || metadata_echo
+        || std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .is_some_and(|value| value_contains_secret(&value, &contains));
+    let denied = !incomplete && !echo && session_denied(&bytes);
+    let result = if read_result.is_err() {
+        Err(error("network_error", "timetable response body read failed"))
+    } else if bytes.len() as u64 > SESSION_BODY_LIMIT {
+        Err(error(
+            "body_limit",
+            "timetable response exceeds bounded body limit",
+        ))
+    } else if issues_session_cookie {
+        // The read response may not re-issue session material; the MIME
+        // essence itself can echo the issued value, so withhold it too.
+        let mut output = withheld(status, None, &bytes, "session_cookie_issued");
+        output["content_type_parameters_withheld"] = json!(content_type.is_some());
+        Ok(output)
+    } else if echo {
+        Ok(withheld(
+            status,
+            safe_content_type,
+            &bytes,
+            "credential_echo",
+        ))
+    } else if assessment == crate::html::ChallengeAssessment::Unreviewed && !challenge {
+        Ok(withheld(
+            status,
+            safe_content_type,
+            &bytes,
+            "response_safety_unreviewed",
+        ))
+    } else if challenge {
+        let mut output = withheld(status, safe_content_type, &bytes, "challenge_requires_human");
+        output["challenge_required"] = json!(true);
+        Ok(output)
+    } else if denied {
+        let mut output = withheld(status, safe_content_type, &bytes, "session_expired");
+        output["result"] = json!("session_expired");
+        Ok(output)
+    } else if !(200..300).contains(&status) {
+        Ok(degraded(
+            status,
+            safe_content_type,
+            &bytes,
+            "http_status_unsafe_response",
+        ))
+    } else {
+        match std::str::from_utf8(&bytes) {
+            Err(_) => Ok(degraded(
+                status,
+                safe_content_type,
+                &bytes,
+                "utf8_decode_failed",
+            )),
+            Ok(body) => {
+                let mut output = crate::timetable_pg::parse_timetable(body, &input.read.xnxqdm);
+                if output.get("result").and_then(Value::as_str) == Some("fallback") {
+                    output["content_type"] = json!(safe_content_type);
+                    output["http_status"] = json!(status);
+                }
+                Ok(output)
+            }
+        }
+    };
+    drop(response);
+    if denied {
+        lease
+            .finish(Outcome::CredentialRejected)
+            .map_err(|_| error("governor_error", "cannot settle timetable session denial"))?;
+    } else {
+        lease
+            .finish(Outcome::Http {
+                status,
+                retry_after: retry_after.as_deref(),
+                challenge,
+                network_failure: incomplete,
+            })
+            .map_err(|_| error("governor_error", "cannot settle timetable request"))?;
+    }
+    result.map(|output| with_provenance(output, true))
+}
+
 /// Describe the command's input/output contract for `buaa schema`.
 pub fn schema() -> Value {
-    json!({
+    let mut schema = json!({
         "command": "timetable ics",
         "description": "Offline conversion of a semester schedule to a standards-compliant RFC 5545 ICS document. No network access, no writes.",
         "input": {
@@ -492,7 +1012,37 @@ pub fn schema() -> Value {
             "event_count": "number of VEVENT instances",
             "ics": "RFC 5545 document text (CRLF line endings, 75-octet folding, floating local date-times)"
         }
-    })
+    });
+    schema["session"] = json!({
+        "description": "One explicit in-memory CAS login to GSMIS followed by exactly one loadXskbData.do read; no persistence, refresh, retry, writes or cookie adoption.",
+        "input": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authorized", "username", "password", "intent", "read"],
+            "properties": {
+                "authorized": {"type": "boolean"},
+                "username": {"type": "string"},
+                "password": {"type": "string"},
+                "intent": {"type": "string"},
+                "read": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["operation", "enabled", "xnxqdm"],
+                    "properties": {
+                        "operation": {"const": "xskb"},
+                        "enabled": {"type": "boolean"},
+                        "xnxqdm": {"type": "string", "pattern": "^[0-9]{5}$"}
+                    }
+                }
+            }
+        },
+        "intent": "LOGIN <username> timetable",
+        "read_url": TIMETABLE_URL,
+        "read_method": "POST form ZC=&XNXQDM={term}&XH=&XQDM=",
+        "output": "timetable_pg parsed shape, or result degraded/fallback with raw_response_base64+sha256+content_type+fallback_reason, or sensitive_response_withheld when credentials/challenge/cookie material is detected; plus service, source, network_performed, write_operations_performed",
+        "validation": "object root only; disabled read performs no I/O; enabled read requires authorized=true, exact intent, five-ASCII-digit xnxqdm and --online before transport or admission"
+    });
+    schema
 }
 
 #[cfg(test)]
@@ -738,5 +1288,109 @@ mod tests {
         let out = run(r#"{"semester":{"start_date":"2026-09-21","weeks":16},"courses":[]}"#);
         assert!(out.get("error").is_none(), "{out}");
         assert_eq!(out["event_count"], 0);
+    }
+}
+
+// These fixed synthetic scenarios stop before transport and governor work.
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn session_input() -> Value {
+        json!({
+            "authorized": true,
+            "username": "synthetic-operator-4b7",
+            "password": "synthetic-password-9q2",
+            "intent": "LOGIN synthetic-operator-4b7 timetable",
+            "read": {"operation": "xskb", "enabled": true, "xnxqdm": "20261"}
+        })
+    }
+
+    #[test]
+    fn intent_mismatch_is_refused_before_io() {
+        let mut request = session_input();
+        request["intent"] = json!("LOGIN another-operator timetable");
+        let failure = session_with_network(&request.to_string(), true, || {
+            panic!("intent mismatch opened network resources")
+        })
+        .unwrap_err();
+        assert_eq!(failure.code, "invalid_input");
+        // The intent binds the same username, not merely the constant suffix.
+        let mut bound = session_input();
+        bound["intent"] = json!("LOGIN synthetic-operator-4b7 smart exams");
+        let failure = session_with_network(&bound.to_string(), true, || {
+            panic!("cross-service intent opened network resources")
+        })
+        .unwrap_err();
+        assert_eq!(failure.code, "invalid_input");
+    }
+
+    #[test]
+    fn xnxqdm_shape_is_refused_before_io() {
+        for (term, label) in [
+            ("2026", "too short"),
+            ("202612", "too long"),
+            ("2026x", "non-digit"),
+            ("2026 ", "trailing space"),
+            ("２０２６１", "non-ascii digits"),
+        ] {
+            let mut request = session_input();
+            request["read"]["xnxqdm"] = json!(term);
+            let failure = session_with_network(&request.to_string(), true, || {
+                panic!("invalid xnxqdm {label} opened network resources")
+            })
+            .unwrap_err();
+            assert_eq!(failure.code, "invalid_input", "{label}");
+        }
+        // A non-object read or unknown operation fails at the object boundary.
+        for (read, label) in [
+            (json!("xskb"), "non-object read"),
+            (json!({"operation": "terms", "enabled": true, "xnxqdm": "20261"}), "unknown operation"),
+            (json!({"operation": "xskb", "xnxqdm": "20261"}), "missing enabled"),
+        ] {
+            let mut request = session_input();
+            request["read"] = read;
+            let failure = session_with_network(&request.to_string(), true, || {
+                panic!("{label} opened network resources")
+            })
+            .unwrap_err();
+            assert_eq!(failure.code, "invalid_input", "{label}");
+        }
+    }
+
+    #[test]
+    fn disabled_read_performs_no_io() {
+        let mut request = session_input();
+        request["read"]["enabled"] = json!(false);
+        // Disabled refuses before any credential, intent or term validation.
+        request["authorized"] = json!(false);
+        request["username"] = json!("");
+        request["password"] = json!("");
+        request["intent"] = json!("");
+        request["read"]["xnxqdm"] = json!("bad");
+        let output = session_with_network(&request.to_string(), true, || {
+            panic!("disabled read opened network resources")
+        })
+        .unwrap();
+        assert_eq!(output["result"], "disabled");
+        assert_eq!(output["source"], "disabled");
+        assert_eq!(output["network_performed"], false);
+        assert_eq!(output["write_operations_performed"], false);
+    }
+
+    #[test]
+    fn unapproved_reads_never_open_authentication_resources() {
+        let mut unauthorized = session_input();
+        unauthorized["authorized"] = json!(false);
+        let failure = session_with_network(&unauthorized.to_string(), true, || {
+            panic!("unauthorized read opened authentication resources")
+        })
+        .unwrap_err();
+        assert_eq!(failure.code, "permission");
+        let failure = session_with_network(&session_input().to_string(), false, || {
+            panic!("offline session opened authentication resources")
+        })
+        .unwrap_err();
+        assert_eq!(failure.code, "online_required");
     }
 }

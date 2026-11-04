@@ -1,5 +1,6 @@
 //! Pending Boya HTTPS client. No UI automation or speculative write endpoints.
 use crate::{governor::{Governor,Outcome},net::{self,Error}};
+use crate::recordings::session as cas;
 use base64::{Engine as _,engine::general_purpose::STANDARD};
 use serde::{Deserialize,Serialize};
 use serde_json::{Value,json};
@@ -224,6 +225,13 @@ impl BoyaClient {
     }
     /// Token must come from a governed authenticated CAS session, never argv.
     pub fn read(&self,auth_token:&str,req:&ReadRequest)->Result<Value,Error>{
+        let (request,key)=Self::prepare(&self.http,auth_token,req)?;
+        let lease=net::acquire(&self.governor)?;
+        Self::execute(&self.http,lease,request,key,auth_token,req)
+    }
+
+    /// Build the encrypted read request without touching the shared governor.
+    pub(crate) fn prepare(client:&reqwest::blocking::Client,auth_token:&str,req:&ReadRequest)->Result<(reqwest::blocking::Request,Zeroizing<[u8;16]>),Error>{
         if auth_token.is_empty()||reqwest::header::HeaderValue::from_str(auth_token).is_err(){return Err(err("invalid_input","credential header cannot be constructed"));}
         let (api,data)=payload(req)?;let key=random_key()?;
         let plain=Zeroizing::new(serde_json::to_vec(&data).map_err(|_|err("json","payload serialization failed"))?);
@@ -232,9 +240,13 @@ impl BoyaClient {
         let digest_hex:String=digest.iter().map(|b|format!("{b:02x}")).collect();
         let ak=rsa(key.as_slice())?;let sk=rsa(digest_hex.as_bytes())?;
         let ts=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|err("clock","invalid clock"))?.as_millis().to_string();
-        let request=self.http.post(format!("https://bykc.buaa.edu.cn/sscv/{api}")).header("auth_token",auth_token).header("authtoken",auth_token).header("Referer","https://bykc.buaa.edu.cn/system/course-select").header("Origin","https://bykc.buaa.edu.cn").header("Content-Type","application/json;charset=UTF-8").header("ak",ak).header("sk",sk).header("ts",ts).body(body).timeout(std::time::Duration::from_secs(30));
-        let mut lease=net::acquire(&self.governor)?;
-        let mut response=match lease.start_request(||request.send()){
+        let request=client.post(format!("https://bykc.buaa.edu.cn/sscv/{api}")).header("auth_token",auth_token).header("authtoken",auth_token).header("Referer","https://bykc.buaa.edu.cn/system/course-select").header("Origin","https://bykc.buaa.edu.cn").header("Content-Type","application/json;charset=UTF-8").header("ak",ak).header("sk",sk).header("ts",ts).body(body).timeout(std::time::Duration::from_secs(30));
+        Ok((request.build().map_err(|_|err("transport","cannot build the read request"))?,key))
+    }
+
+    /// Transmit one prepared read under an already-reserved lease and settle it.
+    pub(crate) fn execute(client:&reqwest::blocking::Client,mut lease:crate::governor::RequestLease<'_>,request:reqwest::blocking::Request,key:Zeroizing<[u8;16]>,auth_token:&str,req:&ReadRequest)->Result<Value,Error>{
+        let mut response=match lease.start_request(||client.execute(request)){
             Ok(Ok(response))=>response,
             Ok(Err(_))=>{lease.finish(Outcome::NetworkFailure).map_err(|_|err("governor_denied","settlement failed"))?;return Err(err("network_error","HTTPS request failed; not retried"));},
             Err(crate::governor::FollowupError::Governor(_))=>return Err(err("governor_denied","request-start admission unavailable")),
@@ -242,8 +254,6 @@ impl BoyaClient {
         let status=response.status().as_u16();let retry=response.headers().get("retry-after").and_then(|v|v.to_str().ok()).map(str::to_owned);
         let header_challenge=response.headers().iter().any(|(k,v)|net::challenge_header(k.as_str(),v.as_bytes()));
         let ct=response_content_type(response.headers());
-        // A newly issued session cookie is a credential this client never
-        // submitted and cannot revoke; its value must never reach the caller.
         let issues_cookie=net::issues_session_cookie(response.headers());
         lease.observe_http_many(status,response.headers().get_all("retry-after").iter().map(|value|value.to_str().ok()),header_challenge).map_err(|_|err("governor_denied","cannot persist response headers"))?;
         let mut bytes=Zeroizing::new(Vec::new());let failure=response.by_ref().take(8*1024*1024+1).read_to_end(&mut bytes).is_err();
@@ -251,7 +261,6 @@ impl BoyaClient {
         let assessment=crate::html::assess_challenge_body(&bytes,ct.as_deref(),!body_failed);
         let challenge=header_challenge||assessment==crate::html::ChallengeAssessment::Detected;
         drop(response);
-        // Complete admission while the original lease is still held.
         let result=admit_response(ReadResponse{bytes:&bytes,ct:ct.as_deref(),status,challenge,body_failed,assessment,issues_cookie},auth_token,&key,req);
         lease.finish(Outcome::Http{status,retry_after:retry.as_deref(),challenge,network_failure:body_failed}).map_err(|_|err("governor_denied","settlement failed"))?;
         result
@@ -309,17 +318,79 @@ pub fn run(input:&str,online:bool)->Result<Value,Error>{
         let input:RunInput=serde_json::from_str(input).map_err(|_|err("invalid_input","expected operation and optional JSON payload only"))?;
         if matches!(input.operation,RunOperation::PreviewWrite){return Ok(json!({"result":"blocked","reason":"缺少选/退课端点与载荷的上游证据","confirmation_available":false,"write_performed":false}));}
         if !online{return Ok(json!({"result":"blocked","reason":"online permission required; no request made"}));}
-        let p=input.payload.unwrap_or_default();
-        let token=if let Some(url)=p.final_token_url{auth_token(&url.0)?}else{p.auth_token.filter(|value|!value.0.is_empty()).ok_or_else(||err("login_required","auth_token or final_token_url required via stdin"))?.0};
-        let req=match input.operation{
-            RunOperation::Profile=>ReadRequest::Profile,RunOperation::Selectable=>ReadRequest::Selectable,RunOperation::Config=>ReadRequest::Config,RunOperation::Statistics=>ReadRequest::Statistics,
-            RunOperation::SemesterCourses=>ReadRequest::Courses(match p.query{Some(RunQuery::Page(query))=>query,_=>return Err(err("invalid_input","query requires pageNumber and pageSize"))}),
-            RunOperation::Chosen=>ReadRequest::Chosen(match p.query{Some(RunQuery::Date(query))=>query,_=>return Err(err("invalid_input","query requires startDate and endDate"))}),
-            RunOperation::PreviewWrite=>unreachable!(),
-        };
+        let mut p=input.payload.unwrap_or_default();
+        let token=if let Some(url)=p.final_token_url.take(){auth_token(&url.0)?}else{p.auth_token.take().filter(|value|!value.0.is_empty()).ok_or_else(||err("login_required","auth_token or final_token_url required via stdin"))?.0};
+        let req=request_for(input.operation,p)?;
         BoyaClient::open()?.read(&token,&req)
     })();
     Ok(match result{Ok(v)=>v,Err(e)=>json!({"result":"blocked","reason":e.code})})
+}
+
+/// Map one admitted operation plus its payload to the fixed read request.
+fn request_for(operation:RunOperation,payload:RunPayload)->Result<ReadRequest,Error>{
+    Ok(match operation{
+        RunOperation::Profile=>ReadRequest::Profile,RunOperation::Selectable=>ReadRequest::Selectable,
+        RunOperation::Config=>ReadRequest::Config,RunOperation::Statistics=>ReadRequest::Statistics,
+        RunOperation::SemesterCourses=>ReadRequest::Courses(match payload.query{Some(RunQuery::Page(query))=>query,_=>return Err(err("invalid_input","query requires pageNumber and pageSize"))}),
+        RunOperation::Chosen=>ReadRequest::Chosen(match payload.query{Some(RunQuery::Date(query))=>query,_=>return Err(err("invalid_input","query requires startDate and endDate"))}),
+        RunOperation::PreviewWrite=>return Err(err("unsupported","write operations stay blocked; no request was sent")),
+    })
+}
+
+/// Strict object-root input for one explicit CAS login plus one selected read.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionInput{authorized:bool,username:String,password:String,
+    intent:String,read:SessionRead}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionRead{operation:RunOperation,#[serde(default)]query:Option<RunQuery>}
+
+/// One explicit in-memory CAS login followed by exactly one Boya read. The
+/// issued token is consumed by that read and never persisted, refreshed or
+/// reused by a later invocation.
+pub fn session(input:&str,online:bool)->Result<Value,Error>{
+    if input.len()>65536{return Err(err("invalid_input","request too large"));}
+    let request:SessionInput=serde_json::from_str(input)
+        .map_err(|_|err("invalid_input","expected strict session object"))?;
+    if !request.authorized{return Err(err("permission","explicit authorization for one Boya authentication attempt is required"));}
+    if request.intent!=format!("LOGIN {} boya",request.username){return Err(err("invalid_input","authentication intent does not match"));}
+    let read=request.read;
+    if matches!(read.operation,RunOperation::PreviewWrite){return Err(err("unsupported","write operations stay blocked; no request was sent"));}
+    let req=request_for(read.operation,RunPayload{query:read.query,auth_token:None,final_token_url:None})?;
+    if !online{return Err(err("online_required","Boya sessions require explicit online permission; no authentication was attempted"));}
+    let username=Zeroizing::new(request.username);
+    let password=Zeroizing::new(request.password);
+    let credentials=cas::SsoCredentials::new(&username,&password)
+        .map_err(|_|err("invalid_input","credentials are not admissible"))?;
+    let client=cas::http_client().map_err(|_|err("transport","HTTPS initialization failed"))?;
+    let governor=Governor::open().map_err(|_|err("governor_denied","shared governor unavailable"))?;
+    let mut lease=net::acquire_kind(&governor,crate::governor::RequestKind::Authentication)
+        .map_err(|_|err("governor_denied","request admission unavailable"))?;
+    let authenticated=cas::authenticate_service(&mut lease,&client,cas::CasService::Boya,credentials);
+    let mut session=match authenticated{
+        Ok(session)=>session,
+        Err(failure)=>{
+            // Settle the durable attempt: an unsettled outcome blocks every
+            // later authentication until an offline operator review.
+            let settled=match failure.code{
+                "auth_latched"=>lease.finish(Outcome::CredentialRejected),
+                "challenge_requires_human"=>lease.finish(Outcome::CaptchaRequired),
+                "network_error"|"body_limit"=>lease.finish(Outcome::NetworkFailure),
+                _=>lease.finish_without_request(),
+            };
+            settled.map_err(|_|err("governor_denied","cannot settle the Boya authentication attempt"))?;
+            return Err(failure);
+        }
+    };
+    let token=session.take_service_credential().map_err(|_|err("authentication_unconfirmed","the Boya handoff supplied no admitted token; no read was sent"))?;
+    // Build the read before booking the follow-up slot so a malformed request
+    // never consumes an admitted request.
+    let (request,key)=BoyaClient::prepare(&client,&token,&req)?;
+    let reservation=lease.reserve_followup().map_err(|_|err("governor_denied","cannot admit the Boya follow-up read"))?;
+    if !reservation.cooldown_wait.is_zero(){return Err(err("cooldown","the Boya read was deferred; no retry was performed"));}
+    if !reservation.request_wait.is_zero(){std::thread::sleep(reservation.request_wait);}
+    BoyaClient::execute(&client,lease,request,key,&token,&req)
 }
 pub fn schema()->Value{json!({"module":"boya","state":"pending","input":{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"enum":["profile","semester_courses","selectable","chosen","config","statistics","preview_write"]},"payload":{}}},"payload_policy":"arbitrary JSON admitted; missing/invalid operation-specific fields produce structured blocked","output":{"type":"object","required":["result"],"properties":{"result":{"enum":["success","upstream_error","fallback","blocked"]}}},"writes":"blocked: missing authoritative endpoint and payload","login":"token issuance blocked before transport: one-shot Authentication outcome contract unproved; reads require an existing governed CAS session token"})}
 #[cfg(test)]

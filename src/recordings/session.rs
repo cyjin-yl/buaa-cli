@@ -6175,7 +6175,7 @@ impl ServiceSession {
     /// once. No retry or alternate credential can be manufactured after the
     /// take.
     pub(crate) fn take_service_credential(&mut self) -> Result<Zeroizing<String>, Error> {
-        if !matches!(self.jar.service, CasService::Library | CasService::Ihome) {
+        if !matches!(self.jar.service, CasService::Library | CasService::Ihome | CasService::Boya) {
             return Err(invalid());
         }
         self.jar.terminal_credential.take().ok_or_else(|| Error::new(

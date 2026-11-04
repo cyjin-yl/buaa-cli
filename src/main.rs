@@ -247,10 +247,22 @@ fn run_governor(args: &[String]) -> CliResult {
             5,
             "boot review commit requires --offline and exact typed stdin intent".into(),
         )),
+        Some("review-outcome-plan") if args.len() == 1 => {
+            emit(&buaa_cli::governor::review_outcome_plan().map_err(service_error)?)
+        }
+        Some("review-outcome-commit") if args.len() == 2 && args[1] == "--offline" => {
+            let input = read_input()?;
+            emit(&buaa_cli::governor::review_outcome_commit(&input).map_err(service_error)?)
+        }
+        Some("review-outcome-commit") => Err((
+            "permission",
+            5,
+            "outcome review commit requires --offline and exact typed stdin intent".into(),
+        )),
         _ => Err((
             "unsupported",
             3,
-            "expected governor boot-review-plan or boot-review-commit --offline".into(),
+            "expected governor boot-review-plan|boot-review-commit --offline|review-outcome-plan|review-outcome-commit --offline".into(),
         )),
     }
 }
@@ -908,6 +920,8 @@ fn run() -> CliResult {
             emit(&output)
         }
         "checkin" => run_json_module(&args[1..], buaa_cli::checkin::run),
+        "boya" if args.get(1).map(String::as_str) == Some("session") =>
+            run_json_module(&args[2..], buaa_cli::boya::session),
         "boya" => run_json_module(&args[1..], buaa_cli::boya::run),
         "drive" => run_json_module(&args[1..], buaa_cli::drive::run),
         "shuttle" => run_json_module(&args[1..], buaa_cli::shuttle::run),
@@ -968,6 +982,8 @@ fn run() -> CliResult {
             }
             emit(&output)
         }
+        "timetable" if args.get(1).map(String::as_str) == Some("session") =>
+            run_json_module(&args[2..], buaa_cli::timetable::session),
         "physics"
             if args.len() == 2
                 && (args[1] == "pendulum" || args[1] == "fit" || args[1] == "type-a") =>
