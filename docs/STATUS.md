@@ -1,5 +1,23 @@
 ## Development status
 
+## 2026-11-04: online CAS reads verified for Smart classrooms and iHome
+
+Two more bounded session profiles completed one authorized in-memory CAS login
+and one selected read each, over protected stdin, under the existing
+Authentication lease and pacing rules. Smart classrooms
+(`buaa smart session --online`, `campus_id=1, date=2026-11-04`) returned HTTP
+200 with a real 11400-byte `text/html` document; the privacy gate withheld it
+as `unknown_content_type` because the free-classroom surface is an HTML UI
+page, not the JSON API the parser admits. iHome
+(`buaa ihome session --online`, `operation=list, limit=10, page=1`) completed
+the BUAA CAS chain, acquired a bearer token via the redirect fragment
+(`credential_source=redirect_fragment_token`), and read a JSON list page with
+`entry_count=0`: this account's iHome list is genuinely empty at that bound.
+Neither invocation persisted the credential or token, and no write, refresh,
+retry or second authentication was performed. Smart exams/cgyy/running are
+not CAS-lease profiles: they require caller-supplied service tokens and
+remain unverified.
+
 ## 2026-11-02: department inventories and rights-reviewed documentation
 
 The actual School 3 branch-tree response named the branch commit
