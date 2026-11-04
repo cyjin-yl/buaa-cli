@@ -36,6 +36,14 @@ const CLASSROOM_HOST: &str = "classroom.msa.buaa.edu.cn";
 const CAS_SERVICE: &str = "https://yjapi.msa.buaa.edu.cn/casapi/index.php?forward=https%3A%2F%2Fclassroom.msa.buaa.edu.cn%2F&r=auth%2Flogin&tenant_code=21";
 const SMART_CLASSROOM_CAS_SERVICE: &str = "https://app.buaa.edu.cn/a_buaa/api/cas/index?redirect=https%3A%2F%2Fapp.buaa.edu.cn%2Fsite%2FclassRoomQuery%2Findex&from=wap&login_from=";
 const LIBRARY_CAS_SERVICE: &str = "https://booking.lib.buaa.edu.cn/v4/login/cas";
+/// Relying parties observed with an owner-authorized sign-on; see
+/// `docs/CAS-SERVICE-CATALOG.md` for the fetch that produced each value.
+const BYXT_CAS_SERVICE: &str = "https://byxt.buaa.edu.cn/jwapp/sys/byrhmhsy/index.do";
+const BYXT_HOST: &str = "byxt.buaa.edu.cn";
+const GSMIS_CAS_SERVICE: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
+const GSMIS_HOST: &str = "gsmis.buaa.edu.cn";
+const BYKC_CAS_SERVICE: &str = "https://bykc.buaa.edu.cn/sscv/cas/login";
+const BYKC_HOST: &str = "bykc.buaa.edu.cn";
 /// The reviewed source declares the iHome CAS callback as a plaintext HTTP
 /// URL; the one exact upgrade to HTTPS is admitted in `upgraded_service_callback`.
 const IHOME_CAS_SERVICE: &str = "http://i.buaa.edu.cn/api/authLogin";
@@ -54,6 +62,9 @@ pub(crate) enum CasService {
     SmartClassrooms,
     Library,
     Ihome,
+    Byxt,
+    Gsmis,
+    Boya,
 }
 
 impl CasService {
@@ -63,6 +74,9 @@ impl CasService {
             Self::SmartClassrooms => SMART_CLASSROOM_CAS_SERVICE,
             Self::Library => LIBRARY_CAS_SERVICE,
             Self::Ihome => IHOME_CAS_SERVICE,
+            Self::Byxt => BYXT_CAS_SERVICE,
+            Self::Gsmis => GSMIS_CAS_SERVICE,
+            Self::Boya => BYKC_CAS_SERVICE,
         }
     }
 }
@@ -3425,6 +3439,9 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::SmartClassrooms => matches!(host, "sso.buaa.edu.cn" | "app.buaa.edu.cn"),
             CasService::Library => matches!(host, "sso.buaa.edu.cn" | "booking.lib.buaa.edu.cn"),
             CasService::Ihome => matches!(host, "sso.buaa.edu.cn" | IHOME_HOST),
+            CasService::Byxt => matches!(host, "sso.buaa.edu.cn" | BYXT_HOST),
+            CasService::Gsmis => matches!(host, "sso.buaa.edu.cn" | GSMIS_HOST),
+            CasService::Boya => matches!(host, "sso.buaa.edu.cn" | BYKC_HOST),
         })
 }
 
@@ -3879,7 +3896,8 @@ fn terminal_service_credential(service: CasService, url: &Url) -> Result<Option<
     match service {
         CasService::Library => library_terminal_credential(url),
         CasService::Ihome => ihome_terminal_credential(url),
-        CasService::Classroom | CasService::SmartClassrooms => {
+        CasService::Classroom | CasService::SmartClassrooms | CasService::Byxt | CasService::Gsmis
+        | CasService::Boya => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
             }
@@ -6131,7 +6149,9 @@ impl ServiceSession {
         let expected_host = match self.jar.service {
             CasService::SmartClassrooms => "app.buaa.edu.cn",
             CasService::Library => "booking.lib.buaa.edu.cn",
-            CasService::Classroom | CasService::Ihome => return Err(invalid()),
+            CasService::Byxt => BYXT_HOST,
+            CasService::Gsmis => GSMIS_HOST,
+            CasService::Classroom | CasService::Ihome | CasService::Boya => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
             return Err(invalid());
@@ -6295,6 +6315,47 @@ pub(crate) fn authenticate_service(
             if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
                 return Err(admission_failed("The classroom-query handoff supplied no usable scoped cookie; no retry was performed."));
             }
+        }
+        CasService::Byxt | CasService::Gsmis => {
+            // The cookie-session relying parties prove the handoff by a
+            // reviewed HTML landing on their own origin plus one usable
+            // session cookie for the read that follows.
+            let (host, probe) = if service == CasService::Byxt {
+                (BYXT_HOST, "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do")
+            } else {
+                (GSMIS_HOST, "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do")
+            };
+            if landed.status != 200
+                || landed.url.host_str() != Some(host)
+                || landed.body.trim().is_empty()
+                || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
+            {
+                return Err(admission_failed("The relying-party handoff could not be confirmed; no retry was performed."));
+            }
+            let probe = Url::parse(probe).map_err(|_| invalid())?;
+            if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
+                return Err(admission_failed("The relying-party handoff supplied no usable scoped cookie; no retry was performed."));
+            }
+        }
+        CasService::Boya => {
+            // Boya issues its API token in the handoff URL query; the landing
+            // document itself is its SPA shell.
+            if landed.status != 200
+                || landed.url.host_str() != Some(BYKC_HOST)
+                || landed.url.path() != "/cas-login"
+            {
+                return Err(admission_failed("The Boya handoff did not reach its token landing; no retry was performed."));
+            }
+            let issued = landed
+                .url
+                .query_pairs()
+                .filter(|(key, _)| key == "token")
+                .map(|(_, value)| value.into_owned())
+                .collect::<Vec<_>>();
+            if issued.len() != 1 || issued[0].len() != 32 || !issued[0].bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(admission_failed("The Boya handoff supplied no single admitted token; no retry was performed."));
+            }
+            jar.terminal_credential = Some(zeroize::Zeroizing::new(issued.into_iter().next().unwrap_or_default()));
         }
         CasService::Classroom => return Err(invalid()),
     }

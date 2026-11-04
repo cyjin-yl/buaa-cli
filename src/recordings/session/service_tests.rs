@@ -1918,7 +1918,8 @@ fn smart_session_never_replays_or_downgrades_a_credential_preserving_redirect() 
                     "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
                     library_read(),
                 ),
-                CasService::Classroom | CasService::Ihome => unreachable!(),
+                CasService::Classroom | CasService::Ihome | CasService::Byxt
+                | CasService::Gsmis | CasService::Boya => unreachable!(),
             };
             let original = sso_responder(service, landing, &[]);
             let harness = CasHarness::with_responders(
