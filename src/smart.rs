@@ -42,7 +42,9 @@ impl Read for SecretBody {
 #[derive(Deserialize)]
 #[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
-    Exams { enabled: bool, cookie: Secret, term_code: String },
+    Exams { enabled: bool, cookie: Secret, term_code: String,
+        #[serde(skip)] authentication_password: Option<Secret>,
+        #[serde(skip)] authentication_session: Option<ServiceSession> },
     Classrooms { enabled: bool, cookie: Secret, campus_id: i64, date: String,
         #[serde(skip)] authentication_password: Option<Secret>,
         #[serde(skip)] authentication_session: Option<ServiceSession> },
@@ -79,7 +81,9 @@ impl Request {
             contains(bytes,&encoded)
         }
         match self {
-            Self::Exams{cookie,..} => contains_cookie(bytes,cookie),
+            Self::Exams{cookie,authentication_password,authentication_session,..} => authentication_session.as_ref()
+                .map_or_else(||contains_cookie(bytes,cookie),|session|contains(bytes,cookie)||session.contains_secret_bytes(bytes))
+                || authentication_password.as_ref().is_some_and(|password|contains(bytes,password)),
             Self::Classrooms{cookie,authentication_password,authentication_session,..} => authentication_session.as_ref()
                 .map_or_else(||contains_cookie(bytes,cookie),|session|contains(bytes,cookie)||session.contains_secret_bytes(bytes))
                 || authentication_password.as_ref().is_some_and(|password|contains(bytes,password)),
@@ -188,6 +192,7 @@ struct SessionInput {
 enum SessionRead {
     Classrooms { enabled: bool, campus_id: i64, date: String },
     Library { enabled: bool, #[serde(deserialize_with = "deserialize_object")] query: LibraryQuery },
+    Exams { enabled: bool, term_code: String },
 }
 
 // Serde's struct/tagged-enum derives also accept positional sequences. This
@@ -241,6 +246,13 @@ fn classroom_request(client: &Client, cookie: &str, campus_id: i64, day: &str) -
         .query(&[("xqid",campus_id.to_string().as_str()),("floorid",""),("date",day)])
         .header("Cookie",cookie).header("User-Agent",MOBILE).header("X-Requested-With","XMLHttpRequest")
         .header("Referer","https://app.buaa.edu.cn/site/classRoomQuery/index")
+}
+
+fn exams_request(client: &Client, cookie: &str, term_code: &str) -> reqwest::blocking::RequestBuilder {
+    client.get("https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do")
+        .query(&[("termCode",term_code)]).header("Cookie",cookie)
+        .header("Accept","*/*").header("X-Requested-With","XMLHttpRequest")
+        .header("Referer","https://byxt.buaa.edu.cn/jwapp/sys/homeapp/index.html")
 }
 
 fn library_request(client: &Client, token: &str, cookie: Option<&str>, read: &LibraryRead) -> reqwest::blocking::RequestBuilder {
@@ -379,6 +391,7 @@ pub(crate) fn session_with_network(
     let (enabled,service,profile) = match &input.read {
         SessionRead::Classrooms { enabled, .. } => (*enabled,Service::Classrooms,CasService::SmartClassrooms),
         SessionRead::Library { enabled, .. } => (*enabled,Service::Library,CasService::Library),
+        SessionRead::Exams { enabled, .. } => (*enabled,Service::Exams,CasService::Byxt),
     };
     if !enabled { return Ok(with_source(json!({"result":"disabled","write_operations_performed":false}),Source::Disabled)); }
     if !input.authorized { return Err(error("permission","explicit authorization for one Smart authentication attempt is required")); }
@@ -387,6 +400,7 @@ pub(crate) fn session_with_network(
     let prepared_library = match &input.read {
         SessionRead::Classrooms { date: day, .. } => { date(day)?; None },
         SessionRead::Library { query, .. } => Some(prepare_library_read(query)?),
+        SessionRead::Exams { term_code, .. } => { secret(term_code)?; None },
     };
     if !online { return Err(error("online_required","Smart sessions require explicit online permission; no authentication was attempted")); }
     let (client,governor) = network()?;
@@ -409,6 +423,13 @@ pub(crate) fn session_with_network(
                 let cookie = cookie.map(Secret);
                 let builder = library_request(&client,&token,cookie.as_deref(),&read);
                 (Request::Library { enabled,token,query,authentication_cookie:cookie,authentication_password:Some(input.password),authentication_cas:Some(credential),authentication_session:Some(session) },read.kind,builder,expiry)
+            },
+            SessionRead::Exams { enabled, term_code } => {
+                let url = url::Url::parse("https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do").map_err(|_|invalid())?;
+                let (cookie,expiry) = session.cookie_header(&url)?;
+                let cookie = Secret(cookie.ok_or_else(||error("auth_latched","the exams session cookie is missing; no read was sent"))?);
+                let builder = exams_request(&client,&cookie,&term_code);
+                (Request::Exams { enabled,cookie,term_code,authentication_password:Some(input.password),authentication_session:Some(session) },"exams",builder,expiry)
             },
         };
         let http_request = build_read(builder)?;
@@ -767,10 +788,7 @@ pub fn read(input: &str, online: bool) -> Result<Value, Error> {
     let (service, kind, builder) = match &request {
         Request::Exams{cookie,term_code,..} => {
             secret(cookie)?; secret(term_code)?;
-            (Service::Exams,"exams",client.get("https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do")
-                .query(&[("termCode",term_code)]).header("Cookie",&**cookie)
-                .header("Accept","*/*").header("X-Requested-With","XMLHttpRequest")
-                .header("Referer","https://byxt.buaa.edu.cn/jwapp/sys/homeapp/index.html"))
+            (Service::Exams,"exams",exams_request(&client,cookie,term_code))
         },
         Request::Classrooms{cookie,campus_id,date:day,..} => {
             secret(cookie)?; date(day)?;
@@ -1015,7 +1033,8 @@ pub fn schema() -> Value {
         op("records",vec![("classify_id",string()),("user_id",string()),("page",json!({"type":"integer","minimum":0,"maximum":4294967295u64})),("limit",json!({"type":"integer","minimum":0,"maximum":4294967295u64}))])]});
     let session_read = json!({"oneOf":[
         service("classrooms",vec![("campus_id",json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),("date",string())]),
-        service("library",vec![("query",library.clone())])]});
+        service("library",vec![("query",library.clone())]),
+        service("exams",vec![("term_code",string())])]});
     let mut schema = json!({"input":{"oneOf":[
         service("exams",vec![("cookie",string()),("term_code",string())]),
         service("classrooms",vec![("cookie",string()),("campus_id",json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),("date",string())]),
@@ -1041,7 +1060,7 @@ pub fn schema() -> Value {
     schema["session"] = json!({
         "input":object(vec![("authorized",json!({"type":"boolean"})),("username",string()),("password",string()),("intent",string()),("read",session_read)]),
         "output":schema["output"].clone(),
-        "intent":"LOGIN <username> smart <service>; service is classrooms or library; JSON must arrive through protected stdin",
+        "intent":"LOGIN <username> smart <service>; service is classrooms, library or exams; JSON must arrive through protected stdin",
         "validation":"disabled read performs no I/O; enabled read requires authorized=true, exact intent, locally valid query and --online before opening transport or admission; no authentication material may be supplied inside read"
     });
     schema
