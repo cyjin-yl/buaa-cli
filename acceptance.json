@@ -333,6 +333,13 @@
           }
         },
         "remaining": "Current source identity, rights, per-service discovery, cache-first behavior and governed online reads remain unverified. Synthetic admission does not prove a live request or authorize attendance."
+        ,"classrooms_session_online_2026_11_04": {
+          "command": "buaa smart session --online with protected JSON stdin (classrooms free-classroom read, campus_id=1, date=2026-11-04)",
+          "observed": "One authorized in-memory CAS login for the classrooms profile completed the sign-on chain and sent the free-classroom read; the endpoint returned a real 11400-byte text/html document (HTTP 200), which the privacy gate withheld as unknown_content_type rather than parsing.",
+          "scope": "Classrooms profile only. The endpoint returned an HTML UI page, not the JSON API the parser admits, so parsed room data is NOT claimed by design. Exams, cgyy and running remain unverified (they require caller-supplied tokens, not CAS).",
+          "attempts": "One CAS sign-on attempt per deliberate operator resume; same lease/deny rules as the library profile.",
+          "receipt": "local://buaa-smart-classrooms-online-20261104.json"
+        }
       },
       "sources": [
         "https://github.com/BUAASubnet/UBAA",
@@ -531,6 +538,13 @@
         "session_transport": "2026-11-01: bounded transport-only probes of current SSO/iHome DNS answers failed before TLS/HTTP: IPv4 TCP 443 refused, IPv6 no route. No real credentials, HTTP requests, authentication attempt or VPN recovery were submitted/performed; this is not a password or live-application verdict.",
         "source_contract": "Pinned MIT public client BUAASubnet/UBAA e8a397fcb35a68147eee65a94c66ffb84e2f09fe, IhomeProtocol.kt: positive code=20000 plus success=true, paginated source facts, no required appeal title. Client defaults and historical reports are not proof of current server behavior; legacy php-ihome is a different social platform, not a modern attachment contract.",
         "remaining": "The bounded iHome login/read implementation has offline proof only. Live token acquisition, account identity/rights, current authorized source, incremental history, full-text and nonempty attachment behavior remain unverified. Current idle window and server token lifetime are unknown. Legacy cache entries without cookie-admission facts are retained but not replayed."
+        ,"session_online_2026_11_04": {
+          "command": "buaa ihome session --online with protected JSON stdin (operation=list, limit=10, page=1)",
+          "observed": "One authorized in-memory CAS login completed, the service handoff produced a bearer token via the redirect fragment (credential_source=redirect_fragment_token), and the list page request returned application/json with entry_count=0. The account's ihome list at this page/limit is genuinely empty. The token was consumed in this invocation only and never persisted.",
+          "scope": "list operation at limit=10 page=1 only. detail not exercised because entry_count=0 produced no list id to anchor a detail id. Full-text/attachment behavior, incremental history and account rights remain unverified.",
+          "attempts": "One CAS sign-on attempt per deliberate operator resume.",
+          "receipt": "local://buaa-ihome-online-20261104.json"
+        }
       },
       "sources": [
         "https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeProtocol.kt",
