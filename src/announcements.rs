@@ -807,7 +807,7 @@ pub(crate) fn security_token(value: &str) -> bool {
         || token.starts_with("cfchl")
 }
 
-fn public_security_element(element: ElementRef<'_>) -> bool {
+pub(crate) fn public_security_element(element: ElementRef<'_>) -> bool {
     let tag = element.value().name();
     element.value().attrs().any(|(name, value)| {
         let name = name.to_ascii_lowercase();

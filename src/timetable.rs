@@ -266,12 +266,14 @@ fn parse_course(index: usize, value: &Value) -> Result<Course, String> {
     .ok_or_else(|| format!("course {index}: invalid day"))?;
     let start_week = get("start_week")?
         .as_u64()
-        .filter(|s| *s >= 1)
-        .ok_or_else(|| format!("course {index}: start_week must be >= 1"))?
-        as u32;
+        .filter(|s| *s >= 1 && *s <= MAX_WEEKS as u64)
+        .ok_or_else(|| {
+            format!("course {index}: start_week must be an integer in 1..={MAX_WEEKS}")
+        })? as u32;
     let end_week = get("end_week")?
         .as_u64()
-        .ok_or_else(|| format!("course {index}: end_week must be an integer"))?
+        .filter(|s| *s >= 1 && *s <= MAX_WEEKS as u64)
+        .ok_or_else(|| format!("course {index}: end_week must be an integer in 1..={MAX_WEEKS}"))?
         as u32;
     if start_week > end_week {
         return Err(format!(
@@ -1073,8 +1075,8 @@ pub fn schema() -> Value {
                 {
                     "name": "non-empty string",
                     "day": "weekday: monday..sunday (or mon..sun)",
-                    "start_week": "1-based first week",
-                    "end_week": "1-based last week (>= start_week); occurrences past the semester end are dropped",
+                    "start_week": "1-based first week (1..=104)",
+                    "end_week": "1-based last week in 1..=104 and >= start_week; occurrences past the semester end are dropped",
                     "parity": "optional: all (default) | odd | even",
                     "start_time": "HH:MM",
                     "end_time": "HH:MM, after start_time",
@@ -1126,6 +1128,41 @@ mod tests {
 
     fn run(input: &str) -> Value {
         check(input)
+    }
+
+    #[test]
+    fn course_week_bounds_refuse_wrapping_and_keep_calendar_boundaries() {
+        let mut input = json!({
+            "semester":{"start_date":"2026-09-21","weeks":2},
+            "courses":[{"name":"Synthetic","day":"monday","start_week":1,
+                "end_week":2,"start_time":"08:00","end_time":"09:00"}]
+        });
+        let ordinary = run(&input.to_string());
+        assert_eq!(ordinary["event_count"], 2);
+        let ics = ordinary["ics"].as_str().unwrap();
+        assert!(ics.contains("DTSTART:20260921T080000"));
+        assert!(ics.contains("DTSTART:20260928T080000"));
+
+        for field in ["start_week", "end_week"] {
+            for week in [0, u64::from(MAX_WEEKS) + 1, 4_294_967_298, u64::MAX] {
+                let mut invalid = input.clone();
+                invalid["courses"][0][field] = json!(week);
+                let refused = run(&invalid.to_string());
+                assert_eq!(refused["error"], "invalid_input", "{field}={week}");
+                assert!(refused.get("ics").is_none());
+            }
+        }
+        input["semester"]["weeks"] = json!(MAX_WEEKS);
+        input["courses"][0]["start_week"] = json!(MAX_WEEKS);
+        input["courses"][0]["end_week"] = json!(MAX_WEEKS);
+        let last = run(&input.to_string());
+        assert_eq!(last["event_count"], 1);
+        assert!(
+            last["ics"]
+                .as_str()
+                .unwrap()
+                .contains("DTSTART:20280911T080000")
+        );
     }
 
     #[test]

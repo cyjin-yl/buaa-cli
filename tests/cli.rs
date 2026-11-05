@@ -15,6 +15,36 @@ fn invoke(args: &[&str], input: &[u8]) -> Output {
 }
 
 #[test]
+fn smart_zero_argument_queries_reject_unknown_fields_before_disabled_dispatch() {
+    for (service, operation) in [
+        ("cgyy", "venues"),
+        ("cgyy", "purpose_types"),
+        ("cgyy", "lock_code"),
+        ("running", "categories"),
+    ] {
+        let read = if service == "cgyy" {
+            serde_json::json!({"service":service,"app_key":"synthetic-app","access_token":"synthetic-token","query":{"operation":operation}})
+        } else {
+            serde_json::json!({"service":service,"uid":"synthetic-user","token":"synthetic-token","query":{"operation":operation}})
+        };
+        let mut input = serde_json::json!({"authorized":true,"enabled":false,"read":read});
+        let accepted = invoke(&["smart", "token"], &serde_json::to_vec(&input).unwrap());
+        assert!(accepted.status.success(), "{service}/{operation}");
+        let result: Value = serde_json::from_slice(&accepted.stdout).unwrap();
+        assert_eq!(result["result"], "disabled");
+        assert_eq!(result["network_performed"], false);
+
+        input["read"]["query"]["unexpected"] = serde_json::json!("private-marker");
+        let refused = invoke(&["smart", "token"], &serde_json::to_vec(&input).unwrap());
+        assert_eq!(refused.status.code(), Some(2), "{service}/{operation}");
+        assert!(refused.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&refused.stderr).unwrap();
+        assert_eq!(error["error"], "invalid_input");
+        assert!(!String::from_utf8_lossy(&refused.stderr).contains("private-marker"));
+    }
+}
+
+#[test]
 fn timed_input_rejects_invalid_offsets_before_output_and_preserves_daily_boundary() {
     for seconds in [
         "-1",

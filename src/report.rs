@@ -354,13 +354,13 @@ fn scan_line(line: &str) -> Option<CredentialShape> {
     }
     if SESSION_COOKIE_NAMES
         .iter()
-        .any(|name| keyed_value(line, name).is_some_and(looks_like_secret))
+        .any(|name| has_secret_assignment(line, name))
     {
         return Some(CredentialShape::SessionCookie);
     }
     if SECRET_KEYS
         .iter()
-        .any(|key| keyed_value(line, key).is_some_and(looks_like_secret))
+        .any(|key| has_secret_assignment(line, key))
     {
         return Some(CredentialShape::SecretAssignment);
     }
@@ -414,22 +414,22 @@ fn assignment_value(rest: &str) -> Option<&str> {
     Some(&value[..end])
 }
 
-/// Find a credential key used in an assignment position (not as prose).
-fn keyed_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+/// Inspect every assignment, including values following harmless placeholders.
+fn has_secret_assignment(line: &str, key: &str) -> bool {
     let bytes = line.as_bytes();
     let mut start = 0;
     while let Some(relative) = find_ci(&line[start..], key) {
         let at = start + relative;
         if boundary_before(bytes, at) && boundary_after(bytes, at + key.len()) {
             if let Some(value) = assignment_value(&line[at + key.len()..]) {
-                if !value.is_empty() {
-                    return Some(value);
+                if !value.is_empty() && looks_like_secret(value) {
+                    return true;
                 }
             }
         }
         start = at + key.len();
     }
-    None
+    false
 }
 
 /// Text after `name:` when it is used as an HTTP-style header.
@@ -917,6 +917,42 @@ mod tests {
             "a refusal must not echo the matched value"
         );
         assert!(!marker.exists(), "gh must not be invoked for a refusal");
+    }
+
+    #[test]
+    fn later_credential_assignments_refuse_before_gh_even_after_placeholders() {
+        let fixture = Fixture::new();
+        let marker = fixture.path("called");
+        let command = fixture.command(&format!(
+            "#!/bin/sh\nprintf called > '{}'\n",
+            marker.display()
+        ));
+        for (body, detected) in [
+            (
+                "token=redacted; token=synthetic-private-a7",
+                "secret_assignment",
+            ),
+            (
+                "token=example; TOKEN=synthetic-private-b8",
+                "secret_assignment",
+            ),
+            (
+                "JSESSIONID=redacted; JSESSIONID=synthetic-private-c9",
+                "session_cookie",
+            ),
+            (
+                "sessionid=null; sessionid=synthetic-private-d0",
+                "session_cookie",
+            ),
+        ] {
+            let input = serde_json::json!({"title":"Synthetic failure","body":body});
+            let output = report_with_command(&input.to_string(), command.as_os_str()).unwrap();
+            assert_eq!(output["result"], "refused");
+            assert_eq!(output["detected"], detected);
+            assert!(output.get("url").is_none());
+            assert!(!output.to_string().contains("synthetic-private"));
+            assert!(!marker.exists(), "the writer ran before credential refusal");
+        }
     }
 
     #[test]

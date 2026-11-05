@@ -1439,6 +1439,8 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
     })
 }
 pub fn schema() -> Value {
+    let mut contract = typed_schema();
+    let questionnaire = json!({"type":"object","required":["wjid","wjmc","rwmc"],"properties":{"wjid":{"type":"string"},"wjmc":{"type":"string"},"rwmc":{"type":"string"},"msid":{"type":["string","null"]}}});
     let mut variants = Vec::new();
     let fields = [
         (
@@ -1457,7 +1459,7 @@ pub fn schema() -> Value {
             "topics",
             vec![
                 ("rwid", json!({"type":"string"})),
-                ("questionnaire", json!({"$ref":"#/$defs/questionnaire"})),
+                ("questionnaire", questionnaire),
                 ("course", json!({})),
                 ("yxdm", json!({"type":"string"})),
             ],
@@ -1465,14 +1467,14 @@ pub fn schema() -> Value {
         (
             "prepare",
             vec![
-                ("intent", json!({"$ref":"#/$defs/intent"})),
+                ("intent", contract["intent"].clone()),
                 ("topics", json!({})),
             ],
         ),
         (
             "submit",
             vec![
-                ("intent", json!({"$ref":"#/$defs/intent"})),
+                ("intent", contract["intent"].clone()),
                 ("topics", json!({})),
                 ("confirmation", json!({"type":"string"})),
                 ("reconfirmation", json!({"type":"boolean"})),
@@ -1507,10 +1509,9 @@ pub fn schema() -> Value {
         }
         variants.push(json!({"type":"object","additionalProperties":false,"required":required,"properties":properties}));
     }
-    let mut contract = typed_schema();
     contract["dispatcher_verify_output"] = json!({"type":"object","additionalProperties":false,"required":["status","completed","verification","postcondition_matches","source","reason"],"properties":{"status":{"const":"ok"},"completed":{"const":false},"verification":{"const":false},"postcondition_matches":{"type":"boolean"},"source":{"enum":["operator_supplied","online_unbound"]},"reason":{"type":"string"}}});
     contract["dispatcher_status_output"] = json!({"type":"object","additionalProperties":false,"required":["status","tasks","total","submission_supported","session_acceptance","page"],"properties":{"status":{"const":"ok"},"tasks":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["rwid","rwmc"],"properties":{"rwid":{"type":"string"},"rwmc":{"type":"string"}}}},"total":{"type":"integer","minimum":0},"submission_supported":{"const":false},"session_acceptance":{"const":"unknown"},"page":{"type":"object","additionalProperties":false,"required":["number","size"],"properties":{"number":{"const":STATUS_PAGE},"size":{"const":STATUS_PAGE_SIZE}}}}});
-    json!({"input":{"oneOf":variants,"$defs":{"intent":contract["intent"],"questionnaire":{"type":"object","required":["wjid","wjmc","rwmc"],"properties":{"wjid":{"type":"string"},"wjmc":{"type":"string"},"rwmc":{"type":"string"},"msid":{"type":["string","null"]}}}}},"output":{"oneOf":[{"type":"object","required":["status","reason"],"properties":{"status":{"enum":["blocked","unsupported"]},"reason":{"type":"string"},"evidence":contract["evidence"]}},{"type":"object","required":["status"],"properties":{"status":{"const":"ok"}},"description":"operation-specific tasks/total (submission_supported:false), questionnaires, courses, topics, submission_body/preview_digest/idempotency_key, completed, or the bounded status task discovery"},contract["dispatcher_status_output"]]},"typed_api":contract})
+    json!({"input":{"oneOf":variants},"output":{"oneOf":[{"type":"object","required":["status","reason"],"properties":{"status":{"enum":["blocked","unsupported"]},"reason":{"type":"string"},"evidence":contract["evidence"]}},{"type":"object","required":["status"],"properties":{"status":{"const":"ok"}},"description":"operation-specific tasks/total (submission_supported:false), questionnaires, courses, topics, submission_body/preview_digest/idempotency_key, completed, or the bounded status task discovery"},contract["dispatcher_status_output"]]},"typed_api":contract})
 }
 fn typed_schema() -> Value {
     json!({

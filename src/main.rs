@@ -57,6 +57,7 @@ fn read_input_optional() -> Result<Option<String>, CliError> {
 fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
+        "source_refused" => ("source_refused", 3),
         "unsupported" | "redirect_refused" | "unsupported_encoding" => ("unsupported", 3),
         "auth_latched" | "safety_latched" | "challenge_requires_human" => ("auth_latched", 4),
         "scoped_cookie_unusable" => ("scoped_cookie_unusable", 7),
@@ -779,7 +780,7 @@ fn run() -> CliResult {
             "schema_version": 1,
             "commands": command_schemas(),
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
-            "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"authorization_required":4,"permission":5,"unavailable":7,"scoped_cookie_unusable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
+            "exit_codes":{"invalid_input":2,"source_refused":3,"unsupported":3,"auth_latched":4,"authorization_required":4,"permission":5,"unavailable":7,"scoped_cookie_unusable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
             "network_policy":{"default":"offline","opt_in":NETWORK_OPT_IN,"campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {

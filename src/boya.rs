@@ -266,9 +266,6 @@ fn sensitive_raw(bytes: &[u8]) -> bool {
             marked(key.as_bytes()) || marked(value.as_bytes())
         })
 }
-fn encoded_echo(text: &str, secret: &str) -> bool {
-    !secret.is_empty() && crate::net::carries_secret(text.as_bytes(), secret)
-}
 fn safe_mime(value: Option<&str>) -> Option<&'static str> {
     let essence = value?.split(';').next()?.trim();
     [
@@ -321,34 +318,43 @@ fn fallback(bytes: &[u8], content_type: Option<&str>, reason: &str) -> Value {
 fn withheld_fallback(bytes: &[u8], content_type: Option<&str>) -> Value {
     json!({"result":"fallback","fallback_reason":"sensitive_response_withheld","raw_evidence":evidence(bytes,content_type,Some("credential_echo"))})
 }
-fn response_contains_secret(bytes: &[u8], content_type: Option<&str>, secret: &str) -> bool {
-    fn contains(candidate: &[u8], secret: &str) -> bool {
-        crate::net::carries_secret(candidate, secret)
-    }
-    contains(bytes, secret)
-        || content_type.is_some_and(|value| contains(value.as_bytes(), secret))
+fn response_carries_secret(
+    bytes: &[u8],
+    content_type: Option<&str>,
+    contains_secret: impl Fn(&[u8]) -> bool,
+) -> bool {
+    contains_secret(bytes)
+        || content_type.is_some_and(|value| contains_secret(value.as_bytes()))
         || serde_json::from_slice::<PrivateValue>(bytes)
             .ok()
-            .is_some_and(|value| value_contains_secret(&value, secret))
+            .is_some_and(|value| value_carries_secret(&value, &contains_secret))
 }
-fn value_contains_secret(value: &Value, secret: &str) -> bool {
-    if secret.is_empty() {
-        return false;
-    }
+#[cfg(test)]
+fn response_contains_secret(bytes: &[u8], content_type: Option<&str>, secret: &str) -> bool {
+    response_carries_secret(bytes, content_type, |candidate| {
+        crate::net::carries_secret(candidate, secret)
+    })
+}
+fn value_carries_secret(value: &Value, contains_secret: &dyn Fn(&[u8]) -> bool) -> bool {
     match value {
-        Value::String(text) => encoded_echo(text, secret),
+        Value::String(text) => contains_secret(text.as_bytes()),
         Value::Array(values) => values
             .iter()
-            .any(|value| value_contains_secret(value, secret)),
-        Value::Object(values) => values
-            .iter()
-            .any(|(key, value)| encoded_echo(key, secret) || value_contains_secret(value, secret)),
+            .any(|value| value_carries_secret(value, contains_secret)),
+        Value::Object(values) => values.iter().any(|(key, value)| {
+            contains_secret(key.as_bytes()) || value_carries_secret(value, contains_secret)
+        }),
         Value::Number(_) | Value::Bool(_) | Value::Null => {
-            crate::net::json_scalar_matches(value, |bytes| {
-                crate::net::carries_secret(bytes, secret)
-            })
+            crate::net::json_scalar_matches(value, contains_secret)
         }
     }
+}
+#[cfg(test)]
+fn value_contains_secret(value: &Value, secret: &str) -> bool {
+    !secret.is_empty()
+        && value_carries_secret(value, &|candidate| {
+            crate::net::carries_secret(candidate, secret)
+        })
 }
 #[derive(Clone, Copy, Default)]
 struct SourceFields {
@@ -356,13 +362,17 @@ struct SourceFields {
     status: bool,
     errmsg: bool,
 }
-fn projected_source_contains_secret(value: &Value, fields: SourceFields, secret: &str) -> bool {
+fn projected_source_carries_secret(
+    value: &Value,
+    fields: SourceFields,
+    contains_secret: &dyn Fn(&[u8]) -> bool,
+) -> bool {
     match value.get("result").and_then(Value::as_str) {
         Some("success") => {
             fields.data
                 && value
                     .get("data")
-                    .is_some_and(|value| value_contains_secret(value, secret))
+                    .is_some_and(|value| value_carries_secret(value, contains_secret))
         }
         Some("upstream_error") => [
             ("status", fields.status),
@@ -374,7 +384,7 @@ fn projected_source_contains_secret(value: &Value, fields: SourceFields, secret:
             *present
                 && value
                     .get(*key)
-                    .is_some_and(|value| value_contains_secret(value, secret))
+                    .is_some_and(|value| value_carries_secret(value, contains_secret))
         }),
         // Fallback metadata is generated locally; the original wire bytes and
         // content type were independently checked before constructing it.
@@ -683,6 +693,11 @@ impl CourseTraversal {
         self.reason = Some(reason);
     }
 
+    fn halt_page(&mut self, reason: &'static str, value: &Value) {
+        self.failure = Some(value.clone());
+        self.halt(reason);
+    }
+
     /// Admit one already-decrypted page value. `Done` means no further request
     /// may be sent for this traversal.
     fn advance(&mut self, value: &Value) -> Step {
@@ -698,7 +713,7 @@ impl CourseTraversal {
         }
         let data = &value["data"];
         if parse_page(data).is_err() {
-            self.halt("invalid_pagination_contract");
+            self.halt_page("invalid_pagination_contract", value);
             return Step::Done;
         }
         let number = data["number"].as_u64().unwrap_or_default();
@@ -722,7 +737,7 @@ impl CourseTraversal {
             }
         };
         if i128::from(number) + offset != i128::from(self.next_page) {
-            self.halt("pagination_page_mismatch");
+            self.halt_page("pagination_page_mismatch", value);
             return Step::Done;
         }
         match (self.total_elements, self.total_pages, self.size) {
@@ -734,7 +749,7 @@ impl CourseTraversal {
             (Some(elements), Some(pages), Some(declared))
                 if elements == total_elements && pages == total_pages && declared == size => {}
             _ => {
-                self.halt("pagination_changed");
+                self.halt_page("pagination_changed", value);
                 return Step::Done;
             }
         }
@@ -743,16 +758,16 @@ impl CourseTraversal {
         // the served content; no item position is assumed.
         let last_declared = number.saturating_add(1) >= total_pages;
         if !last_declared && !content.is_empty() && content.len() as u64 != size {
-            self.halt("pagination_inconsistent");
+            self.halt_page("pagination_inconsistent", value);
             return Step::Done;
         }
         for entry in content {
             let Some(id) = entry.get("id").and_then(Value::as_u64) else {
-                self.halt("entry_id_unconfirmed");
+                self.halt_page("entry_id_unconfirmed", value);
                 return Step::Done;
             };
             if !self.seen.insert(id) {
-                self.halt("duplicate_course_id");
+                self.halt_page("duplicate_course_id", value);
                 return Step::Done;
             }
             self.entries.push(entry.clone());
@@ -761,21 +776,26 @@ impl CourseTraversal {
         let next = i128::from(number) + 1 + offset;
         self.next_page = u32::try_from(next).unwrap_or(u32::MAX);
         let collected = self.entries.len() as u64;
-        if collected > total_elements {
-            self.halt("pagination_inconsistent");
+        let extent_consistent = if total_elements == 0 {
+            total_pages <= 1 && number == 0 && content.is_empty()
+        } else {
+            total_pages == total_elements.div_ceil(size) && number < total_pages
+        };
+        if collected > total_elements || !extent_consistent {
+            self.halt_page("pagination_inconsistent", value);
             return Step::Done;
         }
-        if collected == total_elements {
+        if collected == total_elements && last_declared {
             self.complete = true;
             self.reason = None;
             return Step::Done;
         }
         if content.is_empty() {
-            self.halt("empty_page");
+            self.halt_page("empty_page", value);
             return Step::Done;
         }
         if last_declared {
-            self.halt("declared_pages_exhausted");
+            self.halt_page("declared_pages_exhausted", value);
             return Step::Done;
         }
         if self.pages.len() as u32 >= self.max_pages {
@@ -853,7 +873,7 @@ fn whole_list(value: Value) -> Value {
     let complete = reason.is_none();
     json!({"result":if complete{"success"}else{"partial"},"source":"queryChosenCourse","list_contract":"whole_list",
         "complete":complete,"incomplete_reason":reason,"entries":entries,"entry_count":entry_count,
-        "pagination":Value::Null,"page_failure":Value::Null})
+        "pagination":Value::Null,"page_failure":if complete {Value::Null} else {value}})
 }
 pub struct BoyaClient {
     http: reqwest::blocking::Client,
@@ -866,8 +886,141 @@ struct ReadResponse<'a> {
     challenge: bool,
     body_failed: bool,
     assessment: crate::html::ChallengeAssessment,
-    issues_cookie: bool,
 }
+
+/// The credential values issued by `Set-Cookie` headers during one complete
+/// read invocation. This client maintains no cookie jar: an issued value is
+/// never persisted, adopted or transmitted, but an echo of it inside any
+/// response of the same invocation — including the response that issued it
+/// and any later page — is still a credential disclosure. The guard is
+/// created once per invocation and accumulates every fresh response's
+/// values without resetting or evicting between pages; it is zeroized with
+/// the invocation.
+#[derive(Default)]
+struct IssuedCookies {
+    /// Every nonempty first-pair value, stored exactly as the server sent
+    /// it, quotes included. Matching also covers the unquoted spelling.
+    values: Vec<Zeroizing<String>>,
+    bytes: usize,
+}
+
+/// One invocation may accumulate only so much credential material before it
+/// can no longer review it; exceeding the guard refuses the response rather
+/// than screening a subset or forgetting an earlier page's credential.
+const MAX_ISSUED_COOKIE_VALUES: usize = 64;
+const MAX_ISSUED_COOKIE_BYTES: usize = 64 * 1024;
+
+/// A cookie value that cannot be reviewed cannot be screened. Refuse the
+/// whole response rather than guess which spelling upstream will echo.
+fn issued_cookie_refusal() -> Error {
+    err(
+        "invalid_headers",
+        "the Boya response issued a cookie that cannot be reviewed",
+    )
+}
+
+impl IssuedCookies {
+    /// Review one response's `Set-Cookie` values while the raw header map is
+    /// still available and retain them for the rest of the invocation. Only
+    /// the first `name=value` pair is credential material; attributes are
+    /// not screened. A header that cannot be parsed on its own terms (a
+    /// missing name, a missing `=`, a control byte, or ambiguous quoting)
+    /// refuses the response. An empty value is a deletion, not a
+    /// transmitting secret, so it is not retained.
+    fn absorb(&mut self, headers: &reqwest::header::HeaderMap) -> Result<(), Error> {
+        for value in headers.get_all(reqwest::header::SET_COOKIE) {
+            let text = value.to_str().map_err(|_| issued_cookie_refusal())?;
+            let Some(pair) = text.split(';').next() else {
+                return Err(issued_cookie_refusal());
+            };
+            let Some((name, value)) = pair.split_once('=') else {
+                return Err(issued_cookie_refusal());
+            };
+            let name = name.trim();
+            let value = value.trim();
+            // The same cookie grammar as the authentication jar: invalid
+            // names or folded first pairs cannot establish which value must
+            // remain private, so they refuse instead of guessing.
+            if !cas::valid_cookie_name(name) || !cas::valid_cookie_value(value) {
+                return Err(issued_cookie_refusal());
+            }
+            let unquoted = value
+                .strip_prefix('"')
+                .and_then(|inner| inner.strip_suffix('"'))
+                .unwrap_or(value);
+            if unquoted.is_empty() {
+                // `name=` or `name=""`: upstream is deleting this cookie, so
+                // there is no transmitting secret to screen.
+                continue;
+            }
+            // An identical declaration carries no new secret, so a repeated
+            // `Set-Cookie` on later pages must not grow or exhaust the
+            // history. Compare before the bounds so an already-retained
+            // value is never refused by a full guard.
+            if self
+                .values
+                .iter()
+                .any(|retained| retained.as_str() == value)
+            {
+                continue;
+            }
+            // The bounds are cumulative across the whole invocation: the
+            // guard never resets or evicts an earlier page's secret.
+            if self.values.len() >= MAX_ISSUED_COOKIE_VALUES
+                || self.bytes.saturating_add(value.len()) > MAX_ISSUED_COOKIE_BYTES
+            {
+                return Err(issued_cookie_refusal());
+            }
+            self.bytes += value.len();
+            self.values.push(Zeroizing::new(value.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Whether `bytes` echoes any issued credential value, in any of the
+    /// reversible spellings the token guard already supports. Both the raw
+    /// value and its unquoted spelling are credential carriers.
+    fn carries(&self, bytes: &[u8]) -> bool {
+        self.values.iter().any(|value| {
+            net::carries_secret(bytes, value)
+                || value
+                    .strip_prefix('"')
+                    .and_then(|inner| inner.strip_suffix('"'))
+                    .is_some_and(|unquoted| net::carries_secret(bytes, unquoted))
+        })
+    }
+}
+
+/// Every secret one read invocation may have handled: the issued auth
+/// token, every credential the authentication attempt retained — the
+/// complete transmitted Cookie headers and the cookie values of every
+/// scope, including path-excluded, replaced, expired or dropped values —
+/// and every cookie value a read response issued. The guard is
+/// invocation-only: nothing in it is persisted or transmitted.
+struct ScreenedSecrets<'a> {
+    token: &'a str,
+    session: Option<&'a cas::ServiceSession>,
+    /// The submitted password is not part of the session jar's retained
+    /// history, but a response that echoes it is still a credential
+    /// disclosure. The username is not screened: a decoded profile
+    /// legitimately reports it, matching the smart reader's choice.
+    password: Option<&'a str>,
+    issued: IssuedCookies,
+}
+
+impl ScreenedSecrets<'_> {
+    fn carries(&self, bytes: &[u8]) -> bool {
+        net::carries_secret(bytes, self.token)
+            || self
+                .session
+                .is_some_and(|session| session.contains_secret_bytes(bytes))
+            || self
+                .password
+                .is_some_and(|password| net::carries_secret(bytes, password))
+            || self.issued.carries(bytes)
+    }
+}
+
 /// One response admitted under a lease that stays pending until the whole
 /// traversal is settled with the last exchange's facts.
 struct Exchange {
@@ -955,7 +1108,19 @@ impl BoyaClient {
     pub fn read(&self, auth_token: &str, req: &ReadRequest) -> Result<Value, Error> {
         let (request, key) = Self::prepare(&self.http, auth_token, req)?;
         let lease = net::acquire(&self.governor)?;
-        Self::execute(&self.http, lease, request, key, auth_token, req)
+        Self::execute(
+            &self.http,
+            lease,
+            request,
+            key,
+            ScreenedSecrets {
+                token: auth_token,
+                session: None,
+                password: None,
+                issued: IssuedCookies::default(),
+            },
+            req,
+        )
     }
 
     /// Build the encrypted read request without touching the shared governor.
@@ -1014,7 +1179,7 @@ impl BoyaClient {
         lease: &mut crate::governor::RequestLease<'_>,
         request: reqwest::blocking::Request,
         key: Zeroizing<[u8; 16]>,
-        auth_token: &str,
+        secrets: &mut ScreenedSecrets<'_>,
         req: &ReadRequest,
     ) -> Result<Exchange, ExchangeError> {
         let mut response = match lease.start_request(|| client.execute(request)) {
@@ -1043,7 +1208,6 @@ impl BoyaClient {
             .iter()
             .any(|(k, v)| net::challenge_header(k.as_str(), v.as_bytes()));
         let ct = response_content_type(response.headers());
-        let issues_cookie = net::issues_session_cookie(response.headers());
         lease
             .observe_http_many(
                 status,
@@ -1057,6 +1221,13 @@ impl BoyaClient {
             .map_err(|_| {
                 ExchangeError::Governor(err("governor_denied", "cannot persist response headers"))
             })?;
+        // Every `Set-Cookie` value must be reviewed while the raw header map
+        // is still available and retained for the rest of the invocation.
+        // Issuance itself is not a refusal: the values join the screening
+        // guard only, never a jar, a request or any store. A declaration
+        // that cannot be reviewed refuses the whole response rather than
+        // screening a subset.
+        let issued_failure = secrets.issued.absorb(response.headers()).err();
         let mut bytes = Zeroizing::new(Vec::new());
         let failure = response
             .by_ref()
@@ -1068,20 +1239,22 @@ impl BoyaClient {
         let challenge =
             header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
         drop(response);
-        let value = admit_response(
-            ReadResponse {
-                bytes: &bytes,
-                ct: ct.as_deref(),
-                status,
-                challenge,
-                body_failed,
-                assessment,
-                issues_cookie,
-            },
-            auth_token,
-            &key,
-            req,
-        );
+        let value = match issued_failure {
+            Some(error) => Err(error),
+            None => admit_response(
+                ReadResponse {
+                    bytes: &bytes,
+                    ct: ct.as_deref(),
+                    status,
+                    challenge,
+                    body_failed,
+                    assessment,
+                },
+                &|candidate| secrets.carries(candidate),
+                &key,
+                req,
+            ),
+        };
         Ok(Exchange {
             value,
             status,
@@ -1094,15 +1267,15 @@ impl BoyaClient {
     /// Transmit one prepared read under an already-reserved lease and settle it.
     /// `semester_courses` may continue with the next source-declared page while
     /// the caller's bound allows it; every other operation is one exchange.
-    pub(crate) fn execute(
+    fn execute(
         client: &reqwest::blocking::Client,
         mut lease: crate::governor::RequestLease<'_>,
         request: reqwest::blocking::Request,
         key: Zeroizing<[u8; 16]>,
-        auth_token: &str,
+        mut secrets: ScreenedSecrets<'_>,
         req: &ReadRequest,
     ) -> Result<Value, Error> {
-        let first = match Self::exchange(client, &mut lease, request, key, auth_token, req) {
+        let first = match Self::exchange(client, &mut lease, request, key, &mut secrets, req) {
             Ok(exchange) => exchange,
             Err(ExchangeError::Transport(error)) => {
                 lease
@@ -1189,23 +1362,23 @@ impl BoyaClient {
                 page_size: page.page_size,
                 max_pages: page.max_pages,
             });
-            let (request, key) = match Self::prepare(client, auth_token, &next) {
+            let (request, key) = match Self::prepare(client, secrets.token, &next) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     traversal.halt(error.code);
                     break;
                 }
             };
-            let exchange = match Self::exchange(client, &mut lease, request, key, auth_token, &next)
-            {
-                Ok(exchange) => exchange,
-                Err(ExchangeError::Transport(error)) => {
-                    traversal.halt(error.code);
-                    network_failure = true;
-                    break;
-                }
-                Err(ExchangeError::Governor(error)) => return Err(error),
-            };
+            let exchange =
+                match Self::exchange(client, &mut lease, request, key, &mut secrets, &next) {
+                    Ok(exchange) => exchange,
+                    Err(ExchangeError::Transport(error)) => {
+                        traversal.halt(error.code);
+                        network_failure = true;
+                        break;
+                    }
+                    Err(ExchangeError::Governor(error)) => return Err(error),
+                };
             let Exchange {
                 value: next_value,
                 status,
@@ -1216,14 +1389,11 @@ impl BoyaClient {
             match next_value {
                 Ok(next_value) => value = next_value,
                 Err(error) => {
-                    settle(
-                        lease,
-                        status,
-                        retry_after.as_deref(),
-                        challenge,
-                        body_failed,
-                    )?;
-                    return Err(error);
+                    // Keep previously admitted records; the rejected body's
+                    // bytes stay withheld and only its typed failure is used
+                    // by the same terminal collector path as other failures.
+                    value =
+                        json!({"result":"page_rejected","error":error.code,"http_status":status});
                 }
             }
             last = (status, retry_after, challenge, body_failed);
@@ -1244,7 +1414,7 @@ impl BoyaClient {
 }
 fn admit_response(
     response: ReadResponse<'_>,
-    auth_token: &str,
+    contains_secret: &dyn Fn(&[u8]) -> bool,
     key: &[u8; 16],
     req: &ReadRequest,
 ) -> Result<Value, Error> {
@@ -1255,10 +1425,9 @@ fn admit_response(
         challenge,
         body_failed,
         assessment,
-        issues_cookie,
     } = response;
-    let secret_echo = response_contains_secret(bytes, ct, auth_token);
-    let safe_ct = ct.filter(|value| !response_contains_secret(b"", Some(value), auth_token));
+    let secret_echo = response_carries_secret(bytes, ct, contains_secret);
+    let safe_ct = ct.filter(|value| !contains_secret(value.as_bytes()));
     let (value, fields) = if assessment == crate::html::ChallengeAssessment::Clear {
         if secret_echo {
             (withheld_fallback(bytes, safe_ct), SourceFields::default())
@@ -1269,7 +1438,7 @@ fn admit_response(
         (Value::Null, SourceFields::default())
     };
     let mut decoded = PrivateValue(value);
-    if !secret_echo && projected_source_contains_secret(&decoded, fields, auth_token) {
+    if !secret_echo && projected_source_carries_secret(&decoded, fields, contains_secret) {
         decoded = PrivateValue(withheld_fallback(bytes, safe_ct));
     }
     if matches!(req, ReadRequest::Courses(_))
@@ -1291,14 +1460,6 @@ fn admit_response(
         return Err(err(
             "response_safety_unreviewed",
             "response body safety could not be established; admission refused without retry",
-        ));
-    }
-    // Cookie issuance alone is not a challenge; the issued value stays private
-    // and the whole response is withheld without refresh or retry.
-    if issues_cookie {
-        return Err(err(
-            "session_cookie_refused",
-            "response issued a session cookie; response withheld",
         ));
     }
     Ok(std::mem::take(&mut decoded.0))
@@ -1607,10 +1768,28 @@ pub fn session(input: &str, online: bool) -> Result<Value, Error> {
     if !reservation.request_wait.is_zero() {
         std::thread::sleep(reservation.request_wait);
     }
-    BoyaClient::execute(&client, lease, request, key, &token, &req)
+    // The authentication session stays alive for the whole read: its retained
+    // credentials — every cookie value of every scope, the replaced and
+    // expired values, and the transmitted Cookie headers — screen the raw
+    // and decoded responses alongside the issued token and the submitted
+    // password. Nothing the session or a response issued is adopted,
+    // persisted or transmitted.
+    BoyaClient::execute(
+        &client,
+        lease,
+        request,
+        key,
+        ScreenedSecrets {
+            token: token.as_str(),
+            session: Some(&session),
+            password: Some(password.as_str()),
+            issued: IssuedCookies::default(),
+        },
+        &req,
+    )
 }
 pub fn schema() -> Value {
-    let mut s = json!({"module":"boya","state":"partial-offline","state_detail":"the offline session/read path and the bounded pagination traversal are implemented and offline-tested; no authenticated BYKC session, live encrypted response, live paginated read or owner-present mutation has been observed","input":{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"enum":["profile","semester_courses","selectable","chosen","config","statistics","preview_write"]},"payload":{}}},"payload_policy":"arbitrary JSON admitted; missing/invalid operation-specific fields produce structured blocked","output":{"type":"object","required":["result"],"properties":{"result":{"enum":["success","partial","upstream_error","fallback","blocked"]},"list_contract":{"enum":["page","whole_list"],"description":"List operations only. page is queryStudentSemesterCourseByPage; whole_list is queryChosenCourse, whose source contract declares no pagination."},"complete":{"type":"boolean","description":"List operations only. True only when every element the source declared for the requested window was collected in this invocation; false when the traversal stopped early, and then incomplete_reason says why."},"incomplete_reason":{"type":["string","null"],"description":"Why the traversal stopped before the declared set was collected: page_bound_reached (the caller's maxPages), empty_page, declared_pages_exhausted, pagination_page_mismatch, pagination_changed, pagination_inconsistent, invalid_pagination_contract, duplicate_course_id, entry_id_unconfirmed, list_contract_unrecognized, source_page_not_success, governor_cooldown or a local preflight code. Null when complete."},"entries":{"type":["array","null"],"description":"Admitted list records in source order, deduplicated by source id; null when the declared list contract itself was not recognized."},"entry_count":{"type":["integer","null"]},"pagination":{"type":["object","null"],"description":"semester_courses only: the caller's start page, page size and max_pages bound, each admitted page's declared number/count/size/totals, the source-declared page size, total elements and total pages, and pages_fetched. Null for chosen because that source declares no pagination."},"page_failure":{"description":"The first admitted page whose own result was not success, verbatim, so degraded evidence or an upstream error is not lost."},"fallback_reason":{"type":"string"},"raw_evidence":{"type":"object"}}},"writes":"blocked: missing authoritative endpoint and payload","login":"boya session performs one explicit in-memory CAS login for a caller token then one read operation; a semester_courses read traverses at most the caller-declared maxPages declared pages; the issued token is consumed once and never persisted or refreshed"});
+    let mut s = json!({"module":"boya","state":"partial-offline","state_detail":"the offline session/read path and the bounded pagination traversal are implemented and offline-tested; one authenticated live session reached the read path and its response was withheld when it issued a session cookie; no admitted decoded live course list, complete live pagination or owner-present mutation has been observed","input":{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"enum":["profile","semester_courses","selectable","chosen","config","statistics","preview_write"]},"payload":{}}},"payload_policy":"arbitrary JSON admitted; missing/invalid operation-specific fields produce structured blocked","output":{"type":"object","required":["result"],"properties":{"result":{"enum":["success","partial","upstream_error","fallback","blocked"]},"list_contract":{"enum":["page","whole_list"],"description":"List operations only. page is queryStudentSemesterCourseByPage; whole_list is queryChosenCourse, whose source contract declares no pagination."},"complete":{"type":"boolean","description":"List operations only. True only when every element the source declared for the requested window was collected in this invocation; false when the traversal stopped early, and then incomplete_reason says why."},"incomplete_reason":{"type":["string","null"],"description":"Why the traversal stopped before the declared set was collected: page_bound_reached (the caller's maxPages), empty_page, declared_pages_exhausted, pagination_page_mismatch, pagination_changed, pagination_inconsistent, invalid_pagination_contract, duplicate_course_id, entry_id_unconfirmed, list_contract_unrecognized, source_page_not_success, governor_cooldown or a local preflight code. Null when complete."},"entries":{"type":["array","null"],"description":"Admitted list records in source order, deduplicated by source id; null when the declared list contract itself was not recognized."},"entry_count":{"type":["integer","null"]},"pagination":{"type":["object","null"],"description":"semester_courses only: the caller's start page, page size and max_pages bound, each admitted page's declared number/count/size/totals, the source-declared page size, total elements and total pages, and pages_fetched. Null for chosen because that source declares no pagination."},"page_failure":{"description":"The first admitted page whose own result was not success, verbatim, so degraded evidence or an upstream error is not lost."},"fallback_reason":{"type":"string"},"raw_evidence":{"type":"object"}}},"writes":"blocked: missing authoritative endpoint and payload","login":"boya session performs one explicit in-memory CAS login for a caller token then one read operation; a semester_courses read traverses at most the caller-declared maxPages declared pages; the issued token is consumed once and never persisted or refreshed"});
     s["pagination"] = json!({"applies_to":["semester_courses"],"request":{"maxPages":{"type":"integer","minimum":1,"maximum":MAX_TRAVERSAL_PAGES,"default":1,"description":"Caller-declared bound on how many pages one invocation may request. It is never sent upstream and is never a claim about the source's page count."}},"bound":"A traversal requests at most maxPages pages under one lease and never a page beyond the source-declared totalPages. No page count or page base is inferred: the mapping between the requested page number and the source's declared number is learned from the first admitted page and then required, and every page must repeat the same declared totals and page size.","stops":"Done at the last declared page (declared number + 1 >= totalPages), when the declared totalElements have been collected, or on an empty page. Early stops keep the admitted records and report complete=false with the reason.","refusals":["a page does not answer the requested position under the mapping declared by the first page","totalElements/totalPages/size changed between pages","an intermediate page is not a full page of the declared size","the collected items exceed the declared totalElements","duplicate source id","entry without a numeric source id","a page whose own result is not success","governor cooldown before the next page"],"complete":"complete=true means every declared element of the list was collected in this traversal; it does not claim elements before the requested start page.","whole_list":{"applies_to":["chosen"],"description":"queryChosenCourse returns the complete courseList for the requested date window and declares no pagination metadata; exactly one request is made and complete reflects only that declared list contract. No page count is inferred."}});
     s["input"]["properties"]["payload"] = json!({"description":"operation-specific; semester_courses accepts pageNumber, pageSize and the local-only maxPages (1..=20, default 1), chosen accepts startDate and endDate, preview_write stays blocked"});
     s["pagination"]["acquisition"] = json!(
@@ -1621,7 +1800,7 @@ pub fn schema() -> Value {
     // The session read keeps the same one-lease contract; only the traversal
     // bound and the completeness reporting are added.
     s["session"]["description"] = json!(
-        "One explicit in-memory CAS login to bykc followed by one sscv read operation; a semester_courses read may traverse at most the caller-declared maxPages declared pages under the same lease; no persistence, refresh, retry, writes or cookie adoption."
+        "One explicit in-memory CAS login to bykc followed by one sscv read operation; a semester_courses read may traverse at most the caller-declared maxPages declared pages under the same lease; no persistence, refresh, retry, writes or cookie adoption. Cookie values that read responses issue are retained only as in-memory screening secrets and are never persisted or transmitted."
     );
     s["session"]["output"] = json!(
         "decrypted read result, or a paginated list envelope with complete/incomplete_reason, or degraded/fallback with raw evidence and fallback_reason, or sensitive_response_withheld; writes remain blocked"
@@ -1650,9 +1829,8 @@ mod numeric_admission_proof {
                     Some("text/plain"),
                     true,
                 ),
-                issues_cookie: false,
             },
-            secret,
+            &|candidate| net::carries_secret(candidate, secret),
             &key,
             &ReadRequest::Profile,
         )
@@ -1717,9 +1895,8 @@ mod numeric_admission_proof {
                 challenge: false,
                 body_failed: false,
                 assessment: crate::html::assess_challenge_body(wire, Some("text/plain"), true),
-                issues_cookie: false,
             },
-            "false",
+            &|candidate| net::carries_secret(candidate, "false"),
             &[0u8; 16],
             &ReadRequest::Profile,
         )
@@ -1791,7 +1968,13 @@ mod tests {
     #[test]
     fn production_admission_withholds_cookies_and_encoded_credentials() {
         let key = [0u8; 16];
-        let admit = |plain: &[u8], headers: &reqwest::header::HeaderMap| {
+        let mut secrets = ScreenedSecrets {
+            token: "abc_123",
+            session: None,
+            password: None,
+            issued: IssuedCookies::default(),
+        };
+        let admit = |plain: &[u8], secrets: &ScreenedSecrets<'_>| {
             let wire = STANDARD.encode(aes(plain, &key, true).unwrap().as_slice());
             let wire = Zeroizing::new(wire);
             let assessment =
@@ -1804,33 +1987,43 @@ mod tests {
                     challenge: false,
                     body_failed: false,
                     assessment,
-                    issues_cookie: net::issues_session_cookie(headers),
                 },
-                "abc_123",
+                &|candidate| secrets.carries(candidate),
                 &key,
                 &ReadRequest::Profile,
             )
         };
         let mut headers = reqwest::header::HeaderMap::new();
         let safe = br#"{"status":"0","data":{"value":"q"}}"#;
-        assert_eq!(admit(safe, &headers).unwrap()["data"]["value"], "q");
+        assert_eq!(admit(safe, &secrets).unwrap()["data"]["value"], "q");
         headers.insert(
             reqwest::header::SET_COOKIE,
-            reqwest::header::HeaderValue::from_static("x=q"),
+            reqwest::header::HeaderValue::from_static("x=opaque-issued-value"),
+        );
+        // A reviewed Set-Cookie issuance is admitted: the value joins the
+        // invocation's privacy guard only, never a jar or a later request.
+        secrets.issued.absorb(&headers).unwrap();
+        assert_eq!(admit(safe, &secrets).unwrap()["data"]["value"], "q");
+        // Literal and percent-encoded echoes of the issued value are
+        // withheld from the projected output, while unrelated data stays.
+        assert_eq!(
+            admit(
+                br#"{"status":"0","data":{"note":"opaque-issued-value"}}"#,
+                &secrets
+            )
+            .unwrap()["fallback_reason"],
+            "sensitive_response_withheld"
         );
         assert_eq!(
-            admit(safe, &headers).unwrap_err().code,
-            "session_cookie_refused"
+            admit(
+                br#"{"status":"0","data":{"note":"opaque%2Dissued%2Dvalue"}}"#,
+                &secrets
+            )
+            .unwrap()["fallback_reason"],
+            "sensitive_response_withheld"
         );
         let opaque = br#"{"status":"0","data":"freshopaque123"}"#;
-        headers.insert(
-            reqwest::header::SET_COOKIE,
-            reqwest::header::HeaderValue::from_static("x=freshopaque123"),
-        );
-        assert_eq!(
-            admit(opaque, &headers).unwrap_err().code,
-            "session_cookie_refused"
-        );
+        assert_eq!(admit(opaque, &secrets).unwrap()["data"], "freshopaque123");
         headers.clear();
         for plain in [
             br#"{"status":"0","data":"YWJjXzEyMw=="}"#.as_slice(),
@@ -1839,13 +2032,13 @@ mod tests {
             br#"{"status":"0","data":"\u002561%62%63%5F%31%32%33"}"#.as_slice(),
             br#"{"status":"0","data":{"\u0059WJjXzEyMw==":"ordinary"}}"#.as_slice(),
         ] {
-            let value = admit(plain, &headers).unwrap();
+            let value = admit(plain, &secrets).unwrap();
             assert_eq!(value["raw_evidence"]["data"], Value::Null);
             assert_ne!(value["result"], "success");
         }
         // A truncated ciphertext would otherwise be returned as raw fallback.
         let wire = Zeroizing::new(STANDARD.encode([0u8; 15]));
-        let admit_wire = |headers: &reqwest::header::HeaderMap| {
+        let admit_wire = |secrets: &ScreenedSecrets<'_>| {
             admit_response(
                 ReadResponse {
                     bytes: wire.as_bytes(),
@@ -1858,24 +2051,27 @@ mod tests {
                         Some("text/plain"),
                         true,
                     ),
-                    issues_cookie: net::issues_session_cookie(headers),
                 },
-                "abc_123",
+                &|candidate| secrets.carries(candidate),
                 &key,
                 &ReadRequest::Profile,
             )
         };
         assert_eq!(
-            admit_wire(&headers).unwrap()["raw_evidence"]["data"],
+            admit_wire(&secrets).unwrap()["raw_evidence"]["data"],
             STANDARD.encode(wire.as_bytes())
         );
         headers.insert(
             reqwest::header::SET_COOKIE,
-            reqwest::header::HeaderValue::from_static("x=q"),
+            reqwest::header::HeaderValue::from_static("x=wire-issued-value"),
         );
+        // Issued values keep screening raw fallback bytes too: the wire is
+        // still published only when it carries none of the invocation's
+        // secrets.
+        secrets.issued.absorb(&headers).unwrap();
         assert_eq!(
-            admit_wire(&headers).unwrap_err().code,
-            "session_cookie_refused"
+            admit_wire(&secrets).unwrap()["raw_evidence"]["data"],
+            STANDARD.encode(wire.as_bytes())
         );
         for (status, challenge) in [(401, false), (403, false), (200, true)] {
             let denied = admit_response(
@@ -1890,15 +2086,466 @@ mod tests {
                         Some("text/plain"),
                         true,
                     ),
-                    issues_cookie: net::issues_session_cookie(&headers),
                 },
-                "abc_123",
+                &|candidate| secrets.carries(candidate),
                 &key,
                 &ReadRequest::Profile,
             );
             assert_eq!(denied.unwrap_err().code, "safety_denied");
         }
     }
+
+    /// Admit one synthetic encrypted body the way `exchange` does: the
+    /// response's own `Set-Cookie` values are reviewed into the
+    /// invocation guard first, then the raw and decoded material is
+    /// screened against every secret the invocation has handled.
+    fn cookie_admit(
+        plain: &[u8],
+        secrets: &ScreenedSecrets<'_>,
+        key: &[u8; 16],
+    ) -> Result<Value, Error> {
+        let wire = Zeroizing::new(STANDARD.encode(aes(plain, key, true).unwrap().as_slice()));
+        admit_response(
+            ReadResponse {
+                bytes: wire.as_bytes(),
+                ct: Some("text/plain"),
+                status: 200,
+                challenge: false,
+                body_failed: false,
+                assessment: crate::html::assess_challenge_body(
+                    wire.as_bytes(),
+                    Some("text/plain"),
+                    true,
+                ),
+            },
+            &|candidate| secrets.carries(candidate),
+            key,
+            &ReadRequest::Profile,
+        )
+    }
+
+    #[test]
+    fn issued_cookies_are_screened_across_a_traversal() {
+        let key = [0u8; 16];
+        let token = "synthetic-auth-token-value";
+        // The handoff jar absorbed the first SID declaration, then a
+        // replacement of the same name/path, exactly the sequence the login
+        // exchange produces: the earlier value is retired but stays in the
+        // privacy guard of the attempt.
+        let session = cas::ServiceSession::test_session_with_cookies(
+            cas::CasService::Boya,
+            "https://bykc.buaa.edu.cn/",
+            &[
+                "SID=previous-auth-cookie; Path=/",
+                "SID=current-auth-cookie; Path=/",
+            ],
+        );
+        assert!(session.contains_secret_bytes(b"echo current-auth-cookie"));
+        assert!(session.contains_secret_bytes(b"echo previous-auth-cookie"));
+        assert!(!session.contains_secret_bytes(b"ordinary material"));
+        let mut secrets = ScreenedSecrets {
+            token,
+            session: Some(&session),
+            password: Some("synthetic-auth-password"),
+            issued: IssuedCookies::default(),
+        };
+        let ordinary = br#"{"status":"0","data":{"name":"ordinary"}}"#;
+        // An ordinary HTTP 200 that issues a session cookie is admitted:
+        // issuance is not a challenge, only its value is retained.
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("PAGE=first-page-cookie; Path=/"),
+        );
+        secrets.issued.absorb(&headers).unwrap();
+        assert_eq!(
+            cookie_admit(ordinary, &secrets, &key).unwrap()["data"]["name"],
+            "ordinary"
+        );
+        // A later page issues another value; the first stays in the guard.
+        headers.clear();
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("PAGE2=\"quoted-page-cookie\"; Path=/"),
+        );
+        secrets.issued.absorb(&headers).unwrap();
+        // Decoded echoes of every credential the invocation has handled are
+        // withheld: the auth token, the live and the replaced jar cookies,
+        // the earlier page's issued value, and both spellings of the quoted
+        // issued value.
+        for plain in [
+            br#"{"status":"0","data":{"note":"synthetic-auth-token-value"}}"#.as_slice(),
+            br#"{"status":"0","data":{"note":"synthetic-auth-password"}}"#.as_slice(),
+            br#"{"status":"0","data":{"note":"current-auth-cookie"}}"#.as_slice(),
+            br#"{"status":"0","data":{"note":"previous-auth-cookie"}}"#.as_slice(),
+            br#"{"status":"0","data":{"note":"first-page-cookie"}}"#.as_slice(),
+            br#"{"status":"0","data":{"note":"first%2Dpage%2Dcookie"}}"#.as_slice(),
+            br#"{"status":"0","data":{"note":"\"quoted-page-cookie\""}}"#.as_slice(),
+            br#"{"status":"0","data":{"note":"quoted-page-cookie"}}"#.as_slice(),
+        ] {
+            let value = cookie_admit(plain, &secrets, &key).unwrap();
+            assert_eq!(value["fallback_reason"], "sensitive_response_withheld");
+            assert_eq!(value["raw_evidence"]["data"], Value::Null);
+            assert!(value.get("data").is_none());
+        }
+        // Ordinary data carrying none of the secrets is still admitted.
+        assert_eq!(
+            cookie_admit(ordinary, &secrets, &key).unwrap()["data"]["name"],
+            "ordinary"
+        );
+    }
+
+    /// One in-process HTTP server that captures each request and replies
+    /// with scripted headers and body. The same fixture shape as the
+    /// departments/gateway loopback tests: nonblocking listener, bounded
+    /// read, full request body consumed before replying.
+    struct Server {
+        address: std::net::SocketAddr,
+        requests: std::sync::mpsc::Receiver<String>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Server {
+        fn new(handler: impl FnMut(&mut std::net::TcpStream, usize) + Send + 'static) -> Self {
+            use std::io::Read;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let (sender, requests) = std::sync::mpsc::channel();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let worker_stop = std::sync::Arc::clone(&stop);
+            let worker = std::thread::spawn(move || {
+                let mut handler = handler;
+                let mut index = 0usize;
+                while !worker_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut socket, _)) => {
+                            socket
+                                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                                .unwrap();
+                            let mut bytes = Vec::new();
+                            let mut byte = [0u8];
+                            while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 64 * 1024 {
+                                match socket.read(&mut byte) {
+                                    Ok(1) => bytes.push(byte[0]),
+                                    _ => break,
+                                }
+                            }
+                            let request = String::from_utf8_lossy(&bytes).into_owned();
+                            let body_len: usize = request
+                                .lines()
+                                .find_map(|line| {
+                                    line.strip_prefix("Content-Length: ")
+                                        .and_then(|value| value.trim().parse().ok())
+                                })
+                                .unwrap_or(0);
+                            if body_len > 0 {
+                                socket.read_exact(&mut vec![0u8; body_len]).unwrap();
+                            }
+                            sender.send(request).unwrap();
+                            handler(&mut socket, index);
+                            index += 1;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(2))
+                        }
+                        Err(error) => panic!("loopback listener failed: {error}"),
+                    }
+                }
+            });
+            Self {
+                address,
+                requests,
+                stop,
+                worker: Some(worker),
+            }
+        }
+    }
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(worker) = self.worker.take() {
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    /// Two real exchanges against a loopback server prove the production
+    /// path: the first response's `Set-Cookie` value is admitted and
+    /// retained by the invocation guard, the second request still carries
+    /// no `Cookie` header, and a second response that echoes the issued
+    /// value is withheld rather than admitted.
+    #[test]
+    fn issued_cookie_never_returns_and_its_echo_is_withheld() {
+        use std::io::Write;
+        use std::os::unix::fs::DirBuilderExt;
+        let key = [0u8; 16];
+        let ordinary = STANDARD.encode(
+            aes(br#"{"status":"0","data":{"name":"ordinary"}}"#, &key, true)
+                .unwrap()
+                .as_slice(),
+        );
+        let echoed = STANDARD.encode(
+            aes(
+                br#"{"status":"0","data":{"note":"loop-issued-cookie-value"}}"#,
+                &key,
+                true,
+            )
+            .unwrap()
+            .as_slice(),
+        );
+        let server = Server::new(move |socket, index| {
+            let (extra, body) = match index {
+                0 => (
+                    "Set-Cookie: PAGE=loop-issued-cookie-value; Path=/\r\n",
+                    ordinary.as_str(),
+                ),
+                _ => ("", echoed.as_str()),
+            };
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{}",
+                body.len(),
+                extra,
+                body
+            )
+            .unwrap();
+        });
+        let client = reqwest::blocking::Client::builder()
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .build()
+            .unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "boya-exchange-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        let governor = Governor::isolated_for_test(&path).unwrap();
+        let mut lease = net::acquire(&governor).unwrap();
+        let token = "synthetic-auth-token-value";
+        let mut secrets = ScreenedSecrets {
+            token,
+            session: None,
+            password: None,
+            issued: IssuedCookies::default(),
+        };
+        // Prepared production requests are only re-pointed at the loopback
+        // listener; every header the real client sends stays unchanged.
+        let route = |request: &mut reqwest::blocking::Request| {
+            let url = request.url_mut();
+            url.set_scheme("http").expect("test loopback scheme");
+            url.set_host(Some(&server.address.ip().to_string()))
+                .expect("test loopback host");
+            url.set_port(Some(server.address.port()))
+                .expect("test loopback port");
+        };
+        let mut first = BoyaClient::prepare(&client, token, &ReadRequest::Profile)
+            .unwrap()
+            .0;
+        route(&mut first);
+        // The loopback server encrypts with the test key, so exchange is
+        // given that key instead of the per-request key `prepare` generated.
+        let first = BoyaClient::exchange(
+            &client,
+            &mut lease,
+            first,
+            Zeroizing::new(key),
+            &mut secrets,
+            &ReadRequest::Profile,
+        )
+        .map_err(|_| err("test_exchange", "first exchange transport failed"))
+        .unwrap();
+        assert_eq!(
+            first.value.unwrap()["data"]["name"],
+            "ordinary",
+            "an ordinary cookie-issuing response is admitted"
+        );
+        assert!(secrets.issued.carries(b"loop-issued-cookie-value"));
+        // The traversal reserves the follow-up on the same lease before the
+        // next exchange; the reserved pacing sleep is not part of the test.
+        let reservation = lease.reserve_followup().unwrap();
+        assert!(reservation.cooldown_wait.is_zero());
+        let mut second = BoyaClient::prepare(&client, token, &ReadRequest::Profile)
+            .unwrap()
+            .0;
+        route(&mut second);
+        let second = BoyaClient::exchange(
+            &client,
+            &mut lease,
+            second,
+            Zeroizing::new(key),
+            &mut secrets,
+            &ReadRequest::Profile,
+        )
+        .map_err(|_| err("test_exchange", "second exchange transport failed"))
+        .unwrap();
+        let value = second.value.unwrap();
+        assert_eq!(value["fallback_reason"], "sensitive_response_withheld");
+        assert_eq!(value["raw_evidence"]["data"], Value::Null);
+        settle(
+            lease,
+            second.status,
+            second.retry_after.as_deref(),
+            second.challenge,
+            second.body_failed,
+        )
+        .unwrap();
+        for request_text in [
+            server
+                .requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            server
+                .requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+        ] {
+            assert!(
+                !request_text
+                    .lines()
+                    .any(|line| line.to_ascii_lowercase().starts_with("cookie:")),
+                "an issued value must never be retransmitted"
+            );
+            assert!(
+                request_text.contains("auth_token: synthetic-auth-token-value"),
+                "the token header stays unchanged"
+            );
+        }
+        assert!(!governor.status().unwrap().safety_latched);
+        drop(governor);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn unreviewable_or_bounded_cookie_issuance_refuses() {
+        // The guard may never screen a subset: a Set-Cookie that cannot be
+        // parsed on its own terms refuses the whole response, including a
+        // missing '=', an empty name, folded first pairs, ambiguous quoting
+        // and non-UTF-8 bytes.
+        for header in [
+            "no-equals-sign",
+            "=orphaned-value; Path=/",
+            "invalid name=private; Path=/",
+            "sid=first,other=second; Path=/",
+            "sid=\"ambiguous value\"; Path=/",
+            "sid=\"unbalanced; Path=/",
+            "sid=va\"l\"ue; Path=/",
+        ] {
+            let mut raw = reqwest::header::HeaderMap::new();
+            raw.insert(reqwest::header::SET_COOKIE, header.parse().unwrap());
+            let error = IssuedCookies::default()
+                .absorb(&raw)
+                .err()
+                .expect("an unparseable cookie must refuse");
+            assert_eq!(error.code, "invalid_headers", "{header}");
+        }
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_bytes(b"sid=n\x80nutf8; Path=/").unwrap(),
+        );
+        let error = IssuedCookies::default()
+            .absorb(&raw)
+            .err()
+            .expect("non-UTF-8 cookie material must refuse");
+        assert_eq!(error.code, "invalid_headers");
+        // The credential history is bounded across the invocation: more
+        // than the admitted values or bytes refuses rather than evicting an
+        // older secret.
+        let mut issued = IssuedCookies::default();
+        for index in 0..MAX_ISSUED_COOKIE_VALUES {
+            let mut raw = reqwest::header::HeaderMap::new();
+            raw.insert(
+                reqwest::header::SET_COOKIE,
+                format!("sid{index}=private-issued-value-{index}")
+                    .parse()
+                    .unwrap(),
+            );
+            issued.absorb(&raw).unwrap();
+        }
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=one-too-many".parse().unwrap(),
+        );
+        let error = issued
+            .absorb(&raw)
+            .err()
+            .expect("the invocation-wide value bound must refuse");
+        assert_eq!(error.code, "invalid_headers");
+        assert!(
+            issued.carries(b"private-issued-value-0"),
+            "bound exhaustion must not evict old values"
+        );
+        // The byte bound is cumulative: sixteen distinct maximum-size
+        // values fill the history exactly, an identical repeat still adds
+        // nothing, and a new value is refused rather than evicting an
+        // earlier secret. Each value stays under the cookie-value grammar
+        // ceiling of 4096 bytes.
+        let mut issued = IssuedCookies::default();
+        for index in 0..MAX_ISSUED_COOKIE_BYTES / 4096 {
+            let mut raw = reqwest::header::HeaderMap::new();
+            raw.insert(
+                reqwest::header::SET_COOKIE,
+                format!("sid{index}={:04096}", index).parse().unwrap(),
+            );
+            issued.absorb(&raw).unwrap();
+        }
+        assert_eq!(issued.values.len(), MAX_ISSUED_COOKIE_BYTES / 4096);
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            format!("sid0={:04096}", 0).parse().unwrap(),
+        );
+        issued
+            .absorb(&raw)
+            .expect("an already-retained value must not hit the bound");
+        assert_eq!(issued.values.len(), MAX_ISSUED_COOKIE_BYTES / 4096);
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=new-value".parse().unwrap(),
+        );
+        let error = issued
+            .absorb(&raw)
+            .err()
+            .expect("the byte bound must refuse");
+        assert_eq!(error.code, "invalid_headers");
+        assert!(
+            issued.carries(format!("marker {:04096}", 1).as_bytes()),
+            "bound exhaustion must not evict old values"
+        );
+        // An empty value is a deletion, not a transmitting secret: it is
+        // admitted without joining the guard, and a mixed response still
+        // screens the remaining issued value.
+        let mut raw = reqwest::header::HeaderMap::new();
+        raw.append(
+            reqwest::header::SET_COOKIE,
+            "gone=; Path=/; Max-Age=0".parse().unwrap(),
+        );
+        raw.append(
+            reqwest::header::SET_COOKIE,
+            "empty=\"\"; Path=/".parse().unwrap(),
+        );
+        raw.append(
+            reqwest::header::SET_COOKIE,
+            "sid=kept-private-value; Path=/".parse().unwrap(),
+        );
+        let mut issued = IssuedCookies::default();
+        issued.absorb(&raw).unwrap();
+        assert_eq!(issued.values.len(), 1);
+        assert!(issued.carries(br#"{"value":"kept-private-value"}"#));
+        assert!(!issued.carries(br#"{"value":"ordinary"}"#));
+    }
+
     #[test]
     fn aes_known_block_and_padding() {
         let key = [0u8; 16];
@@ -2349,11 +2996,12 @@ mod tests {
         assert_eq!(changed["complete"], false);
         assert_eq!(changed["incomplete_reason"], "pagination_changed");
         assert_eq!(changed["entry_count"], 20);
+        assert_eq!(changed["page_failure"], course_page(1, 40, 2, 20, 20..40));
         let short = traverse(&request, &[course_page(0, 57, 3, 20, 0..19)]);
         assert_eq!(short["incomplete_reason"], "pagination_inconsistent");
         assert_eq!(short["entry_count"], 0);
         let exhausted = traverse(&request, &[course_page(0, 40, 1, 20, 0..20)]);
-        assert_eq!(exhausted["incomplete_reason"], "declared_pages_exhausted");
+        assert_eq!(exhausted["incomplete_reason"], "pagination_inconsistent");
         assert_eq!(exhausted["entry_count"], 20);
     }
 
@@ -2367,8 +3015,8 @@ mod tests {
         let renumbered = traverse(
             &request,
             &[
-                course_page(0, 40, 3, 20, 0..20),
-                course_page(5, 40, 3, 20, 20..40),
+                course_page(0, 40, 2, 20, 0..20),
+                course_page(5, 40, 2, 20, 20..40),
             ],
         );
         assert_eq!(renumbered["incomplete_reason"], "pagination_page_mismatch");
@@ -2458,6 +3106,52 @@ mod tests {
         assert_eq!(degraded["fallback_reason"], "synthetic");
         assert_eq!(degraded["complete"], false);
         assert_eq!(degraded["incomplete_reason"], "source_page_not_success");
+    }
+
+    #[test]
+    fn contradictory_page_extents_never_claim_completeness() {
+        let request = PageRequest {
+            page_number: 0,
+            page_size: 2,
+            max_pages: 3,
+        };
+        for page in [
+            course_page(0, 2, 0, 2, [1, 2]),
+            course_page(0, 2, 3, 2, [1, 2]),
+            course_page(0, 0, 3, 2, []),
+            course_page(3, 2, 1, 2, [1, 2]),
+        ] {
+            let output = traverse(&request, &[page.clone()]);
+            assert_eq!(output["complete"], false);
+            assert_eq!(output["incomplete_reason"], "pagination_inconsistent");
+            assert_eq!(output["page_failure"], page);
+        }
+    }
+
+    #[test]
+    fn later_rejection_and_whole_list_identity_failure_preserve_admitted_evidence() {
+        let request = PageRequest {
+            page_number: 0,
+            page_size: 2,
+            max_pages: 2,
+        };
+        let rejected = json!({"result":"page_rejected","error":"http_error","http_status":500});
+        let output = traverse(
+            &request,
+            &[course_page(0, 4, 2, 2, [1, 2]), rejected.clone()],
+        );
+        assert_eq!(output["complete"], false);
+        assert_eq!(output["entries"], json!([{"id":1},{"id":2}]));
+        assert_eq!(output["page_failure"], rejected);
+
+        for source in [
+            json!({"result":"success","data":{"courseList":[{"id":1},{"id":1},{"id":2}]}}),
+            json!({"result":"success","data":{"courseList":[{"name":"unidentified"},{"id":2}]}}),
+        ] {
+            let output = whole_list(source.clone());
+            assert_eq!(output["complete"], false);
+            assert_eq!(output["page_failure"], source);
+        }
     }
 
     #[test]

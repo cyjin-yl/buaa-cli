@@ -1,6 +1,48 @@
 ## Development status
 
-## 2026-11-05: offline governor outcome review, unexercised Boya/GSMIS session paths
+## 2026-11-05: directory refresh verified; GSMIS and Boya reads incomplete
+
+A fresh `buaa organizations list --refresh` completed with exit 0, HTTP 200
+and `result=directory_snapshot`: 50 entries in 6 categories, from 41,845
+original bytes. The source SHA-256 is
+`9f639884881b05379ea1cf2e4a7727347be0c2f2098a915270253b4b6ee3616a`.
+Completeness covers exactly the captured official directory document. The
+repair screens projected titles, category/member labels and decoded URLs
+before output or caching. Harmless login navigation outside every directory
+group is admitted only for a successful structured projection; raw fallback,
+active authentication controls, challenge headers and active bases retain
+the full-document refusal rules. `source_refused` now has public exit 3.
+
+Two authorized session attempts used protected JSON stdin without persisting
+credentials or tokens. `buaa timetable session --online` reached a real GSMIS
+response but returned `sensitive_response_withheld`, HTTP 403 and
+`fallback_reason=session_cookie_issued`, with `network_performed=true`.
+Its exit 0 is degraded evidence, not a parsed timetable or accepted session.
+No schedule rows or live-derived ICS were obtained.
+
+`buaa boya session --online` requested semester courses starting at page 0,
+size 20, with a local traversal bound of 20 pages. It exited 7 with public
+error `unavailable`. The retained diagnostic exactly matches the business
+handler's `session_cookie_refused` branch; source inspection places that
+branch after its HTTP-200, complete-body and challenge checks. No course
+list was emitted, and encryption compatibility or complete pagination is
+not established. Response-cookie handling remains under repair. Neither
+attempt is counted as completed authenticated service acceptance.
+
+The current complete offline gate passed 1,322 library tests and all 116
+integration tests, with three existing ignored workers. Earlier failed
+receipts remain retained. These offline passes do not upgrade the two
+service observations above. Gitea publication is also incomplete. The
+canonical hostname failed DNS resolution and the known LAN HTTPS address
+did not connect. Its existing SSH endpoint subsequently passed strict host
+key checking and returned main at
+`53553e58b6223a5bf6730b77cae47cc8123a7f69`; an exact main fetch succeeded.
+The current feature branch and that live main have diverged, so both
+histories need reconciliation. The existing Tailnet service address also
+completed strict TLS but its anonymous API returned HTTP 403. No push or
+merge is claimed.
+
+## 2026-11-05: earlier offline governor outcome review and session implementation
 
 Credential-free reachability was checked first: `sso.buaa.edu.cn`,
 `gsmis.buaa.edu.cn` and `bykc.buaa.edu.cn` all complete TLS with
@@ -19,9 +61,9 @@ both session schemas, acceptance evidence) and `98c05d3` (bounded
 outcome-review archive readback). None performs a campus write, retry,
 refresh, persistence or second authentication: the two session paths keep the
 existing Authentication lease and settlement contract, while the outcome
-review only settles an already-observed pending outcome offline. Neither
-session path has transmitted a credential or read a service response online —
-see the blockers below.
+review only settles an already-observed pending outcome offline. The initial
+proof was offline; the later authorized attempts and current blockers are
+recorded above.
 
 `buaa governor review-outcome-plan` / `review-outcome-commit --offline` resolve
 exactly one unknown (`pending`) outcome offline, under the permanent governor
@@ -57,8 +99,9 @@ length and SHA-256 only, never raw bytes.
 
 `buaa boya session [--online]` performs the same pattern for the bykc service:
 one login, the handoff token taken once via `take_service_credential`, then
-exactly one prepared `sscv` read through `BoyaClient::prepare`/`execute`. The
-token is never persisted and `preview_write` stays blocked. In `bd4e455` the
+one prepared `sscv` read operation through `BoyaClient::prepare`/`execute`.
+A semester-course operation may traverse the caller's declared page bound
+under the same lease. The token is never persisted and `preview_write` stays blocked. In `bd4e455` the
 module's `login` text changed from "token issuance blocked before transport…"
 to describe that implemented one-login contract.
 
@@ -71,13 +114,12 @@ before transport; both session schemas and the governor outcome-review
 schemas passed a Draft 2020-12 check, which accepted valid inputs and rejected
 `until_ms`, unknown settlements and 4- or 6-digit `xnxqdm`.
 
-Blocked, not done: no authenticated GSMIS or BYKC session, no real
-`loadXskbData.do` body, no parsed live schedule, no live encrypted Boya
-response and no paginated read. The only recorded `--online` invocation
-refused for missing authorization before transport. The post-login read
-endpoints and the encrypted Boya response contract therefore stay unverified,
-so the postgraduate timetable acceptance remains `partial-offline` and Boya
-remains `pending`. Matching sign-on entries does not establish either login.
+At the initial implementation gate, the only `--online` smoke invocation
+refused missing authorization before transport. The later attempts above
+supersede that reachability limit but still produced no parsed live schedule,
+live-derived ICS or complete Boya course list. Postgraduate timetable and
+Boya acceptance therefore remain `partial-offline`. Matching sign-on entries
+alone establishes neither service acceptance nor the encrypted response contract.
 
 ## 2026-11-04: online CAS reads verified for Smart classrooms and iHome
 

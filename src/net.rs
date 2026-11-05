@@ -5419,6 +5419,173 @@ mod tests {
     }
 
     #[test]
+    fn directory_navigation_exception_is_projection_scoped_and_query_safe() {
+        const MEMBER: &str = "<a href='https://one.buaa.edu.cn/'>One</a>";
+        const NAVIGATION: &str = "<nav><a href='https://sso.example.invalid/login?service=https%3A%2F%2Fportal.example.invalid%2F'>Navigation-only-text</a></nav>";
+        for (outside, member, accepted) in [
+            (NAVIGATION, MEMBER, true),
+            (
+                "<form action='/search'><input name='q'></form>",
+                MEMBER,
+                true,
+            ),
+            (NAVIGATION, "<a href='/public?lang=en'>One</a>", true),
+            (
+                "<template><a href='/login'>Inert navigation</a></template>",
+                MEMBER,
+                true,
+            ),
+            (
+                "<a href='/login' data-csrf-token='synthetic'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<form action='/login'><input type='password'></form>",
+                MEMBER,
+                false,
+            ),
+            ("<input name='csrf_token' hidden>", MEMBER, false),
+            (
+                "<base href='https://elsewhere.example.invalid/'>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?ticket=synthetic-private'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='https://synthetic-user:synthetic-private@example.invalid/login'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?passwd=synthetic-private'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?%70asswd=synthetic-private'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<span style='display:none'><a href='/login'>One</a></span>",
+                false,
+            ),
+            (
+                "",
+                "<div class='kyjg-box'><div class='kyjg-tit'><h3>Nested</h3></div><div class='kyjg-bd'><a href='/login'>One</a></div></div>",
+                false,
+            ),
+        ] {
+            let body = format!(
+                "<html><title>Directory</title>{outside}<div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'>{member}</div></div></html>"
+            );
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body.as_bytes());
+            });
+            let client = fixture.organization_client(CacheMode::PreferCache, &server);
+            seed(
+                &client,
+                ORGANIZATIONS_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let result = crate::organizations::list_with_client(&client);
+            let retained = client
+                .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+                .unwrap();
+            if accepted {
+                let output = result.unwrap();
+                assert_eq!(output["result"], "directory_snapshot");
+                assert_eq!(output["entries"].as_array().unwrap().len(), 1);
+                assert_eq!(output["entries"][0]["name"], "One");
+                assert!(!output.to_string().contains("Navigation-only-text"));
+                assert!(retained.is_some());
+            } else {
+                assert_eq!(result.unwrap_err().code, "source_refused");
+                assert!(retained.is_none());
+            }
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn directory_navigation_cannot_authorize_raw_fallback_or_replace_a_prior_capture() {
+        const ORIGINAL: &[u8] = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='/public'>One</a></div></div></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                b"<html><title>Changed</title><a href='/login'>Navigation</a></html>",
+            );
+        });
+        let client = fixture.organization_client(CacheMode::Revalidate, &server);
+        seed(
+            &client,
+            ORGANIZATIONS_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(&client, ORGANIZATIONS_URL, ORIGINAL);
+        assert_eq!(
+            crate::organizations::list_with_client(&client)
+                .unwrap_err()
+                .code,
+            "source_refused"
+        );
+        let retained = client
+            .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, ORIGINAL);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn credential_shaped_directory_fields_never_leave_the_request_or_enter_cache() {
+        for (title, category, name) in [
+            ("passwd=synthetic-private", "Group", "One"),
+            ("Directory", "passwd=synthetic-private", "One"),
+            ("Directory", "Group", "passwd=synthetic-private"),
+        ] {
+            let body = format!(
+                "<html><title>{title}</title><div class='kyjg-box'><div class='kyjg-tit'><h3>{category}</h3></div><div class='kyjg-bd'><a href='https://one.buaa.edu.cn/'>{name}</a></div></div></html>"
+            );
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body.as_bytes());
+            });
+            let client = fixture.organization_client(CacheMode::PreferCache, &server);
+            seed(
+                &client,
+                ORGANIZATIONS_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let error = crate::organizations::list_with_client(&client).unwrap_err();
+            assert_eq!(error.code, "source_refused");
+            assert!(!error.message.contains("synthetic-private"));
+            assert!(
+                client
+                    .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
     fn official_directory_profile_checks_robots_paces_and_caches() {
         const BODY: &[u8] = br#"<html><title>directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>A</h3></div><div class='kyjg-bd'><a href='https://one.buaa.edu.cn/'>One</a></div></div></html>"#;
         let fixture = Fixture::new();
@@ -5959,6 +6126,27 @@ mod tests {
         );
         assert_eq!(server.count(), 0);
         assert!(!fixture.0.join("governor").exists());
+    }
+
+    #[test]
+    fn archive_capture_redirect_is_refused_before_body_projection_and_persistence() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: https://example.invalid/retargeted\r\n",
+                b"synthetic-private-redirect-body",
+            );
+        });
+        let client = fixture.client(CacheMode::PreferCache, &server);
+        seed_robots(&client);
+        let query = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
+        let error = crate::archive::capture(query, &client).unwrap_err();
+        assert_eq!(error.code, "redirect_refused");
+        assert!(!error.message.contains("synthetic-private"));
+        assert!(client.load(&Url::parse(TARGET).unwrap()).unwrap().is_none());
+        assert_eq!(server.count(), 1);
     }
 
     #[test]

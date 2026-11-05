@@ -759,7 +759,7 @@ pub fn schema() -> Value {
     }}]});
     let capture_policy = json!({"type":"object","additionalProperties":false,"required":["byte_cap","body_within_cap","redirects","proxy","request_attempts","retries"],"properties":{
         "byte_cap":{"const":MAX_CAPTURE},"body_within_cap":{"type":"boolean"},
-        "redirects":{"const":"not_followed","description":"A 3xx response is never followed; its body is preserved as unverified_capture."},
+        "redirects":{"const":"not_followed","description":"The public transport refuses redirects before reading their bodies; the CLI reports unsupported with exit 3 and follows no Location."},
         "proxy":{"const":"refused","description":"Direct egress only: no proxy configuration or proxy environment variable is consulted."},
         "request_attempts":{"enum":[0,1],"description":"Transport reads performed by this invocation: 0 for a cache hit, otherwise exactly one."},
         "retries":{"const":0,"description":"A failed or refused capture read is never retried."}

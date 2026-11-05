@@ -10,7 +10,7 @@
 //! unreachable transport, no bytes, a non-200 status or a non-HTML media type.
 //! A body-level authentication, credential, CSRF or challenge screen is refused
 //! as an error so its bytes are neither exported nor retained as the capture.
-use crate::announcements::refuse_unsafe_listing;
+use crate::announcements::{public_security_element, refuse_unsafe_listing, security_token};
 use crate::html::{
     css_trim, element_text, inert_element, split_declarations, split_important, strip_css_comments,
 };
@@ -421,6 +421,99 @@ fn response_admitted(response: &Response) -> bool {
         })
 }
 
+fn query_carries_credentials(url: &Url, depth: usize) -> bool {
+    if depth == 4 {
+        return url.query().is_some();
+    }
+    url.query_pairs().any(|(key, value)| {
+        sensitive_text_marker(&key)
+            || security_token(&key)
+            || [
+                "ticket",
+                "code",
+                "sid",
+                "st",
+                "tgt",
+                "access_token",
+                "refresh_token",
+            ]
+            .iter()
+            .any(|reserved| key.eq_ignore_ascii_case(reserved))
+            || sensitive_text_marker(&value)
+            || Url::parse(&value).is_ok_and(|nested| query_carries_credentials(&nested, depth + 1))
+    })
+}
+
+fn harmless_navigation(element: ElementRef<'_>, target: Option<&Url>) -> bool {
+    if !crate::html::is_html_element(element) || element.value().name() != "a" {
+        return false;
+    }
+    if std::iter::once(element)
+        .chain(element.ancestors().filter_map(ElementRef::wrap))
+        .any(|ancestor| {
+            ancestor.value().attr("class").is_some_and(|classes| {
+                classes
+                    .split_ascii_whitespace()
+                    .any(|class| class == "kyjg-box")
+            })
+        })
+    {
+        return false;
+    }
+    if element.value().attrs().any(|(name, value)| {
+        security_token(name)
+            || sensitive_text_marker(name)
+            || (name != "href" && (security_token(value) || sensitive_text_marker(value)))
+    }) {
+        return false;
+    }
+    target.is_some_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && !query_carries_credentials(url, 0)
+    })
+}
+
+// This exception authorizes only the already parsed directory projection.
+// Raw fallback continues to use the original complete-document refusal.
+fn admit_projection(response: &Response, document: &Html) -> Result<(), Error> {
+    let base = Url::parse(ORGANIZATIONS_URL).map_err(|_| unavailable())?;
+    if response
+        .headers
+        .iter()
+        .any(|(name, value)| crate::net::challenge_header(name.trim(), value.as_bytes()))
+    {
+        return Err(source_refused());
+    }
+    let elements = Selector::parse("*").map_err(|_| unavailable())?;
+    for element in document
+        .select(&elements)
+        .filter(|element| !inert_element(*element))
+    {
+        if element.value().name() == "base" && element.value().attr("href").is_some() {
+            return Err(source_refused());
+        }
+        let href = (element.value().name() == "a")
+            .then(|| element.value().attr("href"))
+            .flatten();
+        let target = href.and_then(|href| base.join(href.trim()).ok());
+        if href.is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
+            || target.as_ref().is_some_and(|url| {
+                !url.username().is_empty()
+                    || url.password().is_some()
+                    || query_carries_credentials(url, 0)
+            })
+            || (public_security_element(element) && !harmless_navigation(element, target.as_ref()))
+        {
+            return Err(source_refused());
+        }
+    }
+    Ok(())
+}
+
 fn normalize(response: &Response, admission: CookieAdmission) -> Result<Value, Error> {
     if !response_admitted(response) {
         return Err(unavailable());
@@ -451,27 +544,48 @@ fn normalize(response: &Response, admission: CookieAdmission) -> Result<Value, E
         ));
     };
     let document = Html::parse_document(text);
-    // A document carrying authentication, credential, CSRF or challenge
-    // semantics, or an active `<base href>` that could redirect member
-    // resolution, is failed closed by the shared public-safety scan. Returning
-    // a value here would persist it as the official capture, so the refusal
-    // stays an error.
-    refuse_unsafe_listing(response, &document).map_err(|_| source_refused())?;
     // The admitted document itself is only ever reported, never repaired: a
     // selector contract that no longer matches the observed DOM degrades to an
     // inspectable result carrying the exact bytes instead of escaping as
     // `unavailable`.
     match normalize_document(response, &document) {
-        Ok(value) => Ok(value),
-        Err(_) => Ok(uninterpretable(
-            response,
-            raw_export_safe(&response.body, &document),
-        )),
+        Ok(value) => {
+            admit_projection(response, &document)?;
+            Ok(value)
+        }
+        Err(error) if error.code == "source_refused" => Err(error),
+        Err(_) => {
+            refuse_unsafe_listing(response, &document).map_err(|_| source_refused())?;
+            Ok(uninterpretable(
+                response,
+                raw_export_safe(&response.body, &document),
+            ))
+        }
     }
 }
 
 fn normalize_document(response: &Response, document: &Html) -> Result<Value, Error> {
     let parsed = parse_document(document)?;
+    if sensitive_text_marker(&parsed.title)
+        || parsed
+            .categories
+            .iter()
+            .any(|value| sensitive_text_marker(value))
+        || parsed.entries.iter().any(|entry| {
+            sensitive_text_marker(&entry.name)
+                || sensitive_text_marker(&entry.category)
+                || entry
+                    .listed_href
+                    .as_deref()
+                    .is_some_and(sensitive_text_marker)
+                || entry
+                    .resolved_http_url
+                    .as_deref()
+                    .is_some_and(sensitive_text_marker)
+        })
+    {
+        return Err(source_refused());
+    }
     let entry_count = parsed.entries.len();
     let category_count = parsed.categories.len();
     Ok(json!({

@@ -47,9 +47,9 @@ offline miss is unavailable, not an empty surface.
 A changed or missing entry media type degrades to `script_unverified`
 (`entry_mime_missing`/`entry_mime_changed`) with the exact entry facts
 preserved and no script fetch; when the current entry still declares the
-selected script, the retained immutable bytes are replayed (`script` `hit`)
-instead of a second governed request that could never complete inside one
-bounded wait. A cache-hit entry is reported as
+selected script, the retained immutable bytes are replayed (`script` `hit`).
+This preserves the immutable-script cache policy during declaration refresh.
+A cache-hit entry is reported as
 `declaration_source: retained_entry_snapshot`, never claimed as current.
 A syntactically allowed but undeclared URL
 returns unsupported before the selected fetch, even if old script bytes exist.

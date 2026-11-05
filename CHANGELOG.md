@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Refuse credential-shaped organization titles, category labels, member names
+  and decoded URL parameters before output or cache persistence. Allow harmless
+  login navigation outside directory groups only for a successful structured
+  projection; raw fallback and real authentication/challenge controls remain
+  subject to the complete-document safety screen. Preserve `source_refused`
+  as a distinct public error with exit 3.
+- Inspect every repeated credential assignment before publishing a report,
+  including a secret that follows a harmless placeholder on the same line.
+- Reject repeated rights attestations throughout WE Learn practice requests
+  and positional arrays for typed material searches and fetches. Make evaluation
+  input schemas independent of their embedding location.
+- Return invalid GPA baseline comparisons as top-level errors without a
+  successful calculation, and reject course weeks outside 1 through 104 before
+  calendar generation instead of truncating oversized integers.
+- Reconcile Boya page totals before claiming completeness; preserve screened
+  source payloads when page/list validation stops and keep prior records when
+  a later response is rejected. These are offline contract repairs, not new
+  authenticated service observations.
+- Admit reviewed Boya responses that issue cookies while screening raw and
+  decoded output against authentication secrets and all issued values across
+  the invocation. Keep those values in bounded zeroizing memory without
+  adopting or forwarding them; malformed or exhausted history still refuses.
+- Clarify that archive transport refuses redirects before reading their
+  bodies; the command does not export a fetched redirect body.
+
 - Add `governor review-outcome-plan` / `review-outcome-commit --offline` for
   the operator's deliberate, offline resolution of one unknown request
   outcome. The preview reports the retained state SHA-256, pending kind,

@@ -420,7 +420,12 @@
         "offline_observation_2026_10_31": {
           "command": "buaa evaluation with an empty object",
           "observed": "returned a typed status object with exit 0; no request performed",
-          "live_blocker": "Live evaluation reads need an authenticated JWXT session that is not established here."
+          "live_blocker": "Live evaluation reads need a trusted session for the configured SPOC evaluation origin, with current task binding and owner-authored submission data; those have not been verified."
+        },
+        "schema_reference_repair_2026_11_05": {
+          "change": "Questionnaire and intent definitions are inline in the input variants, so the published input does not depend on its embedding location.",
+          "proof": "The actual native schema was validated with a standard Draft 2020-12 validator. Both the standalone input and a reference to it from an enclosing document accepted four valid topics/prepare/submit/legacy instances and rejected seven malformed questionnaire, intent, answer and unknown-field instances.",
+          "scope": "Offline schema interoperability only; no campus evaluation was read or submitted."
         }
       },
       "sources": [
@@ -445,12 +450,13 @@
         "tests": "cargo test --locked --offline: marks tests passed (weighted GPA table+formula, failure exclusion, null GPA, structured added/removed/changed diff with gpa delta, stored-baseline round-trip diff, baseline idempotency round-trip, policy provenance required, gap/overlap/duplicate/zero-credit/score-over-100/error-echo rejected, same-id policy content change rejected, finite-credit overflow bound rejected); a CLI umask regression confirms 0600 after new and changed baseline saves; clippy 0 warnings; fmt clean.",
         "scope": "Deterministic offline GPA and change-monitoring engine. The grade-point policy is caller-supplied with mandatory id/source provenance (table or formula) so no policy is guessed or embedded; credit arithmetic uses an explicit finite safety ceiling and rejects overflow before output construction; the shared governor enforces the >=15-minute background polling cadence for any future campus reads.",
         "smoke": "Real CLI: table policy {92/4cr,78/2cr,59/3cr} -> gpa 3.6667, counted 6.0, total 9.0, failed course excluded; baseline create/unchanged/changed under umask 0022 with mode 0600 verified; unsafe parent, symlink, irregular target and overflow inputs fail closed; no campus grades were read.",
+        "invalid_baseline_native_2026_11_05": "Before repair an invalid comparison baseline returned exit 0 with a successful GPA and a nested diff error. The actual repaired marks gpa command returns top-level invalid_input, exit 2 and no GPA; removing the invalid baseline from the same synthetic input preserves the valid exit-0 calculation. Full offline tests also passed.",
         "review_issues": [
           "https://github.com/cyjin-yl/buaa-cli/issues/22",
           "https://github.com/cyjin-yl/buaa-cli/issues/25"
         ]
       },
-      "blocker": "Campus grades-fetching adapter requires a live authorized campus session and the exact published grade-point table; both are unreachable from this seat (all .buaa.edu.cn endpoints reset, VPN/Tailscale absent in devcontainer, web archive offline). The offline engine, policy-provenance contract, and baseline diff are complete; status partial-offline until the live adapter and official policy are grounded."
+      "blocker": "The current campus grades-fetching endpoint, authorized service session and exact official grade-point policy have not been bound to a working live adapter. Later successful TLS and other service observations do not establish this contract. The offline engine, caller-supplied policy provenance and baseline diff remain partial-offline acceptance."
     },
     {
       "id": "timetable-ug",
@@ -472,7 +478,8 @@
         "contract": "Offline generation of a standards-compliant RFC 5545 ICS calendar from operator-supplied JSON on stdin. `semester.start_date` is the week-1 Monday; an occurrence lands on `start_date + (week - 1) * 7 + day_offset` (Monday=0 .. Sunday=6), so the date is computed, not asserted. `parity` (all/odd/even) filters weeks; occurrences that fall past the semester end (`start_date + weeks*7 - 1`) are dropped rather than rejected. Output is CRLF-terminated with 75-octet line folding on UTF-8 character boundaries, RFC 5545 text escaping, and per-event UID/DTSTAMP/DTSTART/DTEND/SUMMARY plus optional LOCATION. No network access, no writes, no campus contact.",
         "tests": "cargo test --locked --offline: 9 timetable unit tests pass (Gregorian date math round-trips; invalid date/time rejection; Monday->week-date mapping; odd parity; semester-bound dropping; ICS standards compliance; 75-octet folding on character boundaries; invalid-input rejection; empty-courses zero-event calendar) plus 1 CLI integration test. Full suite: 157 lib + 13 CLI green; strict all-target clippy 0 warnings; fmt clean.",
         "scope": "The offline mapping + ICS generation engine and the `timetable ics` CLI are complete and standards-compliant. Fetching the live undergraduate schedule from the campus system and feeding it to this generator remains pending (requires the governed, authorized campus observation path).",
-        "smoke": "Real CLI: a Monday course over weeks 1..6 in a 4-week semester yields 4 VEVENTs (weeks 5-6 dropped); odd parity drops even weeks; a >75-octet SUMMARY folds on a UTF-8 character boundary with continuation lines <= 75 octets; missing end_time / start_week>end_week / invalid day -> invalid_input exit 2."
+        "smoke": "Real CLI: a Monday course over weeks 1..6 in a 4-week semester yields 4 VEVENTs (weeks 5-6 dropped); odd parity drops even weeks; a >75-octet SUMMARY folds on a UTF-8 character boundary with continuation lines <= 75 octets; missing end_time / start_week>end_week / invalid day -> invalid_input exit 2.",
+        "week_bounds_native_2026_11_05": "Ten actual timetable ics cases passed. start_week and end_week each refuse 0, 105, 4294967298 and u64::MAX with invalid_input exit 2 and no ICS. Ordinary consecutive Mondays and the inclusive week-104 boundary produce dates independently checked with civil-date arithmetic; week 104 starts 2028-09-11. No campus request or live timetable claim."
       }
     },
     {
@@ -498,7 +505,18 @@
           "scope": "One explicit in-memory CAS login to GSMIS followed by exactly one loadXskbData.do read under the existing Authentication lease; no persistence, refresh, retry, writes or cookie adoption.",
           "input_contract": "Strict object root: authorized, username, password, intent, read{operation=xskb, enabled, xnxqdm(5 ASCII digits)}. Object-only and duplicate-field refusal; a disabled read performs no I/O before any governor/network access.",
           "verification": "4 focused session cases plus the full 1217-library gate passed offline (3 existing ignored workers). The published session contract was validated with a Draft 2020-12 validator: valid inputs accepted, 4- and 6-digit xnxqdm rejected. Actual native CLI smoke: session without --online refuses with unavailable exit 7 (internal code online_required) before any governor or network access; --offline is not a session option and is rejected as invalid_input exit 2; a disabled read returned result=disabled with network_performed=false.",
-          "not_proven": "No authenticated GSMIS session from the CLI, no real loadXskbData.do response, no parsed live schedule and no ICS generated from live data. The GSMIS CAS profile and endpoint match the current deployment (deployment identity only, see cas_identity_online_2026_11_05); no ticket was requested or consumed."
+          "not_proven": "The initial implementation gate was offline and established deployment identity only. The later authorized_read_2026_11_05 records a real read attempt; it still yielded no parsed live schedule or live-derived ICS."
+        },
+        "authorized_read_2026_11_05": {
+          "command": "buaa timetable session --online with protected JSON stdin",
+          "exit_code": 0,
+          "result": "sensitive_response_withheld",
+          "fallback_reason": "session_cookie_issued",
+          "http_status": 403,
+          "network_performed": true,
+          "credential_echo_detected_locally": false,
+          "scope": "One authorized in-memory login/read invocation; no credentials or response bodies in source, no writes or automatic retry.",
+          "remaining": "A degraded exit-0 response is not authenticated timetable acceptance. No schedule rows, current date/time mapping or live-derived ICS were obtained."
         },
         "cas_identity_online_2026_11_05": {
           "command": "credential-free HTTPS header read of the GSMIS portal entry",
@@ -507,7 +525,7 @@
           "scope": "Deployment identity only. No credential was submitted, no session established, no timetable read performed; the redirect was read, not followed with a ticket."
         }
       },
-      "blocker": "The postgraduate parser/ICS engine and the one-login GSMIS session readpath are implemented and offline-tested; only deployment identity was established for GSMIS, not an authenticated session. No CLI authentication, live xskb response, parsed live schedule or live-derived ICS has been obtained, so the status stays partial-offline."
+      "blocker": "The authorized GSMIS invocation reached a real HTTP-403 response that issued a session cookie and was withheld. Its exit 0 is degraded evidence, not an accepted timetable session. The parser/ICS engine is offline-tested, but no parsed live schedule or live-derived ICS has been obtained; status stays partial-offline."
     },
     {
       "id": "checkin",
@@ -541,9 +559,22 @@
         "remaining": "Current response contract, authorized session, complete pagination and owner-present mutation/postcondition are unverified. Synthetic encrypted data is not a live response.",
         "session_handoff_2026_11_05": {
           "command": "buaa boya session [--online] with protected JSON stdin",
-          "scope": "One explicit in-memory CAS login to bykc, the issued handoff token consumed once via take_service_credential, then exactly one prepared sscv read reusing BoyaClient::prepare/execute. preview_write stays blocked.",
+          "scope": "One explicit in-memory CAS login to bykc, the issued handoff token consumed once via take_service_credential, then one prepared sscv read operation reusing BoyaClient::prepare/execute. Semester courses may traverse the caller-declared page bound under the same lease. preview_write stays blocked.",
           "verification": "Full 1217-library offline gate passed. The published schema now declares the session contract, validated with a Draft 2020-12 validator. Actual native CLI smoke: authorized=false refused with code permission exit 5 both with and without --online, before any transport.",
-          "not_proven": "No authenticated Boya session from the CLI, no live encrypted response and no paginated read. Current campus token issuance and the live response contract remain unverified for the CLI; bykc deployment identity is recorded separately in cas_identity_online_2026_11_05."
+          "not_proven": "The initial implementation gate did not authenticate. The later authorized_read_2026_11_05 records a request reaching the response-cookie refusal branch, but no admitted decoded course list or complete live pagination."
+        },
+        "authorized_read_2026_11_05": {
+          "command": "buaa boya session --online with protected JSON stdin",
+          "operation": "semester_courses",
+          "requested_page": 0,
+          "page_size": 20,
+          "max_pages": 20,
+          "exit_code": 7,
+          "public_error": "unavailable",
+          "source_matched_refusal": "session_cookie_refused",
+          "phase_evidence": "The retained static diagnostic exactly matches the business handler's response-cookie refusal. Source inspection places that branch after its HTTP-200, complete-body and challenge checks; the receipt does not separately capture a wire HTTP status or admit course values.",
+          "credential_echo_detected_locally": false,
+          "remaining": "No course list was emitted. Ordinary cookie-issued response handling is under repair; current encrypted payload compatibility, complete pagination and authorized mutation postconditions are unverified."
         },
         "cas_identity_online_2026_11_05": {
           "command": "credential-free HTTPS header read of the bykc CAS entry",
@@ -552,7 +583,7 @@
           "scope": "Deployment identity only. No credential, session, token or read."
         }
       },
-      "blocker": "The offline read stack (AES response decoding, raw/quoted envelope admission, secret withholding), BoyaClient prepare/execute and the one-login bykc session readpath are implemented and offline-tested (25 Boya library cases, two CLI cases). Live state: only deployment identity was established for bykc, not an authenticated session; no CLI login, issued token, live encrypted response or complete pagination has been obtained, and select/cancel stay blocked without an authoritative endpoint and payload. The boya module schema still declares state=pending and writes=blocked, which lags this offline implementation.",
+      "blocker": "The authorized semester-course request reached the business handler's session_cookie_refused branch and returned unavailable exit 7 without a list. Response-cookie handling, an admitted decoded live payload and complete source-declared pagination remain unverified. Offline totals/source-preservation repairs do not establish live completeness; select/cancel still need an authoritative endpoint, exact operation data and verified postconditions.",
       "sources": [
         "https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/local/LocalBykcApi.kt#L478-L482",
         "https://github.com/Colorfulshadow/buaa_course_enrollment",
@@ -1030,7 +1061,8 @@
           "local_practice": "Real generate/answer/check CLI requests and their returned sessions validated against the published schema; no nested command wrapper was accepted as an input. Results remained local_only with no official grade, submission or completion claim.",
           "limits": "This verifies only the selected public documentation retrieval and local practice path. It does not establish campus WE Learn authentication, remote learning progress, source-wide rights or authorized graded assessment access."
         },
-        "remaining": "Selected documentation retrieval and local practice are observed in selected_read_2026_11_01. Campus WE Learn authentication, source-wide rights, remote progress and assessments remain unverified; cache fsync-failure and collision-exhaustion behavior were not exercised."
+        "remaining": "Selected documentation retrieval and local practice are observed in selected_read_2026_11_01. Campus WE Learn authentication, source-wide rights, remote progress and assessments remain unverified; cache fsync-failure and collision-exhaustion behavior were not exercised.",
+        "strict_input_native_2026_11_05": "The actual practice CLI previously accepted repeated false/true rights attestations and returned practice_session with exit 0. After recursive duplicate-member rejection it returns invalid_input exit 2. Typed search/fetch also require map-only JSON deserialization without collapsing duplicate members; nested/escaped duplicate, positional-array and trailing-document regressions passed offline."
       },
       "sources": [
         "https://github.com/Micraow/WE-Learn-Answers"
@@ -1099,6 +1131,20 @@
           "homepage_sha256": "b936471fe3aaad7ae6e4753b0183f347fd637aaa18c59ecf893c6703c3911ebd",
           "robots_status": 404,
           "observed_at_unix_ms": 1789949613688
+        },
+        "online_refresh_2026_11_05": {
+          "command": "buaa organizations list --refresh",
+          "exit_code": 0,
+          "result": "directory_snapshot",
+          "http_status": 200,
+          "cache_status": "miss",
+          "response_body_byte_length": 41845,
+          "response_body_sha256": "9f639884881b05379ea1cf2e4a7727347be0c2f2098a915270253b4b6ee3616a",
+          "entries": 50,
+          "categories": 6,
+          "scope": "All entries in this captured official directory document; no university-wide claim beyond it, credentials or campus mutation.",
+          "admission_repair": "Projected credential-shaped titles, labels and decoded URLs refuse before output/cache. Harmless login navigation outside every active directory group is admitted only for a successful structured projection; raw fallback and active authentication, base and challenge controls retain complete-document screening.",
+          "offline_proof": "Loopback regressions cover credential withholding/no cache, external navigation/query/control cases and drift preserving the prior capture. Native source_refused now exits 3; safe drift preserves exact raw bytes, while invalid UTF-8 and oversized bodies remain withheld."
         },
         "coverage": {
           "categories": 6,

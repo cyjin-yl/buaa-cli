@@ -491,7 +491,11 @@ pub fn gpa(input: &str) -> Value {
         "gpa": current.gpa,
     });
     if let Some(baseline) = raw.get("baseline") {
-        out["diff"] = diff_value(baseline, &current, &context, &courses);
+        let difference = diff_value(baseline, &current, &context, &courses);
+        if difference.get("error").is_some() {
+            return difference;
+        }
+        out["diff"] = difference;
     }
     out
 }
@@ -987,7 +991,8 @@ mod tests {
             TABLE_POLICY, baseline
         );
         let out = gpa(&current);
-        assert_eq!(out["diff"]["error"], "invalid_input");
+        assert_eq!(out["error"], "invalid_input");
+        assert!(out.get("gpa").is_none());
     }
 
     #[test]
@@ -1005,11 +1010,8 @@ mod tests {
             TABLE_POLICY, baseline
         );
         let out = gpa(&current);
-        assert_eq!(out["diff"]["error"], "invalid_input");
-        assert_eq!(
-            out["diff"]["message"],
-            "baseline policy content does not match current policy for the same id"
-        );
+        assert_eq!(out["error"], "invalid_input");
+        assert!(out.get("gpa").is_none());
     }
 
     #[test]
@@ -1297,11 +1299,8 @@ mod tests {
             TABLE_POLICY, baseline
         );
         let out = gpa(&current);
-        assert_eq!(out["diff"]["error"], "invalid_input");
-        assert_eq!(
-            out["diff"]["message"],
-            "conflicting duplicate course name in baseline"
-        );
+        assert_eq!(out["error"], "invalid_input");
+        assert!(out.get("gpa").is_none());
 
         // Distinct names stay admitted (control).
         let distinct = format!(

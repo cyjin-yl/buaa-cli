@@ -4427,11 +4427,98 @@ struct FetchInput {
     size: Option<u64>,
 }
 
+fn parse_object<'de, T: Deserialize<'de>>(input: &'de str) -> Result<T, serde_json::Error> {
+    struct Object<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let parsed =
+        serde::Deserializer::deserialize_map(&mut deserializer, Object(std::marker::PhantomData))?;
+    deserializer.end()?;
+    Ok(parsed)
+}
+
+// Preserve all nested member identities until the practice rights and session
+// checks run; Value's last-member-wins decoding would erase contradictions.
+struct StrictJson(Value);
+
+impl<'de> Deserialize<'de> for StrictJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StrictVisitor;
+        impl<'de> serde::de::Visitor<'de> for StrictVisitor {
+            type Value = StrictJson;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a JSON value without repeated object members")
+            }
+            fn visit_bool<E>(self, value: bool) -> Result<StrictJson, E> {
+                Ok(StrictJson(Value::Bool(value)))
+            }
+            fn visit_i64<E>(self, value: i64) -> Result<StrictJson, E> {
+                Ok(StrictJson(Value::from(value)))
+            }
+            fn visit_u64<E>(self, value: u64) -> Result<StrictJson, E> {
+                Ok(StrictJson(Value::from(value)))
+            }
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<StrictJson, E> {
+                serde_json::Number::from_f64(value)
+                    .map(|number| StrictJson(Value::Number(number)))
+                    .ok_or_else(|| E::custom("a non-finite number is not JSON"))
+            }
+            fn visit_str<E>(self, value: &str) -> Result<StrictJson, E> {
+                Ok(StrictJson(Value::String(value.to_owned())))
+            }
+            fn visit_string<E>(self, value: String) -> Result<StrictJson, E> {
+                Ok(StrictJson(Value::String(value)))
+            }
+            fn visit_unit<E>(self) -> Result<StrictJson, E> {
+                Ok(StrictJson(Value::Null))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<StrictJson, A::Error> {
+                let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+                while let Some(value) = sequence.next_element::<StrictJson>()? {
+                    values.push(value.0);
+                }
+                Ok(StrictJson(Value::Array(values)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<StrictJson, A::Error> {
+                let mut values = Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    match values.entry(key) {
+                        serde_json::map::Entry::Vacant(entry) => {
+                            entry.insert(map.next_value::<StrictJson>()?.0);
+                        }
+                        serde_json::map::Entry::Occupied(_) => {
+                            return Err(serde::de::Error::custom(
+                                "the request repeats an object member",
+                            ));
+                        }
+                    }
+                }
+                Ok(StrictJson(Value::Object(values)))
+            }
+        }
+        deserializer.deserialize_any(StrictVisitor)
+    }
+}
+
 fn parse_search_input(input: &str) -> Result<SearchInput, Error> {
     if input.len() > learning::MAX_INPUT {
         return Err(learning::invalid_input("the search request is too large"));
     }
-    let parsed: SearchInput = serde_json::from_str(input)
+    let parsed: SearchInput = parse_object(input)
         .map_err(|_| learning::invalid_input("the search request is malformed"))?;
     if parsed.rights_reviewed != Some(true) {
         return Err(learning::authorization_required(
@@ -4454,7 +4541,7 @@ fn parse_fetch_input(input: &str) -> Result<FetchInput, Error> {
     if input.len() > learning::MAX_INPUT {
         return Err(learning::invalid_input("the fetch request is too large"));
     }
-    let parsed: FetchInput = serde_json::from_str(input)
+    let parsed: FetchInput = parse_object(input)
         .map_err(|_| learning::invalid_input("the fetch request is malformed"))?;
     if parsed.rights_reviewed != Some(true) {
         return Err(learning::authorization_required(
@@ -4661,7 +4748,7 @@ pub fn practice(input: &str) -> Result<Value, Error> {
     if input.len() > learning::MAX_PRACTICE_INPUT {
         return Err(learning::invalid_input("the practice request is too large"));
     }
-    let value: Value = serde_json::from_str(input)
+    let StrictJson(value) = serde_json::from_str(input)
         .map_err(|_| learning::invalid_input("the practice request is malformed"))?;
     let object = value
         .as_object()
@@ -6181,6 +6268,68 @@ mod tests {
         // The attested fact travels in the session; it is never a default.
         assert_eq!(generated["rights_reviewed"], true);
         assert_eq!(generated["practice_source"]["rights_reviewed"], true);
+    }
+
+    #[test]
+    fn practice_rejects_repeated_root_and_nested_rights_attestations() {
+        let material = "The gyroscope keeps a stable axis in flight. Angular momentum resists change of orientation.";
+        for fields in [
+            r#""rights_reviewed":false,"rights_reviewed":true"#,
+            r#""rights_reviewed":true,"rights_reviewed":true"#,
+            r#""rights_reviewed":false,"rights_\u0072eviewed":true"#,
+        ] {
+            let input = format!(
+                r#"{{"action":"generate","mode":"cloze","material_text":"{material}","count":1,{fields}}}"#
+            );
+            assert_eq!(practice(&input).unwrap_err().code, "invalid_input");
+        }
+        let session = practice(&json!({"action":"generate","mode":"cloze","material_text":material,"count":1,"rights_reviewed":true}).to_string()).unwrap();
+        let source = session["practice_source"].to_string();
+        let repeated = source.replace(
+            r#""rights_reviewed":true"#,
+            r#""rights_reviewed":false,"rights_reviewed":true"#,
+        );
+        let input = format!(
+            r#"{{"action":"check","session":{}}}"#,
+            session.to_string().replace(&source, &repeated)
+        );
+        assert_eq!(practice(&input).unwrap_err().code, "invalid_input");
+    }
+
+    #[test]
+    fn material_read_inputs_require_objects_without_collapsing_duplicate_fields() {
+        let query = parse_search_input(r#"{"query":"flight","rights_reviewed":true}"#).unwrap();
+        assert_eq!(query.query, "flight");
+        for input in [
+            r#"["flight",true]"#,
+            r#"{"query":"flight","rights_reviewed":false,"rights_reviewed":true}"#,
+            r#"{"query":"flight","rights_reviewed":true} {}"#,
+        ] {
+            assert_eq!(
+                parse_search_input(input).err().unwrap().code,
+                "invalid_input"
+            );
+        }
+        let reviewed = json!({"path":"README.md","rights_reviewed":true,"tree_sha":"a".repeat(40),"blob_sha":"b".repeat(40),"mode":"100644","size":1});
+        assert_eq!(
+            parse_fetch_input(&reviewed.to_string()).unwrap().path,
+            "README.md"
+        );
+        let positional = json!([
+            "README.md",
+            true,
+            "a".repeat(40),
+            "b".repeat(40),
+            "100644",
+            1
+        ]);
+        assert_eq!(
+            parse_fetch_input(&positional.to_string())
+                .err()
+                .unwrap()
+                .code,
+            "invalid_input"
+        );
     }
 
     #[test]

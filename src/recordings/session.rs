@@ -428,7 +428,7 @@ fn within_session_family(domain: &str) -> bool {
     domain == SESSION_FAMILY || domain.ends_with(&format!(".{SESSION_FAMILY}"))
 }
 
-fn valid_cookie_name(value: &str) -> bool {
+pub(crate) fn valid_cookie_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
         && value
@@ -436,7 +436,7 @@ fn valid_cookie_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
-fn valid_cookie_value(value: &str) -> bool {
+pub(crate) fn valid_cookie_value(value: &str) -> bool {
     if value.len() > 4096 {
         return false;
     }
@@ -806,14 +806,10 @@ impl Jar {
             // declaration remains the identity.
             let host_only = domain.is_none();
             let (scope, declared_domain) = match domain {
-                Some(domain)
-                    if domain_matches(&domain, host) && within_shared_family(&domain) =>
-                {
-                    (
-                        Scope::Platform(domain.trim_start_matches('.').to_ascii_lowercase()),
-                        None,
-                    )
-                }
+                Some(domain) if domain_matches(&domain, host) && within_shared_family(&domain) => (
+                    Scope::Platform(domain.trim_start_matches('.').to_ascii_lowercase()),
+                    None,
+                ),
                 Some(domain) if domain_matches(&domain, host) => (
                     Scope::Host(host.to_ascii_lowercase()),
                     Some(domain.trim_start_matches('.').to_ascii_lowercase()),
@@ -879,7 +875,12 @@ impl Jar {
 
     /// Remove the cookie a deletion names, keeping its credential value
     /// reachable for the privacy guard.
-    fn delete_cookie(&mut self, name: &str, identity_domain: &str, path: &str) -> Result<(), Error> {
+    fn delete_cookie(
+        &mut self,
+        name: &str,
+        identity_domain: &str,
+        path: &str,
+    ) -> Result<(), Error> {
         let mut index = 0;
         while index < self.cookies.len() {
             let deleted = self.cookies[index].name == name
@@ -904,7 +905,10 @@ impl Jar {
             return Ok(());
         }
         if self.retired.len() >= MAX_RETIRED_CREDENTIALS {
-            return Err(Error::new("body_limit", "Authentication cookie history exceeds its privacy bound; no further request is allowed."));
+            return Err(Error::new(
+                "body_limit",
+                "Authentication cookie history exceeds its privacy bound; no further request is allowed.",
+            ));
         }
         self.retired.push(value);
         Ok(())
@@ -921,12 +925,13 @@ impl Jar {
             return Ok(index);
         }
         if self.transmitted_headers.len() >= MAX_TRANSMITTED_HEADERS
-            || self
-                .transmitted_header_bytes
-                .saturating_add(header.len())
+            || self.transmitted_header_bytes.saturating_add(header.len())
                 > MAX_TRANSMITTED_HEADER_BYTES
         {
-            return Err(Error::new("body_limit", "Authentication cookie header history exceeds its privacy bound; no further request is allowed."));
+            return Err(Error::new(
+                "body_limit",
+                "Authentication cookie header history exceeds its privacy bound; no further request is allowed.",
+            ));
         }
         self.transmitted_header_bytes += header.len();
         let index = self.transmitted_headers.len();
@@ -968,8 +973,12 @@ impl Jar {
             }
             let permitted = match &cookie.scope {
                 Scope::Host(scope) => *scope == host,
-                Scope::Platform(domain) => host == *domain
-                    || host.strip_suffix(domain.as_str()).is_some_and(|prefix| prefix.ends_with('.')),
+                Scope::Platform(domain) => {
+                    host == *domain
+                        || host
+                            .strip_suffix(domain.as_str())
+                            .is_some_and(|prefix| prefix.ends_with('.'))
+                }
             };
             if !permitted {
                 continue;
@@ -3446,8 +3455,10 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
 }
 
 fn allowed(url: &Url, service: CasService) -> bool {
-    allowed_origin(url, service) && url.fragment().is_none()
-        && (service != CasService::Ihome || url.host_str() != Some(IHOME_HOST)
+    allowed_origin(url, service)
+        && url.fragment().is_none()
+        && (service != CasService::Ihome
+            || url.host_str() != Some(IHOME_HOST)
             || url.path() == IHOME_CAS_CALLBACK_PATH)
 }
 
@@ -3596,12 +3607,19 @@ fn send(
             Sent(Result<Response, reqwest::Error>),
         }
         let response = match lease.start_request(|| {
-            if cookie_snapshot.as_ref().is_some_and(|(_, expiry)|cookie_expired(*expiry)) {
+            if cookie_snapshot
+                .as_ref()
+                .is_some_and(|(_, expiry)| cookie_expired(*expiry))
+            {
                 return SessionStart::CookieUnusable;
             }
-            let mut request = client.request(method.clone(), url.clone()).timeout(Duration::from_secs(30));
+            let mut request = client
+                .request(method.clone(), url.clone())
+                .timeout(Duration::from_secs(30));
             if let Some((index, _)) = &cookie_snapshot {
-                let Ok(mut header) = HeaderValue::from_str(jar.transmitted_headers[*index].as_str()) else {
+                let Ok(mut header) =
+                    HeaderValue::from_str(jar.transmitted_headers[*index].as_str())
+                else {
                     return SessionStart::CookieUnusable;
                 };
                 header.set_sensitive(true);
@@ -3633,7 +3651,9 @@ fn send(
             Ok(SessionStart::Sent(Ok(response))) => response,
             Ok(SessionStart::Sent(Err(_))) => return Err(unavailable()),
             Ok(SessionStart::CookieUnusable) => return Err(scoped_cookie_unusable()),
-            Err(crate::governor::FollowupError::Governor(_)) => return Err(governor_state_unknown()),
+            Err(crate::governor::FollowupError::Governor(_)) => {
+                return Err(governor_state_unknown());
+            }
         };
         let status = response.status().as_u16();
         let challenged = response
@@ -3647,7 +3667,11 @@ fn send(
             .transpose();
         let observed_result = lease.observe_http_many(
             status,
-            response.headers().get_all(RETRY_AFTER).iter().map(|value|value.to_str().ok()),
+            response
+                .headers()
+                .get_all(RETRY_AFTER)
+                .iter()
+                .map(|value| value.to_str().ok()),
             challenged,
         );
         if observed_result.is_err() {
@@ -3659,7 +3683,11 @@ fn send(
         let mut content_types = all_content_types.iter();
         let content_type_result = match (content_types.next(), content_types.next()) {
             (None, _) => Ok(None),
-            (Some(value), None) => value.to_str().map(str::to_owned).map(Some).map_err(|_| unavailable()),
+            (Some(value), None) => value
+                .to_str()
+                .map(str::to_owned)
+                .map(Some)
+                .map_err(|_| unavailable()),
             (Some(_), Some(_)) => Err(unavailable()),
         };
         let location = response.headers().get(LOCATION).cloned();
@@ -3747,8 +3775,13 @@ fn send(
                         jar.terminal_credential = Some(credential);
                     }
                     return Ok(Hop {
-                        status, url, body, retry_after, challenge: challenged,
-                        content_type, redirected: had_redirect,
+                        status,
+                        url,
+                        body,
+                        retry_after,
+                        challenge: challenged,
+                        content_type,
+                        redirected: had_redirect,
                     });
                 }
             }
@@ -3785,11 +3818,17 @@ fn send(
                 ));
             }
             if jar.service != CasService::Ihome
-                && let Some(credential) = terminal_service_credential(jar.service, &next)? {
+                && let Some(credential) = terminal_service_credential(jar.service, &next)?
+            {
                 jar.terminal_credential = Some(credential);
                 return Ok(Hop {
-                    status, url, body, retry_after, challenge: challenged,
-                    content_type, redirected: had_redirect,
+                    status,
+                    url,
+                    body,
+                    retry_after,
+                    challenge: challenged,
+                    content_type,
+                    redirected: had_redirect,
                 });
             }
             if !allowed(&next, jar.service) {
@@ -3852,7 +3891,8 @@ fn body_text(response: Response) -> Result<String, Error> {
 fn pinned_login_url(service: CasService) -> Result<Url, Error> {
     let mut url = Url::parse(SSO_ORIGIN).map_err(|_| invalid())?;
     url.set_path("/login");
-    url.query_pairs_mut().append_pair("service", service.declaration());
+    url.query_pairs_mut()
+        .append_pair("service", service.declaration());
     if service == CasService::SmartClassrooms {
         url.query_pairs_mut().append_pair("noAutoRedirect", "1");
     }
@@ -3878,8 +3918,13 @@ fn pinned_login_route(url: &Url, service: CasService) -> bool {
             for (name, value) in url.query_pairs() {
                 match name.as_ref() {
                     "service" if !selected && value == service.declaration() => selected = true,
-                    "noAutoRedirect" if service == CasService::SmartClassrooms
-                        && !no_auto_redirect && value == "1" => no_auto_redirect = true,
+                    "noAutoRedirect"
+                        if service == CasService::SmartClassrooms
+                            && !no_auto_redirect
+                            && value == "1" =>
+                    {
+                        no_auto_redirect = true
+                    }
                     _ => return false,
                 }
             }
@@ -3892,11 +3937,17 @@ fn pinned_login_route(url: &Url, service: CasService) -> bool {
 /// The library CAS value and the iHome fragment token are consumed in memory
 /// by their business exchange, never fetched as a new URL or projected as
 /// ordinary response data.
-fn terminal_service_credential(service: CasService, url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
+fn terminal_service_credential(
+    service: CasService,
+    url: &Url,
+) -> Result<Option<Zeroizing<String>>, Error> {
     match service {
         CasService::Library => library_terminal_credential(url),
         CasService::Ihome => ihome_terminal_credential(url),
-        CasService::Classroom | CasService::SmartClassrooms | CasService::Byxt | CasService::Gsmis
+        CasService::Classroom
+        | CasService::SmartClassrooms
+        | CasService::Byxt
+        | CasService::Gsmis
         | CasService::Boya => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
@@ -3933,9 +3984,14 @@ fn library_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, E
     if !allowed_origin(url, CasService::Library) {
         return Err(invalid());
     }
-    let query = url.query().into_iter().flat_map(|query| url::form_urlencoded::parse(query.as_bytes()));
+    let query = url
+        .query()
+        .into_iter()
+        .flat_map(|query| url::form_urlencoded::parse(query.as_bytes()));
     let fragment = url.fragment().into_iter().flat_map(|fragment| {
-        let parameters = fragment.split_once('?').map_or(fragment, |(_, parameters)| parameters);
+        let parameters = fragment
+            .split_once('?')
+            .map_or(fragment, |(_, parameters)| parameters);
         url::form_urlencoded::parse(parameters.as_bytes())
     });
     let mut credential = None;
@@ -3945,7 +4001,9 @@ fn library_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, E
         }
         let value = Zeroizing::new(value.into_owned());
         if url.host_str() != Some("booking.lib.buaa.edu.cn")
-            || credential.is_some() || value.trim().is_empty() || value.len() > MAX_TERMINAL_CREDENTIAL_BYTES
+            || credential.is_some()
+            || value.trim().is_empty()
+            || value.len() > MAX_TERMINAL_CREDENTIAL_BYTES
             || value.chars().any(char::is_control)
         {
             return Err(invalid());
@@ -3978,9 +4036,9 @@ fn ihome_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Err
     if url.path() != IHOME_TERMINAL_PATH {
         return Ok(None);
     }
-    let query_carries_credential = url.query_pairs().any(|(name, _)| {
-        matches!(name.as_ref(), "type" | "token")
-    });
+    let query_carries_credential = url
+        .query_pairs()
+        .any(|(name, _)| matches!(name.as_ref(), "type" | "token"));
     if query_carries_credential {
         return Err(invalid());
     }
@@ -5775,10 +5833,14 @@ pub fn inspect(input: &str) -> Result<Value, Error> {
     let mut jar = Jar::default();
     let mut lease = acquire_kind(&governor, RequestKind::Authentication)?;
     let mut trail = Trail::new();
-    let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true, None) {
+    let page = match send(
+        &mut lease, &client, &mut jar, &url, None, &mut trail, true, None,
+    ) {
         Ok(page) => page,
         Err(error) => {
-            if error.code == "governor_unavailable" { return Err(error); }
+            if error.code == "governor_unavailable" {
+                return Err(error);
+            }
             finish_send_failure(lease, &error).map_err(|_| unavailable())?;
             return Err(error);
         }
@@ -5814,10 +5876,14 @@ pub fn diagnose(input: &str) -> Result<Value, Error> {
     let mut jar = Jar::default();
     let mut lease = acquire_kind(&governor, RequestKind::Interactive)?;
     let mut trail = Trail::new();
-    let page = match send(&mut lease, &client, &mut jar, &url, None, &mut trail, true, None) {
+    let page = match send(
+        &mut lease, &client, &mut jar, &url, None, &mut trail, true, None,
+    ) {
         Ok(page) => page,
         Err(error) => {
-            if error.code == "governor_unavailable" { return Err(error); }
+            if error.code == "governor_unavailable" {
+                return Err(error);
+            }
             finish_send_failure(lease, &error).map_err(|_| unavailable())?;
             return Err(error);
         }
@@ -5837,7 +5903,8 @@ fn finish_login_inspection(
 ) -> Result<Value, Error> {
     let mut output = login_inspection(page, expected);
     let challenged = page.challenge || output["active_challenge_control"].as_bool() == Some(true);
-    lease.finish(crate::governor::Outcome::Http {
+    lease
+        .finish(crate::governor::Outcome::Http {
             status: page.status,
             retry_after: page.retry_after.as_deref(),
             challenge: challenged,
@@ -6007,7 +6074,10 @@ fn settle_failed_attempt(
         return error;
     }
     let (class, outcome) = match error.code {
-        "safety_latched" => (FailureClass::SafetyObservation, crate::governor::Outcome::SafetyObserved),
+        "safety_latched" => (
+            FailureClass::SafetyObservation,
+            crate::governor::Outcome::SafetyObserved,
+        ),
         "scoped_cookie_unusable" => (FailureClass::ScopedCookieUnusable, outcome),
         _ => (class, outcome),
     };
@@ -6090,8 +6160,12 @@ enum FormRefusal {
     Unsafe(Error),
 }
 
-fn prepare_credential_form(page: &Hop, service: CasService) -> Result<PreparedCredentialForm, FormRefusal> {
-    let fields = login_fields(&page.body, LoginSourceScope::CredentialForm).map_err(FormRefusal::Unsafe)?;
+fn prepare_credential_form(
+    page: &Hop,
+    service: CasService,
+) -> Result<PreparedCredentialForm, FormRefusal> {
+    let fields =
+        login_fields(&page.body, LoginSourceScope::CredentialForm).map_err(FormRefusal::Unsafe)?;
     if requires_challenge(&fields) {
         return Err(FormRefusal::Challenge);
     }
@@ -6101,14 +6175,20 @@ fn prepare_credential_form(page: &Hop, service: CasService) -> Result<PreparedCr
         return Err(FormRefusal::ChallengeText);
     }
     if requires_interaction_review(&fields)
-        || !fields.fields.iter().any(|(name, value)| name == "execution" && !value.is_empty())
+        || !fields
+            .fields
+            .iter()
+            .any(|(name, value)| name == "execution" && !value.is_empty())
     {
         return Err(FormRefusal::Unsafe(interaction_review_required()));
     }
     if !fields.method.eq_ignore_ascii_case("post") {
         return Err(FormRefusal::Unsafe(invalid()));
     }
-    let action = page.url.join(&fields.action).map_err(|_| FormRefusal::Unsafe(invalid()))?;
+    let action = page
+        .url
+        .join(&fields.action)
+        .map_err(|_| FormRefusal::Unsafe(invalid()))?;
     if !pinned_login_route(&action, service) {
         return Err(FormRefusal::Unsafe(invalid()));
     }
@@ -6125,7 +6205,10 @@ pub(crate) struct SsoCredentials<'a> {
 impl<'a> SsoCredentials<'a> {
     pub(crate) fn new(username: &'a str, password: &'a str) -> Result<Self, Error> {
         if !valid_secret(username) || !valid_secret(password) {
-            return Err(Error::new("invalid_input", "Campus credentials are invalid."));
+            return Err(Error::new(
+                "invalid_input",
+                "Campus credentials are invalid.",
+            ));
         }
         Ok(Self { username, password })
     }
@@ -6145,7 +6228,10 @@ impl Drop for ServiceSession {
 }
 
 impl ServiceSession {
-    pub(crate) fn cookie_header(&self, url: &Url) -> Result<(Option<Zeroizing<String>>, Option<SystemTime>), Error> {
+    pub(crate) fn cookie_header(
+        &self,
+        url: &Url,
+    ) -> Result<(Option<Zeroizing<String>>, Option<SystemTime>), Error> {
         let expected_host = match self.jar.service {
             CasService::SmartClassrooms => "app.buaa.edu.cn",
             CasService::Library => "booking.lib.buaa.edu.cn",
@@ -6163,9 +6249,15 @@ impl ServiceSession {
         }
     }
 
-    pub(crate) fn absorb_library_headers(&mut self, url: &Url, headers: &HeaderMap) -> Result<(), Error> {
-        if self.jar.service != CasService::Library || !allowed(url, self.jar.service)
-            || url.host_str() != Some("booking.lib.buaa.edu.cn") {
+    pub(crate) fn absorb_library_headers(
+        &mut self,
+        url: &Url,
+        headers: &HeaderMap,
+    ) -> Result<(), Error> {
+        if self.jar.service != CasService::Library
+            || !allowed(url, self.jar.service)
+            || url.host_str() != Some("booking.lib.buaa.edu.cn")
+        {
             return Err(invalid());
         }
         self.jar.absorb(url, headers)
@@ -6175,7 +6267,10 @@ impl ServiceSession {
     /// once. No retry or alternate credential can be manufactured after the
     /// take.
     pub(crate) fn take_service_credential(&mut self) -> Result<Zeroizing<String>, Error> {
-        if !matches!(self.jar.service, CasService::Library | CasService::Ihome | CasService::Boya) {
+        if !matches!(
+            self.jar.service,
+            CasService::Library | CasService::Ihome | CasService::Boya
+        ) {
             return Err(invalid());
         }
         self.jar.terminal_credential.take().ok_or_else(|| Error::new(
@@ -6190,6 +6285,34 @@ impl ServiceSession {
     /// value is exported and no match is reported beyond this answer.
     pub(crate) fn contains_secret_bytes(&self, bytes: &[u8]) -> bool {
         self.jar.contains_secret_bytes(bytes)
+    }
+
+    /// A fixed in-memory handoff for admission proofs that need real cookie
+    /// material: the supplied `Set-Cookie` declarations are admitted through
+    /// the same jar review the login exchange uses, including the retired
+    /// values a replacement or expiration produces.
+    #[cfg(test)]
+    pub(crate) fn test_session_with_cookies(
+        service: CasService,
+        url: &str,
+        declarations: &[&str],
+    ) -> Self {
+        let url = Url::parse(url).expect("test session URL must parse");
+        let mut headers = HeaderMap::new();
+        for declaration in declarations {
+            headers.append(
+                SET_COOKIE,
+                HeaderValue::from_str(declaration)
+                    .expect("test cookie declaration must be a header value"),
+            );
+        }
+        let mut jar = Jar {
+            service,
+            ..Jar::default()
+        };
+        jar.absorb(&url, &headers)
+            .expect("test cookie declarations must be admitted");
+        ServiceSession { jar }
     }
 }
 
@@ -6250,29 +6373,47 @@ pub(crate) fn authenticate_service(
         return Err(invalid());
     }
     let login_url = pinned_login_url(service)?;
-    let mut jar = Jar { service, ..Jar::default() };
+    let mut jar = Jar {
+        service,
+        ..Jar::default()
+    };
     let mut trail = Trail::new();
-    let page = send(lease, client, &mut jar, &login_url, None, &mut trail, true, None)
-        .map_err(service_attempt_failure)?;
+    let page = send(
+        lease, client, &mut jar, &login_url, None, &mut trail, true, None,
+    )
+    .map_err(service_attempt_failure)?;
     if page.challenge {
         return Err(challenge_required());
     }
     if page.retry_after.is_some() || page.status == 429 {
         return Err(deferred());
     }
-    if page.status != 200 || page.url != login_url || page.redirected
+    if page.status != 200
+        || page.url != login_url
+        || page.redirected
         || page.body.trim().is_empty()
         || login_content_type_label(page.content_type.as_deref()) != Some("text/html")
     {
-        return Err(admission_failed("The service sign-on page could not be admitted; no credentials were submitted."));
+        return Err(admission_failed(
+            "The service sign-on page could not be admitted; no credentials were submitted.",
+        ));
     }
     let prepared = prepare_credential_form(&page, service).map_err(|refusal| match refusal {
         FormRefusal::Challenge | FormRefusal::ChallengeText => challenge_required(),
         FormRefusal::Unsafe(error) => service_attempt_failure(error),
     })?;
     let form = login_form_values(&prepared.fields, credentials.username, credentials.password);
-    let landed = send(lease, client, &mut jar, &prepared.action, Some((&form, &page.url)), &mut trail, false, None)
-        .map_err(service_attempt_failure)?;
+    let landed = send(
+        lease,
+        client,
+        &mut jar,
+        &prepared.action,
+        Some((&form, &page.url)),
+        &mut trail,
+        false,
+        None,
+    )
+    .map_err(service_attempt_failure)?;
     if landed.challenge {
         return Err(challenge_required());
     }
@@ -6288,17 +6429,24 @@ pub(crate) fn authenticate_service(
             LandingVerdict::Clear => {}
             LandingVerdict::Challenge => return Err(challenge_required()),
             LandingVerdict::Rejected => {
-                return Err(Error::new("auth_latched", "Service authentication was rejected by the sign-on service; no retry was performed."));
+                return Err(Error::new(
+                    "auth_latched",
+                    "Service authentication was rejected by the sign-on service; no retry was performed.",
+                ));
             }
             LandingVerdict::Unreadable => {
-                return Err(admission_failed("The service handoff page could not be read as a reviewed document; no retry was performed."));
+                return Err(admission_failed(
+                    "The service handoff page could not be read as a reviewed document; no retry was performed.",
+                ));
             }
         }
     }
     match service {
         CasService::Library | CasService::Ihome => {
             if jar.terminal_credential.is_none() {
-                return Err(admission_failed("The relying party did not provide a confirmed credential handoff; no retry was performed."));
+                return Err(admission_failed(
+                    "The relying party did not provide a confirmed credential handoff; no retry was performed.",
+                ));
             }
         }
         CasService::SmartClassrooms => {
@@ -6309,11 +6457,16 @@ pub(crate) fn authenticate_service(
                 || landed.body.trim().is_empty()
                 || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
             {
-                return Err(admission_failed("The classroom-query handoff could not be confirmed; no retry was performed."));
+                return Err(admission_failed(
+                    "The classroom-query handoff could not be confirmed; no retry was performed.",
+                ));
             }
-            let probe = Url::parse("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1").map_err(|_| invalid())?;
+            let probe = Url::parse("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1")
+                .map_err(|_| invalid())?;
             if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
-                return Err(admission_failed("The classroom-query handoff supplied no usable scoped cookie; no retry was performed."));
+                return Err(admission_failed(
+                    "The classroom-query handoff supplied no usable scoped cookie; no retry was performed.",
+                ));
             }
         }
         CasService::Byxt | CasService::Gsmis => {
@@ -6321,20 +6474,30 @@ pub(crate) fn authenticate_service(
             // reviewed HTML landing on their own origin plus one usable
             // session cookie for the read that follows.
             let (host, probe) = if service == CasService::Byxt {
-                (BYXT_HOST, "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do")
+                (
+                    BYXT_HOST,
+                    "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do",
+                )
             } else {
-                (GSMIS_HOST, "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do")
+                (
+                    GSMIS_HOST,
+                    "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do",
+                )
             };
             if landed.status != 200
                 || landed.url.host_str() != Some(host)
                 || landed.body.trim().is_empty()
                 || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
             {
-                return Err(admission_failed("The relying-party handoff could not be confirmed; no retry was performed."));
+                return Err(admission_failed(
+                    "The relying-party handoff could not be confirmed; no retry was performed.",
+                ));
             }
             let probe = Url::parse(probe).map_err(|_| invalid())?;
             if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
-                return Err(admission_failed("The relying-party handoff supplied no usable scoped cookie; no retry was performed."));
+                return Err(admission_failed(
+                    "The relying-party handoff supplied no usable scoped cookie; no retry was performed.",
+                ));
             }
         }
         CasService::Boya => {
@@ -6344,7 +6507,9 @@ pub(crate) fn authenticate_service(
                 || landed.url.host_str() != Some(BYKC_HOST)
                 || landed.url.path() != "/cas-login"
             {
-                return Err(admission_failed("The Boya handoff did not reach its token landing; no retry was performed."));
+                return Err(admission_failed(
+                    "The Boya handoff did not reach its token landing; no retry was performed.",
+                ));
             }
             let issued = landed
                 .url
@@ -6352,10 +6517,17 @@ pub(crate) fn authenticate_service(
                 .filter(|(key, _)| key == "token")
                 .map(|(_, value)| value.into_owned())
                 .collect::<Vec<_>>();
-            if issued.len() != 1 || issued[0].len() != 32 || !issued[0].bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Err(admission_failed("The Boya handoff supplied no single admitted token; no retry was performed."));
+            if issued.len() != 1
+                || issued[0].len() != 32
+                || !issued[0].bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(admission_failed(
+                    "The Boya handoff supplied no single admitted token; no retry was performed.",
+                ));
             }
-            jar.terminal_credential = Some(zeroize::Zeroizing::new(issued.into_iter().next().unwrap_or_default()));
+            jar.terminal_credential = Some(zeroize::Zeroizing::new(
+                issued.into_iter().next().unwrap_or_default(),
+            ));
         }
         CasService::Classroom => return Err(invalid()),
     }
@@ -6478,14 +6650,34 @@ pub fn login(input: &str) -> Result<Value, Error> {
         Ok(prepared) => prepared,
         Err(refusal) => {
             let (class, outcome, error) = match refusal {
-                FormRefusal::Challenge => (FailureClass::Challenge, crate::governor::Outcome::CaptchaRequired, challenge()),
+                FormRefusal::Challenge => (
+                    FailureClass::Challenge,
+                    crate::governor::Outcome::CaptchaRequired,
+                    challenge(),
+                ),
                 // Challenge wording keeps the classroom reader's established
                 // treatment: an unreviewed interaction, not a verdict on the
                 // credential.
-                FormRefusal::ChallengeText => (FailureClass::UnsafeInteraction, crate::governor::Outcome::CredentialRejected, interaction_review_required()),
-                FormRefusal::Unsafe(error) => (FailureClass::UnsafeInteraction, crate::governor::Outcome::CredentialRejected, error),
+                FormRefusal::ChallengeText => (
+                    FailureClass::UnsafeInteraction,
+                    crate::governor::Outcome::CredentialRejected,
+                    interaction_review_required(),
+                ),
+                FormRefusal::Unsafe(error) => (
+                    FailureClass::UnsafeInteraction,
+                    crate::governor::Outcome::CredentialRejected,
+                    error,
+                ),
             };
-            return Err(settle_failed_attempt(lease, &fingerprint, class, &trail, &page.url, outcome, error));
+            return Err(settle_failed_attempt(
+                lease,
+                &fingerprint,
+                class,
+                &trail,
+                &page.url,
+                outcome,
+                error,
+            ));
         }
     };
     let fields = prepared.fields;
@@ -6604,7 +6796,13 @@ pub fn login(input: &str) -> Result<Value, Error> {
     // same authentication lease. A classroom cookie and a 200 redirect alone
     // never establish a session or imply account identity/rights.
     let probe = send(
-        &mut lease, &client, &mut jar, &probe_url, None, &mut trail, false,
+        &mut lease,
+        &client,
+        &mut jar,
+        &probe_url,
+        None,
+        &mut trail,
+        false,
         bearer.as_ref().map(|b| b.as_str()),
     );
     let probe = match probe {
@@ -8478,7 +8676,10 @@ mod tests {
     #[test]
     fn selected_cookie_expiring_during_pacing_prevents_the_next_post() {
         use std::io::Write;
-        use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -8490,7 +8691,8 @@ mod tests {
                 match listener.accept() {
                     Ok((mut socket, _)) => {
                         worker_requests.fetch_add(1, Ordering::SeqCst);
-                        let _ = socket.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(5));
@@ -8501,21 +8703,41 @@ mod tests {
         });
         let (_directory, path) = temporary_directory("cookie-expires-before-fenced-post");
         let governor = Governor::isolated_for_test(&path).unwrap();
-        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        governor
+            .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+            .unwrap();
         let mut lease = governor.try_acquire(RequestKind::Authentication).unwrap();
         let url = pinned_login_url(CasService::Classroom).unwrap();
         let mut headers = HeaderMap::new();
-        headers.append(SET_COOKIE, HeaderValue::from_static("sid=synthetic; Path=/; Max-Age=1"));
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("sid=synthetic; Path=/; Max-Age=1"),
+        );
         let mut jar = Jar::default();
         jar.absorb(&url, &headers).unwrap();
         let proxy = reqwest::Proxy::all(format!("http://{address}")).unwrap();
-        let client = Client::builder().https_only(true).proxy(proxy).build().unwrap();
+        let client = Client::builder()
+            .https_only(true)
+            .proxy(proxy)
+            .build()
+            .unwrap();
         let fields = [("username", "synthetic"), ("password", "synthetic")];
         let mut trail = Trail::new();
-        let result = send(&mut lease, &client, &mut jar, &url, Some((&fields, &url)), &mut trail, false, None);
+        let result = send(
+            &mut lease,
+            &client,
+            &mut jar,
+            &url,
+            Some((&fields, &url)),
+            &mut trail,
+            false,
+            None,
+        );
         stopped.store(true, Ordering::SeqCst);
         worker.join().unwrap();
-        let error = result.err().expect("expired cookie must refuse the next request");
+        let error = result
+            .err()
+            .expect("expired cookie must refuse the next request");
         assert_eq!(error.code, "scoped_cookie_unusable");
         finish_send_failure(lease, &error).unwrap();
         let status = governor.status().unwrap();
@@ -8528,23 +8750,44 @@ mod tests {
     fn expired_scoped_cookie_refusal_preserves_interactive_governor_state() {
         let (_directory, path) = temporary_directory("already-expired-scoped-cookie");
         let governor = Governor::isolated_for_test(&path).unwrap();
-        governor.resume_authentication(ResumeAuthorization::ExplicitUserRequest).unwrap();
+        governor
+            .resume_authentication(ResumeAuthorization::ExplicitUserRequest)
+            .unwrap();
         let mut lease = governor.try_acquire(RequestKind::Interactive).unwrap();
         let url = pinned_login_url(CasService::Classroom).unwrap();
         let other = Url::parse("https://classroom.msa.buaa.edu.cn/").unwrap();
         let mut jar = Jar::default();
-        assert!(matches!(jar.select_cookies(&url, true), ScopedCookies::Anonymous));
+        assert!(matches!(
+            jar.select_cookies(&url, true),
+            ScopedCookies::Anonymous
+        ));
         let mut headers = HeaderMap::new();
-        headers.append(SET_COOKIE, HeaderValue::from_static("sid=synthetic; Path=/; Max-Age=60"));
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("sid=synthetic; Path=/; Max-Age=60"),
+        );
         jar.absorb(&url, &headers).unwrap();
         jar.cookies[0].expiry = Some(UNIX_EPOCH);
-        assert!(matches!(jar.select_cookies(&other, true), ScopedCookies::Anonymous));
-        assert!(matches!(jar.select_cookies(&url, true), ScopedCookies::Unusable));
+        assert!(matches!(
+            jar.select_cookies(&other, true),
+            ScopedCookies::Anonymous
+        ));
+        assert!(matches!(
+            jar.select_cookies(&url, true),
+            ScopedCookies::Unusable
+        ));
         let proxy = reqwest::Proxy::all("http://127.0.0.1:1").unwrap();
-        let client = Client::builder().https_only(true).proxy(proxy).build().unwrap();
+        let client = Client::builder()
+            .https_only(true)
+            .proxy(proxy)
+            .build()
+            .unwrap();
         let mut trail = Trail::new();
-        let error = send(&mut lease, &client, &mut jar, &url, None, &mut trail, true, None)
-            .err().expect("an expired applicable cookie must refuse the request");
+        let error = send(
+            &mut lease, &client, &mut jar, &url, None, &mut trail, true, None,
+        )
+        .err()
+        .expect("an expired applicable cookie must refuse the request");
         assert_eq!(error.code, "scoped_cookie_unusable");
         finish_send_failure(lease, &error).unwrap();
         let status = governor.status().unwrap();
@@ -9796,10 +10039,7 @@ mod tests {
         // the setter for delivery; replacing one never touches the other.
         let mut jar = Jar::default();
         set(&mut jar, "sid=host; Path=/; Max-Age=3600");
-        set(
-            &mut jar,
-            "sid=parent; Path=/; Domain=edu.cn; Max-Age=3600",
-        );
+        set(&mut jar, "sid=parent; Path=/; Domain=edu.cn; Max-Age=3600");
         assert_eq!(jar.cookies.len(), 2);
         assert_eq!(jar.cookies[0].value, "host");
         assert_eq!(jar.cookies[1].value, "parent");
@@ -9843,19 +10083,13 @@ mod tests {
             "sid=shared; Path=/; Domain=buaa.edu.cn; Max-Age=3600",
         );
         let yjapi = Url::parse("https://yjapi.msa.buaa.edu.cn/").unwrap();
-        assert_eq!(
-            jar.header(&yjapi).unwrap().to_str().unwrap(),
-            "sid=shared"
-        );
+        assert_eq!(jar.header(&yjapi).unwrap().to_str().unwrap(), "sid=shared");
         assert_eq!(jar.cookies.len(), 2);
         assert_eq!(jar.cookies[1].identity_domain(), "buaa.edu.cn");
 
         // Private storage preserves a narrowed suffix-domain cookie's
         // identity and its narrowed delivery through a reload.
-        set(
-            &mut jar,
-            "sid=parent; Path=/; Domain=edu.cn; Max-Age=3600",
-        );
+        set(&mut jar, "sid=parent; Path=/; Domain=edu.cn; Max-Age=3600");
         let (directory, _) = temporary_directory("narrowed-parent-domain-identity");
         let fingerprint = account_fingerprint("student");
         store_session(&directory, &fingerprint, &jar).expect("store narrowed identities");
@@ -10345,7 +10579,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.append(
             SET_COOKIE,
-            HeaderValue::from_static("opaque_session=old; Domain=buaa.edu.cn; Path=/; Max-Age=3600"),
+            HeaderValue::from_static(
+                "opaque_session=old; Domain=buaa.edu.cn; Path=/; Max-Age=3600",
+            ),
         );
         jar.absorb(&sso, &headers).unwrap();
         assert_eq!(jar.header(&sso).unwrap(), "opaque_session=old");
@@ -10363,7 +10599,6 @@ mod tests {
         assert_eq!(jar.header(&sso).unwrap(), "opaque_session=old");
         assert_eq!(jar.header(&callback).unwrap(), "opaque_session=old");
     }
-
 
     #[test]
     fn cookie_paths_and_expiry_never_widen_or_retain_stale_sessions() {
@@ -10609,9 +10844,15 @@ mod tests {
             "https://sso.buaa.edu.cn/login#fragment",
         ] {
             let action = Url::parse(action).expect("action");
-            assert!(!pinned_login_route(&action, CasService::Classroom), "{action}");
+            assert!(
+                !pinned_login_route(&action, CasService::Classroom),
+                "{action}"
+            );
         }
-        assert!(pinned_login_route(&page.join("login").expect("relative"), CasService::Classroom));
+        assert!(pinned_login_route(
+            &page.join("login").expect("relative"),
+            CasService::Classroom
+        ));
     }
 
     #[test]
@@ -10880,7 +11121,10 @@ mod tests {
     fn only_the_reviewed_hosts_are_admitted() {
         for host in ALLOWED_HOSTS {
             let url = Url::parse(&format!("https://{host}/path")).expect("url");
-            assert!(allowed(&url, CasService::Classroom), "{host} must be admitted");
+            assert!(
+                allowed(&url, CasService::Classroom),
+                "{host} must be admitted"
+            );
         }
         for candidate in [
             "http://sso.buaa.edu.cn/login",
@@ -10891,7 +11135,10 @@ mod tests {
             "https://example.invalid/login",
         ] {
             let url = Url::parse(candidate).expect("url");
-            assert!(!allowed(&url, CasService::Classroom), "{candidate} must be refused");
+            assert!(
+                !allowed(&url, CasService::Classroom),
+                "{candidate} must be refused"
+            );
         }
     }
 
@@ -11191,5 +11438,4 @@ mod tests {
             assert!(!bytes.contains(marker), "receipt leaked {marker}");
         }
     }
-
 }
