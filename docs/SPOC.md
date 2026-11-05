@@ -43,10 +43,15 @@ offline miss is unavailable, not an empty surface.
 
 `script` accepts exactly JSON `{ "url": "..." }` on stdin and returns
 `type: spoc_public_script`. `--online` admits a governed cache miss;
-`--refresh` conditionally revalidates only the selected script. Entry discovery
-requires HTTP 200 with an explicit exact `text/html` media type (parameters
-allowed), then stays cache-first on the same client; refresh `surface entry` separately to
-discover changed declarations. A syntactically allowed but undeclared URL
+`--refresh` revalidates the entry declaration observed for this request.
+A changed or missing entry media type degrades to `script_unverified`
+(`entry_mime_missing`/`entry_mime_changed`) with the exact entry facts
+preserved and no script fetch; when the current entry still declares the
+selected script, the retained immutable bytes are replayed (`script` `hit`)
+instead of a second governed request that could never complete inside one
+bounded wait. A cache-hit entry is reported as
+`declaration_source: retained_entry_snapshot`, never claimed as current.
+A syntactically allowed but undeclared URL
 returns unsupported before the selected fetch, even if old script bytes exist.
 Script bytes are immutable at their URL: conflicting refresh bytes are refused,
 not overwritten. Each fresh HTTP 200 script response must pass its own JavaScript
