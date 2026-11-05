@@ -4,14 +4,23 @@ use base64::Engine;
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::net::{ArchiveClient, Error, Response};
+use crate::net::{ArchiveClient, CacheStatus, Error, Response};
 
 const MAX_INPUT: usize = 32 * 1024;
 const MAX_URL: usize = 8192;
 const MAX_CURSOR: usize = 4096;
 const MAX_CDX: usize = 16 * 1024 * 1024;
+/// Hard bound on a capture body that may be preserved verbatim. The transport
+/// already refuses responses above its own, larger bound, so this bound is
+/// reachable and is enforced before any byte is re-encoded or exported.
+const MAX_CAPTURE: usize = 4 * 1024 * 1024;
+const REDIRECT_REFUSED: &str = "redirect_not_followed";
+const SOURCE_MISMATCH: &str = "response_not_from_requested_source";
+const ATTRIBUTION_INVALID: &str = "memento_attribution_invalid";
+const BODY_OVER_BOUND: &str = "body_exceeds_capture_bound";
 const FIELDS: [&str; 7] = [
     "urlkey",
     "timestamp",
@@ -100,6 +109,19 @@ fn timestamp(value: &str) -> Result<NaiveDateTime, Error> {
         .ok_or_else(invalid)
 }
 
+/// The archive indexes a resource scheme-insensitively, so an archived row may
+/// spell the same resource with either HTTP scheme. Nothing else may differ:
+/// host, port, path and query must all describe the queried resource.
+fn same_resource(expected: &Url, candidate: &Url) -> bool {
+    expected.port() == candidate.port()
+        && expected.path() == candidate.path()
+        && expected.query() == candidate.query()
+        && expected
+            .host_str()
+            .zip(candidate.host_str())
+            .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
 fn datetime(value: NaiveDateTime) -> String {
     value.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -142,6 +164,16 @@ fn decode_cursor(value: &str) -> Result<String, Error> {
         return Err(invalid());
     }
     Ok(decoded)
+}
+
+// A CDX resume key is "<urlkey> <timestamp>!". The urlkey is the index key the
+// page continues, so a page that is not about that exact key is refused.
+fn cursor_urlkey(value: &str) -> Result<&str, Error> {
+    let (urlkey, position) = value.split_once(' ').ok_or_else(unavailable)?;
+    if urlkey.is_empty() || position.is_empty() {
+        return Err(unavailable());
+    }
+    Ok(urlkey)
 }
 
 fn lookup_request(input: &str) -> Result<(LookupInput, Url), Error> {
@@ -239,13 +271,16 @@ pub fn capture(input: &str, client: &ArchiveClient) -> Result<Value, Error> {
     let expected_date = timestamp(&query.timestamp)?
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
-    client.get_with_archive_status(
+    client.get_with_archive_status_and_persistence(
         &source,
         true,
         |status, headers| {
             (400..=599).contains(&status)
                 && valid_memento_attribution(&query, &expected_date, headers)
         },
+        // Only admitted captures may persist: a refused or unverified body is
+        // reported with its facts and is never retained as the official replay.
+        |value: &Value, _| value["result"] == "capture_found",
         |response| normalize_capture(&query, &source, response),
     )
 }
@@ -289,6 +324,13 @@ fn normalize_lookup(
     }
     let mut captures = Vec::new();
     let mut next_cursor = None;
+    // Every row must describe the queried resource, and a resumed page must
+    // continue the exact index key its cursor was issued for; an unrelated
+    // snapshot can therefore never be reported as this query's capture.
+    let expected = original_url(&query.url)?;
+    let requested_cursor = query.cursor.as_deref().map(decode_cursor).transpose()?;
+    let requested_key = requested_cursor.as_deref().map(cursor_urlkey).transpose()?;
+    let mut page_key: Option<&str> = None;
     if let Some(header) = rows.first() {
         if header.len() < FIELDS.len() || header.len() > 32 {
             return Err(unavailable());
@@ -342,9 +384,12 @@ fn normalize_lookup(
             if urlkey.is_empty()
                 || !urlkey.is_ascii()
                 || urlkey.bytes().any(|byte| byte.is_ascii_whitespace())
+                || requested_key.is_some_and(|key| key != urlkey)
+                || page_key.is_some_and(|key| key != urlkey)
             {
                 return Err(unavailable());
             }
+            page_key = Some(urlkey);
             let parsed_time = timestamp(capture_time).map_err(|_| unavailable())?;
             if query
                 .from
@@ -354,7 +399,10 @@ fn normalize_lookup(
             {
                 return Err(unavailable());
             }
-            original_url(original).map_err(|_| unavailable())?;
+            let parsed_original = original_url(original).map_err(|_| unavailable())?;
+            if !same_resource(&expected, &parsed_original) {
+                return Err(unavailable());
+            }
             let status = optional_number(status)?;
             if status.is_some_and(|s| !(100..=599).contains(&s)) {
                 return Err(unavailable());
@@ -380,6 +428,13 @@ fn normalize_lookup(
                 "capture_body_sha256": null,
                 "source_url": source.as_str()
             }));
+        }
+    }
+    if let Some(next) = next_cursor.as_deref() {
+        let decoded = decode_cursor(next).map_err(|_| unavailable())?;
+        // A resume key may only continue the index key of the rows it follows.
+        if page_key != Some(cursor_urlkey(&decoded)?) {
+            return Err(unavailable());
         }
     }
     Ok(json!({
@@ -508,15 +563,100 @@ fn valid_memento_attribution(
             .is_some_and(|value| original_link(value, &query.url).is_ok())
 }
 
+/// The transport digest must describe the bytes this process actually received:
+/// a preserved "original" whose digest disagrees with those bytes is not evidence.
+fn verified_digest(response: &Response) -> Result<String, Error> {
+    let digest = format!("{:x}", Sha256::digest(&response.body));
+    if digest == response.sha256 {
+        Ok(digest)
+    } else {
+        Err(unavailable())
+    }
+}
+
+/// Fetched bytes that were not admitted as the requested capture: the exact
+/// bytes and local digest are kept unless the body exceeds the capture bound,
+/// in which case only the digest, length and content type are retained.
+fn raw_response(digest: &str, response: &Response, withheld: Option<&'static str>) -> Value {
+    json!({
+        "content_type": response.headers.get("content-type"),
+        "byte_length": response.body.len(),
+        "sha256": digest,
+        "body_base64": withheld.is_none().then(|| {
+            base64::engine::general_purpose::STANDARD.encode(&response.body)
+        }),
+        "raw_withheld": withheld.is_some(),
+        "raw_withheld_reason": withheld
+    })
+}
+
+fn archive_reported_http(query: &CaptureInput, response: &Response) -> Value {
+    json!({
+        "status": response.status,
+        "memento_datetime": response.headers.get("memento-datetime"),
+        "original_link": query.url,
+        "content_type": response.headers.get("content-type")
+    })
+}
+
+struct CaptureFacts {
+    result: &'static str,
+    capture_datetime: Option<NaiveDateTime>,
+    representation: Option<&'static str>,
+    immutable_original: Value,
+    archive_reported_http: Value,
+    raw_response: Value,
+    fallback_reason: Option<&'static str>,
+}
+
+/// One shape for every capture outcome: bytes, digest, retrieval timestamps and
+/// the enforced transport policy are always reported, and `fallback_reason`
+/// states why a fetched body was not admitted as the requested capture.
+fn capture_output(
+    query: &CaptureInput,
+    source: &Url,
+    response: &Response,
+    facts: CaptureFacts,
+) -> Value {
+    // A cache hit performs no transport read; nothing is ever retried.
+    let request_attempts = if response.cache_status == CacheStatus::Hit {
+        0
+    } else {
+        1
+    };
+    json!({
+        "schema_version": 1,
+        "type": "archive_capture",
+        "result": facts.result,
+        "original_url": query.url,
+        "requested_timestamp": query.timestamp,
+        "capture_datetime": facts.capture_datetime.map(datetime),
+        "representation": facts.representation,
+        "publication_date": { "value": null, "confidence": "unknown" },
+        "immutable_original": facts.immutable_original,
+        "archive_reported_http": facts.archive_reported_http,
+        "raw_response": facts.raw_response,
+        "fallback_reason": facts.fallback_reason,
+        "policy": {
+            "byte_cap": MAX_CAPTURE,
+            "body_within_cap": response.body.len() <= MAX_CAPTURE,
+            "redirects": "not_followed",
+            "proxy": "refused",
+            "request_attempts": request_attempts,
+            "retries": 0
+        },
+        "source_url": source.as_str(),
+        "retrieval": retrieval(response)
+    })
+}
+
 fn normalize_capture(
     query: &CaptureInput,
     source: &Url,
     response: &Response,
 ) -> Result<Value, Error> {
-    if response.url != source.as_str()
-        || !(100..=599).contains(&response.status)
-        || (300..=399).contains(&response.status)
-    {
+    let digest = verified_digest(response)?;
+    if !(100..=599).contains(&response.status) {
         return Err(unavailable());
     }
     let requested_time = timestamp(&query.timestamp)?;
@@ -524,36 +664,80 @@ fn normalize_capture(
     let link = response.headers.get("link");
     // An archive error page without attribution is not an archived origin 404.
     if matches!(response.status, 404 | 410) && memento.is_none() && link.is_none() {
-        return Ok(json!({
-            "schema_version": 1, "type": "archive_capture", "result": "missing_in_query_scope",
-            "original_url": query.url, "requested_timestamp": query.timestamp,
-            "capture_datetime": null, "representation": null,
-            "publication_date": { "value": null, "confidence": "unknown" },
-            "immutable_original": null, "archive_reported_http": null,
-            "source_url": source.as_str(), "retrieval": retrieval(response)
-        }));
+        return Ok(capture_output(
+            query,
+            source,
+            response,
+            CaptureFacts {
+                result: "missing_in_query_scope",
+                capture_datetime: None,
+                representation: None,
+                immutable_original: Value::Null,
+                archive_reported_http: Value::Null,
+                raw_response: Value::Null,
+                fallback_reason: None,
+            },
+        ));
     }
     let expected_date = requested_time
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
-    if !valid_memento_attribution(query, &expected_date, &response.headers) {
-        return Err(unavailable());
+    let attributed = valid_memento_attribution(query, &expected_date, &response.headers);
+    // Redirects are never followed: a 3xx body is a redirect descriptor, and a
+    // body served for another URL is not this replay. Both keep their bytes and
+    // are labelled instead of being reported as the requested capture.
+    let refused = if response.url != source.as_str() {
+        Some(SOURCE_MISMATCH)
+    } else if (300..=399).contains(&response.status) {
+        Some(REDIRECT_REFUSED)
+    } else if !attributed {
+        Some(ATTRIBUTION_INVALID)
+    } else {
+        None
+    };
+    let over_bound = response.body.len() > MAX_CAPTURE;
+    if let Some(reason) = refused.or(over_bound.then_some(BODY_OVER_BOUND)) {
+        let withheld = over_bound.then_some(BODY_OVER_BOUND);
+        // Attribution is established only when nothing was refused, so a
+        // bound-only refusal may still report the verified capture facts.
+        let confirmed = refused.is_none();
+        return Ok(capture_output(
+            query,
+            source,
+            response,
+            CaptureFacts {
+                result: "unverified_capture",
+                capture_datetime: confirmed.then_some(requested_time),
+                representation: None,
+                immutable_original: Value::Null,
+                archive_reported_http: if confirmed {
+                    archive_reported_http(query, response)
+                } else {
+                    Value::Null
+                },
+                raw_response: raw_response(&digest, response, withheld),
+                fallback_reason: Some(reason),
+            },
+        ));
     }
-    Ok(json!({
-        "schema_version": 1, "type": "archive_capture", "result": "capture_found",
-        "original_url": query.url, "requested_timestamp": query.timestamp,
-        "capture_datetime": datetime(requested_time), "representation": "archived",
-        "publication_date": { "value": null, "confidence": "unknown" },
-        "immutable_original": {
-            "sha256": response.sha256, "byte_length": response.body.len(),
-            "body_base64": base64::engine::general_purpose::STANDARD.encode(&response.body)
+    Ok(capture_output(
+        query,
+        source,
+        response,
+        CaptureFacts {
+            result: "capture_found",
+            capture_datetime: Some(requested_time),
+            representation: Some("archived"),
+            immutable_original: json!({
+                "sha256": digest,
+                "byte_length": response.body.len(),
+                "body_base64": base64::engine::general_purpose::STANDARD.encode(&response.body)
+            }),
+            archive_reported_http: archive_reported_http(query, response),
+            raw_response: Value::Null,
+            fallback_reason: None,
         },
-        "archive_reported_http": {
-            "status": response.status, "memento_datetime": memento,
-            "original_link": query.url, "content_type": response.headers.get("content-type")
-        },
-        "source_url": source.as_str(), "retrieval": retrieval(response)
-    }))
+    ))
 }
 
 /// Machine-readable stdin and output contracts; publication dates are never inferred.
@@ -562,6 +746,24 @@ pub fn schema() -> Value {
     let original = json!({"type":"string", "maxLength":MAX_URL, "description":"HTTP(S) URL with host, no userinfo, whitespace, controls, fragment, backslash or wildcard. Original spelling is retained."});
     let cursor = json!({"type":["string","null"], "maxLength":MAX_CURSOR, "description":"CDX query-encoded resume key; pass next_cursor unchanged. Bound to the exact query (url, from, to, limit) that minted it; a cursor from any other query is rejected."});
     let publication = json!({"type":"object", "additionalProperties":false, "required":["value","confidence"], "properties":{"value":{"type":"null"}, "confidence":{"const":"unknown"}}});
+    // Why a fetched body was not admitted as the requested capture. A body that
+    // was never parsed is preserved verbatim, so its reason is always reported.
+    let fallback_reasons = json!({"type":["string","null"], "enum":[REDIRECT_REFUSED, SOURCE_MISMATCH, ATTRIBUTION_INVALID, BODY_OVER_BOUND, null]});
+    let raw_body = json!({"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["content_type","byte_length","sha256","body_base64","raw_withheld","raw_withheld_reason"],"properties":{
+        "content_type":{"type":["string","null"],"description":"archive-reported content type of the received body"},
+        "byte_length":{"type":"integer","minimum":0,"description":"Bytes actually received; may exceed the capture bound when the body was withheld."},
+        "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Locally computed digest of the received bytes."},
+        "body_base64":{"type":["string","null"],"contentEncoding":"base64","description":"Exact received bytes; null only when withheld by the capture bound."},
+        "raw_withheld":{"type":"boolean"},
+        "raw_withheld_reason":{"type":["string","null"],"enum":[BODY_OVER_BOUND,null]}
+    }}]});
+    let capture_policy = json!({"type":"object","additionalProperties":false,"required":["byte_cap","body_within_cap","redirects","proxy","request_attempts","retries"],"properties":{
+        "byte_cap":{"const":MAX_CAPTURE},"body_within_cap":{"type":"boolean"},
+        "redirects":{"const":"not_followed","description":"A 3xx response is never followed; its body is preserved as unverified_capture."},
+        "proxy":{"const":"refused","description":"Direct egress only: no proxy configuration or proxy environment variable is consulted."},
+        "request_attempts":{"enum":[0,1],"description":"Transport reads performed by this invocation: 0 for a cache hit, otherwise exactly one."},
+        "retries":{"const":0,"description":"A failed or refused capture read is never retried."}
+    }});
     let retrieval = json!({"type":"object", "additionalProperties":false, "required":["source_url","fetched_at_unix_ms","cache_status","revalidated_at_unix_ms","revalidation_status","response_body_sha256","response_body_byte_length","http","trust"], "properties":{
         "source_url":{"type":"string"}, "fetched_at_unix_ms":{"type":"integer","minimum":0},
         "cache_status":{"enum":["hit","miss","revalidated"]}, "revalidated_at_unix_ms":{"type":["integer","null"],"minimum":0},
@@ -586,12 +788,13 @@ pub fn schema() -> Value {
                 "limit":{"type":"integer","minimum":1,"maximum":1000,"default":100},"cursor":cursor
             }},
             "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","query","captures","next_cursor","completeness","retrieval"],"properties":{
-                "schema_version":{"const":1},"type":{"const":"archive_lookup"},"result":{"enum":["captures_found","missing_in_query_scope"]},
+                "schema_version":{"const":1},"type":{"const":"archive_lookup"},
+                "result":{"enum":["captures_found","missing_in_query_scope"],"description":"Both results cover the queried resource only; a page whose index key or original URLs describe any other resource is refused instead of reported."},
                 "query":{"type":"object","additionalProperties":false,"required":["original_url","match_type","from","to","bounds","limit","cursor"],"properties":{
                     "original_url":original,"match_type":{"const":"exact"},"from":{"anyOf":[timestamp,{"type":"null"}]},"to":{"anyOf":[timestamp,{"type":"null"}]},
                     "bounds":{"const":"inclusive"},"limit":{"type":"integer","minimum":1,"maximum":1000},"cursor":cursor
                 }},
-                "captures":{"type":"array","maxItems":1000,"items":capture_row},"next_cursor":cursor,
+                "captures":{"type":"array","maxItems":1000,"items":capture_row,"description":"Rows of the exact index key for the queried resource; capture timestamps stay within the requested bounds."},"next_cursor":cursor,
                 "completeness":{"type":"object","additionalProperties":false,"required":["scope","page_complete","more_results","complete_history"],"properties":{
                     "scope":{"const":"archive_index_query"},"page_complete":{"const":true},"more_results":{"type":"boolean"},"complete_history":{"const":false}
                 }},"retrieval":retrieval
@@ -599,13 +802,15 @@ pub fn schema() -> Value {
         },
         "capture":{
             "input":{"type":"object","additionalProperties":false,"required":["url","timestamp"],"properties":{"url":original,"timestamp":timestamp}},
-            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","original_url","requested_timestamp","capture_datetime","representation","publication_date","immutable_original","archive_reported_http","source_url","retrieval"],"properties":{
-                "schema_version":{"const":1},"type":{"const":"archive_capture"},"result":{"enum":["capture_found","missing_in_query_scope"]},
+            "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","original_url","requested_timestamp","capture_datetime","representation","publication_date","immutable_original","archive_reported_http","raw_response","fallback_reason","policy","source_url","retrieval"],"properties":{
+                "schema_version":{"const":1},"type":{"const":"archive_capture"},
+                "result":{"enum":["capture_found","missing_in_query_scope","unverified_capture"],"description":"unverified_capture means a body was fetched but is not claimed as the requested capture; see fallback_reason."},
                 "original_url":original,"requested_timestamp":timestamp,"capture_datetime":{"type":["string","null"],"format":"date-time"},
                 "representation":{"enum":["archived",null]},"publication_date":publication,"source_url":{"type":"string"},"retrieval":retrieval,
                 "immutable_original":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["sha256","byte_length","body_base64"],"properties":{
-                    "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"byte_length":{"type":"integer","minimum":0},"body_base64":{"type":"string","contentEncoding":"base64"}
-                }}]},
+                    "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Locally recomputed digest of body_base64; must equal the transport digest."},"byte_length":{"type":"integer","minimum":0},"body_base64":{"type":"string","contentEncoding":"base64"}
+                }}],"description":"Present only for capture_found and only within the capture byte bound."},
+                "raw_response":raw_body,"fallback_reason":fallback_reasons,"policy":capture_policy,
                 "archive_reported_http":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["status","memento_datetime","original_link","content_type"],"properties":{
                     "status":{"type":"integer","minimum":100,"maximum":599},"memento_datetime":{"type":"string"},"original_link":{"type":"string"},"content_type":{"type":["string","null"]}
                 }}]}
@@ -785,6 +990,132 @@ mod tests {
     }
 
     #[test]
+    fn lookup_refuses_rows_for_another_resource() {
+        let (query, source) = query();
+        let header = json!(FIELDS);
+        for original in [
+            "https://example.org/other",
+            "https://other.example.org/a?x=1&y=2",
+            "https://example.org/a?x=1&y=3",
+        ] {
+            let body = json!([
+                header.clone(),
+                [
+                    "org,example)/a",
+                    "20240229120000",
+                    original,
+                    "text/html",
+                    "200",
+                    "-",
+                    "1"
+                ]
+            ])
+            .to_string();
+            assert!(
+                normalize_lookup(&query, &source, &response(&source, body.as_bytes())).is_err(),
+                "{original}"
+            );
+        }
+        // The index keys the resource scheme-insensitively, so the other HTTP
+        // scheme still names the queried resource; no other difference does.
+        let body = json!([
+            header,
+            [
+                "org,example)/a",
+                "20240229120000",
+                "http://example.org/a?x=1&y=2",
+                "text/html",
+                "200",
+                "-",
+                "1"
+            ]
+        ])
+        .to_string();
+        assert!(normalize_lookup(&query, &source, &response(&source, body.as_bytes())).is_ok());
+    }
+
+    #[test]
+    fn lookup_refuses_a_page_that_mixes_index_keys() {
+        let (query, source) = query();
+        let body = json!([
+            FIELDS,
+            [
+                "org,example)/a",
+                "20240229120000",
+                "https://example.org/a?x=1&y=2",
+                "text/html",
+                "200",
+                "-",
+                "1"
+            ],
+            [
+                "org,example)/b",
+                "20240229120000",
+                "https://example.org/a?x=1&y=2",
+                "text/html",
+                "200",
+                "-",
+                "1"
+            ]
+        ])
+        .to_string();
+        assert!(normalize_lookup(&query, &source, &response(&source, body.as_bytes())).is_err());
+    }
+
+    #[test]
+    fn resume_keys_must_continue_the_page_index_key() {
+        let (query, source) = query();
+        let row = json!([
+            "org,example)/a",
+            "20240229120000",
+            "https://example.org/a?x=1&y=2",
+            "text/html",
+            "200",
+            "-",
+            "1"
+        ]);
+        let page = |cursor: &str| json!([FIELDS, row.clone(), [], [cursor]]);
+        let foreign = page("org%2Cexample%29%2Fother+20240229120001%21");
+        assert!(
+            normalize_lookup(
+                &query,
+                &source,
+                &response(&source, foreign.to_string().as_bytes())
+            )
+            .is_err()
+        );
+        let own = page("org%2Cexample%29%2Fa+20240229120001%21");
+        let result = normalize_lookup(
+            &query,
+            &source,
+            &response(&source, own.to_string().as_bytes()),
+        )
+        .unwrap();
+        assert_eq!(
+            result["next_cursor"],
+            "org%2Cexample%29%2Fa+20240229120001%21"
+        );
+        // A cursor minted for another index key cannot select this page's rows.
+        let other = json!({
+            "url":"https://example.org/a?x=1&y=2",
+            "from":"20240229000000",
+            "to":"20240229235959",
+            "cursor":"org%2Cexample%29%2Fb+20240229120000%21"
+        })
+        .to_string();
+        let (other_query, other_source) = lookup_request(&other).unwrap();
+        let body = json!([FIELDS, row]).to_string();
+        assert!(
+            normalize_lookup(
+                &other_query,
+                &other_source,
+                &response(&other_source, body.as_bytes())
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn cdx_rows_require_valid_internal_urlkeys() {
         let (query, source) = query();
         let empty_urlkey = json!([
@@ -931,30 +1262,58 @@ mod tests {
     }
 
     #[test]
-    fn nearest_capture_redirect_or_wrong_source_cannot_succeed() {
+    fn nearest_capture_redirect_or_wrong_source_is_never_admitted() {
         let (query, source, mut response) = captured();
         response.headers.insert(
             "memento-datetime".into(),
             "Thu, 29 Feb 2024 12:00:01 GMT".into(),
         );
-        assert!(normalize_capture(&query, &source, &response).is_err());
+        let unverified = |response: &Response| {
+            let value = normalize_capture(&query, &source, response).unwrap();
+            assert_eq!(value["result"], "unverified_capture");
+            assert_eq!(value["immutable_original"], Value::Null);
+            assert_eq!(value["archive_reported_http"], Value::Null);
+            assert_eq!(value["policy"]["request_attempts"], 1);
+            assert_eq!(value["policy"]["redirects"], "not_followed");
+            assert_eq!(value["policy"]["proxy"], "refused");
+            value
+        };
+        assert_eq!(
+            unverified(&response)["fallback_reason"],
+            ATTRIBUTION_INVALID
+        );
         response.headers.insert(
             "memento-datetime".into(),
             "Thu, 29 Feb 2024 12:00:00 +0000".into(),
         );
-        assert!(normalize_capture(&query, &source, &response).is_err());
+        assert_eq!(
+            unverified(&response)["fallback_reason"],
+            ATTRIBUTION_INVALID
+        );
         let (_, _, mut response) = captured();
         response.headers.insert(
             "link".into(),
             "<https://example.org/other>; rel=\"original\"".into(),
         );
-        assert!(normalize_capture(&query, &source, &response).is_err());
+        assert_eq!(
+            unverified(&response)["fallback_reason"],
+            ATTRIBUTION_INVALID
+        );
         let (_, _, mut response) = captured();
         response.status = 302;
-        assert!(normalize_capture(&query, &source, &response).is_err());
+        // A redirect is never followed: its body is kept, but not as a capture.
+        let refused = unverified(&response);
+        assert_eq!(refused["fallback_reason"], REDIRECT_REFUSED);
+        assert_eq!(refused["raw_response"]["raw_withheld"], false);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(refused["raw_response"]["body_base64"].as_str().unwrap())
+                .unwrap(),
+            b"\x00original\xff"
+        );
         let (_, _, mut response) = captured();
         response.url.push_str("changed");
-        assert!(normalize_capture(&query, &source, &response).is_err());
+        assert_eq!(unverified(&response)["fallback_reason"], SOURCE_MISMATCH);
         assert!(
             capture_request(r#"{"url":"https://example.org/a/../b","timestamp":"20240229120000"}"#)
                 .is_err()
@@ -967,7 +1326,56 @@ mod tests {
                 query.url
             ),
         );
-        assert!(normalize_capture(&query, &source, &response).is_err());
+        assert_eq!(
+            unverified(&response)["fallback_reason"],
+            ATTRIBUTION_INVALID
+        );
+    }
+
+    #[test]
+    fn capture_bound_withholds_oversized_bodies_without_losing_provenance() {
+        let (query, source, mut response) = captured();
+        response.body = vec![b'x'; MAX_CAPTURE + 1];
+        response.sha256 = format!("{:x}", Sha256::digest(&response.body));
+        let result = normalize_capture(&query, &source, &response).unwrap();
+        assert_eq!(result["result"], "unverified_capture");
+        assert_eq!(result["fallback_reason"], BODY_OVER_BOUND);
+        assert_eq!(result["immutable_original"], Value::Null);
+        assert_eq!(result["raw_response"]["body_base64"], Value::Null);
+        assert_eq!(result["raw_response"]["raw_withheld"], true);
+        assert_eq!(
+            result["raw_response"]["raw_withheld_reason"],
+            BODY_OVER_BOUND
+        );
+        assert_eq!(result["raw_response"]["byte_length"], MAX_CAPTURE + 1);
+        assert_eq!(
+            result["raw_response"]["sha256"],
+            format!("{:x}", Sha256::digest(&response.body))
+        );
+        // Attribution preceded the bound, so the verified capture facts remain.
+        assert_eq!(result["capture_datetime"], "2024-02-29T12:00:00Z");
+        assert_eq!(result["archive_reported_http"]["status"], 200);
+        assert_eq!(result["policy"]["byte_cap"], json!(MAX_CAPTURE));
+        assert_eq!(result["policy"]["body_within_cap"], false);
+        assert_eq!(result["policy"]["request_attempts"], 1);
+        assert_eq!(result["policy"]["retries"], 0);
+        // A cache hit performs no transport read at all.
+        response.cache_status = CacheStatus::Hit;
+        let cached = normalize_capture(&query, &source, &response).unwrap();
+        assert_eq!(cached["policy"]["request_attempts"], 0);
+        assert_eq!(cached["retrieval"]["cache_status"], "hit");
+    }
+
+    #[test]
+    fn capture_refuses_a_digest_that_does_not_describe_the_received_bytes() {
+        let (query, source, mut response) = captured();
+        response.sha256 = format!("{:x}", Sha256::digest(b"another body"));
+        assert_eq!(
+            normalize_capture(&query, &source, &response)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
     }
 
     #[test]
@@ -979,10 +1387,19 @@ mod tests {
             let result = normalize_capture(&query, &source, &response).unwrap();
             assert_eq!(result["result"], "missing_in_query_scope");
             assert_eq!(result["immutable_original"], Value::Null);
+            assert_eq!(result["raw_response"], Value::Null);
+            assert_eq!(result["fallback_reason"], Value::Null);
             assert_eq!(result["capture_datetime"], Value::Null);
             assert_eq!(result["retrieval"]["http"]["status"], status);
         }
         response.status = 200;
-        assert!(normalize_capture(&query, &source, &response).is_err());
+        // A fetched 200 body without attribution is preserved but never claimed
+        // as the requested capture.
+        let result = normalize_capture(&query, &source, &response).unwrap();
+        assert_eq!(result["result"], "unverified_capture");
+        assert_eq!(result["fallback_reason"], ATTRIBUTION_INVALID);
+        assert_eq!(result["immutable_original"], Value::Null);
+        assert_eq!(result["capture_datetime"], Value::Null);
+        assert_eq!(result["raw_response"]["raw_withheld"], false);
     }
 }

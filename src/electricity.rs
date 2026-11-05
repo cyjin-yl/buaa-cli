@@ -7,6 +7,15 @@
 //! oracle. The blocked [`run`] command therefore performs no campus request,
 //! no HTTPS probe and no state write; the observation API persists local data.
 //!
+//! A meter is never implied. Both the request and the directory fixture demand
+//! an explicit binding of building, room and meter number from the reviewed
+//! allowlist shape; an account identity, a card number or any credential is
+//! not a meter, and an absent binding is refused before anything is read.
+//! Exactly one bounded read follows an admitted binding, with no fallback
+//! lookup and no retry. No reviewed price-per-kilowatt-hour or unit conversion
+//! exists, so no conversion is applied to a balance or a threshold and every
+//! threshold conversion fact is reported as null instead of being assumed.
+//!
 //! What is implemented offline is the parsing and alerting contract: strict
 //! charset handling (UTF-8 and GBK), directory selection for a sanitized
 //! fixture, balance-page parsing with unambiguous element ownership, chart
@@ -28,7 +37,7 @@
 //! performs no request and persists nothing at all.
 
 use crate::governor;
-use crate::html::{element_text, inert_element, script_kind, ScriptKind};
+use crate::html::{ScriptKind, element_text, inert_element, script_kind};
 use crate::net::Error;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use fs2::FileExt;
@@ -85,33 +94,52 @@ const FALLBACK_REASONS: [&str; 18] = [
     "response_safety_unreviewed",
 ];
 
+/// The explicit meter binding: exactly the reviewed allowlist shape.
+///
+/// A meter is named by its building, its room and its meter number, and by
+/// nothing else. An account identity, a card number or any other credential
+/// is not a meter and cannot imply one, so no variant of this contract accepts
+/// an identity in place of a binding: the retired `identity_no`, `campus` and
+/// `floor` selector members are unknown fields and are refused instead of
+/// being reinterpreted. The binding is mandatory, so an absent or null binding
+/// is refused before any read; it is never derived from the caller's account.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Identity {
-    identity_no: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Location {
-    campus: String,
+struct MeterBinding {
     building: String,
-    floor: String,
     room: String,
+    meter_no: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum MeterSelector {
-    Identity(Identity),
-    Location(Location),
+/// A binding member is a bounded non-empty field. The request and the fixture
+/// binding share this admission, so neither can smuggle an empty or oversized
+/// value past the typed shape.
+fn usable_binding(binding: &MeterBinding) -> bool {
+    let usable = |value: &str| !value.is_empty() && value.chars().count() <= MAX_FIELD;
+    [&binding.building, &binding.room, &binding.meter_no]
+        .into_iter()
+        .all(|value| usable(value))
+}
+
+/// The input root must be a JSON object. A derived struct visitor would accept
+/// a positional array, which neither the published schema nor the reviewed
+/// binding shape declares. The gate reads the first non-whitespace byte only,
+/// allocates nothing and materializes no intermediate value, so duplicates and
+/// trailing documents remain the typed deserializer's own refusal.
+fn object_root(input: &str) -> bool {
+    input
+        .bytes()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|first| first == b'{')
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Input {
     operation: String,
-    selector: MeterSelector,
+    /// Mandatory explicit binding; never inferred from account credentials.
+    #[serde(default)]
+    binding: Option<MeterBinding>,
     authorization_confirmed: bool,
     #[serde(default)]
     threshold_kwh: Option<f64>,
@@ -132,19 +160,19 @@ fn local_error() -> Error {
 
 /// A polling interval must be a whole number of seconds inside the accepted
 /// range; `null` and an absent field are equivalent.
-fn interval<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<u64>, D::Error> {
+fn interval<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
     match Option::<Value>::deserialize(deserializer)? {
         None => Ok(None),
         Some(Value::Number(value)) => {
             // JSON Schema integers include integral floating representations.
             let seconds = value
                 .as_f64()
-                .filter(|seconds| seconds.is_finite()
-                    && *seconds >= 0.0
-                    && *seconds <= MAX_INTERVAL as f64
-                    && seconds.fract() == 0.0)
+                .filter(|seconds| {
+                    seconds.is_finite()
+                        && *seconds >= 0.0
+                        && *seconds <= MAX_INTERVAL as f64
+                        && seconds.fract() == 0.0
+                })
                 .ok_or_else(|| serde::de::Error::custom("invalid polling interval"))?;
             Ok(Some(seconds as u64))
         }
@@ -156,25 +184,26 @@ fn parse_input(input: &str) -> Result<Input, Error> {
     if input.len() > MAX_INPUT {
         return Err(invalid("electricity input exceeds its byte limit"));
     }
+    if !object_root(input) {
+        return Err(invalid("electricity input must be a JSON object"));
+    }
     let request: Input =
         serde_json::from_str(input).map_err(|_| invalid("invalid electricity input"))?;
     if !matches!(request.operation.as_str(), "resolve" | "balance") {
         return Err(invalid("operation must be resolve or balance"));
     }
-    let usable = |value: &str| !value.is_empty() && value.chars().count() <= MAX_FIELD;
-    let usable_selector = match &request.selector {
-        MeterSelector::Identity(identity) => usable(&identity.identity_no),
-        MeterSelector::Location(location) => [
-            &location.campus,
-            &location.building,
-            &location.floor,
-            &location.room,
-        ]
-        .into_iter()
-        .all(|value| usable(value)),
+    // The binding is a required member of the reviewed shape. Absent, null or
+    // any other shape is refused here, before this process reads anything: an
+    // account identity is not evidence of which dormitory or meter is meant.
+    let Some(binding) = request.binding.as_ref() else {
+        return Err(invalid(
+            "an explicit meter binding with building, room and meter_no is required",
+        ));
     };
-    if !usable_selector {
-        return Err(invalid("selector values must contain 1 to 256 characters"));
+    if !usable_binding(binding) {
+        return Err(invalid(
+            "meter binding values must contain 1 to 256 characters",
+        ));
     }
     if !request.authorization_confirmed {
         return Err(Error::new(
@@ -202,7 +231,8 @@ fn blocked(operation: &str, online: bool) -> Value {
         "reason":"directory_authorization_and_raw_evidence_disclosure_conflict",
         "message":POLICY_MESSAGE,"online_requested":online,"network_requests":0,
         "https_probe":"not_performed_due_to_directory_privacy_blocker",
-        "authorization":"caller_selector_is_not_identity_or_permission_proof",
+        "authorization":"caller_binding_is_not_identity_or_permission_proof",
+        "threshold_conversion":null,
         "unimplemented":["governed_https_probe","authorized_live_directory","live_balance",
             "background_observation_against_the_live_source"],
         "poll_floor_seconds":MIN_POLL_SECONDS,"background_floor_seconds":MIN_POLL_SECONDS,
@@ -213,9 +243,11 @@ fn blocked(operation: &str, online: bool) -> Value {
 
 /// Validate stdin and report the precise pre-request safety blocker. Neither
 /// mode sends a request, opens the shared governor or writes any state at
-/// all; selector values are never echoed, hashed, persisted or treated as
-/// proof of permission. The separate observation API does keep local state,
-/// and it keeps only what its caller supplied.
+/// all; binding values are never echoed, hashed, persisted or treated as
+/// proof of permission. An absent binding is refused before this branch, so
+/// an account identity can never stand in for a dormitory or a meter. The
+/// separate observation API does keep local state, and it keeps only what its
+/// caller supplied.
 pub fn run(input: &str, online: bool) -> Result<Value, Error> {
     let request = parse_input(input)?;
     Ok(blocked(&request.operation, online))
@@ -232,18 +264,29 @@ fn scalar(value: Option<&&RawValue>) -> Option<String> {
     }
 }
 
-/// Select the single matching meter of a sanitized synthetic directory
-/// fixture. This establishes no authorization and must not be fed a real full
-/// directory for publication. Card numbers are never part of the projection.
-pub fn parse_directory_fixture(
-    bytes: &[u8],
-    selector_json: &str,
-) -> Result<Option<Value>, Error> {
-    if bytes.len() > MAX_BODY || selector_json.len() > MAX_INPUT {
+/// Select the single meter a caller explicitly bound in a sanitized synthetic
+/// directory fixture. The binding is the reviewed building/room/meter number
+/// shape: an identity, card or credential column never matches, and a binding
+/// is admitted before the body is parsed, so a missing binding yields no read
+/// at all. Exactly one bounded read follows: the body and its entry count are
+/// bounded, a second match is refused as ambiguous instead of being resolved
+/// by another lookup, and there is no fallback read, probe or retry. This
+/// establishes no authorization and must not be fed a real full directory for
+/// publication. Card numbers are never part of the projection.
+pub fn parse_directory_fixture(bytes: &[u8], binding_json: &str) -> Result<Option<Value>, Error> {
+    if bytes.len() > MAX_BODY || binding_json.len() > MAX_INPUT {
         return Err(invalid("fixture exceeds its byte limit"));
     }
-    let selector: MeterSelector =
-        serde_json::from_str(selector_json).map_err(|_| invalid("invalid fixture selector"))?;
+    if !object_root(binding_json) {
+        return Err(invalid("meter binding must be a JSON object"));
+    }
+    let binding: MeterBinding =
+        serde_json::from_str(binding_json).map_err(|_| invalid("invalid meter binding"))?;
+    if !usable_binding(&binding) {
+        return Err(invalid(
+            "meter binding values must contain 1 to 256 characters",
+        ));
+    }
     let rows: Vec<BTreeMap<String, &RawValue>> =
         serde_json::from_slice(bytes).map_err(|_| invalid("invalid directory fixture JSON"))?;
     if rows.len() > MAX_ENTRIES {
@@ -252,24 +295,19 @@ pub fn parse_directory_fixture(
     let mut selected = None;
     for row in rows {
         let entry = row;
-        let id = scalar(entry.get("id")).ok_or_else(|| invalid("directory fixture entry lacks id"))?;
+        let id =
+            scalar(entry.get("id")).ok_or_else(|| invalid("directory fixture entry lacks id"))?;
         if id.is_empty() || id.chars().count() > MAX_FIELD {
             return Err(invalid("invalid directory fixture entry"));
         }
-        let matches = match &selector {
-            MeterSelector::Identity(identity) => {
-                scalar(entry.get("identityNo")).as_deref() == Some(identity.identity_no.as_str())
-            }
-            MeterSelector::Location(location) => {
-                scalar(entry.get("campus")).as_deref() == Some(location.campus.as_str())
-                    && scalar(entry.get("building")).as_deref() == Some(location.building.as_str())
-                    && scalar(entry.get("floor")).as_deref() == Some(location.floor.as_str())
-                    && scalar(entry.get("room")).as_deref() == Some(location.room.as_str())
-            }
-        };
+        // All three reviewed members must agree, so a room shared by several
+        // meters cannot be satisfied by location alone.
+        let matches = scalar(entry.get("building")).as_deref() == Some(binding.building.as_str())
+            && scalar(entry.get("room")).as_deref() == Some(binding.room.as_str())
+            && scalar(entry.get("meterNo")).as_deref() == Some(binding.meter_no.as_str());
         if matches {
             if selected.is_some() {
-                return Err(invalid("ambiguous fixture selector"));
+                return Err(invalid("ambiguous meter binding"));
             }
             selected = Some(json!({
                 "id": id,
@@ -340,11 +378,27 @@ fn admit_charset(selected: &mut Option<&'static str>, value: &str) -> Result<(),
 }
 
 fn mime_token(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric()
-            || matches!(byte, b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-'
-                | b'.' | b'^' | b'_' | b'`' | b'|' | b'~')
-    })
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 /// Parse complete MIME parameters, so a quoted semicolon cannot introduce a
@@ -355,10 +409,14 @@ fn charset_parameters(
     charset_only: bool,
     html_meta: bool,
 ) -> Result<(), &'static str> {
-    let Some((_, mut parameters)) = value.split_once(';') else { return Ok(()) };
+    let Some((_, mut parameters)) = value.split_once(';') else {
+        return Ok(());
+    };
     loop {
         let trimmed = parameters.trim_start();
-        if trimmed.is_empty() { return Err("unsupported_charset"); }
+        if trimmed.is_empty() {
+            return Err("unsupported_charset");
+        }
         let equal = trimmed.find('=').ok_or("unsupported_charset")?;
         let name = trimmed[..equal].trim();
         if !mime_token(name) || (charset_only && !name.eq_ignore_ascii_case("charset")) {
@@ -369,7 +427,9 @@ fn charset_parameters(
             let mut escaped = false;
             let mut closing = None;
             for (index, byte) in quoted.bytes().enumerate() {
-                if byte < 0x20 || byte == 0x7f { return Err("unsupported_charset"); }
+                if byte < 0x20 || byte == 0x7f {
+                    return Err("unsupported_charset");
+                }
                 if escaped {
                     escaped = false;
                 } else if byte == b'\\' {
@@ -387,7 +447,9 @@ fn charset_parameters(
                 while let Some(ch) = chars.next() {
                     unescaped.push(if ch == '\\' {
                         chars.next().ok_or("unsupported_charset")?
-                    } else { ch });
+                    } else {
+                        ch
+                    });
                 }
                 std::borrow::Cow::Owned(unescaped)
             } else {
@@ -397,14 +459,18 @@ fn charset_parameters(
         } else {
             let end = rest.find(';').unwrap_or(rest.len());
             let parameter = rest[..end].trim();
-            if !mime_token(parameter) { return Err("unsupported_charset"); }
+            if !mime_token(parameter) {
+                return Err("unsupported_charset");
+            }
             (std::borrow::Cow::Borrowed(parameter), &rest[end..], false)
         };
         if name.eq_ignore_ascii_case("charset") {
             // HTML's legacy meta content syntax also permits single quotes
             // around the label; MIME header parameters do not use them.
             let label: &str = if html_meta && !quoted && parameter.starts_with('\'') {
-                parameter.strip_prefix('\'').and_then(|label| label.strip_suffix('\''))
+                parameter
+                    .strip_prefix('\'')
+                    .and_then(|label| label.strip_suffix('\''))
                     .ok_or("unsupported_charset")?
             } else {
                 &parameter
@@ -444,13 +510,18 @@ fn declared_charset(
         .collect();
     let doc = Html::parse_document(&prefix);
     let metas = Selector::parse("meta").map_err(|_| "internal_selector")?;
-    for meta in doc.select(&metas).filter(|element| !inert_element(*element)) {
+    for meta in doc
+        .select(&metas)
+        .filter(|element| !inert_element(*element))
+    {
         if let Some(value) = meta.value().attr("charset") {
             admit_charset(&mut selected, value.trim())?;
         }
-        if meta.value().attr("http-equiv").is_some_and(|value| {
-            value.trim().eq_ignore_ascii_case("Content-Type")
-        }) {
+        if meta
+            .value()
+            .attr("http-equiv")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("Content-Type"))
+        {
             let content = meta.value().attr("content").ok_or("unsupported_charset")?;
             let mime = content.split(';').next().unwrap_or("").trim();
             if !mime.eq_ignore_ascii_case("text/html") {
@@ -522,7 +593,9 @@ fn tokenize(script: &str) -> Result<Vec<Token>, &'static str> {
             continue;
         }
         if bytes[offset].is_ascii_whitespace() {
-            if script_line_terminator(bytes, offset) { line_has_code = false; }
+            if script_line_terminator(bytes, offset) {
+                line_has_code = false;
+            }
             offset += 1;
             continue;
         }
@@ -536,7 +609,9 @@ fn tokenize(script: &str) -> Result<Vec<Token>, &'static str> {
             continue;
         }
         let byte = bytes[offset];
-        if byte != b'/' { line_has_code = true; }
+        if byte != b'/' {
+            line_has_code = true;
+        }
         match byte {
             b' ' | b'\t' | b'\r' | b'\n' | b'\x0c' => offset += 1,
             b'"' | b'\'' => {
@@ -580,7 +655,9 @@ fn tokenize(script: &str) -> Result<Vec<Token>, &'static str> {
                     offset += 2;
                     let mut closed = false;
                     while offset + 1 < bytes.len() {
-                        if script_line_terminator(bytes, offset) { line_has_code = false; }
+                        if script_line_terminator(bytes, offset) {
+                            line_has_code = false;
+                        }
                         if bytes[offset] == b'*' && bytes[offset + 1] == b'/' {
                             offset += 2;
                             closed = true;
@@ -697,7 +774,8 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
     for (position, token) in tokens.iter().enumerate() {
         if token.kind == TokenKind::Str
             && script[token.start..token.end].contains('\\')
-            && tokens.get(position + 1)
+            && tokens
+                .get(position + 1)
                 .is_some_and(|next| next.kind == TokenKind::Punct(b':'))
         {
             return Err("script_unlexable");
@@ -706,9 +784,14 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
         let member_start = containers.last().is_some_and(|entry| entry.0 == b'{')
             && position > 0
             && matches!(tokens[position - 1].kind, TokenKind::Punct(b'{' | b','));
-        if member_start && token.kind == TokenKind::Punct(b'.')
-            && tokens.get(position + 1).is_some_and(|next| next.kind == TokenKind::Punct(b'.'))
-            && tokens.get(position + 2).is_some_and(|next| next.kind == TokenKind::Punct(b'.'))
+        if member_start
+            && token.kind == TokenKind::Punct(b'.')
+            && tokens
+                .get(position + 1)
+                .is_some_and(|next| next.kind == TokenKind::Punct(b'.'))
+            && tokens
+                .get(position + 2)
+                .is_some_and(|next| next.kind == TokenKind::Punct(b'.'))
         {
             // Spread can supply or overwrite data, including a previously
             // admitted literal. Its absence cannot be established statically.
@@ -727,7 +810,8 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
                     TokenKind::Punct(b']') => {
                         brackets -= 1;
                         if brackets == 0 {
-                            if tokens.get(end + 1)
+                            if tokens
+                                .get(end + 1)
                                 .is_some_and(|after| after.kind == TokenKind::Punct(b':'))
                             {
                                 return Err("script_unlexable");
@@ -744,7 +828,8 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
         // silently dropping the declaration (e.g. y=({data:...})).
         if containers.last() == Some(&(b'{', false))
             && is_data_member(script, *token)
-            && tokens.get(position + 1)
+            && tokens
+                .get(position + 1)
                 .is_some_and(|next| next.kind == TokenKind::Punct(b':'))
         {
             return Err("script_unlexable");
@@ -755,8 +840,10 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
             TokenKind::Punct(b'{') => {
                 let assignment = matches!(previous, Some(TokenKind::Punct(b'=')))
                     && position >= 2
-                    && !matches!(tokens[position - 2].kind,
-                        TokenKind::Punct(b'=' | b'!' | b'<' | b'>'));
+                    && !matches!(
+                        tokens[position - 2].kind,
+                        TokenKind::Punct(b'=' | b'!' | b'<' | b'>')
+                    );
                 let member_value = in_object
                     && matches!(previous, Some(TokenKind::Punct(b':')))
                     && position >= 3
@@ -767,7 +854,11 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
             }
             TokenKind::Punct(open @ (b'[' | b'(')) => containers.push((open, false)),
             TokenKind::Punct(close @ (b'}' | b']' | b')')) => {
-                let expected = match close { b'}' => b'{', b']' => b'[', _ => b'(' };
+                let expected = match close {
+                    b'}' => b'{',
+                    b']' => b'[',
+                    _ => b'(',
+                };
                 if containers.pop().map(|entry| entry.0) != Some(expected) {
                     return Err("script_unlexable");
                 }
@@ -785,8 +876,12 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
             && is_data_member(script, tokens[index])
             && index > 0
             && matches!(tokens[index - 1].kind, TokenKind::Punct(b'{' | b','))
-            && tokens.get(index + 1).is_some_and(|token| token.kind == TokenKind::Punct(b':'))
-            && !tokens.get(index + 2).is_some_and(|token| token.kind == TokenKind::Punct(b'['))
+            && tokens
+                .get(index + 1)
+                .is_some_and(|token| token.kind == TokenKind::Punct(b':'))
+            && !tokens
+                .get(index + 2)
+                .is_some_and(|token| token.kind == TokenKind::Punct(b'['))
         {
             return Err("history_ambiguous");
         }
@@ -853,10 +948,7 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
     if usage.len() < dates.len() {
         return Err("history_ambiguous");
     }
-    if dates
-        .iter()
-        .any(|text| text.is_empty())
-    {
+    if dates.iter().any(|text| text.is_empty()) {
         return Err("history_ambiguous");
     }
     if usage
@@ -890,7 +982,10 @@ fn parse_number(text: &str) -> Option<f64> {
 fn balance_readings(document: &Html) -> Result<(f64, f64), &'static str> {
     let spans = Selector::parse("tspan").map_err(|_| "internal_selector")?;
     let mut readings: Vec<f64> = Vec::new();
-    for span in document.select(&spans).filter(|element| !inert_element(*element)) {
+    for span in document
+        .select(&spans)
+        .filter(|element| !inert_element(*element))
+    {
         if span.select(&spans).any(|child| !inert_element(child)) {
             continue;
         }
@@ -918,7 +1013,10 @@ fn room_and_address(document: &Html) -> Result<(String, String), &'static str> {
     let divs = Selector::parse("div").map_err(|_| "internal_selector")?;
     let children = Selector::parse(":scope > p.shadow").map_err(|_| "internal_selector")?;
     let descendants = Selector::parse("p.shadow").map_err(|_| "internal_selector")?;
-    for div in document.select(&divs).filter(|element| !inert_element(*element)) {
+    for div in document
+        .select(&divs)
+        .filter(|element| !inert_element(*element))
+    {
         let style = div.value().attr("style").unwrap_or("");
         let floated = style.split(';').any(|declaration| {
             declaration
@@ -931,10 +1029,10 @@ fn room_and_address(document: &Html) -> Result<(String, String), &'static str> {
         }
         let texts = |selector: &Selector| -> Vec<String> {
             div.select(selector)
-            .filter(|element| !inert_element(*element))
-            .map(element_text)
-            .map(|text| text.trim().to_owned())
-            .filter(|text| !text.is_empty())
+                .filter(|element| !inert_element(*element))
+                .map(element_text)
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty())
                 .collect()
         };
         let Some(room) = texts(&children).into_iter().next() else {
@@ -960,7 +1058,9 @@ fn is_address_line(text: &str) -> bool {
 }
 
 fn address_line(text: &str) -> Option<String> {
-    let rest = text.strip_prefix("地址:").or_else(|| text.strip_prefix("地址："))?;
+    let rest = text
+        .strip_prefix("地址:")
+        .or_else(|| text.strip_prefix("地址："))?;
     let address = rest.trim();
     (!address.is_empty()).then(|| address.to_owned())
 }
@@ -979,7 +1079,10 @@ fn recharge_records(document: &Html) -> Result<Vec<Value>, &'static str> {
     {
         found = true;
         let mut body_records = Vec::new();
-        for row in body.select(&rows).filter(|element| !inert_element(*element)) {
+        for row in body
+            .select(&rows)
+            .filter(|element| !inert_element(*element))
+        {
             let values: Vec<String> = row
                 .select(&cells)
                 .filter(|element| !inert_element(*element))
@@ -1017,9 +1120,7 @@ fn chart_history(document: &Html) -> Result<(Value, Value), &'static str> {
     {
         // This parser's source contract is HTML classic inline scripts only.
         // SVG script href/xlink:href bodies must never contribute history.
-        if !crate::html::is_html_element(script)
-            || script.value().attr("src").is_some()
-        {
+        if !crate::html::is_html_element(script) || script.value().attr("src").is_some() {
             continue;
         }
         if script_kind(script) != Some(ScriptKind::Classic) {
@@ -1081,15 +1182,48 @@ pub fn parse_balance_page(bytes: &[u8], content_type: Option<&str>) -> Result<Va
 }
 
 fn marked_bytes(bytes: &[u8]) -> bool {
-    ["password", "passwd", "pwd", "credential", "cookie", "authorization",
-        "bearer", "ticket", "nonce", "jwt", "secret", "session", "token",
-        "csrf", "xsrf", "execution", "username", "user_name", "loginname", "login_name",
-        "one-time-code", "captcha", "challenge", "turnstile", "verification_code",
-        "密码", "口令", "验证码", "校验码", "用户名", "\\u", "\\x", "&#"]
-        .iter().any(|marker| {
-            let marker = marker.as_bytes();
-            bytes.windows(marker.len()).any(|part| part.eq_ignore_ascii_case(marker))
-        })
+    [
+        "password",
+        "passwd",
+        "pwd",
+        "credential",
+        "cookie",
+        "authorization",
+        "bearer",
+        "ticket",
+        "nonce",
+        "jwt",
+        "secret",
+        "session",
+        "token",
+        "csrf",
+        "xsrf",
+        "execution",
+        "username",
+        "user_name",
+        "loginname",
+        "login_name",
+        "one-time-code",
+        "captcha",
+        "challenge",
+        "turnstile",
+        "verification_code",
+        "密码",
+        "口令",
+        "验证码",
+        "校验码",
+        "用户名",
+        "\\u",
+        "\\x",
+        "&#",
+    ]
+    .iter()
+    .any(|marker| {
+        let marker = marker.as_bytes();
+        bytes
+            .windows(marker.len())
+            .any(|part| part.eq_ignore_ascii_case(marker))
+    })
 }
 
 fn percent_digit(byte: u8) -> Option<u8> {
@@ -1110,18 +1244,27 @@ fn has_percent_escape(bytes: &[u8]) -> bool {
 /// Decode a form component as bytes, not lossy UTF-8: a GBK-encoded name can
 /// occur alongside already-decoded UTF-8 text in the same component.
 fn decode_percent_component(bytes: &[u8]) -> Option<Vec<u8>> {
-    if !has_percent_escape(bytes) { return None; }
+    if !has_percent_escape(bytes) {
+        return None;
+    }
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) = (percent_digit(bytes[index + 1]), percent_digit(bytes[index + 2])) {
+            if let (Some(high), Some(low)) = (
+                percent_digit(bytes[index + 1]),
+                percent_digit(bytes[index + 2]),
+            ) {
                 decoded.push(high * 16 + low);
                 index += 3;
                 continue;
             }
         }
-        decoded.push(if bytes[index] == b'+' { b' ' } else { bytes[index] });
+        decoded.push(if bytes[index] == b'+' {
+            b' '
+        } else {
+            bytes[index]
+        });
         index += 1;
     }
     Some(decoded)
@@ -1131,26 +1274,41 @@ fn gbk_private_labels(bytes: &[u8]) -> bool {
     // GBK byte spellings of the same Chinese labels in marked_bytes. Search
     // the decoded component directly rather than converting a mixed-encoding
     // component, which could lose or misinterpret an adjacent label.
-    [b"\xc3\xdc\xc2\xeb".as_slice(), b"\xbf\xda\xc1\xee",
-        b"\xd3\xc3\xbb\xa7\xc3\xfb", b"\xd1\xe9\xd6\xa4\xc2\xeb",
-        b"\xd0\xa3\xd1\xe9\xc2\xeb"]
-        .iter().any(|marker| bytes.windows(marker.len()).any(|part| part == *marker))
+    [
+        b"\xc3\xdc\xc2\xeb".as_slice(),
+        b"\xbf\xda\xc1\xee",
+        b"\xd3\xc3\xbb\xa7\xc3\xfb",
+        b"\xd1\xe9\xd6\xa4\xc2\xeb",
+        b"\xd0\xa3\xd1\xe9\xc2\xeb",
+    ]
+    .iter()
+    .any(|marker| bytes.windows(marker.len()).any(|part| part == *marker))
 }
 
 /// Scan the original source and decoded form components without treating a
 /// literal percent as private. Nested encodings are bounded; a deeper encoding
 /// is unreviewed rather than silently admitted or called a credential.
 fn private_markers(text: &str) -> Result<bool, ()> {
-    if marked_bytes(text.as_bytes()) { return Ok(true); }
-    if !text.as_bytes().contains(&b'%') { return Ok(false); }
+    if marked_bytes(text.as_bytes()) {
+        return Ok(true);
+    }
+    if !text.as_bytes().contains(&b'%') {
+        return Ok(false);
+    }
     for component in text.split(['&', '=']) {
         let mut current = std::borrow::Cow::Borrowed(component.as_bytes());
         for _ in 0..8 {
-            let Some(decoded) = decode_percent_component(&current) else { break };
-            if marked_bytes(&decoded) || gbk_private_labels(&decoded) { return Ok(true); }
+            let Some(decoded) = decode_percent_component(&current) else {
+                break;
+            };
+            if marked_bytes(&decoded) || gbk_private_labels(&decoded) {
+                return Ok(true);
+            }
             current = std::borrow::Cow::Owned(decoded);
         }
-        if has_percent_escape(&current) { return Err(()); }
+        if has_percent_escape(&current) {
+            return Err(());
+        }
     }
     Ok(false)
 }
@@ -1173,44 +1331,68 @@ fn document_privacy_reason(text: &str) -> Option<&'static str> {
     for node in document.tree.root().descendants() {
         match node.value() {
             Node::Text(text) => {
-                projection.extend(text.text.chars().filter(|character| !character.is_whitespace()));
+                projection.extend(
+                    text.text
+                        .chars()
+                        .filter(|character| !character.is_whitespace()),
+                );
             }
             Node::Element(element) => {
-                let Some(reference) = ElementRef::wrap(node) else { continue };
-                if crate::html::is_html_element(reference) && element.name() == "noscript"
+                let Some(reference) = ElementRef::wrap(node) else {
+                    continue;
+                };
+                if crate::html::is_html_element(reference)
+                    && element.name() == "noscript"
                     && reference.text().any(|value| !value.trim().is_empty())
                 {
                     // With scripting enabled, noscript fallback is raw text,
                     // not a reviewed tree of controls.
                     unreviewed_fallback = true;
                 }
-                if matches!(element.name(), "input" | "button" | "select" | "option" | "textarea")
-                    && (element.attr("value").is_some()
-                        || (matches!(element.name(), "textarea" | "option")
-                            && reference.text().any(|value| !value.trim().is_empty())))
+                if matches!(
+                    element.name(),
+                    "input" | "button" | "select" | "option" | "textarea"
+                ) && (element.attr("value").is_some()
+                    || (matches!(element.name(), "textarea" | "option")
+                        && reference.text().any(|value| !value.trim().is_empty())))
                 {
                     return Some("sensitive_response_material");
                 }
                 for (name, value) in element.attrs() {
-                    let joined: String = name.chars().chain(value.chars())
-                        .filter(|character| !character.is_whitespace()).collect();
-                    if let Some(reason) = marker_withholding(&joined) { return Some(reason); }
+                    let joined: String = name
+                        .chars()
+                        .chain(value.chars())
+                        .filter(|character| !character.is_whitespace())
+                        .collect();
+                    if let Some(reason) = marker_withholding(&joined) {
+                        return Some(reason);
+                    }
                 }
             }
             _ => {}
         }
     }
-    if let Some(reason) = marker_withholding(&projection) { return Some(reason); }
+    if let Some(reason) = marker_withholding(&projection) {
+        return Some(reason);
+    }
     unreviewed_fallback.then_some("response_safety_unreviewed")
 }
 
 fn safe_content_type(value: Option<&str>) -> Option<&str> {
     let value = value?;
     let mime = value.split(';').next()?.trim();
-    if !["text/html", "application/xhtml+xml", "application/json", "text/plain"]
-        .iter().any(|allowed| mime.eq_ignore_ascii_case(allowed))
+    if ![
+        "text/html",
+        "application/xhtml+xml",
+        "application/json",
+        "text/plain",
+    ]
+    .iter()
+    .any(|allowed| mime.eq_ignore_ascii_case(allowed))
         || value.chars().any(char::is_control)
-    { return None; }
+    {
+        return None;
+    }
     charset_parameters(value, &mut None, true, false).ok()?;
     Some(value)
 }
@@ -1232,18 +1414,28 @@ fn response_withholding(bytes: &[u8], content_type: Option<&str>) -> Option<&'st
                     Ok(decoded) => decoded,
                     Err(_) => return Some("response_safety_unreviewed"),
                 };
-                if let Some(reason) = marker_withholding(&decoded) { return Some(reason); }
+                if let Some(reason) = marker_withholding(&decoded) {
+                    return Some(reason);
+                }
             }
             return None;
         }
-        if let Some(reason) = marker_withholding(text) { return Some(reason); }
+        if let Some(reason) = marker_withholding(text) {
+            return Some(reason);
+        }
     }
     let text = match decode_html(bytes, content_type) {
         Ok((text, _)) => text,
         Err(_) => return Some("response_safety_unreviewed"),
     };
-    if let Some(reason) = marker_withholding(&text) { return Some(reason); }
-    match crate::html::assess_challenge_body(text.as_bytes(), Some("text/html; charset=utf-8"), true) {
+    if let Some(reason) = marker_withholding(&text) {
+        return Some(reason);
+    }
+    match crate::html::assess_challenge_body(
+        text.as_bytes(),
+        Some("text/html; charset=utf-8"),
+        true,
+    ) {
         crate::html::ChallengeAssessment::Clear => document_privacy_reason(&text),
         crate::html::ChallengeAssessment::Detected => Some("challenge_detected"),
         crate::html::ChallengeAssessment::Unreviewed => Some("response_safety_unreviewed"),
@@ -1314,6 +1506,11 @@ pub fn restore_raw_evidence(evidence: &Value) -> Result<(Vec<u8>, Option<String>
 /// Pure edge-triggered transition calculation. The first observation and a
 /// changed threshold establish a baseline; only a crossing produces a
 /// transition, and a transition inside the cooldown window is suppressed.
+///
+/// Both the reading and the threshold are caller-supplied kilowatt hours, so
+/// no conversion is applied. No reviewed price-per-kWh or unit mapping relates
+/// an upstream balance or a threshold to anything else, so the conversion fact
+/// is reported as `null` instead of an assumed factor.
 pub fn threshold_transition(
     previous: Option<f64>,
     current: f64,
@@ -1345,6 +1542,7 @@ pub fn threshold_transition(
         "threshold_kwh": limit,
         "previous_balance_kwh": previous,
         "current_balance_kwh": current,
+        "threshold_conversion": null,
         "transition": transition,
         "notified": transition.is_some() && !suppressed,
         "cooldown_suppressed": suppressed,
@@ -1435,15 +1633,14 @@ impl Store {
     fn open() -> Result<Self, Error> {
         let home = governor::identity_home().map_err(|_| local_error())?;
         let _home = governor::open_directory(&home, false, false).map_err(|_| local_error())?;
-        let directory =
-            governor::open_directory(&home.join(PRIVATE_DIR), true, true).map_err(|_| local_error())?;
+        let directory = governor::open_directory(&home.join(PRIVATE_DIR), true, true)
+            .map_err(|_| local_error())?;
         Ok(Self { directory })
     }
 
     #[cfg(test)]
     fn open_at(path: &std::path::Path) -> Result<Self, Error> {
-        let directory =
-            governor::open_directory(path, true, true).map_err(|_| local_error())?;
+        let directory = governor::open_directory(path, true, true).map_err(|_| local_error())?;
         Ok(Self { directory })
     }
 
@@ -1490,7 +1687,9 @@ impl Store {
         }
         let state: StoredState = serde_json::from_slice(&bytes).map_err(|_| local_error())?;
         if state.version != 1
-            || state.last_balance_kwh.is_some_and(|value| !value.is_finite())
+            || state
+                .last_balance_kwh
+                .is_some_and(|value| !value.is_finite())
             || state
                 .threshold_kwh
                 .is_some_and(|value| !value.is_finite() || value < 0.0)
@@ -1643,31 +1842,37 @@ pub fn observe_threshold(
 /// JSON input/output contract for CLI integration.
 pub fn schema() -> Value {
     let text = json!({"type":"string","minLength":1,"maxLength":MAX_FIELD});
-    let selector = json!({"oneOf":[
-        {"type":"object","additionalProperties":false,"required":["identity_no"],"properties":{"identity_no":text.clone()}},
-        {"type":"object","additionalProperties":false,"required":["campus","building","floor","room"],
-            "properties":{"campus":text.clone(),"building":text.clone(),"floor":text.clone(),"room":text}}
-    ]});
+    // The reviewed allowlist shape. A different shape, including the retired
+    // identity and campus/floor selectors, is not a binding at all.
+    let binding = json!({"type":"object","additionalProperties":false,
+        "required":["building","room","meter_no"],
+        "description":"Mandatory explicit meter binding. Exactly these three reviewed members name a meter; an account identity, card number or credential is never a binding and cannot be inferred into one.",
+        "properties":{"building":text.clone(),"room":text.clone(),"meter_no":text}});
+    // No reviewed fact relates an upstream balance or price to kilowatt hours,
+    // so the conversion is unknown and is published as null, never assumed.
+    let conversion = json!({"type":"null",
+        "description":"Unknown conversion fact. No reviewed price-per-kilowatt-hour or unit mapping exists, so no conversion is applied to a balance or a threshold and null is reported in its place."});
     json!({"input":{"type":"object","additionalProperties":false,
-        "required":["operation","selector","authorization_confirmed"],
-        "properties":{"operation":{"enum":["resolve","balance"]},"selector":selector,
+        "required":["operation","binding","authorization_confirmed"],
+        "properties":{"operation":{"enum":["resolve","balance"]},"binding":binding,
             "authorization_confirmed":{"const":true,"description":"Caller assertion only; it does not establish upstream permission."},
             "threshold_kwh":{"type":["number","null"],"minimum":0,"description":"Absent and null are equivalent; no threshold means no alert state."},
             "poll_interval_seconds":{"type":["integer","null"],"minimum":MIN_POLL_SECONDS,"maximum":MAX_INTERVAL,"description":"Absent and null are equivalent; a value below 900 seconds is refused locally."}}},
         "output":{"type":"object","additionalProperties":false,
-            "required":["schema_version","type","operation","result","reason","message","online_requested","network_requests","https_probe","authorization","unimplemented","poll_floor_seconds","background_floor_seconds","cooldown_seconds","persisted_state","next_step"],
+            "required":["schema_version","type","operation","result","reason","message","online_requested","network_requests","https_probe","authorization","threshold_conversion","unimplemented","poll_floor_seconds","background_floor_seconds","cooldown_seconds","persisted_state","next_step"],
             "properties":{"schema_version":{"const":1},"type":{"const":"electricity"},
                 "operation":{"enum":["resolve","balance"]},"result":{"const":"blocked"},
                 "reason":{"const":"directory_authorization_and_raw_evidence_disclosure_conflict"},
                 "message":{"const":POLICY_MESSAGE},"online_requested":{"type":"boolean"},"network_requests":{"const":0},
                 "https_probe":{"const":"not_performed_due_to_directory_privacy_blocker"},
-                "authorization":{"const":"caller_selector_is_not_identity_or_permission_proof"},
+                "authorization":{"const":"caller_binding_is_not_identity_or_permission_proof"},
+                "threshold_conversion":conversion,
                 "unimplemented":{"type":"array","items":{"type":"string"}},
                 "poll_floor_seconds":{"const":MIN_POLL_SECONDS},"background_floor_seconds":{"const":MIN_POLL_SECONDS},
                 "cooldown_seconds":{"const":COOLDOWN_SECONDS},
                 "persisted_state":{"const":"none_the_blocked_branch_writes_no_state"},"next_step":{"type":"string"}}},
         "library_output":{
-            "parse_directory_fixture":{"type":["object","null"],"description":"The single matching sanitized fixture entry, or null when the selector matches no entry. Card numbers are never projected."},
+            "parse_directory_fixture":{"type":["object","null"],"description":"The single sanitized fixture entry matching the explicit building/room/meter-number binding, or null when no entry matches. The binding is admitted before the body is parsed; one bounded read follows, and a second match is refused rather than resolved by another lookup. Identity column values are never match keys and card numbers are never projected."},
             "parse_balance_fixture":{"type":"object","additionalProperties":false,
                 "required":["result","balance","raw_evidence"],
                 "properties":{"result":{"enum":["parsed","degraded"]},
@@ -1689,7 +1894,7 @@ pub fn schema() -> Value {
                                 "fallback_reason":{"enum":FALLBACK_REASONS}}}]}}},
             "observe_threshold":{"type":"object","additionalProperties":false,
                 "required":["alert","poll_floor_seconds","cooldown_seconds","source","network_requests","authorization","scope","persisted_state"],
-                "properties":{"alert":{"type":["object","null"],"description":"The edge-triggered transition, or null when no threshold is configured."},
+                "properties":{"alert":{"type":["object","null"],"description":"The edge-triggered transition, or null when no threshold is configured. Its threshold_conversion is always null: no reviewed unit or price conversion exists, and the reading and the threshold are compared only as caller-supplied kilowatt hours."},
                     "poll_floor_seconds":{"const":MIN_POLL_SECONDS},
                     "cooldown_seconds":{"const":COOLDOWN_SECONDS},
                     "source":{"const":"caller_supplied_value","description":"The recorded balance comes from the caller. No meter is read."},
@@ -1697,13 +1902,13 @@ pub fn schema() -> Value {
                     "authorization":{"const":"none_a_caller_value_is_not_an_authorized_meter_reading"},
                     "scope":{"const":"per_key_local_state_not_the_shared_account_governor"},
                     "persisted_state":{"const":"caller_supplied_observation_threshold_timestamps_and_key_digest_in_the_private_state_directory","description":"The observation persists the caller-supplied value, threshold, timestamps and key digest in the private state directory. No meter is read and no network request is made."}}}},
-        "library":{"parse_directory_fixture":"Sanitized synthetic directory selection; establishes no authorization.",
+        "library":{"parse_directory_fixture":"Sanitized synthetic directory selection by an explicit building/room/meter-number binding; establishes no authorization.",
             "parse_balance_fixture":"Supplied balance parsing: reviewed-safe degradation retains exact originals; credentials, challenges, unsafe metadata and unreviewable bodies withhold reversible bytes and parsed values.",
             "parse_balance_page":"Structured balance reading: exactly two numeric leaf-tspan readings (no ancestor double counting), room, address, recharge rows and literal-only chart history. Computed object keys and object spread refuse uniqueness.",
             "restore_raw_evidence":"Re-read the exact bytes of a degraded evidence envelope offline; the declared length and digest must match.",
-            "threshold_transition":"Pure edge-triggered transition with a one-hour cooldown.",
+            "threshold_transition":"Pure edge-triggered transition with a one-hour cooldown; the threshold conversion fact is null because no reviewed conversion exists.",
             "observe_threshold":"Persist the caller-supplied observation, its threshold, the observation timestamps and the digest of the caller key in the private directory (0700/0600) under a per-key local lock, and return the transition. Zero network requests: no meter is read or authenticated, and the per-key window is not the shared account governor."},
-        "description":"The unauthenticated upstream directory exposes other people's card and meter data, so no remote request is made and no raw directory body is published. A caller selector is an assertion, not proof of permission. Optional threshold and interval fields treat absent and null as equivalent; intervals below 900 seconds are refused locally and background observations respect the same floor. Chart history is read only from an active classic inline script, from object members literally named data, never from JavaScript strings or comments. Observations consume caller-supplied values only: no network request and no meter is read or authenticated, while the private state keeps the caller-supplied observation, its threshold, the observation timestamps and the digest of the caller key; the per-key local lock that serializes concurrent processes is a cache synchronization device, not the shared account governor. The blocked branch performs no request and persists nothing. Synthetic fixtures are not online service acceptance."})
+        "description":"The unauthenticated upstream directory exposes other people's card and meter data, so no remote request is made and no raw directory body is published. A meter is named only by an explicit building/room/meter-number binding from the reviewed allowlist shape; an absent binding is refused before any read, and an account identity, card number or credential is never inferred into one. A caller binding is an assertion, not proof of permission. Optional threshold and interval fields treat absent and null as equivalent; intervals below 900 seconds are refused locally and background observations respect the same floor. Threshold conversion facts are unknown and reported as null: no reviewed unit or price mapping exists. Chart history is read only from an active classic inline script, from object members literally named data, never from JavaScript strings or comments. Observations consume caller-supplied values only: no network request and no meter is read or authenticated, while the private state keeps the caller-supplied observation, its threshold, the observation timestamps and the digest of the caller key; the per-key local lock that serializes concurrent processes is a cache synchronization device, not the shared account governor. The blocked branch performs no request and persists nothing. Synthetic fixtures are not online service acceptance."})
 }
 
 #[cfg(test)]
@@ -1729,7 +1934,10 @@ mod tests {
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));
             let _ = std::fs::remove_dir_all(&root);
-            std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&root)
+                .unwrap();
             Self { root }
         }
 
@@ -1745,33 +1953,45 @@ mod tests {
     }
 
     #[test]
-    fn directory_selects_only_the_requested_meter() {
-        let source = br#"[{"id":1,"identityNo":"card1","name":"mine","campus":"A","building":"B","floor":"1","room":"101"},{"id":2,"identityNo":"card2","name":"other"}]"#;
-        for selector in [
-            r#"{"identity_no":"card1"}"#,
-            r#"{"campus":"A","building":"B","floor":"1","room":"101"}"#,
-        ] {
-            let selected = parse_directory_fixture(source, selector).unwrap().unwrap();
-            assert_eq!(selected["id"], "1");
-            assert!(!selected.to_string().contains("card2"));
-            assert!(!selected.to_string().contains("identityNo"));
-        }
+    fn directory_selects_only_the_explicitly_bound_meter() {
+        let source = br#"[{"id":1,"identityNo":"card1","name":"mine","campus":"A","building":"B","floor":"1","room":"101","meterNo":"M1"},{"id":2,"identityNo":"card2","name":"other","building":"B","floor":"1","room":"101","meterNo":"M2"}]"#;
+        let selected =
+            parse_directory_fixture(source, r#"{"building":"B","room":"101","meter_no":"M1"}"#)
+                .unwrap()
+                .unwrap();
+        assert_eq!(selected["id"], "1");
+        assert!(!selected.to_string().contains("card2"));
+        assert!(!selected.to_string().contains("identityNo"));
+        // The same room with another meter number is a different meter.
+        assert!(
+            parse_directory_fixture(source, r#"{"building":"B","room":"101","meter_no":"M3"}"#)
+                .unwrap()
+                .is_none()
+        );
+        // An identity is not a binding and cannot select the row.
+        assert!(parse_directory_fixture(source, r#"{"identity_no":"card1"}"#).is_err());
+        assert!(parse_directory_fixture(source, r#"{"building":"B","room":"101"}"#).is_err());
     }
 
     #[test]
     fn directory_uses_literal_scalar_types_and_ignores_metadata_objects() {
-        let selector = r#"{"identity_no":"a"}"#;
-        let object_id = br#"[{"id":{"$serde_json::private::RawValue":"1"},"identityNo":"a"}]"#;
-        assert!(parse_directory_fixture(object_id, selector).is_err());
+        let binding = r#"{"building":"B","room":"101","meter_no":"M1"}"#;
+        let object_id = br#"[{"id":{"$serde_json::private::RawValue":"1"},"building":"B","room":"101","meterNo":"M1"}]"#;
+        assert!(parse_directory_fixture(object_id, binding).is_err());
 
-        let source = br#"[{"id":9007199254740993,"identityNo":"a","name":"$serde_json::private::RawValue","address":{"$serde_json::private::RawValue":"x"},"metadata":{"$serde_json::private::RawValue":"0"}}]"#;
-        let selected = parse_directory_fixture(source, selector).unwrap().unwrap();
+        let source = br#"[{"id":9007199254740993,"building":"B","room":"101","meterNo":"M1","name":"$serde_json::private::RawValue","address":{"$serde_json::private::RawValue":"x"},"metadata":{"$serde_json::private::RawValue":"0"}}]"#;
+        let selected = parse_directory_fixture(source, binding).unwrap().unwrap();
         assert_eq!(selected["id"], "9007199254740993");
         assert_eq!(selected["name"], "$serde_json::private::RawValue");
         assert!(selected["address"].is_null());
 
-        let source = br#"[{"id":"$serde_json::private::RawValue","identityNo":7,"floor":-2}]"#;
-        let selected = parse_directory_fixture(source, r#"{"identity_no":"7"}"#).unwrap().unwrap();
+        // A literal numeric meter number is admissible as its own decimal text.
+        let source =
+            br#"[{"id":"$serde_json::private::RawValue","building":"B","room":"101","meterNo":7,"floor":-2}]"#;
+        let selected =
+            parse_directory_fixture(source, r#"{"building":"B","room":"101","meter_no":"7"}"#)
+                .unwrap()
+                .unwrap();
         assert_eq!(selected["id"], "$serde_json::private::RawValue");
         assert_eq!(selected["floor"], "-2");
     }
@@ -1803,7 +2023,7 @@ mod tests {
         let chart = script_history("option={xAxis:{data:[\"a,b\",\"c\"]},series:{data:[1.0,2.5]}}")
             .unwrap()
             .unwrap();
-        assert_eq!(chart.0, json!(["a,b","c"]));
+        assert_eq!(chart.0, json!(["a,b", "c"]));
         assert_eq!(chart.1, json!([1.0, 2.5]));
         // A string or a comment that mentions data cannot supply the arrays.
         for script in [
@@ -1835,24 +2055,35 @@ mod tests {
             assert_eq!(script_history(script), Err("history_ambiguous"));
         }
 
-        let page = PAGE.replace("data:[1.2]", r#"data:[{"$serde_json::private::RawValue":"0"}]"#);
-        let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+        let page = PAGE.replace(
+            "data:[1.2]",
+            r#"data:[{"$serde_json::private::RawValue":"0"}]"#,
+        );
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(output["result"], "degraded");
-        assert_eq!(output["raw_evidence"]["fallback_reason"], "history_ambiguous");
+        assert_eq!(
+            output["raw_evidence"]["fallback_reason"],
+            "history_ambiguous"
+        );
         let (original, _) = restore_raw_evidence(&output["raw_evidence"]).unwrap();
         assert_eq!(original, page.as_bytes());
     }
 
     #[test]
     fn comment_trivia_and_escaped_keys_cannot_hide_competing_history() {
-        let page = format!("{PAGE}<script>/*note*/--> y={{data:[\"fake\"],series:{{data:[9]}}}};\n</script>");
-        let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-            .unwrap();
+        let page = format!(
+            "{PAGE}<script>/*note*/--> y={{data:[\"fake\"],series:{{data:[9]}}}};\n</script>"
+        );
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(output["result"], "parsed");
         assert_eq!(output["balance"]["history"]["dates"], json!(["2024-05-01"]));
-        let page = format!("{PAGE}<script>y={{d\\u0061ta:[\"other\"],series:{{d\\u0061ta:[9]}}}};</script>");
-        let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-            .unwrap();
+        let page = format!(
+            "{PAGE}<script>y={{d\\u0061ta:[\"other\"],series:{{d\\u0061ta:[9]}}}};</script>"
+        );
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(output["result"], "degraded");
         assert!(output["balance"].is_null());
     }
@@ -1861,7 +2092,8 @@ mod tests {
     fn legacy_meta_charset_precedes_utf8_guess_and_conflicts_withhold() {
         let ascii = PAGE.replace("知行楼", "ROOM").replace("北京市", "ADDR");
         let (before, _) = ascii.split_once("ROOM").unwrap();
-        let mut bytes = b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=GBK\">".to_vec();
+        let mut bytes =
+            b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=GBK\">".to_vec();
         bytes.extend_from_slice(before.as_bytes());
         // The same rule applies when the charset comes from the legacy meta:
         // the page tail must be GBK bytes for the address label to survive.
@@ -1913,12 +2145,24 @@ mod tests {
         assert_eq!(output["balance"]["room"], "漏");
         assert_eq!(output["balance"]["charset"], "gbk");
 
-        let quoted = format!("<meta http-equiv=Content-Type content='text/html; note=\"x; charset=gbk\"; charset=utf-8'>{PAGE}");
+        let quoted = format!(
+            "<meta http-equiv=Content-Type content='text/html; note=\"x; charset=gbk\"; charset=utf-8'>{PAGE}"
+        );
         assert_eq!(declared_charset(None, quoted.as_bytes()), Ok(Some("utf-8")));
-        assert_eq!(parse_balance_fixture(quoted.as_bytes(), Some("text/html")).unwrap()["result"], "parsed");
-        let single_quoted = format!("<meta http-equiv=Content-Type content=\"text/html; charset='utf-8'\">{PAGE}");
-        assert_eq!(parse_balance_fixture(single_quoted.as_bytes(), Some("text/html")).unwrap()["result"], "parsed");
-        assert_eq!(parse_balance_fixture(PAGE.as_bytes(), Some("text/html; charset=\"utf-8\"")).unwrap()["result"], "parsed");
+        assert_eq!(
+            parse_balance_fixture(quoted.as_bytes(), Some("text/html")).unwrap()["result"],
+            "parsed"
+        );
+        let single_quoted =
+            format!("<meta http-equiv=Content-Type content=\"text/html; charset='utf-8'\">{PAGE}");
+        assert_eq!(
+            parse_balance_fixture(single_quoted.as_bytes(), Some("text/html")).unwrap()["result"],
+            "parsed"
+        );
+        assert_eq!(
+            parse_balance_fixture(PAGE.as_bytes(), Some("text/html; charset=\"utf-8\"")).unwrap()["result"],
+            "parsed"
+        );
     }
 
     #[test]
@@ -1933,7 +2177,10 @@ mod tests {
             "<meta http-equiv=Content-Type content='application/json'>",
         ] {
             let page = format!("{declaration}{PAGE}");
-            assert_eq!(declared_charset(Some("text/html"), page.as_bytes()), Err("unsupported_charset"));
+            assert_eq!(
+                declared_charset(Some("text/html"), page.as_bytes()),
+                Err("unsupported_charset")
+            );
             let output = parse_balance_fixture(page.as_bytes(), Some("text/html")).unwrap();
             assert_eq!(output["result"], "degraded", "{declaration}");
             assert_eq!(output["raw_evidence"]["raw_withheld"], true);
@@ -1961,17 +2208,30 @@ mod tests {
     #[test]
     fn percentages_do_not_block_balance_or_exact_safe_fallback() {
         let page = format!("<div style='width:100%;height:100%'><output>50%</output></div>{PAGE}")
-            .replace("series:{data:[1.2]}", "series:{data:[1.2]},grid:{width:\"100%\",height:\"100%\"}");
-        let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+            .replace(
+                "series:{data:[1.2]}",
+                "series:{data:[1.2]},grid:{width:\"100%\",height:\"100%\"}",
+            );
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(output["result"], "parsed");
         assert_eq!(output["balance"]["remaining_kwh"], 25.5);
         assert_eq!(output["balance"]["history"]["usage_kwh"], json!([1.2]));
         assert!(output["raw_evidence"].is_null());
 
         for (bytes, content_type) in [
-            (b"<p style='width:100%'><output>50% complete; %41%42</output></p>".as_slice(), "text/html; charset=utf-8"),
-            (b"<p style='width:100%'>\xd6\xaa\xd0\xd0\xc2\xa5</p>".as_slice(), "text/html; charset=gbk"),
-            (br#"{"load":"100%","label":"%41%42"}"#.as_slice(), "application/json"),
+            (
+                b"<p style='width:100%'><output>50% complete; %41%42</output></p>".as_slice(),
+                "text/html; charset=utf-8",
+            ),
+            (
+                b"<p style='width:100%'>\xd6\xaa\xd0\xd0\xc2\xa5</p>".as_slice(),
+                "text/html; charset=gbk",
+            ),
+            (
+                br#"{"load":"100%","label":"%41%42"}"#.as_slice(),
+                "application/json",
+            ),
         ] {
             let output = parse_balance_fixture(bytes, Some(content_type)).unwrap();
             assert_eq!(output["result"], "degraded", "{content_type}");
@@ -1999,14 +2259,21 @@ mod tests {
             "<form><button name='account_ref' value='opaque-fixture-value'>Go</button></form>",
         ] {
             let page = format!("{PAGE}{control}");
-            let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+            let output =
+                parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
             assert_eq!(output["result"], "degraded", "{control}");
             assert!(output["balance"].is_null(), "{control}");
             assert_eq!(output["raw_evidence"]["raw_withheld"], true, "{control}");
             assert!(output["raw_evidence"]["data"].is_null(), "{control}");
-            assert!(!output.to_string().contains("opaque-fixture-value"), "{control}");
+            assert!(
+                !output.to_string().contains("opaque-fixture-value"),
+                "{control}"
+            );
             assert!(restore_raw_evidence(&output["raw_evidence"]).is_err());
-            assert_eq!(parse_balance_page(page.as_bytes(), Some("text/html; charset=utf-8")), Err("response_withheld"));
+            assert_eq!(
+                parse_balance_page(page.as_bytes(), Some("text/html; charset=utf-8")),
+                Err("response_withheld")
+            );
         }
     }
 
@@ -2023,19 +2290,28 @@ mod tests {
             "to%6ben=opaque-fixture-value",
             "<input name='p%61ssword' value='opaque-fixture-value'>",
         ] {
-            let output = parse_balance_fixture(body.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+            let output =
+                parse_balance_fixture(body.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
             assert_eq!(output["result"], "degraded", "{body}");
             assert_eq!(output["raw_evidence"]["raw_withheld"], true, "{body}");
-            assert_eq!(output["raw_evidence"]["raw_withheld_reason"], "sensitive_response_material");
+            assert_eq!(
+                output["raw_evidence"]["raw_withheld_reason"],
+                "sensitive_response_material"
+            );
             assert!(output["raw_evidence"]["data"].is_null());
             assert!(!output.to_string().contains("opaque-fixture-value"));
         }
         let mut deeply_encoded = "%70assword".to_owned();
-        for _ in 0..8 { deeply_encoded = deeply_encoded.replacen('%', "%25", 1); }
+        for _ in 0..8 {
+            deeply_encoded = deeply_encoded.replacen('%', "%25", 1);
+        }
         let body = format!(r#"{{"{deeply_encoded}":"opaque-fixture-value"}}"#);
         let output = parse_balance_fixture(body.as_bytes(), Some("application/json")).unwrap();
         assert_eq!(output["raw_evidence"]["raw_withheld"], true);
-        assert_eq!(output["raw_evidence"]["raw_withheld_reason"], "response_safety_unreviewed");
+        assert_eq!(
+            output["raw_evidence"]["raw_withheld_reason"],
+            "response_safety_unreviewed"
+        );
         assert!(output["raw_evidence"]["data"].is_null());
     }
 
@@ -2062,10 +2338,12 @@ mod tests {
             assert!(restore_raw_evidence(&output["raw_evidence"]).is_err());
         }
         let page = PAGE.replace("知行楼", "password=private-value");
-        let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert!(output["balance"].is_null());
         assert!(parse_balance_page(page.as_bytes(), Some("text/html; charset=utf-8")).is_err());
-        let output = parse_balance_fixture(PAGE.as_bytes(), Some("text/html; token=private-value")).unwrap();
+        let output =
+            parse_balance_fixture(PAGE.as_bytes(), Some("text/html; token=private-value")).unwrap();
         assert!(output["raw_evidence"]["content_type"].is_null());
         assert!(output["raw_evidence"]["data"].is_null());
         assert!(!output.to_string().contains("private-value"));
@@ -2091,23 +2369,32 @@ mod tests {
     #[test]
     fn chart_literal_boundaries_and_competing_scripts() {
         let pair = script_history("x={'data':[\"a\"],series:{'data':[1]}};")
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
         assert_eq!(pair.0, json!(["a"]));
         assert_eq!(pair.1, json!([1]));
         assert!(script_history("{data:[\"fake-date\"]}{data:[999]}").is_err());
-        assert!(script_history("<!-- {data:[\"fake\"],data:[9]}\n-->")
-            .unwrap().is_none());
+        assert!(
+            script_history("<!-- {data:[\"fake\"],data:[9]}\n-->")
+                .unwrap()
+                .is_none()
+        );
         for script in [
             "function f(){return /({data:[\"fake\"],data:[9]})/;}",
             "x={data:[\"Mon\"].concat([\"Tue\"]),series:{data:[1].concat([2])}};",
         ] {
             assert!(script_history(script).is_err(), "{script}");
         }
-        let page = format!("{PAGE}<script>y={{data:[\"other\"],series:{{data:[9]}}}};const note=`x`;</script>");
-        let result = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-            .unwrap();
+        let page = format!(
+            "{PAGE}<script>y={{data:[\"other\"],series:{{data:[9]}}}};const note=`x`;</script>"
+        );
+        let result =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(result["result"], "degraded");
-        assert_eq!(result["raw_evidence"]["fallback_reason"], "script_unlexable");
+        assert_eq!(
+            result["raw_evidence"]["fallback_reason"],
+            "script_unlexable"
+        );
         assert!(schema()["library_output"]["observe_threshold"].is_object());
         assert!(schema().get("observe_threshold").is_none());
     }
@@ -2139,7 +2426,10 @@ mod tests {
             )
             .unwrap();
             assert_eq!(output["result"], "parsed", "{injection}");
-            assert_eq!(output["balance"]["history"]["usage_kwh"][0], 1.2, "{injection}");
+            assert_eq!(
+                output["balance"]["history"]["usage_kwh"][0], 1.2,
+                "{injection}"
+            );
         }
     }
 
@@ -2154,12 +2444,15 @@ mod tests {
         ] {
             assert!(script_history(script).is_err(), "{script}");
             let page = format!("{PAGE}<script>{script}</script>");
-            let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-                .unwrap();
+            let output =
+                parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
             assert_eq!(output["result"], "degraded", "{script}");
             assert!(output["balance"].is_null());
             if !script.contains("\\u") {
-                assert_eq!(output["raw_evidence"]["fallback_reason"], "script_unlexable");
+                assert_eq!(
+                    output["raw_evidence"]["fallback_reason"],
+                    "script_unlexable"
+                );
                 let (original, _) = restore_raw_evidence(&output["raw_evidence"]).unwrap();
                 assert_eq!(original.as_slice(), page.as_bytes());
             }
@@ -2167,8 +2460,8 @@ mod tests {
         // Ordinary arrays, including an array expression in a statement
         // block, are not computed object keys and do not compete with PAGE.
         let page = format!("{PAGE}<script>const values=[1,2];{{[3,4];}}</script>");
-        let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-            .unwrap();
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(output["result"], "parsed");
         assert_eq!(output["balance"]["history"]["usage_kwh"], json!([1.2]));
     }
@@ -2176,20 +2469,29 @@ mod tests {
     #[test]
     fn nested_tspan_text_has_only_one_reading_owner() {
         let original = "<svg><tspan>25.5</tspan><tspan>1.2</tspan></svg>";
-        let single = PAGE.replacen(original,
-            "<svg><text><tspan><tspan>25.5</tspan></tspan></text></svg>", 1);
-        let output = parse_balance_fixture(single.as_bytes(), Some("text/html; charset=utf-8"))
-            .unwrap();
+        let single = PAGE.replacen(
+            original,
+            "<svg><text><tspan><tspan>25.5</tspan></tspan></text></svg>",
+            1,
+        );
+        let output =
+            parse_balance_fixture(single.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(output["result"], "degraded");
         assert!(output["balance"].is_null());
-        assert_eq!(output["raw_evidence"]["fallback_reason"], "balance_values_ambiguous");
+        assert_eq!(
+            output["raw_evidence"]["fallback_reason"],
+            "balance_values_ambiguous"
+        );
         let (retained, _) = restore_raw_evidence(&output["raw_evidence"]).unwrap();
         assert_eq!(retained.as_slice(), single.as_bytes());
-        let siblings = PAGE.replacen(original,
-            "<svg><text><tspan><tspan>25.5</tspan><tspan>1.2</tspan></tspan></text></svg>", 1);
+        let siblings = PAGE.replacen(
+            original,
+            "<svg><text><tspan><tspan>25.5</tspan><tspan>1.2</tspan></tspan></text></svg>",
+            1,
+        );
         for page in [PAGE, siblings.as_str()] {
-            let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-                .unwrap();
+            let output =
+                parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
             assert_eq!(output["result"], "parsed");
             assert_eq!(output["balance"]["remaining_kwh"], 25.5);
             assert_eq!(output["balance"]["yesterday_usage_kwh"], 1.2);
@@ -2199,25 +2501,37 @@ mod tests {
     #[test]
     fn unicode_comment_ends_and_unsupported_objects_preserve_ambiguity() {
         for separator in ['\u{2028}', '\u{2029}'] {
-            let suffix = format!("//comment{separator}y={{data:[\"other\"],series:{{data:[9]}}}};</script>");
+            let suffix =
+                format!("//comment{separator}y={{data:[\"other\"],series:{{data:[9]}}}};</script>");
             let page = PAGE.replace("</script>", &suffix);
-            let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-                .unwrap();
+            let output =
+                parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
             assert_eq!(output["result"], "degraded");
-            assert_eq!(output["raw_evidence"]["fallback_reason"], "history_ambiguous");
-            assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(page.as_bytes()));
+            assert_eq!(
+                output["raw_evidence"]["fallback_reason"],
+                "history_ambiguous"
+            );
+            assert_eq!(
+                output["raw_evidence"]["data"],
+                STANDARD.encode(page.as_bytes())
+            );
         }
         let page = format!("{PAGE}<script>y=({{data:[\"other\"],series:{{data:[9]}}}});</script>");
-        let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-            .unwrap();
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
         assert_eq!(output["result"], "degraded");
-        assert_eq!(output["raw_evidence"]["fallback_reason"], "script_unlexable");
+        assert_eq!(
+            output["raw_evidence"]["fallback_reason"],
+            "script_unlexable"
+        );
 
         let without_chart = PAGE.split("<script>").next().unwrap();
         for reference in ["href", "xlink:href"] {
-            let page = format!("{without_chart}<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"><script {reference}=\"/chart.js\">x={{data:[\"fake\"],series:{{data:[9]}}}};</script></svg>");
-            let output = parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8"))
-                .unwrap();
+            let page = format!(
+                "{without_chart}<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"><script {reference}=\"/chart.js\">x={{data:[\"fake\"],series:{{data:[9]}}}};</script></svg>"
+            );
+            let output =
+                parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
             assert_eq!(output["result"], "degraded");
             assert_eq!(output["raw_evidence"]["fallback_reason"], "history_missing");
         }
@@ -2260,8 +2574,7 @@ mod tests {
         store.write("meter", &state).unwrap();
         let reloaded = store.read("meter").unwrap();
         assert_eq!(reloaded.last_balance_kwh, Some(9.0));
-        let edge =
-            threshold_transition(reloaded.last_balance_kwh, 11.0, 10.0, None, 200).unwrap();
+        let edge = threshold_transition(reloaded.last_balance_kwh, 11.0, 10.0, None, 200).unwrap();
         assert_eq!(edge["transition"], "above_threshold");
         // A background observation inside the floor is refused.
         let mut background = StoredState {
@@ -2407,7 +2720,7 @@ mod tests {
     fn concurrent_background_observations_keep_the_polling_window() {
         if child_observation().is_some() {
             return;
-    }
+        }
         let fixture = Fixture::new();
         let store = fixture.store();
         let mut state = StoredState {
@@ -2446,25 +2759,28 @@ mod tests {
 
     #[test]
     fn rejects_interval_floor_and_unknown_fields() {
-        let input = r#"{"operation":"balance","selector":{"identity_no":"synthetic"},"authorization_confirmed":true,"poll_interval_seconds":899}"#;
+        let input = r#"{"operation":"balance","binding":{"building":"B","room":"101","meter_no":"M1"},"authorization_confirmed":true,"poll_interval_seconds":899}"#;
         assert_eq!(run(input, true).unwrap_err().code, "invalid_input");
-        assert!(parse_input(
-            &input
-                .replace("899", "900")
-                .replace("\"operation\"", "\"unexpected\":true,\"operation\"")
-        )
-        .is_err());
+        assert!(
+            parse_input(
+                &input
+                    .replace("899", "900")
+                    .replace("\"operation\"", "\"unexpected\":true,\"operation\"")
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn live_and_offline_block_without_probe_or_identifier_echo() {
-        let input = r#"{"operation":"balance","selector":{"identity_no":"synthetic-private-selector"},"authorization_confirmed":true}"#;
+    fn live_and_offline_block_without_probe_or_binding_echo() {
+        let input = r#"{"operation":"balance","binding":{"building":"synthetic-private-building","room":"synthetic-private-room","meter_no":"synthetic-private-meter"},"authorization_confirmed":true}"#;
         for online in [false, true] {
             let result = run(input, online).unwrap();
             assert_eq!(result["result"], "blocked");
             assert_eq!(result["message"], POLICY_MESSAGE);
             assert_eq!(result["network_requests"], 0);
-            assert!(!result.to_string().contains("synthetic-private-selector"));
+            assert!(!result.to_string().contains("synthetic-private"));
+            assert!(result["threshold_conversion"].is_null());
         }
     }
 
@@ -2500,7 +2816,10 @@ mod tests {
             parse_balance_fixture(single_array.as_bytes(), Some("text/html; charset=utf-8"))
                 .unwrap();
         assert_eq!(output["result"], "degraded");
-        assert_eq!(output["raw_evidence"]["fallback_reason"], "history_ambiguous");
+        assert_eq!(
+            output["raw_evidence"]["fallback_reason"],
+            "history_ambiguous"
+        );
 
         // An address line without its documented prefix is not an address.
         let without_prefix = PAGE.replace("地址:北京市", "北京市");
@@ -2569,10 +2888,30 @@ mod tests {
             assert!(reasons.contains(&json!(reason)), "{reason}");
         }
 
+        // The published input demands exactly the reviewed binding shape.
+        assert_eq!(
+            schema["input"]["properties"]["binding"]["required"],
+            json!(["building", "room", "meter_no"])
+        );
+        assert_eq!(
+            schema["input"]["properties"]["binding"]["additionalProperties"],
+            false
+        );
+        assert!(schema["input"]["properties"]["selector"].is_null());
+        assert_eq!(
+            schema["input"]["required"],
+            json!(["operation", "binding", "authorization_confirmed"])
+        );
+        // Unknown conversion facts are published as null, not as a factor.
+        assert_eq!(
+            schema["output"]["properties"]["threshold_conversion"]["type"],
+            "null"
+        );
+
         // The runtime accepts exactly the integer set the schema publishes.
         for interval in ["900.5", "899", "-900", "2147483648"] {
             let input = format!(
-                r#"{{"operation":"balance","selector":{{"identity_no":"synthetic"}},"authorization_confirmed":true,"poll_interval_seconds":{interval}}}"#
+                r#"{{"operation":"balance","binding":{{"building":"B","room":"101","meter_no":"M1"}},"authorization_confirmed":true,"poll_interval_seconds":{interval}}}"#
             );
             assert_eq!(
                 run(&input, false).unwrap_err().code,
@@ -2582,7 +2921,7 @@ mod tests {
         }
         for interval in ["900", "900.0", "9e2", "2147483647.0"] {
             let input = format!(
-                r#"{{"operation":"balance","selector":{{"identity_no":"synthetic"}},"authorization_confirmed":true,"poll_interval_seconds":{interval}}}"#
+                r#"{{"operation":"balance","binding":{{"building":"B","room":"101","meter_no":"M1"}},"authorization_confirmed":true,"poll_interval_seconds":{interval}}}"#
             );
             assert!(run(&input, false).is_ok(), "{interval}");
         }
@@ -2590,18 +2929,58 @@ mod tests {
 
     #[test]
     fn directory_fixture_refuses_ambiguous_and_unknown_matches() {
-        let duplicated = br#"[{"id":1,"identityNo":"card1"},{"id":2,"identityNo":"card1"}]"#;
-        assert!(parse_directory_fixture(duplicated, r#"{"identity_no":"card1"}"#).is_err());
-        let unique = br#"[{"id":1,"identityNo":"card1"}]"#;
+        let duplicated = br#"[{"id":1,"building":"B","room":"101","meterNo":"M1"},{"id":2,"building":"B","room":"101","meterNo":"M1"}]"#;
         assert!(
-            parse_directory_fixture(unique, r#"{"identity_no":"card2"}"#)
+            parse_directory_fixture(
+                duplicated,
+                r#"{"building":"B","room":"101","meter_no":"M1"}"#,
+            )
+            .is_err()
+        );
+        let unique = br#"[{"id":1,"building":"B","room":"101","meterNo":"M1"}]"#;
+        assert!(
+            parse_directory_fixture(unique, r#"{"building":"B","room":"101","meter_no":"M2"}"#,)
                 .unwrap()
                 .is_none()
         );
-        // A selector that mixes both variants is not a member of either.
-        let mixed = r#"{"operation":"balance","selector":{"identity_no":"a","campus":"b"},"authorization_confirmed":true}"#;
+        // A retired selector member, or a positional root, is not a binding.
+        let mixed = r#"{"operation":"balance","binding":{"building":"B","room":"101","meter_no":"M1","identity_no":"a"},"authorization_confirmed":true}"#;
         assert!(run(mixed, false).is_err());
+        assert!(parse_directory_fixture(unique, r#"["B","101","M1"]"#).is_err());
     }
 
+    #[test]
+    fn meter_binding_is_mandatory_and_an_identity_is_not_one() {
+        for input in [
+            r#"{"operation":"balance","authorization_confirmed":true}"#,
+            r#"{"operation":"balance","binding":null,"authorization_confirmed":true}"#,
+            r#"{"operation":"balance","selector":{"identity_no":"synthetic"},"authorization_confirmed":true}"#,
+            r#"{"operation":"balance","selector":{"campus":"A","building":"B","floor":"1","room":"101"},"authorization_confirmed":true}"#,
+            r#"{"operation":"balance","binding":{"building":"B","room":"101"},"authorization_confirmed":true}"#,
+            r#"{"operation":"balance","binding":{"building":"B","room":"101","meter_no":"M1","identity_no":"synthetic"},"authorization_confirmed":true}"#,
+            r#"{"operation":"balance","binding":{"building":"","room":"101","meter_no":"M1"},"authorization_confirmed":true}"#,
+            r#"["balance",{"building":"B","room":"101","meter_no":"M1"},true]"#,
+        ] {
+            assert_eq!(
+                run(input, true).unwrap_err().code,
+                "invalid_input",
+                "{input}"
+            );
+        }
+        let admitted = r#"{"operation":"resolve","binding":{"building":"B","room":"101","meter_no":"M1"},"authorization_confirmed":true}"#;
+        assert_eq!(run(admitted, false).unwrap()["result"], "blocked");
+    }
 
+    #[test]
+    fn unknown_threshold_conversion_stays_null() {
+        let transition = threshold_transition(Some(11.0), 10.0, 10.0, None, 100).unwrap();
+        assert!(transition["threshold_conversion"].is_null());
+        assert_eq!(transition["notified"], true);
+        assert!(
+            parse_balance_page(PAGE.as_bytes(), Some("text/html; charset=utf-8"))
+                .unwrap()
+                .get("threshold_conversion")
+                .is_none()
+        );
+    }
 }

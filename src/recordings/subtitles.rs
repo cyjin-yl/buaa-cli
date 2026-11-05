@@ -930,6 +930,56 @@ mod tests {
     }
 
     #[test]
+    fn derived_digest_binds_the_emitted_segment_value_not_input_key_order() {
+        // The same two cues supplied with different JSON key orders must
+        // normalize to one Value and therefore one derived digest.
+        let ordered = r#"[{"BeginSec":1,"EndSec":2,"Text":"一","TransText":"first"},{"BeginSec":3,"EndSec":4,"Text":"two","TransText":""}]"#;
+        let reordered = r#"[{"TransText":"first","Text":"一","EndSec":2,"BeginSec":1},{"Text":"two","TransText":"","BeginSec":3,"EndSec":4}]"#;
+        let first = import(&input(&native(ordered)).to_string()).unwrap();
+        let second = import(&input(&native(reordered)).to_string()).unwrap();
+        assert_eq!(first["segments"], second["segments"]);
+        assert_eq!(
+            second["derivation"]["sha256"],
+            first["derivation"]["sha256"]
+        );
+        // The published hash is SHA-256 over the compact JSON of exactly the
+        // Value that leaves in `segments`, so those bytes are also present
+        // verbatim inside a compact rendering of the emitted document.
+        let segments = serde_json::to_vec(&first["segments"]).unwrap();
+        assert_eq!(first["derivation"]["sha256"], digest(&segments));
+        let document = String::from_utf8(serde_json::to_vec(&first).unwrap()).unwrap();
+        assert!(document.contains(std::str::from_utf8(&segments).unwrap()));
+        // Hashing a struct vector before the Value conversion would bind the
+        // module field order instead, which cannot match the emitted document.
+        #[derive(Serialize)]
+        struct PreConversion<'a> {
+            text: &'a str,
+            translation: &'a str,
+            start_ms: u64,
+            end_ms: u64,
+            source_order: usize,
+        }
+        let unconverted = serde_json::to_vec(&vec![
+            PreConversion {
+                text: "一",
+                translation: "first",
+                start_ms: 1000,
+                end_ms: 2000,
+                source_order: 1,
+            },
+            PreConversion {
+                text: "two",
+                translation: "",
+                start_ms: 3000,
+                end_ms: 4000,
+                source_order: 2,
+            },
+        ])
+        .unwrap();
+        assert_ne!(first["derivation"]["sha256"], digest(&unconverted));
+    }
+
+    #[test]
     fn malformed_timing_and_oversized_text_do_not_become_partial_success() {
         for cues in [
             r#"[{"BeginSec":-1,"EndSec":1,"Text":"x","TransText":""}]"#.to_owned(),

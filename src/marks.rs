@@ -15,6 +15,15 @@
 //! A course below `pass_min` (default 60) is `pass: false`, earns no point,
 //! and is excluded from the weighted average. `buaa marks baseline` persists an
 //! idempotent local snapshot used by the structured diff.
+//!
+//! Arithmetic is checked end to end: a weighted sum, credit total or rounded
+//! value that would leave the finite `f64` domain is refused as
+//! `invalid_input` instead of being published as `inf`/`NaN`. One course name
+//! identifies one course inside one selection, so a repeated name is refused
+//! whether it repeats the same values or conflicting ones: summing it would
+//! double-weight the credits and keeping either value would drop supplied
+//! data. A score the declared policy carries no point for is refused, never
+//! scored as a guessed `0.0`.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -101,21 +110,24 @@ struct PolicyContext {
     source: String,
 }
 impl PolicyContext {
-    fn point_for(&self, score: u8) -> f64 {
+    fn point_for(&self, score: u8) -> Option<f64> {
         match &self.policy {
             Policy::Table(bands, pass_min) => {
                 if score < *pass_min {
-                    return 0.0;
+                    return Some(0.0);
                 }
+                // A table validated to cover [pass_min, 100] always matches.
+                // A miss is an unsupported score under the declared policy,
+                // so it is refused instead of being guessed as 0.0.
                 bands
                     .iter()
                     .find(|band| score >= band.min && score <= band.max)
                     .map(|band| band.point)
-                    .unwrap_or(0.0)
             }
             Policy::Formula { a, b, c, .. } => {
                 let x = f64::from(100u8) - f64::from(score);
-                (a - b * x * x / c).clamp(0.0, *a)
+                let point = (a - b * x * x / c).clamp(0.0, *a);
+                point.is_finite().then_some(point)
             }
         }
     }
@@ -157,6 +169,20 @@ fn parse_policy(raw: &Value) -> Result<PolicyContext, Value> {
             json!({"error":"invalid_input","message":"policy requires non-empty id and source provenance"}),
         );
     }
+    // Only the two published policy kinds are supported. An unknown or missing
+    // `kind` is refused explicitly rather than coerced into a default scoring
+    // shape.
+    if !matches!(
+        raw.get("policy")
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str),
+        Some("table" | "formula")
+    ) {
+        return Err(json!({
+            "error":"invalid_input",
+            "message":"unsupported policy kind; expected table or formula"
+        }));
+    }
     let mut spec_value = raw["policy"].clone();
     if let Some(map) = spec_value.as_object_mut() {
         map.remove("id");
@@ -177,7 +203,9 @@ fn parse_policy(raw: &Value) -> Result<PolicyContext, Value> {
             bands.sort_by_key(|band| band.min);
             let mut cursor = pass_min;
             for band in &bands {
-                if band.min > band.max || band.max > 100 || band.point < 0.0 || band.point > 5.0 {
+                // `!(range.contains)` also refuses NaN, which two separate
+                // `< 0.0` / `> 5.0` comparisons would silently admit.
+                if band.min > band.max || band.max > 100 || !(0.0..=5.0).contains(&band.point) {
                     return Err(invalid());
                 }
                 if band.min != cursor {
@@ -240,7 +268,7 @@ fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
     if list.len() > 10_000 {
         return Err(invalid());
     }
-    let mut seen: BTreeMap<String, ()> = BTreeMap::new();
+    let mut seen: BTreeMap<String, (u8, f64)> = BTreeMap::new();
     let mut courses = Vec::with_capacity(list.len());
     let mut total_credit = 0.0;
     for item in list {
@@ -261,10 +289,20 @@ fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
             return Err(invalid());
         }
         total_credit = next_total;
-        if seen.insert(input.name.clone(), ()).is_some() {
-            return Err(
-                json!({"error":"invalid_input","message":"duplicate course name in selection"}),
-            );
+        if let Some((seen_score, seen_credit)) =
+            seen.insert(input.name.clone(), (input.score, input.credit))
+        {
+            // One name is one course inside one selection. The repeat is
+            // refused either way: summing it double-weights the credits and
+            // keeping one row would drop supplied data. Conflicting values are
+            // named as such so the caller can fix the real defect.
+            let conflict = seen_score != input.score || seen_credit != input.credit;
+            let message = if conflict {
+                "conflicting duplicate course name in selection"
+            } else {
+                "duplicate course name in selection"
+            };
+            return Err(json!({"error":"invalid_input","message":message}));
         }
         courses.push(Course {
             name: input.name,
@@ -284,7 +322,7 @@ fn parse_baseline_courses(baseline: &Value) -> Result<Vec<Course>, Value> {
     if list.len() > 10_000 {
         return Err(json!({"error":"invalid_input","message":"baseline courses are malformed"}));
     }
-    let mut seen: BTreeMap<String, ()> = BTreeMap::new();
+    let mut seen: BTreeMap<String, (u8, f64)> = BTreeMap::new();
     let mut courses = Vec::with_capacity(list.len());
     let mut total_credit = 0.0;
     for item in list {
@@ -303,6 +341,7 @@ fn parse_baseline_courses(baseline: &Value) -> Result<Vec<Course>, Value> {
             .ok_or_else(
                 || json!({"error":"invalid_input","message":"baseline courses are malformed"}),
             )?;
+        let score = score as u8;
         let credit = item
             .get("credit")
             .and_then(Value::as_f64)
@@ -317,22 +356,42 @@ fn parse_baseline_courses(baseline: &Value) -> Result<Vec<Course>, Value> {
             );
         }
         total_credit = next_total;
-        if seen.insert(name.clone(), ()).is_some() {
-            return Err(
-                json!({"error":"invalid_input","message":"duplicate course name in baseline"}),
-            );
+        if let Some((seen_score, seen_credit)) = seen.insert(name.clone(), (score, credit)) {
+            let conflict = seen_score != score || seen_credit != credit;
+            let message = if conflict {
+                "conflicting duplicate course name in baseline"
+            } else {
+                "duplicate course name in baseline"
+            };
+            return Err(json!({"error":"invalid_input","message":message}));
         }
         courses.push(Course {
             name,
-            score: score as u8,
+            score,
             credit,
         });
     }
     Ok(courses)
 }
 
-fn round4(value: f64) -> f64 {
-    (value * 10_000.0).round() / 10_000.0
+/// Checked `f64` accumulation: a non-finite term or sum is refused, so a
+/// published credit total or weighted sum can never become `inf`/`NaN`.
+fn checked_sum(total: f64, term: f64) -> Option<f64> {
+    if !total.is_finite() || !term.is_finite() {
+        return None;
+    }
+    let sum = total + term;
+    sum.is_finite().then_some(sum)
+}
+
+/// Checked `round4`: the 10^4 scaling is refused when it would leave the
+/// finite domain, so no published number can be `inf`.
+fn round4(value: f64) -> Option<f64> {
+    let scaled = value * 10_000.0;
+    if !scaled.is_finite() {
+        return None;
+    }
+    Some(scaled.round() / 10_000.0)
 }
 
 #[derive(Debug, Clone)]
@@ -343,42 +402,53 @@ struct Calculation {
     lines: Vec<Value>,
 }
 
-fn compute(context: &PolicyContext, courses: &[Course]) -> Calculation {
+fn compute(context: &PolicyContext, courses: &[Course]) -> Result<Calculation, Value> {
+    let pass_min = context.pass_min();
     let mut numerator = 0.0;
     let mut counted_credits = 0.0;
     let mut total_credits = 0.0;
     let mut lines = Vec::with_capacity(courses.len());
     for course in courses {
-        let pass = course.score >= context.pass_min();
+        // `compute` is the last boundary before arithmetic, so it re-checks the
+        // course domain instead of trusting every caller to have validated it.
+        if course.score > 100 || !course.credit.is_finite() || course.credit <= 0.0 {
+            return Err(invalid());
+        }
+        let pass = course.score >= pass_min;
         let point = if pass {
-            context.point_for(course.score)
+            context.point_for(course.score).ok_or_else(invalid)?
         } else {
             0.0
         };
         if pass {
-            numerator += point * course.credit;
-            counted_credits += course.credit;
+            numerator = checked_sum(numerator, point * course.credit).ok_or_else(invalid)?;
+            counted_credits = checked_sum(counted_credits, course.credit).ok_or_else(invalid)?;
         }
-        total_credits += course.credit;
+        total_credits = checked_sum(total_credits, course.credit).ok_or_else(invalid)?;
+        let shown_point = round4(point).ok_or_else(invalid)?;
         lines.push(json!({
             "name": course.name,
             "score": course.score,
             "credit": course.credit,
-            "point": round4(point),
+            "point": shown_point,
             "counts": pass
         }));
     }
     let gpa = if counted_credits > 0.0 {
-        Some(round4(numerator / counted_credits))
+        let mean = numerator / counted_credits;
+        if !mean.is_finite() || mean < 0.0 {
+            return Err(invalid());
+        }
+        Some(round4(mean).ok_or_else(invalid)?)
     } else {
         None
     };
-    Calculation {
+    Ok(Calculation {
         gpa,
-        counted_credits: round4(counted_credits),
-        total_credits: round4(total_credits),
+        counted_credits: round4(counted_credits).ok_or_else(invalid)?,
+        total_credits: round4(total_credits).ok_or_else(invalid)?,
         lines,
-    }
+    })
 }
 
 fn policy_provenance(context: &PolicyContext) -> Value {
@@ -399,13 +469,18 @@ pub fn gpa(input: &str) -> Value {
         Ok(value) => value,
         Err(_) => return invalid(),
     };
-    let Ok(context) = parse_policy(&raw) else {
-        return invalid();
+    let context = match parse_policy(&raw) {
+        Ok(value) => value,
+        Err(error) => return error,
     };
-    let Ok(courses) = parse_courses(&raw) else {
-        return invalid();
+    let courses = match parse_courses(&raw) {
+        Ok(value) => value,
+        Err(error) => return error,
     };
-    let current = compute(&context, &courses);
+    let current = match compute(&context, &courses) {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
     let mut out = json!({
         "schema_version": 1,
         "type": "gpa_calculation",
@@ -434,10 +509,10 @@ fn normalized_policy_content(raw: &Value) -> Option<Value> {
     let kind = value.get("kind")?.as_str()?;
     match kind {
         "table" => {
-            let pass_min = value
-                .get("pass_min")
-                .and_then(Value::as_u64)
-                .unwrap_or(DEFAULT_PASS_MIN as u64);
+            // No defaulting: the canonical content this tool emits always
+            // carries pass_min, so an absent bound must fail the comparison
+            // rather than be guessed as the default and silently match.
+            let pass_min = value.get("pass_min").and_then(Value::as_u64)?;
             let bands = value.get("bands")?.as_array()?.clone();
             let mut sorted = bands;
             sorted.sort_by_key(|band| band.get("min").and_then(Value::as_u64).unwrap_or(u64::MAX));
@@ -448,7 +523,7 @@ fn normalized_policy_content(raw: &Value) -> Option<Value> {
             "a":value.get("a")?,
             "b":value.get("b")?,
             "c":value.get("c")?,
-            "pass_min":value.get("pass_min").and_then(Value::as_u64).unwrap_or(DEFAULT_PASS_MIN as u64),
+            "pass_min":value.get("pass_min").and_then(Value::as_u64)?,
         })),
         _ => None,
     }
@@ -481,7 +556,12 @@ fn diff_value(
         Ok(value) => value,
         Err(value) => return value,
     };
-    let baseline_calc = compute(context, &baseline_courses);
+    let baseline_calc = match compute(context, &baseline_courses) {
+        Ok(value) => value,
+        Err(_) => {
+            return json!({"error":"invalid_input","message":"baseline courses are malformed"});
+        }
+    };
 
     let mut baseline_by_name: BTreeMap<String, (u8, f64)> = BTreeMap::new();
     for course in &baseline_courses {
@@ -521,7 +601,7 @@ fn diff_value(
     let gpa_baseline = baseline_calc.gpa;
     let gpa_current = current.gpa;
     let delta = match (gpa_baseline, gpa_current) {
-        (Some(before), Some(after)) => Some(round4(after - before)),
+        (Some(before), Some(after)) => round4(after - before),
         _ => None,
     };
     json!({
@@ -625,7 +705,7 @@ fn load_current(input: &str) -> Result<(PolicyContext, Vec<Course>, Calculation)
     let raw: Value = serde_json::from_str(input).map_err(|_| invalid())?;
     let context = parse_policy(&raw)?;
     let courses = parse_courses(&raw)?;
-    let calculation = compute(&context, &courses);
+    let calculation = compute(&context, &courses)?;
     Ok((context, courses, calculation))
 }
 
@@ -761,7 +841,7 @@ pub fn schema() -> Value {
                         "bands":{"type":"array","minItems":1,"description":"After sorting by min, inclusive integer bands must cover every score from pass_min (default 60) through 100 exactly once, with no gaps or overlaps; each min must be <= max. Input order need not be sorted.","items":{"type":"object","additionalProperties":false,"required":["min","max","point"],"properties":{"min":{"type":"integer","minimum":0,"maximum":100},"max":{"type":"integer","minimum":0,"maximum":100},"point":{"type":"number","minimum":0,"maximum":5}}}},
                         "a":{"type":"number","exclusiveMinimum":0,"maximum":5},"b":{"type":"number","exclusiveMinimum":0},"c":{"type":"number","exclusiveMinimum":0}},
                     "description":"Caller-supplied published policy with nonempty id/source provenance. Formula points are clamp(a - b * (100-score)^2 / c, 0, a); scores below pass_min do not count. All coefficients must be finite."},
-                "courses":{"type":"array","maxItems":10000,"x-maxTotalCredit":MAX_SAFE_CREDIT_TOTAL,"description":"Course names must be unique. Each credit and the aggregate credit total must be finite, positive per course, and strictly below x-maxTotalCredit.","items":{"type":"object","additionalProperties":false,"required":["name","score","credit"],
+                "courses":{"type":"array","maxItems":10000,"x-maxTotalCredit":MAX_SAFE_CREDIT_TOTAL,"description":"Course names must be unique: a repeated name is invalid_input whether it repeats identical values or conflicting score/credit values. Each credit and the aggregate credit total must be finite, positive per course, and strictly below x-maxTotalCredit.","items":{"type":"object","additionalProperties":false,"required":["name","score","credit"],
                     "properties":{"name":{"type":"string","minLength":1},
                         "score":{"type":"integer","minimum":0,"maximum":100},
                         "credit":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL}}}},
@@ -813,6 +893,12 @@ mod tests {
         "b": 3.0,
         "c": 1600.0
     }"#;
+
+    // Single uniform band: every passing score carries 4.0, so a checked
+    // arithmetic refusal cannot be confused with a banding change.
+    const BAND_POLICY_INPUT: &str = r#"{"policy":{"kind":"table","id":"test-band",
+        "source":"https://example.invalid/band","pass_min":60,
+        "bands":[{"min":60,"max":100,"point":4.0}]}}"#;
 
     #[test]
     fn table_policy_computes_weighted_gpa_and_excludes_failures() {
@@ -1154,5 +1240,146 @@ mod tests {
             "relative/path.json",
         );
         assert_eq!(out["error"], "invalid_input");
+    }
+
+    fn course(name: &str, score: u8, credit: f64) -> Course {
+        Course {
+            name: name.to_owned(),
+            score,
+            credit,
+        }
+    }
+
+    #[test]
+    fn conflicting_duplicate_course_identity_is_refused() {
+        // Same name, different score.
+        let conflict_score = format!(
+            r#"{{"policy":{},"courses":[{{"name":"A","score":90,"credit":2.0}},{{"name":"A","score":80,"credit":2.0}}]}}"#,
+            TABLE_POLICY
+        );
+        let out = gpa(&conflict_score);
+        assert_eq!(out["error"], "invalid_input");
+        assert_eq!(
+            out["message"],
+            "conflicting duplicate course name in selection"
+        );
+
+        // Same name and score, different credit.
+        let conflict_credit = format!(
+            r#"{{"policy":{},"courses":[{{"name":"A","score":90,"credit":2.0}},{{"name":"A","score":90,"credit":3.0}}]}}"#,
+            TABLE_POLICY
+        );
+        assert_eq!(
+            gpa(&conflict_credit)["message"],
+            "conflicting duplicate course name in selection"
+        );
+
+        // An identical repeat is refused too: counting it twice would
+        // double-weight the credits.
+        let identical = format!(
+            r#"{{"policy":{},"courses":[{{"name":"A","score":90,"credit":2.0}},{{"name":"A","score":90,"credit":2.0}}]}}"#,
+            TABLE_POLICY
+        );
+        let out = gpa(&identical);
+        assert_eq!(out["error"], "invalid_input");
+        assert_eq!(out["message"], "duplicate course name in selection");
+
+        // The baseline side refuses conflicting identity before diffing.
+        let baseline = r#"{
+            "policy":{"kind":"table","id":"test-table","source":"https://example.invalid/policy",
+                "pass_min":60,"bands":[{"min":85,"max":100,"point":4.0},{"min":75,"max":84,"point":3.0},{"min":60,"max":74,"point":2.0}]},
+            "courses":[
+                {"name":"A","score":90,"credit":2.0},
+                {"name":"A","score":70,"credit":2.0}]
+        }"#;
+        let current = format!(
+            r#"{{"policy":{},"courses":[{{"name":"A","score":90,"credit":2.0}}],"baseline":{}}}"#,
+            TABLE_POLICY, baseline
+        );
+        let out = gpa(&current);
+        assert_eq!(out["diff"]["error"], "invalid_input");
+        assert_eq!(
+            out["diff"]["message"],
+            "conflicting duplicate course name in baseline"
+        );
+
+        // Distinct names stay admitted (control).
+        let distinct = format!(
+            r#"{{"policy":{},"courses":[{{"name":"A","score":90,"credit":2.0}},{{"name":"B","score":90,"credit":2.0}}]}}"#,
+            TABLE_POLICY
+        );
+        assert_eq!(gpa(&distinct)["gpa"], 4.0);
+    }
+
+    #[test]
+    fn checked_arithmetic_refuses_overflow_and_non_finite_values() {
+        let raw: Value = serde_json::from_str(BAND_POLICY_INPUT).unwrap();
+        let context = parse_policy(&raw).unwrap();
+
+        // `compute` holds the finite domain on its own, so these refusals do
+        // not depend on the parse-time credit bound.
+        let overflow = [
+            course("A", 90, f64::MAX / 4.0),
+            course("B", 90, f64::MAX / 4.0),
+        ];
+        assert!(compute(&context, &overflow).is_err());
+        for credit in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 0.0, -1.0] {
+            assert!(
+                compute(&context, &[course("A", 90, credit)]).is_err(),
+                "{credit}"
+            );
+        }
+        assert!(compute(&context, &[course("A", 150, 1.0)]).is_err());
+
+        // Finite, in-domain input still reproduces the same result exactly.
+        let ok = [course("A", 92, 4.0), course("B", 78, 2.0)];
+        let first = compute(&context, &ok).unwrap();
+        let second = compute(&context, &ok).unwrap();
+        assert_eq!(first.gpa, Some(4.0));
+        assert_eq!(first.counted_credits, 6.0);
+        assert_eq!(first.total_credits, 6.0);
+        assert_eq!(first.lines, second.lines);
+        assert_eq!(first.gpa, second.gpa);
+        assert_eq!(first.counted_credits, second.counted_credits);
+        assert_eq!(first.total_credits, second.total_credits);
+    }
+
+    #[test]
+    fn unsupported_score_and_policy_kind_are_refused_not_guessed() {
+        // A table that carries no point for a supplied score is refused
+        // instead of being scored as a guessed 0.0.
+        let raw: Value = serde_json::from_str(BAND_POLICY_INPUT).unwrap();
+        let mut uncovered = parse_policy(&raw).unwrap();
+        if let Policy::Table(bands, _) = &mut uncovered.policy {
+            bands[0].min = 85;
+        } else {
+            panic!("test policy must be a table");
+        }
+        assert!(compute(&uncovered, &[course("A", 70, 2.0)]).is_err());
+
+        // A NaN point can never reach a published number either.
+        let mut not_a_number = parse_policy(&raw).unwrap();
+        if let Policy::Table(bands, _) = &mut not_a_number.policy {
+            bands[0].point = f64::NAN;
+        } else {
+            panic!("test policy must be a table");
+        }
+        assert!(compute(&not_a_number, &[course("A", 90, 2.0)]).is_err());
+
+        // Published policy parsing refuses unknown kinds and non-finite or
+        // out-of-range points.
+        for policy in [
+            r#"{"kind":"weighted","id":"x","source":"y"}"#,
+            r#"{"kind":"table","id":"x","source":"y","bands":[{"min":60,"max":100,"point":1e400}]}"#,
+            r#"{"kind":"table","id":"x","source":"y","bands":[{"min":60,"max":100,"point":6.0}]}"#,
+        ] {
+            let input = format!(r#"{{"policy":{policy},"courses":[]}}"#);
+            assert_eq!(gpa(&input)["error"], "invalid_input", "{policy}");
+        }
+        let out = gpa(r#"{"policy":{"kind":"weighted","id":"x","source":"y"},"courses":[]}"#);
+        assert_eq!(
+            out["message"],
+            "unsupported policy kind; expected table or formula"
+        );
     }
 }

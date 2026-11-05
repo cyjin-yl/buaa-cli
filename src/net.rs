@@ -1268,10 +1268,13 @@ impl ClassroomClient {
         if !classroom_transcript_url_allowed(url) {
             return Err(invalid_url());
         }
-        self.source
-            .get_with_cookie(url, true, Some(&self.cookie), |_, _| false, move |r, _| {
-                process(r)
-            })
+        self.source.get_with_cookie(
+            url,
+            true,
+            Some(&self.cookie),
+            |_, _| false,
+            move |r, _| process(r),
+        )
     }
 
     /// Cache-first, session-isolated reads of the two reviewed lesson-source
@@ -1285,10 +1288,13 @@ impl ClassroomClient {
         if !classroom_source_url_allowed(url) {
             return Err(invalid_url());
         }
-        self.source
-            .get_with_cookie(url, false, Some(&self.cookie), |_, _| false, move |r, _| {
-                process(r)
-            })
+        self.source.get_with_cookie(
+            url,
+            false,
+            Some(&self.cookie),
+            |_, _| false,
+            move |r, _| process(r),
+        )
     }
 }
 
@@ -1486,9 +1492,35 @@ impl ArchiveClient {
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        self.get_with_cookie(url, immutable, None, is_attributed_archive_status, move |r, _| {
-            process(r)
-        })
+        self.get_with_archive_status_and_persistence(
+            url,
+            immutable,
+            is_attributed_archive_status,
+            |_, _| true,
+            process,
+        )
+    }
+
+    /// Same read as `get_with_archive_status`, with a caller predicate deciding
+    /// whether a processed result may persist its response. A rejected capture
+    /// can then report degraded evidence without retaining the inadmissible
+    /// bytes as the official replay.
+    pub(crate) fn get_with_archive_status_and_persistence<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        persist: impl Fn(&T, &Response) -> bool,
+        process: impl FnOnce(&Response) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.get_with_persistence(
+            url,
+            immutable,
+            None,
+            is_attributed_archive_status,
+            persist,
+            move |r, _| process(r),
+        )
     }
 
     /// Same read as `get`, additionally reporting whether the response's
@@ -1510,6 +1542,25 @@ impl ArchiveClient {
         immutable: bool,
         cookie: Option<&RequestCookie>,
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.get_with_persistence(
+            url,
+            immutable,
+            cookie,
+            is_attributed_archive_status,
+            |_, _| true,
+            process,
+        )
+    }
+
+    fn get_with_persistence<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        cookie: Option<&RequestCookie>,
+        is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        persist: impl Fn(&T, &Response) -> bool,
         process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.profile.validate_url(url)?;
@@ -1551,6 +1602,7 @@ impl ArchiveClient {
                 cookie,
             },
             is_attributed_archive_status,
+            persist,
             process,
         )
     }
@@ -1653,6 +1705,7 @@ impl ArchiveClient {
             governor,
             RequestSession { http, cookie: None },
             |_, _| false,
+            |_, _| true,
             move |r, _| process(r),
         )
     }
@@ -1664,6 +1717,7 @@ impl ArchiveClient {
         governor: &Governor,
         session: RequestSession<'_>,
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        persist: impl Fn(&T, &Response) -> bool,
         process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let mut lease = acquire(governor)?;
@@ -1689,10 +1743,9 @@ impl ArchiveClient {
         // An entry whose cookie admission is unknown cannot supply validators:
         // revalidation must observe a complete fresh 200, so a legacy entry
         // is never re-promoted by a conditional 304.
-        if let Some(entry) = cached
-            .as_ref()
-            .filter(|entry| !organizations_target(self, url) || entry.admission != CookieAdmission::Unknown)
-        {
+        if let Some(entry) = cached.as_ref().filter(|entry| {
+            !organizations_target(self, url) || entry.admission != CookieAdmission::Unknown
+        }) {
             if let Some(etag) = &entry.etag {
                 request = request.header("If-None-Match", etag);
             }
@@ -1718,7 +1771,11 @@ impl ArchiveClient {
             Sent(Result<reqwest::blocking::Response, reqwest::Error>),
         }
         let started = lease.start_request(|| {
-            if session.cookie.is_some_and(|cookie|cookie.expires.is_some_and(|expiry|expiry <= SystemTime::now())) {
+            if session.cookie.is_some_and(|cookie| {
+                cookie
+                    .expires
+                    .is_some_and(|expiry| expiry <= SystemTime::now())
+            }) {
                 StartAttempt::CredentialExpired
             } else {
                 StartAttempt::Sent(request.send())
@@ -1727,7 +1784,9 @@ impl ArchiveClient {
         let mut raw = match started {
             Ok(StartAttempt::Sent(Ok(response))) => response,
             Ok(StartAttempt::CredentialExpired) => {
-                lease.finish_without_request().map_err(|_| governor_error())?;
+                lease
+                    .finish_without_request()
+                    .map_err(|_| governor_error())?;
                 return Err(Error::new(
                     "unavailable",
                     "Stored classroom cookie expired before transmission; deliberate authentication is required.",
@@ -1768,14 +1827,23 @@ impl ArchiveClient {
             };
         let result = (|| {
             let header_result = collect_headers(raw.headers());
-            attributed_archive_status = header_result.as_ref().is_ok_and(|headers|
-                (400..=599).contains(&status) && !challenge
-                    && is_attributed_archive_status(status, headers));
-            if !attributed_archive_status && lease.observe_http_many(
-                status,
-                raw.headers().get_all("retry-after").iter().map(|value|value.to_str().ok()),
-                challenge,
-            ).is_err() {
+            attributed_archive_status = header_result.as_ref().is_ok_and(|headers| {
+                (400..=599).contains(&status)
+                    && !challenge
+                    && is_attributed_archive_status(status, headers)
+            });
+            if !attributed_archive_status
+                && lease
+                    .observe_http_many(
+                        status,
+                        raw.headers()
+                            .get_all("retry-after")
+                            .iter()
+                            .map(|value| value.to_str().ok()),
+                        challenge,
+                    )
+                    .is_err()
+            {
                 observation_failed = true;
                 return Err(governor_error());
             }
@@ -1825,10 +1893,7 @@ impl ArchiveClient {
             if organizations_target(self, url)
                 && raw.headers().iter().any(|(name, value)| {
                     sensitive_text_marker(name.as_str())
-                        || value
-                            .to_str()
-                            .map(sensitive_text_marker)
-                            .unwrap_or(true)
+                        || value.to_str().map(sensitive_text_marker).unwrap_or(true)
                 })
             {
                 directory_metadata_marked = true;
@@ -1907,7 +1972,9 @@ impl ArchiveClient {
             } else {
                 let hash = hash(&body);
                 match cached {
-                    Some(mut entry) if !organizations_target(self, url) && (immutable || entry.immutable) => {
+                    Some(mut entry)
+                        if !organizations_target(self, url) && (immutable || entry.immutable) =>
+                    {
                         if entry.response.sha256 != hash
                             || entry.response.body != body
                             || entry.response.status != status
@@ -1952,10 +2019,9 @@ impl ArchiveClient {
                             // inadmissible provenance.
                             cache_status: if previous.is_some()
                                 && (!organizations_target(self, url)
-                                    || previous
-                                        .as_ref()
-                                        .is_some_and(|entry| entry.admission != CookieAdmission::Unknown))
-                            {
+                                    || previous.as_ref().is_some_and(|entry| {
+                                        entry.admission != CookieAdmission::Unknown
+                                    })) {
                                 CacheStatus::Revalidated
                             } else {
                                 CacheStatus::Miss
@@ -1973,14 +2039,18 @@ impl ArchiveClient {
             let processed = process(response, entry.admission)?;
             // An unattributed replay 404/410 is an archive gap, not immutable
             // captured content. Return its facts without persisting the gap.
-            if self.profile.cacheable(url, response) {
+            if self.profile.cacheable(url, response) && persist(&processed, response) {
                 self.save(&entry)?;
             }
             Ok(processed)
         })();
-        let network_failure = result.as_ref().is_err_and(|error|
-            matches!(error.code, "network_error" | "body_limit"))
-            || (status == 200 && !body_complete && !challenge && !directory_cookie_issued
+        let network_failure = result
+            .as_ref()
+            .is_err_and(|error| matches!(error.code, "network_error" | "body_limit"))
+            || (status == 200
+                && !body_complete
+                && !challenge
+                && !directory_cookie_issued
                 && !directory_metadata_marked);
         // A session is rejected by what the response actually is, not by the
         // transport's content label: the classroom platform serves its native
@@ -2440,14 +2510,19 @@ pub(crate) fn percent_decode_into(input: &[u8], plus_as_space: bool, out: &mut V
     }
     let mut index = 0;
     while index < input.len() {
-        if input[index] == b'%' && index + 2 < input.len()
+        if input[index] == b'%'
+            && index + 2 < input.len()
             && let (Some(high), Some(low)) = (hex(input[index + 1]), hex(input[index + 2]))
         {
             out.push((high << 4) | low);
             index += 3;
             continue;
         }
-        out.push(if plus_as_space && input[index] == b'+' { b' ' } else { input[index] });
+        out.push(if plus_as_space && input[index] == b'+' {
+            b' '
+        } else {
+            input[index]
+        });
         index += 1;
     }
 }
@@ -2461,17 +2536,25 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
     if secret.is_empty() || candidate.len() < secret.len() {
         return false;
     }
-    let escaped = secret.bytes().any(|byte| byte < 0x20 || matches!(byte, b'"' | b'\\'))
+    let escaped = secret
+        .bytes()
+        .any(|byte| byte < 0x20 || matches!(byte, b'"' | b'\\'))
         .then(|| Zeroizing::new(serde_json::to_string(secret).expect("string serialization")));
     let encoded = Zeroizing::new(STANDARD.encode(secret));
-    let url_encoded = encoded.bytes().any(|byte| matches!(byte, b'+' | b'/'))
+    let url_encoded = encoded
+        .bytes()
+        .any(|byte| matches!(byte, b'+' | b'/'))
         .then(|| Zeroizing::new(URL_SAFE.encode(secret)));
     let matches = |part: &[u8]| {
         let contains = |text: &str| {
             text.contains(secret)
-                || escaped.as_ref().is_some_and(|value| text.contains(&value[1..value.len() - 1]))
+                || escaped
+                    .as_ref()
+                    .is_some_and(|value| text.contains(&value[1..value.len() - 1]))
                 || text.contains(encoded.trim_end_matches('='))
-                || url_encoded.as_ref().is_some_and(|value| text.contains(value.trim_end_matches('=')))
+                || url_encoded
+                    .as_ref()
+                    .is_some_and(|value| text.contains(value.trim_end_matches('=')))
         };
         // Every needle is valid UTF-8, so a match cannot cross an invalid
         // sequence. Search valid chunks linearly rather than comparing a long
@@ -2484,8 +2567,12 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
                     let valid = error.valid_up_to();
                     let text = std::str::from_utf8(&remaining[..valid])
                         .expect("UTF-8 error identifies a valid prefix");
-                    if contains(text) { return true; }
-                    let Some(invalid) = error.error_len() else { return false };
+                    if contains(text) {
+                        return true;
+                    }
+                    let Some(invalid) = error.error_len() else {
+                        return false;
+                    };
                     remaining = &remaining[valid + invalid..];
                 }
             }
@@ -2505,13 +2592,17 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
     let mut decoded = Zeroizing::new(Vec::with_capacity(candidate.len()));
     if has_percent {
         percent_decode_into(candidate, false, &mut decoded);
-        if matches(&decoded) { return true; }
+        if matches(&decoded) {
+            return true;
+        }
     }
     if has_plus {
         decoded.fill(0);
         decoded.clear();
         percent_decode_into(candidate, true, &mut decoded);
-        if matches(&decoded) { return true; }
+        if matches(&decoded) {
+            return true;
+        }
     }
     url::form_urlencoded::parse(candidate).any(|(mut key, mut value)| {
         let reflected = matches(key.as_bytes()) || matches(value.as_bytes());
@@ -2528,8 +2619,14 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
 
 /// Check the exact JSON spelling emitted for a scalar without allocating per
 /// value. If the bounded buffer is insufficient, refuse rather than expose it.
-pub(crate) fn json_scalar_matches(value: &serde_json::Value, predicate: impl FnOnce(&[u8]) -> bool) -> bool {
-    if !matches!(value, serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null) {
+pub(crate) fn json_scalar_matches(
+    value: &serde_json::Value,
+    predicate: impl FnOnce(&[u8]) -> bool,
+) -> bool {
+    if !matches!(
+        value,
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null
+    ) {
         return true;
     }
     let mut bytes = [0u8; 64];
@@ -2681,7 +2778,9 @@ mod tests {
         assert!(carries_secret(b"abc_123", secret));
         assert!(carries_secret(br#"{"echo":"abc_123"}"#, secret));
         assert!(carries_secret(
-            base64::engine::general_purpose::STANDARD.encode(secret).as_bytes(),
+            base64::engine::general_purpose::STANDARD
+                .encode(secret)
+                .as_bytes(),
             secret
         ));
         assert!(carries_secret(
@@ -2693,17 +2792,29 @@ mod tests {
         assert!(carries_secret(b"echo=%61%62%63%5F%31%32%33", secret));
         assert!(carries_secret(b"echo=abc%2B123", "abc+123"));
         assert!(carries_secret(b"echo=a+b", "a b"));
-        assert!(carries_secret(br#"{"echo":"private\"token"}"#, "private\"token"));
-        let alphabet_secret="~~~???x";
-        for encoding in [STANDARD.encode(alphabet_secret),URL_SAFE.encode(alphabet_secret)] {
-            assert!(carries_secret(encoding.as_bytes(),alphabet_secret));
-            assert!(carries_secret(encoding.trim_end_matches('=').as_bytes(),alphabet_secret));
+        assert!(carries_secret(
+            br#"{"echo":"private\"token"}"#,
+            "private\"token"
+        ));
+        let alphabet_secret = "~~~???x";
+        for encoding in [
+            STANDARD.encode(alphabet_secret),
+            URL_SAFE.encode(alphabet_secret),
+        ] {
+            assert!(carries_secret(encoding.as_bytes(), alphabet_secret));
+            assert!(carries_secret(
+                encoding.trim_end_matches('=').as_bytes(),
+                alphabet_secret
+            ));
         }
-        assert!(carries_secret(b"echo=%59%57%4A%6A%58%7A%45%79%4D%77%3D%3D",secret));
+        assert!(carries_secret(
+            b"echo=%59%57%4A%6A%58%7A%45%79%4D%77%3D%3D",
+            secret
+        ));
         assert!(!carries_secret(b"an unrelated body", secret));
         assert!(!carries_secret(b"anything", ""));
-        assert!(!carries_secret(b"%zz",secret));
-        assert!(!carries_secret(b"id",&"x".repeat(4096)));
+        assert!(!carries_secret(b"%zz", secret));
+        assert!(!carries_secret(b"id", &"x".repeat(4096)));
     }
 
     #[test]
@@ -2962,8 +3073,7 @@ mod tests {
 
     const SCE_XYXW_ROOT: &str = "<div class='news-box'><a href='xwzx/xyxw.htm'>学院新闻</a></div>";
     const SCE_XYXW_BOARD: &str = "<head><title>学院新闻-化学学院</title></head><div class='fy-list'><ul><li><span>2000-02-29</span><a href='../info/1013/42.htm'>Distinct listing teaser</a></li></ul></div>";
-    const SCE_XYXW_PDF_PATH: &str =
-        "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+    const SCE_XYXW_PDF_PATH: &str = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
     const SCE_XYXW_ARTICLE: &str = "<div class='c-content'><h1 class='c-title'>Own complete original</h1><div class='other-s'>发布日期：2000-02-29</div><div class='nr-info'><div id='vsb_content'><div class='v_news_content'><p>Whole source paragraph.</p><script>showVsbpdfIframe(\"/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf\",\"100%\");</script></div></div></div></div>";
     const SCE_ORIGINAL: &[u8] = b"%PDF-1.7\nSynthetic retained document.\n%%EOF\n";
 
@@ -3119,7 +3229,12 @@ mod tests {
             assert!(request.starts_with("GET /__local/C/C7/70/"));
             let headers = request.to_ascii_lowercase();
             assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
-            reply(socket, 200, "Content-Type: application/pdf\r\n", SCE_ORIGINAL);
+            reply(
+                socket,
+                200,
+                "Content-Type: application/pdf\r\n",
+                SCE_ORIGINAL,
+            );
         });
         let mut client = fixture.client(CacheMode::Revalidate, &server);
         client.profile = SourceProfile::Sce;
@@ -3193,7 +3308,10 @@ mod tests {
         assert_eq!(cached["document"], result["document"]);
         assert_eq!(cached["source_article"], result["source_article"]);
         assert_eq!(cached["source_listing"], result["source_listing"]);
-        assert_eq!(cached["directory_attribution"], result["directory_attribution"]);
+        assert_eq!(
+            cached["directory_attribution"],
+            result["directory_attribution"]
+        );
         assert_eq!(server.count(), 1);
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         client.profile = SourceProfile::Sce;
@@ -3209,14 +3327,21 @@ mod tests {
         assert_eq!(revalidated["document"], result["document"]);
         assert_eq!(revalidated["source_article"], result["source_article"]);
         assert_eq!(revalidated["source_listing"], result["source_listing"]);
-        assert_eq!(revalidated["directory_attribution"], result["directory_attribution"]);
+        assert_eq!(
+            revalidated["directory_attribution"],
+            result["directory_attribution"]
+        );
         assert_eq!(server.count(), 2);
     }
 
     #[test]
     fn sce_document_refuses_unbound_or_unsafe_source_snapshots_before_document_transport() {
         for (url, body, expected) in [
-            (SCE_ROOT_URL, "<title>No reviewed board</title>".to_owned(), "unsupported"),
+            (
+                SCE_ROOT_URL,
+                "<title>No reviewed board</title>".to_owned(),
+                "unsupported",
+            ),
             (
                 SCE_ROOT_URL,
                 "<template><a href='xwzx/xyxw.htm'>学院新闻</a></template>".to_owned(),
@@ -3277,8 +3402,7 @@ mod tests {
         let latest = format!("{SCE_XYXW_BOARD}<a href='xyxw/30.htm'>2</a>");
         seed_college_html(&client, SCE_NOTICES_URL, latest.as_bytes());
         let selected = "https://sce.buaa.edu.cn/xwzx/xyxw/30.htm";
-        let page_two_board =
-            SCE_XYXW_BOARD.replace("../info/", "../../info/");
+        let page_two_board = SCE_XYXW_BOARD.replace("../info/", "../../info/");
         seed_college_html(&client, selected, page_two_board.as_bytes());
         let pdf = format!("https://sce.buaa.edu.cn{SCE_XYXW_PDF_PATH}");
         seed(&client, &pdf, SCE_ORIGINAL, true);
@@ -3312,7 +3436,11 @@ mod tests {
     #[test]
     fn sce_document_article_admission_keeps_safe_layout_failures_not_unsafe_bodies() {
         for (content_type, body, retained) in [
-            ("text/html", "<title>Changed article layout</title>".to_owned(), true),
+            (
+                "text/html",
+                "<title>Changed article layout</title>".to_owned(),
+                true,
+            ),
             ("text/plain", SCE_XYXW_ARTICLE.to_owned(), false),
             (
                 "text/html",
@@ -3926,7 +4054,10 @@ mod tests {
         );
         let (robots_at, _) = server.requests.recv().unwrap();
         let (target_at, _) = server.requests.recv().unwrap();
-        assert!(target_at.duration_since(robots_at) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
+        assert!(
+            target_at.duration_since(robots_at)
+                >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+        );
         let before = fs::read(fixture.0.join("governor/state.json")).unwrap();
         let cached = client.get(&url, classroom_track).unwrap().unwrap();
         assert_eq!(cached["segments"], first["segments"]);
@@ -4246,14 +4377,26 @@ mod tests {
         const SCRIPT: &[u8] = b"globalThis.fixtureValue = 'private synthetic source';";
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
-            assert!(request.starts_with("GET /spocnew/js/app.12345678.js "));
-            assert!(!request.to_ascii_lowercase().contains("cookie:"));
-            reply(
-                socket,
-                200,
-                "Content-Type: application/javascript; charset=utf-8\r\n",
-                SCRIPT,
+            assert!(
+                request.starts_with("GET /spocnew/js/app.12345678.js ")
+                    || request.starts_with("GET /spocnew/ ")
             );
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            if request.starts_with("GET /spocnew/ ") {
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: text/html; charset=utf-8\r\n",
+                    ENTRY,
+                );
+            } else {
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: application/javascript; charset=utf-8\r\n",
+                    SCRIPT,
+                );
+            }
         });
         let client = fixture.spoc_client(CacheMode::PreferCache, &server);
         seed_spoc_html(&client, ENTRY);
@@ -4292,13 +4435,10 @@ mod tests {
         let client = fixture.spoc_client(CacheMode::PreferCache, &server);
         let refreshed =
             crate::spoc::script_with_client(client, CacheMode::Revalidate, &target).unwrap();
-        assert_eq!(
-            refreshed["script"]["retrieval"]["cache_status"],
-            "revalidated"
-        );
+        assert_eq!(refreshed["script"]["retrieval"]["cache_status"], "hit");
         assert_eq!(
             refreshed["source_entry"]["retrieval"]["cache_status"],
-            "hit"
+            "revalidated"
         );
         assert_eq!(
             refreshed["script"]["body_sha256"],
@@ -4346,13 +4486,20 @@ mod tests {
     }
 
     #[test]
-    fn spoc_refresh_rejects_wrong_mime_without_revalidating_identical_original_bytes() {
+    fn spoc_refresh_rejects_a_retired_declaration_without_replaying_retained_script_bytes() {
         const SCRIPT_URL: &str = "https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js";
         const SCRIPT: &[u8] = b"globalThis.syntheticSource = true;";
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
-            assert!(request.starts_with("GET /spocnew/js/app.12345678.js "));
-            reply(socket, 200, "Content-Type: text/html\r\n", SCRIPT);
+            assert!(request.starts_with("GET /spocnew/ "));
+            // The current entry bytes no longer declare the selected script:
+            // the declaration retired and the retained bytes are never replayed.
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html; charset=utf-8\r\n",
+                br#"<script src="js/app.99999999.js"></script>"#,
+            );
         });
         let client = fixture.spoc_client(CacheMode::Offline, &server);
         seed_spoc_html(&client, br#"<script src="js/app.12345678.js"></script>"#);
@@ -4376,7 +4523,7 @@ mod tests {
             crate::spoc::script_with_client(client, CacheMode::Revalidate, &target)
                 .unwrap_err()
                 .code,
-            "unavailable"
+            "unsupported"
         );
         let client = fixture.spoc_client(CacheMode::Offline, &server);
         let after = crate::spoc::script_with_client(client, CacheMode::Offline, &target).unwrap();
@@ -4409,11 +4556,19 @@ mod tests {
             false,
         );
         let target = Url::parse("https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js").unwrap();
+        // A missing entry media type cannot authorize a script fetch: the
+        // observation degrades with the exact entry facts instead of claiming
+        // a verified JavaScript snapshot.
+        let snapshot =
+            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target).unwrap();
+        assert_eq!(snapshot["result"], "script_unverified");
+        assert_eq!(snapshot["fallback_reason"], "entry_mime_missing");
+        assert_eq!(snapshot["script"], serde_json::Value::Null);
+        assert_eq!(snapshot["raw_evidence"]["scope"], "entry");
+        assert_eq!(snapshot["raw_evidence"]["raw_withheld"], true);
         assert_eq!(
-            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target)
-                .unwrap_err()
-                .code,
-            "unavailable"
+            snapshot["raw_evidence"]["raw_withheld_reason"],
+            "private_public_source_bytes"
         );
         assert_eq!(server.count(), 0);
     }
@@ -5257,7 +5412,10 @@ mod tests {
         assert_eq!(again.fetched_at_unix_ms, first.fetched_at_unix_ms);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
+        assert!(
+            requests[1].0.duration_since(requests[0].0)
+                >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+        );
     }
 
     #[test]
@@ -5290,7 +5448,10 @@ mod tests {
         assert_eq!(count, 1);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
+        assert!(
+            requests[1].0.duration_since(requests[0].0)
+                >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+        );
         assert_eq!(
             client.snapshot(&url, false).unwrap().cache_status,
             CacheStatus::Hit
@@ -5820,10 +5981,11 @@ mod tests {
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         seed_robots(&client);
         let query = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
-        assert_eq!(
-            crate::archive::capture(query, &client).unwrap_err().code,
-            "unavailable"
-        );
+        // An unattributed body is reported as degraded evidence with its
+        // exact bytes preserved, and is never retained as the official replay.
+        let refused = crate::archive::capture(query, &client).unwrap();
+        assert_eq!(refused["result"], "unverified_capture");
+        assert_eq!(refused["fallback_reason"], "memento_attribution_invalid");
         assert!(client.load(&Url::parse(TARGET).unwrap()).unwrap().is_none());
         client.mode = CacheMode::Revalidate;
         let accepted = crate::archive::capture(query, &client).unwrap();
@@ -6066,8 +6228,8 @@ mod tests {
     }
     #[test]
     fn lookup_cursor_is_bound_to_the_query_that_minted_it() {
-        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["20240601000000"]]"#;
-        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk2","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
+        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["uk1+20240601000000%21"]]"#;
+        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
             assert!(
@@ -6076,7 +6238,7 @@ mod tests {
                 ),
                 "unexpected request: {request}"
             );
-            if request.contains("resumeKey=20240601000000") {
+            if request.contains("resumeKey=") {
                 reply(socket, 200, "", PAGE_2);
             } else {
                 reply(socket, 200, "", PAGE_1);
@@ -6090,12 +6252,12 @@ mod tests {
             &client,
         )
         .unwrap();
-        assert_eq!(first["next_cursor"], "20240601000000");
+        assert_eq!(first["next_cursor"], "uk1+20240601000000%21");
         assert_eq!(first["completeness"]["more_results"], true);
         assert_eq!(first["captures"].as_array().unwrap().len(), 1);
 
         let second = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240601000000%21" }"#,
             &client,
         )
         .unwrap();
@@ -6105,7 +6267,7 @@ mod tests {
 
         // A cursor from a different query scope is rejected before any request.
         let cross = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 3, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 3, "cursor": "uk1+20240601000000%21" }"#,
             &client,
         )
         .unwrap_err();
@@ -6114,7 +6276,7 @@ mod tests {
 
         // A cursor never issued for this query is rejected the same way.
         let unknown = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240202000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240202000000%21" }"#,
             &client,
         )
         .unwrap_err();
@@ -6124,7 +6286,7 @@ mod tests {
         // The binding persists across client instances sharing the cache directory.
         let fresh = fixture.client(CacheMode::PreferCache, &server);
         let replayed = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240601000000%21" }"#,
             &fresh,
         )
         .unwrap();
@@ -6137,11 +6299,11 @@ mod tests {
 
     #[test]
     fn cursor_scope_registry_evicts_at_the_entry_cap() {
-        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["20240601000000"]]"#;
-        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk2","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
+        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["uk1+20240601000000%21"]]"#;
+        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
-            if request.contains("resumeKey=20240601000000") {
+            if request.contains("resumeKey=") {
                 reply(socket, 200, "", PAGE_2);
             } else {
                 reply(socket, 200, "", PAGE_1);
@@ -6181,13 +6343,13 @@ mod tests {
             &client,
         )
         .unwrap();
-        assert_eq!(first["next_cursor"], "20240601000000");
+        assert_eq!(first["next_cursor"], "uk1+20240601000000%21");
 
         // Recording the next binding must evict the stale entries, not
         // persist an over-cap registry: the continuation verifies and
         // succeeds without a corrupt-cache rejection.
         let second = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240601000000%21" }"#,
             &client,
         )
         .unwrap();

@@ -9,8 +9,8 @@
 //! refused, not exported or cached. Cache record v2 proves cookie admission;
 //! older originals remain untouched but cannot be reused or silently refetched.
 
-use crate::governor::{self, Governor, Outcome};
 use crate::git_tree::{GitTreeEntry, verify_recursive_tree};
+use crate::governor::{self, Governor, Outcome};
 use crate::html::{self, ChallengeAssessment};
 use crate::net::{self, CacheStatus, Error, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -250,7 +250,11 @@ fn safety_latched() -> Error {
 fn assess_response_body(response: &Response) -> ChallengeAssessment {
     // Cached headers join repeated field lines with commas; they cannot serve
     // as a single trustworthy Content-Type, including after MIME parameters.
-    if response.headers.get("content-type").is_some_and(|value| value.contains(',')) {
+    if response
+        .headers
+        .get("content-type")
+        .is_some_and(|value| value.contains(','))
+    {
         return ChallengeAssessment::Unreviewed;
     }
     html::assess_challenge_body(
@@ -261,7 +265,10 @@ fn assess_response_body(response: &Response) -> ChallengeAssessment {
 }
 
 fn body_limit() -> Error {
-    Error::new("body_limit", "department source response exceeds its byte limit")
+    Error::new(
+        "body_limit",
+        "department source response exceeds its byte limit",
+    )
 }
 
 fn unexpected_content() -> Error {
@@ -307,9 +314,9 @@ fn valid_branch(value: &str) -> bool {
         && !value.contains("//")
         && !value.contains("..")
         && !value.contains("@{")
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-'))
         && value
             .split('/')
             .all(|component| !component.is_empty() && !component.ends_with(".lock"))
@@ -391,11 +398,7 @@ fn parse_inventory_input(input: &str) -> Result<SourceSelection, Error> {
     }
     let input: InventoryInput = serde_json::from_str(input)
         .map_err(|_| invalid_input("invalid department inventory request"))?;
-    select_source(
-        input.school,
-        input.repo.as_deref(),
-        input.branch.as_deref(),
-    )
+    select_source(input.school, input.repo.as_deref(), input.branch.as_deref())
 }
 
 fn parse_retrieval_input(input: &str) -> Result<RetrievalRequest, Error> {
@@ -415,12 +418,20 @@ fn parse_retrieval_input(input: &str) -> Result<RetrievalRequest, Error> {
             "path must be one explicit normalized repository file path",
         ));
     }
-    let tree_sha = input.tree_sha.filter(|value| valid_upstream_sha(value))
+    let tree_sha = input
+        .tree_sha
+        .filter(|value| valid_upstream_sha(value))
         .ok_or_else(|| invalid_input("tree_sha must confirm the exact inventory tree object"))?;
-    let blob_sha = input.blob_sha.filter(|value| valid_upstream_sha(value))
-        .ok_or_else(|| invalid_input("blob_sha must confirm the exact inventory path's blob object"))?;
+    let blob_sha = input
+        .blob_sha
+        .filter(|value| valid_upstream_sha(value))
+        .ok_or_else(|| {
+            invalid_input("blob_sha must confirm the exact inventory path's blob object")
+        })?;
     if tree_sha.len() != blob_sha.len() {
-        return Err(invalid_input("tree_sha and blob_sha must use the same Git object format"));
+        return Err(invalid_input(
+            "tree_sha and blob_sha must use the same Git object format",
+        ));
     }
     Ok(RetrievalRequest {
         repository: select_repository(input.school, input.repo.as_deref())?,
@@ -449,6 +460,16 @@ impl Surface {
         match self {
             Self::Commit | Self::Tree => "application/vnd.github+json",
             Self::Blob => "application/vnd.github.raw+json",
+        }
+    }
+
+    /// The output name of this surface. Inventory evidence keeps it, so a
+    /// degraded commit original is never relabeled as tree evidence.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::Tree => "tree",
+            Self::Blob => "blob",
         }
     }
 }
@@ -480,7 +501,8 @@ impl ResponseCache {
     fn open() -> Result<Self, Error> {
         #[cfg(test)]
         if let Some(path) = TEST_CACHE_DIR.with(|cell| cell.borrow().clone()) {
-            let directory = governor::open_directory(&path, true, true).map_err(|_| cache_error())?;
+            let directory =
+                governor::open_directory(&path, true, true).map_err(|_| cache_error())?;
             return Ok(Self { directory });
         }
         let home = governor::identity_home().map_err(|_| cache_error())?;
@@ -497,7 +519,6 @@ impl ResponseCache {
         }
         Governor::open().map_err(|_| governor_error())
     }
-
 
     fn http_client(&self) -> Result<Client, Error> {
         let builder = Client::builder()
@@ -518,14 +539,12 @@ impl ResponseCache {
         let builder = builder.https_only(true);
         #[cfg(test)]
         let builder = builder.https_only(TEST_ROUTE.with(|cell| cell.get()).is_none());
-        builder
-            .build()
-            .map_err(|_| {
-                Error::new(
-                    "transport_unavailable",
-                    "cannot initialize department source transport",
-                )
-            })
+        builder.build().map_err(|_| {
+            Error::new(
+                "transport_unavailable",
+                "cannot initialize department source transport",
+            )
+        })
     }
 
     fn open_transport(&self) -> Result<Transport, Error> {
@@ -575,9 +594,10 @@ impl ResponseCache {
             || cached.status != 200
             || !valid_sha256(&cached.sha256)
             || cached.body_base64.len() > MAX_TREE_BODY.div_ceil(3) * 4
-            || cached.headers.iter().any(|(name, value)| {
-                !HEADER_NAMES.contains(&name.as_str()) || !valid_header(value)
-            })
+            || cached
+                .headers
+                .iter()
+                .any(|(name, value)| !HEADER_NAMES.contains(&name.as_str()) || !valid_header(value))
             || cached
                 .headers
                 .iter()
@@ -608,7 +628,10 @@ impl ResponseCache {
             if assess_response_body(&response) == ChallengeAssessment::Detected {
                 return Err(safety_latched());
             }
-            return Err(Error::new("unreviewed_cache", "department cache predates session-cookie admission; original retained without reuse or automatic refetch"));
+            return Err(Error::new(
+                "unreviewed_cache",
+                "department cache predates session-cookie admission; original retained without reuse or automatic refetch",
+            ));
         }
         Ok(Some(response))
     }
@@ -667,13 +690,7 @@ impl ResponseCache {
         })();
         if result.is_err() {
             // SAFETY: this is our exclusively created temporary, not user input.
-            unsafe {
-                libc::unlinkat(
-                    self.directory.as_raw_fd(),
-                    temporary_name.as_ptr(),
-                    0,
-                )
-            };
+            unsafe { libc::unlinkat(self.directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
         }
         result
     }
@@ -717,13 +734,13 @@ impl Transport {
         #[cfg(test)]
         if let Some(address) = self.test_route {
             let mut routed = url.clone();
-            routed
-                .set_scheme("http")
-                .expect("test loopback scheme");
+            routed.set_scheme("http").expect("test loopback scheme");
             routed
                 .set_host(Some(&address.ip().to_string()))
                 .expect("test loopback host");
-            routed.set_port(Some(address.port())).expect("test loopback port");
+            routed
+                .set_port(Some(address.port()))
+                .expect("test loopback port");
             return routed;
         }
         url.clone()
@@ -742,11 +759,14 @@ impl Transport {
         match cache.load(url) {
             Ok(Some(response)) => {
                 let processed = match assess_response_body(&response) {
-                    ChallengeAssessment::Clear => screen_api_response(surface, &response)
-                        .and_then(|()| process(&response)),
+                    ChallengeAssessment::Clear => {
+                        screen_api_response(surface, &response).and_then(|()| process(&response))
+                    }
                     ChallengeAssessment::Unreviewed => Err(unreviewed_body()),
                     ChallengeAssessment::Detected => {
-                        lease.finish_without_request().map_err(|_| governor_error())?;
+                        lease
+                            .finish_without_request()
+                            .map_err(|_| governor_error())?;
                         return Err(safety_latched());
                     }
                 };
@@ -793,12 +813,21 @@ impl Transport {
             .get("x-ratelimit-remaining")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let mut challenge = raw.headers().iter().any(|(name, value)| {
-            net::challenge_header(name.as_str(), value.as_bytes())
-        });
+        let mut challenge = raw
+            .headers()
+            .iter()
+            .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
         // Persist header facts without ending this same pending lease. A body
         // failure must not erase a previously observed rejection or cooldown.
-        lease.observe_http_many(status, raw.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()), challenge)
+        lease
+            .observe_http_many(
+                status,
+                raw.headers()
+                    .get_all("retry-after")
+                    .iter()
+                    .map(|value| value.to_str().ok()),
+                challenge,
+            )
             .map_err(|_| governor_error())?;
         let mut read_failure = false;
         let result = (|| {
@@ -806,24 +835,24 @@ impl Transport {
             let declared_oversize = raw
                 .content_length()
                 .is_some_and(|length| length > limit as u64);
-            let identity_encoding = raw.headers().get_all("content-encoding").iter()
+            let identity_encoding = raw
+                .headers()
+                .get_all("content-encoding")
+                .iter()
                 .all(|value| value.as_bytes().eq_ignore_ascii_case(b"identity"));
             let mut mime_values = raw.headers().get_all("content-type").iter();
-            let observed_mime = mime_values.next().and_then(|value| value.to_str().ok()).map(str::to_owned);
+            let observed_mime = mime_values
+                .next()
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
             let unambiguous_mime = observed_mime.is_some() && mime_values.next().is_none();
             let headers = collect_headers(raw.headers());
             let mut body = Vec::new();
-            let read = raw.by_ref()
-                .take(limit as u64 + 1)
-                .read_to_end(&mut body);
+            let read = raw.by_ref().take(limit as u64 + 1).read_to_end(&mut body);
             read_failure = read.is_err();
             let complete = !read_failure && !declared_oversize && body.len() <= limit;
             let assessment = if identity_encoding && unambiguous_mime {
-                html::assess_challenge_body(
-                    &body,
-                    observed_mime.as_deref(),
-                    complete,
-                )
+                html::assess_challenge_body(&body, observed_mime.as_deref(), complete)
             } else {
                 // Missing/ambiguous MIME and unsupported encoding cannot
                 // establish a clear or challenged decoded representation.
@@ -831,12 +860,28 @@ impl Transport {
             };
             if assessment == ChallengeAssessment::Detected {
                 challenge = true;
-                lease.observe_http_many(status, raw.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()), true)
+                lease
+                    .observe_http_many(
+                        status,
+                        raw.headers()
+                            .get_all("retry-after")
+                            .iter()
+                            .map(|value| value.to_str().ok()),
+                        true,
+                    )
                     .map_err(|_| governor_error())?;
             }
-            classify_status(status, challenge, retry_after.as_deref(), rate_remaining.as_deref())?;
+            classify_status(
+                status,
+                challenge,
+                retry_after.as_deref(),
+                rate_remaining.as_deref(),
+            )?;
             if net::issues_session_cookie(raw.headers()) {
-                return Err(Error::new("sensitive_response", "public department transport issued a session cookie; response withheld"));
+                return Err(Error::new(
+                    "sensitive_response",
+                    "public department transport issued a session cookie; response withheld",
+                ));
             }
             if declared_oversize || body.len() > limit {
                 return Err(body_limit());
@@ -870,7 +915,14 @@ impl Transport {
         })();
         let network_failure = read_failure;
         drop(raw);
-        lease.finish(Outcome::Http { status, retry_after: retry_after.as_deref(), challenge, network_failure }).map_err(|_| governor_error())?;
+        lease
+            .finish(Outcome::Http {
+                status,
+                retry_after: retry_after.as_deref(),
+                challenge,
+                network_failure,
+            })
+            .map_err(|_| governor_error())?;
         result
     }
 }
@@ -887,9 +939,7 @@ fn classify_status(
             "GitHub access was challenged; explicit safety review is required",
         ));
     }
-    if status == 429
-        || (status == 403 && (retry_after.is_some() || rate_remaining == Some("0")))
-    {
+    if status == 429 || (status == 403 && (retry_after.is_some() || rate_remaining == Some("0"))) {
         return Err(Error::new(
             "rate_limited",
             "GitHub rate limiting or a cooldown was observed; no retry was attempted",
@@ -924,7 +974,9 @@ fn valid_header(value: &str) -> bool {
             .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte))
 }
 
-fn collect_headers(headers: &reqwest::header::HeaderMap) -> Result<BTreeMap<String, String>, Error> {
+fn collect_headers(
+    headers: &reqwest::header::HeaderMap,
+) -> Result<BTreeMap<String, String>, Error> {
     let mut collected = BTreeMap::new();
     let mut total = 0usize;
     for name in HEADER_NAMES {
@@ -932,10 +984,7 @@ fn collect_headers(headers: &reqwest::header::HeaderMap) -> Result<BTreeMap<Stri
         let Some(first) = values.next() else {
             continue;
         };
-        let mut value = first
-            .to_str()
-            .map_err(|_| unexpected_content())?
-            .to_owned();
+        let mut value = first.to_str().map_err(|_| unexpected_content())?.to_owned();
         for next in values {
             value.push_str(", ");
             value.push_str(next.to_str().map_err(|_| unexpected_content())?);
@@ -993,6 +1042,30 @@ struct TreeEnvelope {
     truncated: bool,
 }
 
+/// The exact commit object one branch read returned and the immutable tree that
+/// object declares. Both identities are admitted together, so a tree is only
+/// ever read for the commit object this response names.
+struct ResolvedCommit {
+    commit_sha: String,
+    tree_sha: String,
+}
+
+#[derive(Deserialize)]
+struct CommitEnvelope {
+    sha: String,
+    commit: CommitData,
+}
+
+#[derive(Deserialize)]
+struct CommitData {
+    tree: TreeReference,
+}
+
+#[derive(Deserialize)]
+struct TreeReference {
+    sha: String,
+}
+
 #[derive(Deserialize)]
 struct TreeEntry {
     path: String,
@@ -1001,6 +1074,42 @@ struct TreeEntry {
     object_type: String,
     sha: String,
     size: Option<u64>,
+}
+
+/// Resolve exactly the commit object the requested branch URL names, and only
+/// the immutable tree that object declares. A malformed, foreign-format or
+/// self-referential identity pair cannot be a commit, so no tree request is
+/// made for any of them.
+fn resolve_commit(response: &Response, expected_url: &Url) -> Result<ResolvedCommit, Error> {
+    if response.url != expected_url.as_str()
+        || response.status != 200
+        || response.body.len() > MAX_TREE_BODY
+    {
+        return Err(upstream_parse());
+    }
+    if !matches!(
+        content_type(response).as_deref(),
+        Some("application/json" | "application/vnd.github+json")
+    ) {
+        return Err(unexpected_content());
+    }
+    // A repeated `sha`/`commit` member or a non-object envelope is a parse
+    // failure, never a second chance to pick a different tree.
+    let envelope: CommitEnvelope =
+        serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
+    if !valid_upstream_sha(&envelope.sha)
+        || !valid_upstream_sha(&envelope.commit.tree.sha)
+        || envelope.sha.len() != envelope.commit.tree.sha.len()
+        // A commit object never is the tree it declares. Equal identities can
+        // only be a substituted or fabricated response.
+        || envelope.sha == envelope.commit.tree.sha
+    {
+        return Err(upstream_parse());
+    }
+    Ok(ResolvedCommit {
+        commit_sha: envelope.sha,
+        tree_sha: envelope.commit.tree.sha,
+    })
 }
 
 fn entry_kind(entry: &TreeEntry) -> Result<&'static str, Error> {
@@ -1020,16 +1129,32 @@ fn entry_kind(entry: &TreeEntry) -> Result<&'static str, Error> {
     Ok(kind)
 }
 
-fn parse_tree_response(response: &Response) -> Result<TreeEnvelope, Error> {
+/// Admit exactly the requested immutable tree. Root proof: the response must
+/// advertise that same object identity, so a different but internally valid
+/// tree is refused before normalization. Subtree proof: every advertised
+/// directory object must match its own entries, which also proves the root.
+fn parse_tree_response(response: &Response, requested: &str) -> Result<TreeEnvelope, Error> {
     if response.status != 200 || response.body.len() > MAX_TREE_BODY {
         return Err(upstream_parse());
     }
-    if !matches!(content_type(response).as_deref(), Some("application/json" | "application/vnd.github+json")) {
+    if !matches!(
+        content_type(response).as_deref(),
+        Some("application/json" | "application/vnd.github+json")
+    ) {
         return Err(unexpected_content());
     }
-    let envelope: TreeEnvelope = serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
+    let envelope: TreeEnvelope =
+        serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
     if !valid_upstream_sha(&envelope.sha) || envelope.tree.len() > MAX_ENTRIES {
         return Err(upstream_parse());
+    }
+    // A truncated response skips object verification below, so the advertised
+    // root is checked first: observations are never accepted for another tree.
+    if envelope.sha != requested {
+        return Err(Error::new(
+            "tree_identity_mismatch",
+            "tree response advertises a different immutable object than the requested tree",
+        ));
     }
     let mut paths = BTreeSet::new();
     for entry in &envelope.tree {
@@ -1039,12 +1164,16 @@ fn parse_tree_response(response: &Response) -> Result<TreeEnvelope, Error> {
         }
     }
     if !envelope.truncated {
-        verify_recursive_tree(&envelope.sha, envelope.tree.iter().map(|entry| GitTreeEntry {
-            path: &entry.path,
-            mode: &entry.mode,
-            object_type: &entry.object_type,
-            sha: &entry.sha,
-        })).map_err(|_| upstream_parse())?;
+        verify_recursive_tree(
+            &envelope.sha,
+            envelope.tree.iter().map(|entry| GitTreeEntry {
+                path: &entry.path,
+                mode: &entry.mode,
+                object_type: &entry.object_type,
+                sha: &entry.sha,
+            }),
+        )
+        .map_err(|_| upstream_parse())?;
     }
     Ok(envelope)
 }
@@ -1064,8 +1193,12 @@ fn normalize_entry(selection: &SourceSelection, entry: TreeEntry) -> Result<Valu
 }
 
 fn screen_private_response(response: &Response) -> Result<(), Error> {
-    if crate::welearn::learning::private_evidence(&response.body, content_type(response).as_deref()) {
-        return Err(Error::new("sensitive_response", "department source contains credential-shaped evidence; raw response withheld"));
+    if crate::welearn::learning::private_evidence(&response.body, content_type(response).as_deref())
+    {
+        return Err(Error::new(
+            "sensitive_response",
+            "department source contains credential-shaped evidence; raw response withheld",
+        ));
     }
     Ok(())
 }
@@ -1073,8 +1206,14 @@ fn screen_private_response(response: &Response) -> Result<(), Error> {
 fn screen_api_response(surface: Surface, response: &Response) -> Result<(), Error> {
     match surface {
         Surface::Commit => {
-            if crate::welearn::learning::private_commit_evidence(&response.body, content_type(response).as_deref()) {
-                return Err(Error::new("sensitive_response", "department source contains credential-shaped evidence; raw response withheld"));
+            if crate::welearn::learning::private_commit_evidence(
+                &response.body,
+                content_type(response).as_deref(),
+            ) {
+                return Err(Error::new(
+                    "sensitive_response",
+                    "department source contains credential-shaped evidence; raw response withheld",
+                ));
             }
             Ok(())
         }
@@ -1087,6 +1226,7 @@ fn screen_api_response(surface: Surface, response: &Response) -> Result<(), Erro
 
 fn inventory_output(
     selection: &SourceSelection,
+    commit: &ResolvedCommit,
     expected_url: &Url,
     response: &Response,
 ) -> Result<Value, Error> {
@@ -1101,29 +1241,39 @@ fn inventory_output(
         return Err(body_limit());
     }
     let parsed: Result<_, Error> = (|| {
-        let envelope = parse_tree_response(response)?;
-        if expected_url.path_segments().and_then(|mut segments| segments.next_back())
-            != Some(envelope.sha.as_str())
-        {
-            return Err(upstream_parse());
-        }
+        // The exact tree is the one the resolved commit declares, not whatever
+        // this response happens to advertise. `expected_url` names that same
+        // object, so a response read for any other tree cannot normalize here.
+        let envelope = parse_tree_response(response, &commit.tree_sha)?;
         let mut entries = Vec::with_capacity(envelope.tree.len());
         for entry in envelope.tree {
             entries.push(normalize_entry(selection, entry)?);
         }
         Ok((envelope.sha, envelope.truncated, entries))
     })();
-    Ok(inventory_result(selection, response, parsed))
+    Ok(inventory_result(
+        Surface::Tree,
+        Some(commit),
+        selection,
+        response,
+        parsed,
+    ))
 }
 
 fn inventory_result(
+    surface: Surface,
+    commit: Option<&ResolvedCommit>,
     selection: &SourceSelection,
     response: &Response,
     parsed: Result<(String, bool, Vec<Value>), Error>,
 ) -> Value {
     let common = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "type": "department_material_inventory",
+        // The originating surface survives normalization failure, so a branch
+        // commit original never becomes immutable tree evidence.
+        "surface": surface.name(),
+        "commit_sha": commit.map(|commit| commit.commit_sha.as_str()),
         "school": selection.school(),
         "repo": selection.repo(),
         "repository_url": selection.repository_url(),
@@ -1142,14 +1292,20 @@ fn inventory_result(
             });
             // A truncated response supplies observations, not authenticated
             // membership in the advertised root or proof of absent aliases.
-            output["tree_sha"] = if truncated { Value::Null } else { json!(tree_sha) };
+            output["tree_sha"] = if truncated {
+                Value::Null
+            } else {
+                json!(tree_sha)
+            };
             output["truncated"] = json!(truncated);
             output["complete"] = json!(!truncated);
             output["entries"] = json!(entries);
             output["fallback_reason"] = Value::Null;
             output["raw_response_base64"] = if truncated {
                 json!(STANDARD.encode(&response.body))
-            } else { Value::Null };
+            } else {
+                Value::Null
+            };
             output
         }
         Err(error) => {
@@ -1215,14 +1371,16 @@ fn immutable_tree_binding(
     if response.url != expected_url.as_str() {
         return Err("tree_provenance_mismatch");
     }
-    let tree = parse_tree_response(response).map_err(|error| error.code)?;
-    if tree.sha != request.tree_sha {
-        return Err("tree_identity_mismatch");
-    }
+    // The parser admits exactly the attested object, so an unverified or
+    // substituted root can never reach the path/blob checks below.
+    let tree = parse_tree_response(response, &request.tree_sha).map_err(|error| error.code)?;
     if tree.truncated {
         return Err("tree_incomplete");
     }
-    let entry = tree.tree.iter().find(|entry| entry.path == request.path)
+    let entry = tree
+        .tree
+        .iter()
+        .find(|entry| entry.path == request.path)
         .ok_or("tree_path_missing")?;
     if entry_kind(entry).map_err(|error| error.code)? != "file" {
         return Err("tree_path_not_file");
@@ -1230,7 +1388,9 @@ fn immutable_tree_binding(
     if entry.sha != request.blob_sha {
         return Err("tree_blob_mismatch");
     }
-    let size = entry.size.and_then(|size| usize::try_from(size).ok())
+    let size = entry
+        .size
+        .and_then(|size| usize::try_from(size).ok())
         .filter(|size| *size <= MAX_RAW_BODY)
         .ok_or("tree_blob_size_limit")?;
     Ok(size)
@@ -1342,24 +1502,34 @@ fn retrieval_output(
     Ok(output)
 }
 
-/// Resolve the branch commit, then return its exact recursive tree snapshot.
-/// Offline is the default; `online` permits these two sequential cache-miss
-/// reads and never triggers a retry. Preserve each admitted original separately.
+/// Resolve the branch commit object, then return exactly the immutable tree
+/// that object declares. Offline is the default; `online` permits these two
+/// sequential cache-miss reads and never triggers a retry. Each admitted
+/// original is preserved separately, and an unresolved commit stops before the
+/// tree request instead of becoming tree evidence.
 pub fn inventory(input: &str, online: bool) -> Result<Value, Error> {
     let selection = parse_inventory_input(input)?;
     let commit_url = selection.repository.commit_url(&selection.branch)?;
     let cache = ResponseCache::open()?;
-    let resolved = cache.get(&commit_url, Surface::Commit, online, |response| {
-        Ok(crate::welearn::learning::resolved_tree_sha(response, &commit_url)
-            .map_err(|error| inventory_result(&selection, response, Err(error))))
+    let resolution = cache.get(&commit_url, Surface::Commit, online, |response| {
+        Ok(match resolve_commit(response, &commit_url) {
+            Ok(commit) => Ok(commit),
+            Err(error) => Err(inventory_result(
+                Surface::Commit,
+                None,
+                &selection,
+                response,
+                Err(error),
+            )),
+        })
     })?;
-    let tree_sha = match resolved {
-        Ok(tree_sha) => tree_sha,
+    let commit = match resolution {
+        Ok(commit) => commit,
         Err(output) => return Ok(output),
     };
-    let url = selection.repository.tree_url(&tree_sha)?;
+    let url = selection.repository.tree_url(&commit.tree_sha)?;
     cache.get(&url, Surface::Tree, online, |response| {
-        inventory_output(&selection, &url, response)
+        inventory_output(&selection, &commit, &url, response)
     })
 }
 
@@ -1374,17 +1544,22 @@ pub fn retrieve(input: &str, online: bool) -> Result<Value, Error> {
         // Cache only an HTTP-source original, never a successful membership
         // decision: every replay rechecks the complete canonical tree. Rejected
         // originals remain raw evidence and cannot authorize a blob request.
-        Ok(match immutable_tree_binding(&request, &tree_url, response) {
-            Ok(size) => Ok((size, json!({
-                "tree_sha": request.tree_sha,
-                "path": request.path,
-                "blob_sha": request.blob_sha,
-                "byte_length": size,
-                "raw_response_base64": STANDARD.encode(&response.body),
-                "retrieval": retrieval(response)
-            }))),
-            Err(reason) => Err(degraded_retrieval(&request, response, reason, Value::Null)?),
-        })
+        Ok(
+            match immutable_tree_binding(&request, &tree_url, response) {
+                Ok(size) => Ok((
+                    size,
+                    json!({
+                        "tree_sha": request.tree_sha,
+                        "path": request.path,
+                        "blob_sha": request.blob_sha,
+                        "byte_length": size,
+                        "raw_response_base64": STANDARD.encode(&response.body),
+                        "retrieval": retrieval(response)
+                    }),
+                )),
+                Err(reason) => Err(degraded_retrieval(&request, response, reason, Value::Null)?),
+            },
+        )
     })?;
     match admission {
         Err(rejected) => Ok(rejected),
@@ -1479,17 +1654,19 @@ pub fn schema() -> Value {
             "options":{"--online":"Permit up to two sequential governed GitHub requests on cache misses: resolve the branch commit, then read its exact immutable tree. An unresolved commit stops before the tree request; no automatic retry. Credential-bearing API/fallback bodies and Set-Cookie responses are withheld without new cache entries. Pre-cookie-admission cache records are retained but refused, not automatically refetched."},
             "output":{
                 "type":"object","additionalProperties":false,
-                "required":["schema_version","type","result","school","repo","repository_url","branch","community_source","tree_sha","truncated","complete","next_cursor","entries","fallback_reason","raw_response_base64","retrieval"],
+                "required":["schema_version","type","result","surface","commit_sha","school","repo","repository_url","branch","community_source","tree_sha","truncated","complete","next_cursor","entries","fallback_reason","raw_response_base64","retrieval"],
                 "properties":{
-                    "schema_version":{"const":1},"type":{"const":"department_material_inventory"},
+                    "schema_version":{"const":2},"type":{"const":"department_material_inventory"},
                     "result":{"enum":["inventory_snapshot","inventory_partial","degraded"]},
+                    "surface":{"enum":["commit","tree"],"description":"Response surface that produced this evidence: the branch commit resolution or the immutable tree read. A degraded result keeps it, so a commit original is never relabeled as tree evidence."},
+                    "commit_sha":{"type":["string","null"],"pattern":"^([0-9a-f]{40}|[0-9a-f]{64})$","description":"Exact commit object the branch read returned, and the only object whose declared tree may be read; null when no commit could be resolved."},
                     "school":{"enum":[3,6,8,21]},"repo":{"type":"string"},"repository_url":{"type":"string"},"branch":{"type":"string"},
                     "community_source":{"const":true},
                     "tree_sha":{"type":["string","null"],"pattern":"^([0-9a-f]{40}|[0-9a-f]{64})$"},
                     "truncated":{"type":["boolean","null"]},"complete":{"type":"boolean"},
                     "next_cursor":{"type":"null","description":"GitHub's recursive tree response supplies no continuation cursor; truncation is never hidden behind a fabricated cursor."},
                     "entries":{"type":"array","maxItems":MAX_ENTRIES,"items":entry},
-                    "fallback_reason":{"type":["string","null"],"enum":["unexpected_content","upstream_parse",null]},
+                    "fallback_reason":{"type":["string","null"],"enum":["tree_identity_mismatch","unexpected_content","upstream_parse",null]},
                     "raw_response_base64":{"type":["string","null"],"description":"Original response bytes when normalization degrades or a truncated inventory cannot authenticate membership."},
                     "retrieval":retrieval_schema()
                 }
@@ -1557,10 +1734,7 @@ mod tests {
         Response {
             url: url.as_str().to_owned(),
             status: 200,
-            headers: BTreeMap::from([(
-                "content-type".to_owned(),
-                content_type.to_owned(),
-            )]),
+            headers: BTreeMap::from([("content-type".to_owned(), content_type.to_owned())]),
             body: body.to_vec(),
             sha256: sha256(body),
             fetched_at_unix_ms: 1_700_000_000_000,
@@ -1574,8 +1748,10 @@ mod tests {
     // directory object required by the recursive tree representation.
     const TREE_SHA: &str = "6aae43dbff092dd6c3e333827194a2ca05feb0c3";
     const DOCS_SHA: &str = "9aa4816ed4d7cce80d7fa619412de2aebededcee";
-    const BINARY_TREE_SHA256: &str = "04c8a6f66471686b88d015154eb5a8ee15dcdf1fb48b6aed4bfb2a6aeafa78b2";
-    const BINARY_DOCS_SHA256: &str = "7ef6b7e527a3ea5224a145c6542909ea18d52bf1ceb1bd300d68881e9f7ba875";
+    const BINARY_TREE_SHA256: &str =
+        "04c8a6f66471686b88d015154eb5a8ee15dcdf1fb48b6aed4bfb2a6aeafa78b2";
+    const BINARY_DOCS_SHA256: &str =
+        "7ef6b7e527a3ea5224a145c6542909ea18d52bf1ceb1bd300d68881e9f7ba875";
     const HELLO_BLOB: &str = "95d09f2b10159347eece71399a7e2e907ea3df4f";
     const MATERIAL: &[u8] = b"hello world";
 
@@ -1627,6 +1803,20 @@ mod tests {
         )
     }
 
+    // A commit object identity is distinct from every tree this fixture uses,
+    // and keeps the same Git object format as the tree it declares.
+    fn resolved(tree_sha: &str) -> ResolvedCommit {
+        let commit_sha = if tree_sha.len() == 64 {
+            "a".repeat(64)
+        } else {
+            "1".repeat(40)
+        };
+        ResolvedCommit {
+            commit_sha,
+            tree_sha: tree_sha.to_owned(),
+        }
+    }
+
     fn admitted_output(request: &RetrievalRequest, body: &[u8], content_type: &str) -> Value {
         let tree = tree_response(request, false);
         let tree_url = request.repository.tree_url(&request.tree_sha).unwrap();
@@ -1640,8 +1830,14 @@ mod tests {
             "retrieval": retrieval(&tree)
         });
         let url = request.repository.blob_url(&request.blob_sha).unwrap();
-        retrieval_output(request, &url, &response(&url, body, content_type), size, binding)
-            .unwrap()
+        retrieval_output(
+            request,
+            &url,
+            &response(&url, body, content_type),
+            size,
+            binding,
+        )
+        .unwrap()
     }
 
     fn schema_type(value: &Value, expected: &str) -> bool {
@@ -1775,7 +1971,10 @@ mod tests {
 
     #[test]
     fn fixed_school_mapping_does_not_infer_school8_defaults() {
-        assert_eq!(selection(3, None, None).repo(), "AccSrd/BUAA_Course_Automation");
+        assert_eq!(
+            selection(3, None, None).repo(),
+            "AccSrd/BUAA_Course_Automation"
+        );
         assert_eq!(selection(3, None, None).branch, "main");
         assert_eq!(selection(6, None, None).branch, "master");
         assert_eq!(selection(21, None, None).branch, "main");
@@ -1788,10 +1987,7 @@ mod tests {
             "grandchicken/1708SEM_ISIM"
         );
         assert_eq!(
-            select_source(8, None, Some("main"))
-                .err()
-                .unwrap()
-                .code,
+            select_source(8, None, Some("main")).err().unwrap().code,
             "invalid_input"
         );
         assert_eq!(
@@ -1810,7 +2006,10 @@ mod tests {
     #[test]
     fn inventory_normalizes_entries_and_marks_truncation_without_a_cursor() {
         let selected = selection(3, None, None);
-        let url = selected.repository.tree_url("0123456789abcdef0123456789abcdef01234567").unwrap();
+        let url = selected
+            .repository
+            .tree_url("0123456789abcdef0123456789abcdef01234567")
+            .unwrap();
         let body = br#"{
             "sha":"0123456789abcdef0123456789abcdef01234567",
             "url":"https://api.github.com/ignored",
@@ -1822,8 +2021,21 @@ mod tests {
                 {"path":"vendor","mode":"160000","type":"commit","sha":"4123456789abcdef0123456789abcdef01234567"}
             ]
         }"#;
-        let output = inventory_output(&selected, &url, &response(&url, body, "application/json; charset=utf-8")).unwrap();
+        let output = inventory_output(
+            &selected,
+            &resolved("0123456789abcdef0123456789abcdef01234567"),
+            &url,
+            &response(&url, body, "application/json; charset=utf-8"),
+        )
+        .unwrap();
         assert_eq!(output["result"], "inventory_partial");
+        assert_eq!(output["surface"], "tree");
+        assert_eq!(
+            output["commit_sha"],
+            resolved("0123456789abcdef0123456789abcdef01234567")
+                .commit_sha
+                .as_str()
+        );
         assert_eq!(output["tree_sha"], Value::Null);
         assert_eq!(output["raw_response_base64"], STANDARD.encode(body));
         assert_eq!(output["complete"], false);
@@ -1838,10 +2050,9 @@ mod tests {
         assert_eq!(output["entries"][2]["kind"], "symlink");
         assert_eq!(output["entries"][3]["kind"], "submodule");
         assert_eq!(output["fallback_reason"], Value::Null);
-        assert_eq!(
-            output["retrieval"]["response_body_sha256"],
-            sha256(body)
-        );
+        assert_eq!(output["retrieval"]["response_body_sha256"], sha256(body));
+        // Observations from an unverified partial never become membership.
+        assert_schema(&output, &schema()["inventory"]["output"]);
     }
 
     #[test]
@@ -1850,19 +2061,16 @@ mod tests {
         let url = selected.repository.tree_url(TREE_SHA).unwrap();
         let body = br#"{"sha":"not-a-digest","tree":[],"truncated":false}"#;
         let original = response(&url, body, "application/json");
-        let output = inventory_output(&selected, &url, &original).unwrap();
+        let output = inventory_output(&selected, &resolved(TREE_SHA), &url, &original).unwrap();
         assert_eq!(output["result"], "degraded");
         assert_eq!(output["complete"], false);
         assert_eq!(output["tree_sha"], Value::Null);
         assert_eq!(output["fallback_reason"], "upstream_parse");
         assert_eq!(output["raw_response_base64"], STANDARD.encode(body));
-        assert_eq!(
-            output["retrieval"]["response_body_byte_length"],
-            body.len()
-        );
+        assert_eq!(output["retrieval"]["response_body_byte_length"], body.len());
 
         let wrong_type = response(&url, b"<html>not a tree</html>", "text/html");
-        let degraded = inventory_output(&selected, &url, &wrong_type).unwrap();
+        let degraded = inventory_output(&selected, &resolved(TREE_SHA), &url, &wrong_type).unwrap();
         assert_eq!(degraded["fallback_reason"], "unexpected_content");
     }
 
@@ -1870,11 +2078,17 @@ mod tests {
     fn duplicate_inventory_paths_cannot_be_silently_overwritten() {
         let selected = selection(3, None, None);
         let url = selected.repository.tree_url(TREE_SHA).unwrap();
-        let body = br#"{"sha":"0123456789abcdef0123456789abcdef01234567","truncated":false,"tree":[
+        let body = br#"{"sha":"6aae43dbff092dd6c3e333827194a2ca05feb0c3","truncated":false,"tree":[
             {"path":"same","mode":"100644","type":"blob","sha":"1123456789abcdef0123456789abcdef01234567","size":1},
             {"path":"same","mode":"100644","type":"blob","sha":"2123456789abcdef0123456789abcdef01234567","size":2}
         ]}"#;
-        let output = inventory_output(&selected, &url, &response(&url, body, "application/json")).unwrap();
+        let output = inventory_output(
+            &selected,
+            &resolved(TREE_SHA),
+            &url,
+            &response(&url, body, "application/json"),
+        )
+        .unwrap();
         assert_eq!(output["result"], "degraded");
         assert_eq!(output["fallback_reason"], "upstream_parse");
     }
@@ -1909,7 +2123,10 @@ mod tests {
             json!({"school":3,"path":"docs/readme.md","tree_sha":TREE_SHA,"blob_sha":"473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813","rights_reviewed":true}),
         ] {
             assert_eq!(
-                parse_retrieval_input(&input.to_string()).err().unwrap().code,
+                parse_retrieval_input(&input.to_string())
+                    .err()
+                    .unwrap()
+                    .code,
                 "invalid_input",
                 "input {input}"
             );
@@ -1933,7 +2150,8 @@ mod tests {
     fn complete_inventory_rejects_unbound_root_subtree_mode_and_path() {
         let selected = selection(3, None, None);
         let url = selected.repository.tree_url(TREE_SHA).unwrap();
-        let original: Value = serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
+        let original: Value =
+            serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
         let mut variants = Vec::new();
         let mut root = original.clone();
         root["sha"] = json!("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
@@ -1947,18 +2165,28 @@ mod tests {
         let mut path = original;
         path["tree"][0]["path"] = json!("docs/changed.md");
         variants.push(path);
-        let mut alias: Value = serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
+        let mut alias: Value =
+            serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
         alias["tree"][1]["mode"] = json!("120000");
         alias["tree"][1]["type"] = json!("blob");
         variants.push(alias);
         for variant in variants {
             let bytes = serde_json::to_vec(&variant).unwrap();
-            let output = inventory_output(&selected, &url, &response(&url, &bytes, "application/json")).unwrap();
+            let output = inventory_output(
+                &selected,
+                &resolved(TREE_SHA),
+                &url,
+                &response(&url, &bytes, "application/json"),
+            )
+            .unwrap();
             assert_eq!(output["result"], "degraded");
             assert_eq!(output["tree_sha"], Value::Null);
             assert_eq!(output["complete"], false);
             assert_eq!(output["entries"], json!([]));
             assert_eq!(output["raw_response_base64"], STANDARD.encode(bytes));
+            // A degraded tree result still states it came from the tree read.
+            assert_eq!(output["surface"], "tree");
+            assert_eq!(output["commit_sha"], resolved(TREE_SHA).commit_sha.as_str());
         }
     }
 
@@ -1966,8 +2194,13 @@ mod tests {
     fn valid_empty_tree_proves_missing_path_without_invented_membership() {
         let request = request("4b825dc642cb6eb9a060e54bf8d69288fbee4904", HELLO_BLOB);
         let url = request.repository.tree_url(&request.tree_sha).unwrap();
-        let bytes = serde_json::to_vec(&json!({"sha":request.tree_sha,"tree":[],"truncated":false})).unwrap();
-        assert_eq!(immutable_tree_binding(&request, &url, &response(&url, &bytes, "application/json")), Err("tree_path_missing"));
+        let bytes =
+            serde_json::to_vec(&json!({"sha":request.tree_sha,"tree":[],"truncated":false}))
+                .unwrap();
+        assert_eq!(
+            immutable_tree_binding(&request, &url, &response(&url, &bytes, "application/json")),
+            Err("tree_path_missing")
+        );
     }
 
     #[test]
@@ -1975,7 +2208,10 @@ mod tests {
         let request = request(TREE_SHA, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
         let url = request.repository.tree_url(TREE_SHA).unwrap();
         let bytes = tree_body(TREE_SHA, HELLO_BLOB, false);
-        assert_eq!(immutable_tree_binding(&request, &url, &response(&url, &bytes, "application/json")), Err("tree_blob_mismatch"));
+        assert_eq!(
+            immutable_tree_binding(&request, &url, &response(&url, &bytes, "application/json")),
+            Err("tree_blob_mismatch")
+        );
     }
 
     #[test]
@@ -1991,11 +2227,24 @@ mod tests {
             Err("tree_incomplete")
         );
         let mut missing = tree_response(&request, false);
-        missing.body = br#"{"sha":"0123456789abcdef0123456789abcdef01234567","tree":[],"truncated":false}"#.to_vec();
+        missing.body =
+            br#"{"sha":"0123456789abcdef0123456789abcdef01234567","tree":[],"truncated":false}"#
+                .to_vec();
         missing.sha256 = sha256(&missing.body);
         assert_eq!(
             immutable_tree_binding(&request, &tree_url, &missing),
-            Err("upstream_parse")
+            Err("tree_identity_mismatch")
+        );
+        // The empty tree is a complete, self-consistent Git object. It is still
+        // a different tree than the attested one, so it must not be admitted.
+        let mut other_valid = tree_response(&request, false);
+        other_valid.body =
+            br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","tree":[],"truncated":false}"#
+                .to_vec();
+        other_valid.sha256 = sha256(&other_valid.body);
+        assert_eq!(
+            immutable_tree_binding(&request, &tree_url, &other_valid),
+            Err("tree_identity_mismatch")
         );
         let mut other_blob = tree_response(&request, false);
         other_blob.body = tree_body(TREE_SHA, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", false);
@@ -2004,7 +2253,10 @@ mod tests {
             immutable_tree_binding(&request, &tree_url, &other_blob),
             Err("upstream_parse")
         );
-        let other_url = request.repository.tree_url("1123456789abcdef0123456789abcdef01234567").unwrap();
+        let other_url = request
+            .repository
+            .tree_url("1123456789abcdef0123456789abcdef01234567")
+            .unwrap();
         assert_eq!(
             immutable_tree_binding(&request, &other_url, &tree_response(&request, false)),
             Err("tree_provenance_mismatch")
@@ -2022,12 +2274,22 @@ mod tests {
         assert_eq!(output["material_identity"]["blob_sha"], HELLO_BLOB);
         assert_eq!(output["material_identity"]["tree_sha"], TREE_SHA);
         assert_eq!(output["material_identity"]["verified"], true);
-        assert_eq!(output["operator_attestation"]["independent_rights_proof"], false);
+        assert_eq!(
+            output["operator_attestation"]["independent_rights_proof"],
+            false
+        );
         assert_eq!(output["raw_evidence"], Value::Null);
-        assert_eq!(output["retrieval"]["response_representation"], "github_git_blob_raw");
+        assert_eq!(
+            output["retrieval"]["response_representation"],
+            "github_git_blob_raw"
+        );
         assert_schema(&output, &schema()["retrieve"]["output"]);
 
-        let mismatch = admitted_output(&request, b"changed branch bytes", "application/octet-stream");
+        let mismatch = admitted_output(
+            &request,
+            b"changed branch bytes",
+            "application/octet-stream",
+        );
         assert_eq!(mismatch["result"], "degraded_raw");
         assert_eq!(mismatch["material_admitted"], false);
         assert_eq!(mismatch["fallback_reason"], "blob_identity_mismatch");
@@ -2049,7 +2311,10 @@ mod tests {
         assert_eq!(degraded["fallback_reason"], "unexpected_content");
         assert_eq!(degraded["content_type"], "text/html");
         assert_eq!(degraded["bytes"], Value::Null);
-        assert_eq!(degraded["raw_evidence"]["raw_response_base64"], STANDARD.encode(MATERIAL));
+        assert_eq!(
+            degraded["raw_evidence"]["raw_response_base64"],
+            STANDARD.encode(MATERIAL)
+        );
 
         let url = request.repository.blob_url(&request.blob_sha).unwrap();
         let no_mime = Response {
@@ -2066,20 +2331,29 @@ mod tests {
         let tree = tree_response(&request, false);
         let tree_url = request.repository.tree_url(&request.tree_sha).unwrap();
         let size = immutable_tree_binding(&request, &tree_url, &tree).unwrap();
-        let missing = retrieval_output(&request, &url, &no_mime, size, json!({
-            "tree_sha": TREE_SHA,
-            "path": request.path,
-            "blob_sha": HELLO_BLOB,
-            "byte_length": size,
-            "raw_response_base64": STANDARD.encode(&tree.body),
-            "retrieval": retrieval(&tree)
-        }))
+        let missing = retrieval_output(
+            &request,
+            &url,
+            &no_mime,
+            size,
+            json!({
+                "tree_sha": TREE_SHA,
+                "path": request.path,
+                "blob_sha": HELLO_BLOB,
+                "byte_length": size,
+                "raw_response_base64": STANDARD.encode(&tree.body),
+                "retrieval": retrieval(&tree)
+            }),
+        )
         .unwrap();
         assert_eq!(missing["result"], "degraded_raw");
         assert_eq!(missing["fallback_reason"], "missing_content_type");
         assert_eq!(missing["content_type"], Value::Null);
         assert_eq!(missing["bytes"], Value::Null);
-        assert_eq!(missing["raw_evidence"]["raw_response_base64"], STANDARD.encode(MATERIAL));
+        assert_eq!(
+            missing["raw_evidence"]["raw_response_base64"],
+            STANDARD.encode(MATERIAL)
+        );
         assert_schema(&missing, &schema()["retrieve"]["output"]);
     }
 
@@ -2146,17 +2420,21 @@ mod tests {
             retrieve_output["properties"]["result"]["enum"],
             json!(["raw_snapshot", "degraded_raw"])
         );
-        assert!(retrieve_output["properties"]["fallback_reason"]["enum"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("blob_identity_mismatch")));
+        assert!(
+            retrieve_output["properties"]["fallback_reason"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("blob_identity_mismatch"))
+        );
         assert_eq!(
             retrieve_output["properties"]["content_type"]["type"],
             json!(["string", "null"])
         );
-        assert!(contract["retrieve"]["input"]["properties"]
-            .get("branch")
-            .is_none());
+        assert!(
+            contract["retrieve"]["input"]["properties"]
+                .get("branch")
+                .is_none()
+        );
         assert_eq!(
             contract["retrieve"]["input"]["required"],
             json!(["school", "path", "tree_sha", "blob_sha", "rights_reviewed"])
@@ -2172,15 +2450,22 @@ mod tests {
         let selected = selection(3, None, None);
         let url = selected.repository.tree_url(TREE_SHA).unwrap();
         let body = tree_body(TREE_SHA, HELLO_BLOB, false);
-        let output = inventory_output(&selected, &url, &response(&url, &body, "application/json"))
-            .unwrap();
+        let output = inventory_output(
+            &selected,
+            &resolved(TREE_SHA),
+            &url,
+            &response(&url, &body, "application/json"),
+        )
+        .unwrap();
+        assert_eq!(output["surface"], "tree");
+        assert_eq!(output["commit_sha"], resolved(TREE_SHA).commit_sha.as_str());
+        assert_eq!(output["tree_sha"], TREE_SHA);
         assert_eq!(output["entries"][0]["blob_sha"], HELLO_BLOB);
         assert_eq!(output["entries"][0]["upstream_sha"], HELLO_BLOB);
         assert_schema(&output, &schema()["inventory"]["output"]);
     }
 
-    static SEQUENCE: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(0);
+    static SEQUENCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     struct Fixture(std::path::PathBuf);
     impl Fixture {
@@ -2246,20 +2531,25 @@ mod tests {
                                 }
                             }
                             let request = String::from_utf8(bytes).unwrap();
-                            let index = worker_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            let index =
+                                worker_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                             sender.send(request.clone()).unwrap();
                             handler(&mut socket, &request, index);
                         }
-                        Err(error)
-                            if error.kind() == std::io::ErrorKind::WouldBlock =>
-                        {
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(std::time::Duration::from_millis(2))
                         }
                         Err(error) => panic!("loopback listener failed: {error}"),
                     }
                 }
             });
-            Self { address, requests, count, stop, worker: Some(worker) }
+            Self {
+                address,
+                requests,
+                count,
+                stop,
+                worker: Some(worker),
+            }
         }
     }
     impl Drop for Server {
@@ -2288,10 +2578,8 @@ mod tests {
     }
 
     fn governor_state(fixture: &Fixture) -> Value {
-        serde_json::from_slice(
-            &std::fs::read(fixture.governor_dir().join("state.json")).unwrap(),
-        )
-        .unwrap()
+        serde_json::from_slice(&std::fs::read(fixture.governor_dir().join("state.json")).unwrap())
+            .unwrap()
     }
 
     #[test]
@@ -2300,21 +2588,37 @@ mod tests {
         env(&fixture, None, false);
         let selected = selection(3, None, None);
         let branch_url = selected.repository.tree_url(&selected.branch).unwrap();
-        let commit_url = Url::parse("https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main").unwrap();
+        let commit_url =
+            Url::parse("https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main")
+                .unwrap();
         let tree_url = selected.repository.tree_url(TREE_SHA).unwrap();
         let commit_sha = "1111111111111111111111111111111111111111";
         let cache = ResponseCache::open().unwrap();
-        cache.save(&response(&branch_url, &tree_body(commit_sha, HELLO_BLOB, false), "application/json")).unwrap();
+        cache
+            .save(&response(
+                &branch_url,
+                &tree_body(commit_sha, HELLO_BLOB, false),
+                "application/json",
+            ))
+            .unwrap();
         let original_path = fixture.cache_dir().join(ResponseCache::name(&branch_url));
         let original = std::fs::read(&original_path).unwrap();
-        let commit = serde_json::to_vec(&json!({"sha":commit_sha,"commit":{"tree":{"sha":TREE_SHA}}})).unwrap();
-        cache.save(&response(&commit_url, &commit, "application/json")).unwrap();
+        let commit =
+            serde_json::to_vec(&json!({"sha":commit_sha,"commit":{"tree":{"sha":TREE_SHA}}}))
+                .unwrap();
+        cache
+            .save(&response(&commit_url, &commit, "application/json"))
+            .unwrap();
         let tree = tree_body(TREE_SHA, HELLO_BLOB, false);
-        cache.save(&response(&tree_url, &tree, "application/json")).unwrap();
+        cache
+            .save(&response(&tree_url, &tree, "application/json"))
+            .unwrap();
 
         let output = inventory(r#"{"school":3}"#, false).unwrap();
         assert_eq!(output["result"], "inventory_snapshot");
         assert_eq!(output["complete"], true);
+        assert_eq!(output["surface"], "tree");
+        assert_eq!(output["commit_sha"], commit_sha);
         assert_eq!(output["tree_sha"], TREE_SHA);
         assert_eq!(output["entries"][0]["path"], "docs/readme.md");
         assert_eq!(output["entries"][0]["blob_sha"], HELLO_BLOB);
@@ -2329,24 +2633,207 @@ mod tests {
     fn branch_commit_cannot_be_replaced_by_another_valid_tree() {
         let fixture = Fixture::new();
         env(&fixture, None, false);
-        let commit_url = Url::parse("https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main").unwrap();
-        let tree_url = selection(3, None, None).repository.tree_url(TREE_SHA).unwrap();
+        let commit_url =
+            Url::parse("https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main")
+                .unwrap();
+        let tree_url = selection(3, None, None)
+            .repository
+            .tree_url(TREE_SHA)
+            .unwrap();
         let cache = ResponseCache::open().unwrap();
         let commit = serde_json::to_vec(&json!({"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":TREE_SHA}}})).unwrap();
-        cache.save(&response(&commit_url, &commit, "application/json")).unwrap();
-        let other_tree = br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","tree":[],"truncated":false}"#;
-        cache.save(&response(&tree_url, other_tree, "application/json")).unwrap();
+        cache
+            .save(&response(&commit_url, &commit, "application/json"))
+            .unwrap();
+        let other_tree =
+            br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","tree":[],"truncated":false}"#;
+        cache
+            .save(&response(&tree_url, other_tree, "application/json"))
+            .unwrap();
 
         let output = inventory(r#"{"school":3}"#, false).unwrap();
         assert_eq!(output["result"], "degraded");
         assert_eq!(output["complete"], false);
+        // The commit resolved, so the degraded result is tree evidence for
+        // exactly that commit; it never silently reads the other valid tree.
+        assert_eq!(output["surface"], "tree");
+        assert_eq!(
+            output["commit_sha"],
+            "1111111111111111111111111111111111111111"
+        );
         assert_eq!(output["tree_sha"], Value::Null);
         assert_eq!(output["entries"], json!([]));
-        assert_eq!(output["fallback_reason"], "upstream_parse");
+        assert_eq!(output["fallback_reason"], "tree_identity_mismatch");
         assert_eq!(output["raw_response_base64"], STANDARD.encode(other_tree));
         assert_eq!(output["retrieval"]["source_url"], tree_url.as_str());
         assert_schema(&output, &schema()["inventory"]["output"]);
         assert!(!fixture.governor_dir().exists());
+    }
+
+    #[test]
+    fn commit_resolution_rejects_every_substituted_identity_pair() {
+        let commit_sha = "1111111111111111111111111111111111111111";
+        let bodies = vec![
+            // A tree identity of the other Git object format chooses no tree.
+            serde_json::to_vec(&json!({
+                "sha":commit_sha,
+                "commit":{"tree":{"sha":"a".repeat(64)}}
+            })).unwrap(),
+            // A commit object never is the tree it declares.
+            serde_json::to_vec(&json!({
+                "sha":commit_sha,
+                "commit":{"tree":{"sha":commit_sha}}
+            })).unwrap(),
+            // Not a commit envelope at all.
+            serde_json::to_vec(&json!({"sha":commit_sha,"commit":"tree"})).unwrap(),
+            // A repeated member cannot offer a second tree.
+            br#"{"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":"2222222222222222222222222222222222222222"}},"commit":{"tree":{"sha":"3333333333333333333333333333333333333333"}}}"#.to_vec(),
+        ];
+        for body in bodies {
+            let fixture = Fixture::new();
+            let served = body.clone();
+            let server = Server::new(move |socket, _, index| {
+                assert_eq!(index, 0, "an unresolved commit must not select a tree");
+                reply(socket, 200, "Content-Type: application/json\r\n", &served)
+            });
+            env(&fixture, Some(server.address), true);
+            let output = inventory(r#"{"school":3}"#, true).unwrap();
+            assert_eq!(
+                output["result"],
+                "degraded",
+                "{}",
+                String::from_utf8_lossy(&body)
+            );
+            assert_eq!(output["surface"], "commit");
+            assert_eq!(output["commit_sha"], Value::Null);
+            assert_eq!(output["tree_sha"], Value::Null);
+            assert_eq!(output["truncated"], Value::Null);
+            assert_eq!(output["complete"], false);
+            assert_eq!(output["entries"], json!([]));
+            assert_eq!(output["fallback_reason"], "upstream_parse");
+            assert_eq!(output["raw_response_base64"], STANDARD.encode(&body));
+            assert_schema(&output, &schema()["inventory"]["output"]);
+            assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(governor_state(&fixture)["safety_latched"], false);
+        }
+    }
+
+    #[test]
+    fn only_the_requested_tree_object_is_admitted() {
+        let empty = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+        let empty_tree =
+            br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","tree":[],"truncated":false}"#;
+        let selected = selection(3, None, None);
+        let empty_url = selected.repository.tree_url(empty).unwrap();
+        // The empty tree is a complete, self-consistent Git object.
+        assert!(
+            parse_tree_response(&response(&empty_url, empty_tree, "application/json"), empty)
+                .is_ok()
+        );
+        for truncated in [false, true] {
+            let body = if truncated {
+                br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","tree":[],"truncated":true}"#
+                    .to_vec()
+            } else {
+                empty_tree.to_vec()
+            };
+            // Its root identity is not the requested object, so it is refused
+            // as tree evidence even when it cannot be object-verified.
+            assert_eq!(
+                parse_tree_response(&response(&empty_url, &body, "application/json"), TREE_SHA)
+                    .err()
+                    .unwrap()
+                    .code,
+                "tree_identity_mismatch"
+            );
+            let url = selected.repository.tree_url(TREE_SHA).unwrap();
+            let output = inventory_output(
+                &selected,
+                &resolved(TREE_SHA),
+                &url,
+                &response(&url, &body, "application/json"),
+            )
+            .unwrap();
+            assert_eq!(output["result"], "degraded");
+            assert_eq!(output["surface"], "tree");
+            assert_eq!(output["commit_sha"], resolved(TREE_SHA).commit_sha.as_str());
+            assert_eq!(output["tree_sha"], Value::Null);
+            assert_eq!(output["truncated"], Value::Null);
+            assert_eq!(output["fallback_reason"], "tree_identity_mismatch");
+            assert_eq!(output["raw_response_base64"], STANDARD.encode(&body));
+            assert_schema(&output, &schema()["inventory"]["output"]);
+            // The same original cannot bind a raw material request either.
+            let request = request(TREE_SHA, HELLO_BLOB);
+            let tree_url = request.repository.tree_url(&request.tree_sha).unwrap();
+            assert_eq!(
+                immutable_tree_binding(
+                    &request,
+                    &tree_url,
+                    &response(&tree_url, &body, "application/json")
+                ),
+                Err("tree_identity_mismatch")
+            );
+        }
+    }
+
+    #[test]
+    fn commit_and_tree_surfaces_are_never_interchangeable() {
+        let selected = selection(3, None, None);
+        let commit_url = selected.repository.commit_url(&selected.branch).unwrap();
+        let tree_url = selected.repository.tree_url(TREE_SHA).unwrap();
+        let commit = serde_json::to_vec(&json!({
+            "sha":"1111111111111111111111111111111111111111",
+            "commit":{"tree":{"sha":TREE_SHA}}
+        }))
+        .unwrap();
+        let tree = tree_body(TREE_SHA, HELLO_BLOB, false);
+        // A commit envelope is never tree evidence and a tree is not a commit.
+        assert_eq!(
+            parse_tree_response(
+                &response(&commit_url, &commit, "application/json"),
+                TREE_SHA
+            )
+            .err()
+            .unwrap()
+            .code,
+            "upstream_parse"
+        );
+        assert_eq!(
+            resolve_commit(&response(&tree_url, &tree, "application/json"), &tree_url)
+                .err()
+                .unwrap()
+                .code,
+            "upstream_parse"
+        );
+        // The resolved pair comes only from the exact requested branch URL.
+        let other_url = selected.repository.commit_url("master").unwrap();
+        assert_eq!(
+            resolve_commit(
+                &response(&commit_url, &commit, "application/json"),
+                &other_url
+            )
+            .err()
+            .unwrap()
+            .code,
+            "upstream_parse"
+        );
+        let pair = resolve_commit(
+            &response(&commit_url, &commit, "application/json"),
+            &commit_url,
+        )
+        .unwrap();
+        assert_eq!(pair.commit_sha, "1111111111111111111111111111111111111111");
+        assert_eq!(pair.tree_sha, TREE_SHA);
+        assert_eq!(
+            resolve_commit(
+                &response(&commit_url, b"<html>not a commit</html>", "text/html"),
+                &commit_url
+            )
+            .err()
+            .unwrap()
+            .code,
+            "unexpected_content"
+        );
     }
 
     #[test]
@@ -2360,20 +2847,42 @@ mod tests {
         env(&fixture, Some(server.address), true);
         let output = inventory(r#"{"school":3}"#, true).unwrap();
         assert_eq!(output["result"], "degraded");
+        // An unresolved commit keeps its own surface and never declares a tree
+        // or a commit identity it did not verify.
+        assert_eq!(output["surface"], "commit");
+        assert_eq!(output["commit_sha"], Value::Null);
         assert_eq!(output["tree_sha"], Value::Null);
         assert_eq!(output["entries"], json!([]));
         assert_eq!(output["raw_response_base64"], STANDARD.encode(body));
-        assert_eq!(output["retrieval"]["source_url"], "https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main");
+        assert_eq!(
+            output["retrieval"]["source_url"],
+            "https://api.github.com/repos/AccSrd/BUAA_Course_Automation/commits/main"
+        );
+        assert_schema(&output, &schema()["inventory"]["output"]);
         let cached = inventory(r#"{"school":3}"#, false).unwrap();
         assert_eq!(cached["raw_response_base64"], output["raw_response_base64"]);
+        assert_eq!(cached["surface"], "commit");
         assert_eq!(cached["fallback_reason"], "upstream_parse");
+        assert_schema(&cached, &schema()["inventory"]["output"]);
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 1);
     }
 
     #[test]
     fn public_commit_accounts_do_not_hide_other_credential_members() {
-        for case in ["public", "bot", "password", "token", "nested-login", "other-role", "invalid-handle", "escaped-name", "duplicate-name", "tree-account", "array-root"] {
+        for case in [
+            "public",
+            "bot",
+            "password",
+            "token",
+            "nested-login",
+            "other-role",
+            "invalid-handle",
+            "escaped-name",
+            "duplicate-name",
+            "tree-account",
+            "array-root",
+        ] {
             let fixture = Fixture::new();
             env(&fixture, None, false);
             let selected = selection(3, None, None);
@@ -2399,15 +2908,28 @@ mod tests {
             if case == "escaped-name" {
                 body = body.replacen("\"login\"", "\"lo\\u0067in\"", 1);
             } else if case == "duplicate-name" {
-                body = body.replacen("\"login\":\"course-owner\"", "\"login\":\"course-owner\",\"login\":\"other-owner\"", 1);
+                body = body.replacen(
+                    "\"login\":\"course-owner\"",
+                    "\"login\":\"course-owner\",\"login\":\"other-owner\"",
+                    1,
+                );
             }
             let cache = ResponseCache::open().unwrap();
-            cache.save(&response(&commit_url, body.as_bytes(), "application/json")).unwrap();
-            let mut tree: Value = serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
+            cache
+                .save(&response(&commit_url, body.as_bytes(), "application/json"))
+                .unwrap();
+            let mut tree: Value =
+                serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
             if case == "tree-account" {
                 tree["author"] = json!({"login":"course-owner"});
             }
-            cache.save(&response(&tree_url, &serde_json::to_vec(&tree).unwrap(), "application/json")).unwrap();
+            cache
+                .save(&response(
+                    &tree_url,
+                    &serde_json::to_vec(&tree).unwrap(),
+                    "application/json",
+                ))
+                .unwrap();
 
             let result = inventory(r#"{"school":3}"#, false);
             if matches!(case, "public" | "bot") {
@@ -2441,20 +2963,39 @@ mod tests {
             "path":path,"mode":"100644","type":"blob","sha":blob,"size":6
         }]});
         let cache = ResponseCache::open().unwrap();
-        cache.save(&response(&commit_url, &serde_json::to_vec(&commit).unwrap(), "application/json")).unwrap();
-        cache.save(&response(&tree_url, &serde_json::to_vec(&tree).unwrap(), "application/json")).unwrap();
+        cache
+            .save(&response(
+                &commit_url,
+                &serde_json::to_vec(&commit).unwrap(),
+                "application/json",
+            ))
+            .unwrap();
+        cache
+            .save(&response(
+                &tree_url,
+                &serde_json::to_vec(&tree).unwrap(),
+                "application/json",
+            ))
+            .unwrap();
 
         let output = inventory(r#"{"school":3}"#, false).unwrap();
         assert_eq!(output["result"], "inventory_snapshot");
         assert_eq!(output["complete"], true);
+        assert_eq!(output["surface"], "tree");
         assert_eq!(output["tree_sha"], root);
-        assert_eq!(output["entries"], json!([{
-            "path":path,"size":6,"kind":"file","branch":"main",
-            "repo":"AccSrd/BUAA_Course_Automation","rights_review_required":true,
-            "blob_sha":blob,"upstream_sha":blob
-        }]));
+        // The exact source name stays in metadata under the published contract.
+        assert_eq!(
+            output["entries"],
+            json!([{
+                "path":path,"size":6,"kind":"file","branch":"main",
+                "repo":"AccSrd/BUAA_Course_Automation","rights_review_required":true,
+                "blob_sha":blob,"upstream_sha":blob
+            }])
+        );
+        assert_schema(&output, &schema()["inventory"]["output"]);
         let request = json!({"school":3,"path":path,"tree_sha":root,
-            "blob_sha":blob,"rights_reviewed":true}).to_string();
+            "blob_sha":blob,"rights_reviewed":true})
+        .to_string();
         assert_eq!(retrieve(&request, true).unwrap_err().code, "invalid_input");
         assert!(!fixture.governor_dir().exists());
     }
@@ -2493,8 +3034,14 @@ mod tests {
         let url = selected.repository.commit_url(&selected.branch).unwrap();
         // Simulate a retained original from an older classifier. Loading must
         // re-screen even a record with the current cookie-admission version.
-        ResponseCache::open().unwrap().save(&response(&url, body, "text/html")).unwrap();
-        assert_eq!(inventory(r#"{"school":3}"#, false).unwrap_err().code, "sensitive_response");
+        ResponseCache::open()
+            .unwrap()
+            .save(&response(&url, body, "text/html"))
+            .unwrap();
+        assert_eq!(
+            inventory(r#"{"school":3}"#, false).unwrap_err().code,
+            "sensitive_response"
+        );
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 1);
     }
@@ -2502,7 +3049,8 @@ mod tests {
     #[test]
     fn safe_malformed_fallback_retains_exact_original_offline() {
         let fixture = Fixture::new();
-        let body = b"<html><p>Reference: token/password vocabulary, no credential controls.</p></html>";
+        let body =
+            b"<html><p>Reference: token/password vocabulary, no credential controls.</p></html>";
         let server = Server::new(move |socket, _, _| {
             reply(socket, 200, "Content-Type: text/html\r\n", body)
         });
@@ -2518,15 +3066,25 @@ mod tests {
     fn cookie_refusal_preserves_observed_cooldown() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
-            reply(socket, 200, "Content-Type: text/html\r\nSet-Cookie: session=private\r\nRetry-After: 120\r\n", b"<html>reference</html>")
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\nSet-Cookie: session=private\r\nRetry-After: 120\r\n",
+                b"<html>reference</html>",
+            )
         });
         env(&fixture, Some(server.address), true);
-        assert_eq!(inventory(r#"{"school":3}"#, true).unwrap_err().code, "sensitive_response");
+        assert_eq!(
+            inventory(r#"{"school":3}"#, true).unwrap_err().code,
+            "sensitive_response"
+        );
         assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 0);
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);
-        assert!(state["cooldown_until_ms"].as_u64().unwrap()
-            >= state["last_observed_ms"].as_u64().unwrap() + 119_000);
+        assert!(
+            state["cooldown_until_ms"].as_u64().unwrap()
+                >= state["last_observed_ms"].as_u64().unwrap() + 119_000
+        );
     }
 
     #[test]
@@ -2537,13 +3095,18 @@ mod tests {
         let selected = selection(3, None, None);
         let url = selected.repository.commit_url(&selected.branch).unwrap();
         let cache = ResponseCache::open().unwrap();
-        cache.save(&response(&url, b"<html>reference</html>", "text/html")).unwrap();
+        cache
+            .save(&response(&url, b"<html>reference</html>", "text/html"))
+            .unwrap();
         let path = fixture.cache_dir().join(ResponseCache::name(&url));
         let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         record["version"] = json!(1);
         let original = serde_json::to_vec(&record).unwrap();
         std::fs::write(&path, &original).unwrap();
-        assert_eq!(inventory(r#"{"school":3}"#, true).unwrap_err().code, "unreviewed_cache");
+        assert_eq!(
+            inventory(r#"{"school":3}"#, true).unwrap_err().code,
+            "unreviewed_cache"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), original);
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(!fixture.governor_dir().exists());
@@ -2555,11 +3118,21 @@ mod tests {
         let tree = tree_body(TREE_SHA, HELLO_BLOB, false);
         let server = Server::new(move |socket, _, index| match index {
             0 => reply(socket, 200, "Content-Type: application/json\r\n", &tree),
-            1 => reply(socket, 200, "Content-Type: text/html\r\n", b"<form><input type='password' name='password' value='private'></form>"),
+            1 => reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                b"<form><input type='password' name='password' value='private'></form>",
+            ),
             _ => panic!("unexpected request"),
         });
         env(&fixture, Some(server.address), true);
-        assert_eq!(retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true).unwrap_err().code, "sensitive_response");
+        assert_eq!(
+            retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+                .unwrap_err()
+                .code,
+            "sensitive_response"
+        );
         // Only the independently admitted tree original survives.
         assert_eq!(fixture.cache_dir().read_dir().unwrap().count(), 1);
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -2582,12 +3155,9 @@ mod tests {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| reply(socket, 200, "", b""));
         env(&fixture, Some(server.address), true);
-        let error = retrieve(
-            &retrieval_input(TREE_SHA, HELLO_BLOB),
-            false,
-        )
-        .err()
-        .unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "offline_miss");
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(fixture.cache_dir().read_dir().unwrap().count() == 0);
@@ -2616,7 +3186,10 @@ mod tests {
         assert_eq!(first["retrieval"]["cache_status"], "miss");
         assert_eq!(first["tree_binding"]["retrieval"]["cache_status"], "miss");
         assert_eq!(first["bytes"], STANDARD.encode(MATERIAL));
-        assert_eq!(first["tree_binding"]["raw_response_base64"], STANDARD.encode(&tree_body(TREE_SHA, HELLO_BLOB, false)));
+        assert_eq!(
+            first["tree_binding"]["raw_response_base64"],
+            STANDARD.encode(&tree_body(TREE_SHA, HELLO_BLOB, false))
+        );
         assert_schema(&first, &schema()["retrieve"]["output"]);
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 2);
         let requests: Vec<_> = server.requests.try_iter().collect();
@@ -2627,9 +3200,11 @@ mod tests {
         assert!(requests[1].starts_with(&format!(
             "GET /repos/AccSrd/BUAA_Course_Automation/git/blobs/{HELLO_BLOB} "
         )));
-        assert!(requests[1]
-            .to_ascii_lowercase()
-            .contains("accept: application/vnd.github.raw+json"));
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains("accept: application/vnd.github.raw+json")
+        );
         assert!(!requests[0].contains("main") && !requests[1].contains("main"));
 
         let second = retrieve(&input, false).unwrap();
@@ -2650,8 +3225,10 @@ mod tests {
         env(&fixture, Some(server.address), true);
         assert!(inventory(r#"{"school":3}"#, true).is_err());
         let state = governor_state(&fixture);
-        assert!(state["cooldown_until_ms"].as_u64().unwrap()
-            >= state["last_observed_ms"].as_u64().unwrap() + 119_000);
+        assert!(
+            state["cooldown_until_ms"].as_u64().unwrap()
+                >= state["last_observed_ms"].as_u64().unwrap() + 119_000
+        );
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
@@ -2660,7 +3237,12 @@ mod tests {
         let fixture = Fixture::new();
         let tree = tree_body(TREE_SHA, HELLO_BLOB, false);
         let server = Server::new(move |socket, _, _| {
-            reply(socket, 200, "Content-Type: application/json; charset=utf-8\r\nContent-Type: text/html\r\n", &tree)
+            reply(
+                socket,
+                200,
+                "Content-Type: application/json; charset=utf-8\r\nContent-Type: text/html\r\n",
+                &tree,
+            )
         });
         env(&fixture, Some(server.address), true);
         let error = inventory(r#"{"school":3}"#, true).err().unwrap();
@@ -2669,8 +3251,15 @@ mod tests {
         assert_eq!(governor_state(&fixture)["safety_latched"], false);
         let selected = selection(3, None, None);
         let url = selected.repository.commit_url(&selected.branch).unwrap();
-        let cached = response(&url, &tree_body(TREE_SHA, HELLO_BLOB, false), "application/json; charset=utf-8, text/html");
-        assert_eq!(assess_response_body(&cached), ChallengeAssessment::Unreviewed);
+        let cached = response(
+            &url,
+            &tree_body(TREE_SHA, HELLO_BLOB, false),
+            "application/json; charset=utf-8, text/html",
+        );
+        assert_eq!(
+            assess_response_body(&cached),
+            ChallengeAssessment::Unreviewed
+        );
     }
 
     #[test]
@@ -2678,57 +3267,61 @@ mod tests {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| reply(socket, 429, "", b""));
         env(&fixture, Some(server.address), true);
-        let error = retrieve(
-            &retrieval_input(TREE_SHA, HELLO_BLOB),
-            true,
-        )
-        .err()
-        .unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "rate_limited");
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);
-        assert!(state["cooldown_until_ms"].as_u64().unwrap() > state["last_observed_ms"].as_u64().unwrap());
+        assert!(
+            state["cooldown_until_ms"].as_u64().unwrap()
+                > state["last_observed_ms"].as_u64().unwrap()
+        );
     }
 
     #[test]
     fn raw_403_rate_limit_refuses_and_preserves_the_cooldown() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
-            reply(socket, 403, "Retry-After: 30\r\nx-ratelimit-remaining: 0\r\n", b"")
+            reply(
+                socket,
+                403,
+                "Retry-After: 30\r\nx-ratelimit-remaining: 0\r\n",
+                b"",
+            )
         });
         env(&fixture, Some(server.address), true);
-        let error = retrieve(
-            &retrieval_input(TREE_SHA, HELLO_BLOB),
-            true,
-        )
-        .err()
-        .unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "rate_limited");
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);
-        assert!(state["cooldown_until_ms"].as_u64().unwrap() > state["last_observed_ms"].as_u64().unwrap());
+        assert!(
+            state["cooldown_until_ms"].as_u64().unwrap()
+                > state["last_observed_ms"].as_u64().unwrap()
+        );
     }
 
     #[test]
     fn raw_429_with_challenge_refuses_and_keeps_the_cooldown() {
         let fixture = Fixture::new();
-        let server = Server::new(|socket, _, _| {
-            reply(socket, 429, "cf-mitigated: challenge\r\n", b"")
-        });
+        let server =
+            Server::new(|socket, _, _| reply(socket, 429, "cf-mitigated: challenge\r\n", b""));
         env(&fixture, Some(server.address), true);
-        let error = retrieve(
-            &retrieval_input(TREE_SHA, HELLO_BLOB),
-            true,
-        )
-        .err()
-        .unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "safety_latched");
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);
-        assert!(state["cooldown_until_ms"].as_u64().unwrap() > state["last_observed_ms"].as_u64().unwrap());
+        assert!(
+            state["cooldown_until_ms"].as_u64().unwrap()
+                > state["last_observed_ms"].as_u64().unwrap()
+        );
     }
 
     #[test]
@@ -2815,7 +3408,12 @@ mod tests {
     fn github_raw_vendor_response_is_verified_without_a_json_envelope() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
-            reply(socket, 200, "Content-Type: application/vnd.github.raw+json\r\n", MATERIAL)
+            reply(
+                socket,
+                200,
+                "Content-Type: application/vnd.github.raw+json\r\n",
+                MATERIAL,
+            )
         });
         env(&fixture, Some(server.address), true);
         let request = request(TREE_SHA, HELLO_BLOB);
@@ -2826,10 +3424,17 @@ mod tests {
         assert_eq!(output["result"], "raw_snapshot");
         assert_eq!(output["bytes"], STANDARD.encode(MATERIAL));
         assert_eq!(output["content_type"], "application/vnd.github.raw+json");
-        assert_eq!(output["retrieval"]["http"]["headers"]["content-type"], "application/vnd.github.raw+json");
+        assert_eq!(
+            output["retrieval"]["http"]["headers"]["content-type"],
+            "application/vnd.github.raw+json"
+        );
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].to_ascii_lowercase().contains("accept: application/vnd.github.raw+json"));
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("accept: application/vnd.github.raw+json")
+        );
         assert!(requests[0].starts_with(&format!(
             "GET /repos/AccSrd/BUAA_Course_Automation/git/blobs/{HELLO_BLOB} "
         )));
@@ -2852,7 +3457,9 @@ mod tests {
         let url = request.repository.blob_url(&blob_sha).unwrap();
         let cache = ResponseCache::open().unwrap();
         cache.save(&tree_response(&request, false)).unwrap();
-        cache.save(&response(&url, &bytes, "application/octet-stream")).unwrap();
+        cache
+            .save(&response(&url, &bytes, "application/octet-stream"))
+            .unwrap();
         let output = retrieve(&retrieval_input(&tree_sha, &blob_sha), false).unwrap();
         assert_eq!(output["result"], "raw_snapshot");
         assert_eq!(output["material_admitted"], true);
@@ -2873,8 +3480,11 @@ mod tests {
         let request = request(TREE_SHA, HELLO_BLOB);
         let url = request.repository.tree_url(TREE_SHA).unwrap();
         let cache = ResponseCache::open().unwrap();
-        let bytes = serde_json::to_vec(&json!({"sha": TREE_SHA, "tree": [], "truncated": false})).unwrap();
-        cache.save(&response(&url, &bytes, "application/json")).unwrap();
+        let bytes =
+            serde_json::to_vec(&json!({"sha": TREE_SHA, "tree": [], "truncated": false})).unwrap();
+        cache
+            .save(&response(&url, &bytes, "application/json"))
+            .unwrap();
         let output = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false).unwrap();
         assert_eq!(output["fallback_reason"], "upstream_parse");
         assert_eq!(output["material_admitted"], false);
@@ -2922,10 +3532,17 @@ mod tests {
     fn header_only_challenge_refuses_without_body_processing() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
-            reply(socket, 200, "Content-Type: application/json\r\nX-Captcha: required\r\n", b"{}")
+            reply(
+                socket,
+                200,
+                "Content-Type: application/json\r\nX-Captcha: required\r\n",
+                b"{}",
+            )
         });
         env(&fixture, Some(server.address), true);
-        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true).err().unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "safety_latched");
         assert_challenge_followup_rereads_after_gap(&fixture, &server);
     }
@@ -2934,10 +3551,17 @@ mod tests {
     fn body_only_active_challenge_refuses_without_caching() {
         let fixture = Fixture::new();
         let server = Server::new(|socket, _, _| {
-            reply(socket, 200, "Content-Type: text/html\r\n", br#"<form><input name="captcha"></form>"#)
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                br#"<form><input name="captcha"></form>"#,
+            )
         });
         env(&fixture, Some(server.address), true);
-        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true).err().unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "safety_latched");
         assert_challenge_followup_rereads_after_gap(&fixture, &server);
     }
@@ -2956,10 +3580,15 @@ mod tests {
             socket.write_all(prefix).unwrap();
         });
         env(&fixture, Some(server.address), true);
-        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true).err().unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), true)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "safety_latched");
         let state = governor_state(&fixture);
-        assert!(state["cooldown_until_ms"].as_u64().unwrap() > state["last_observed_ms"].as_u64().unwrap());
+        assert!(
+            state["cooldown_until_ms"].as_u64().unwrap()
+                > state["last_observed_ms"].as_u64().unwrap()
+        );
         assert_eq!(state["network_failures"], 1);
         assert_challenge_followup_blocked_by_cooldown(&fixture, &server);
     }
@@ -2978,27 +3607,37 @@ mod tests {
         assert_eq!(output["raw_response_base64"], STANDARD.encode(inert));
         assert_eq!(governor_state(&fixture)["safety_latched"], false);
         let offline = inventory(r#"{"school":3}"#, false).unwrap();
-        assert_eq!(offline["raw_response_base64"], output["raw_response_base64"]);
+        assert_eq!(
+            offline["raw_response_base64"],
+            output["raw_response_base64"]
+        );
         assert_eq!(server.count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
     fn json_embedded_html_is_data_not_an_active_challenge() {
         let fixture = Fixture::new();
-        let mut tree: Value = serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
+        let mut tree: Value =
+            serde_json::from_slice(&tree_body(TREE_SHA, HELLO_BLOB, false)).unwrap();
         tree["note"] = json!(r#"<!doctype html><html><input name="captcha"></html>"#);
         let bytes = serde_json::to_vec(&tree).unwrap();
         let commit = serde_json::to_vec(&json!({
             "sha":"1111111111111111111111111111111111111111",
             "commit":{"tree":{"sha":TREE_SHA}},
             "note":r#"<!doctype html><html><input name="captcha"></html>"#
-        })).unwrap();
+        }))
+        .unwrap();
         let server = Server::new(move |socket, _, index| {
-            reply(socket, 200, "Content-Type: application/json\r\n", match index {
-                0 => &commit,
-                1 => &bytes,
-                _ => panic!("unexpected extra request"),
-            })
+            reply(
+                socket,
+                200,
+                "Content-Type: application/json\r\n",
+                match index {
+                    0 => &commit,
+                    1 => &bytes,
+                    _ => panic!("unexpected extra request"),
+                },
+            )
         });
         env(&fixture, Some(server.address), true);
         let output = inventory(r#"{"school":3}"#, true).unwrap();
@@ -3011,8 +3650,14 @@ mod tests {
     fn unreviewed_live_bodies_never_latch_process_or_enter_cache() {
         for (mime, body) in [
             (Some("text/html"), b"\xff<input name='captcha'>".as_slice()),
-            (Some("application/xhtml+xml"), b"<input name='captcha'/>".as_slice()),
-            (Some("application/octet-stream"), b"<!doctype html><html><input name='captcha'>".as_slice()),
+            (
+                Some("application/xhtml+xml"),
+                b"<input name='captcha'/>".as_slice(),
+            ),
+            (
+                Some("application/octet-stream"),
+                b"<!doctype html><html><input name='captcha'>".as_slice(),
+            ),
             (None, b"ordinary material without MIME".as_slice()),
         ] {
             let fixture = Fixture::new();
@@ -3034,17 +3679,24 @@ mod tests {
         let request = request(TREE_SHA, HELLO_BLOB);
         let url = request.repository.tree_url(TREE_SHA).unwrap();
         let cache = ResponseCache::open().unwrap();
-        cache.save(&response(&url, br#"<input name="captcha">"#, "text/html")).unwrap();
+        cache
+            .save(&response(&url, br#"<input name="captcha">"#, "text/html"))
+            .unwrap();
         let governor = cache.open_governor().unwrap();
         let lease = net::acquire(&governor).unwrap();
-        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false).err().unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "safety_latched");
         lease.finish_without_request().unwrap();
         drop(governor);
         let reopened = cache.open_governor().unwrap();
         // No latch persists: the next acquisition is admitted after ordinary
         // request-interval pacing.
-        net::acquire(&reopened).unwrap().finish_without_request().unwrap();
+        net::acquire(&reopened)
+            .unwrap()
+            .finish_without_request()
+            .unwrap();
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);
         assert_eq!(state["authentication_armed"], false);
@@ -3058,13 +3710,20 @@ mod tests {
         let request = request(TREE_SHA, HELLO_BLOB);
         let url = request.repository.tree_url(TREE_SHA).unwrap();
         let cache = ResponseCache::open().unwrap();
-        cache.save(&response(&url, br#"<input name="captcha">"#, "text/html")).unwrap();
-        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false).err().unwrap();
+        cache
+            .save(&response(&url, br#"<input name="captcha">"#, "text/html"))
+            .unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "safety_latched");
         // The refusal is per-request only: no durable latch blocks the next
         // acquisition, which settles cleanly without sending a request.
         let persisted = cache.open_governor().unwrap();
-        net::acquire(&persisted).unwrap().finish_without_request().unwrap();
+        net::acquire(&persisted)
+            .unwrap()
+            .finish_without_request()
+            .unwrap();
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);
         assert_eq!(state["authentication_armed"], false);
@@ -3081,10 +3740,14 @@ mod tests {
         let request = request(TREE_SHA, HELLO_BLOB);
         let url = request.repository.tree_url(TREE_SHA).unwrap();
         let cache = ResponseCache::open().unwrap();
-        cache.save(&response(&url, b"\xff<input name='captcha'>", "text/html")).unwrap();
+        cache
+            .save(&response(&url, b"\xff<input name='captcha'>", "text/html"))
+            .unwrap();
         let path = fixture.cache_dir().join(ResponseCache::name(&url));
         let before = std::fs::read(&path).unwrap();
-        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false).err().unwrap();
+        let error = retrieve(&retrieval_input(TREE_SHA, HELLO_BLOB), false)
+            .err()
+            .unwrap();
         assert_eq!(error.code, "unreviewed_body");
         assert!(!fixture.governor_dir().exists());
         assert_eq!(std::fs::read(&path).unwrap(), before);
@@ -3100,10 +3763,15 @@ mod tests {
         let url = request.repository.tree_url(TREE_SHA).unwrap();
         let cache = ResponseCache::open().unwrap();
         let transport = cache.open_transport().unwrap();
-        cache.save(&response(&url, br#"<input name="captcha">"#, "text/html")).unwrap();
-        let error = transport.fetch::<Value>(&cache, &url, Surface::Tree, |_| {
-            panic!("cached challenge reached structured processing")
-        }).err().unwrap();
+        cache
+            .save(&response(&url, br#"<input name="captcha">"#, "text/html"))
+            .unwrap();
+        let error = transport
+            .fetch::<Value>(&cache, &url, Surface::Tree, |_| {
+                panic!("cached challenge reached structured processing")
+            })
+            .err()
+            .unwrap();
         assert_eq!(error.code, "safety_latched");
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);
@@ -3121,10 +3789,15 @@ mod tests {
         let url = request.repository.tree_url(TREE_SHA).unwrap();
         let cache = ResponseCache::open().unwrap();
         let transport = cache.open_transport().unwrap();
-        cache.save(&response(&url, b"\xff<input name='captcha'>", "text/html")).unwrap();
-        let error = transport.fetch::<Value>(&cache, &url, Surface::Tree, |_| {
-            panic!("unreviewed cache reached structured processing")
-        }).err().unwrap();
+        cache
+            .save(&response(&url, b"\xff<input name='captcha'>", "text/html"))
+            .unwrap();
+        let error = transport
+            .fetch::<Value>(&cache, &url, Surface::Tree, |_| {
+                panic!("unreviewed cache reached structured processing")
+            })
+            .err()
+            .unwrap();
         assert_eq!(error.code, "unreviewed_body");
         let state = governor_state(&fixture);
         assert_eq!(state["safety_latched"], false);

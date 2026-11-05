@@ -81,6 +81,17 @@
 //!   Source pagination must match the requested page, limit and record count.
 //!   Missing/inconsistent facts, changing totals and duplicate ids stop the
 //!   traversal without advancing a cursor or claiming complete history.
+//! * A detail read requires an explicit source-shaped appeal id. The id is
+//!   never defaulted: an absent or null id is refused, `0` is refused as an
+//!   invented placeholder before any cache or network access, and an admitted
+//!   URL path must be the canonical decimal form of a positive id.
+//!   The detail envelope states completeness explicitly. `complete` is true
+//!   only when the requested record was projected from an accepted positive
+//!   envelope; a withheld, unparsable or mismatched response keeps its
+//!   `fallback_reason` as `incomplete_reason`; and an accepted envelope that
+//!   supplies no record for the requested id is `not_found` with
+//!   `incomplete_reason=record_not_returned`, because an empty answer cannot
+//!   be distinguished from an account-scoped visibility limit here.
 //!
 //! Source protocol reference (not current-deployment proof):
 //! https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/feature/IhomeProtocol.kt
@@ -166,6 +177,25 @@ fn invalid_input(message: &'static str) -> Error {
 
 fn invalid_url() -> Error {
     Error::new("invalid_url", "the ihome request URL is invalid")
+}
+
+/// The appeal id is a source fact, never a default. An absent id is refused
+/// instead of being materialized as `0`, and `0` cannot address a source
+/// record: the listing publishes positive record identifiers, so a zero id can
+/// only be an invented placeholder for a record the caller never identified.
+const MIN_APPEAL_ID: u64 = 1;
+
+fn missing_appeal_id() -> Error {
+    invalid_input("an explicit upstream appeal id is required; it is never defaulted")
+}
+
+fn source_appeal_id(id: u64) -> Result<u64, Error> {
+    if id < MIN_APPEAL_ID {
+        return Err(invalid_input(
+            "id must be a positive upstream appeal id observed from the source",
+        ));
+    }
+    Ok(id)
 }
 
 fn cache_error() -> Error {
@@ -855,7 +885,9 @@ struct DetailInput {
     token: Option<Zeroizing<String>>,
     operation: Option<Operation>,
     token_source: Option<TokenSource>,
-    id: u64,
+    // Absent and null are both "no id supplied"; the caller never receives a
+    // defaulted `0` request for a record it did not name.
+    id: Option<u64>,
     refresh: Option<bool>,
     download_attachments: Option<bool>,
 }
@@ -868,7 +900,7 @@ impl<'de> Deserialize<'de> for DetailInput {
             token: Option<Zeroizing<String>>,
             operation: Option<Operation>,
             token_source: Option<TokenSource>,
-            id: u64,
+            id: Option<u64>,
             refresh: Option<bool>,
             download_attachments: Option<bool>,
         }
@@ -1128,10 +1160,12 @@ fn parse_detail_input(input: &str) -> Result<DetailRequest, Error> {
     if parsed.download_attachments == Some(true) {
         return Err(attachment_download_unsupported());
     }
+    // The read is only ever for a record the caller named from the source.
+    let id = source_appeal_id(parsed.id.ok_or_else(missing_appeal_id)?)?;
     Ok(DetailRequest {
         token,
         token_source: parsed.token_source,
-        id: parsed.id,
+        id,
         refresh: parsed.refresh.unwrap_or(false),
     })
 }
@@ -1152,6 +1186,9 @@ fn list_url(limit: u32, page: u32) -> Result<Url, Error> {
 }
 
 fn detail_url(id: u64) -> Result<Url, Error> {
+    // Defence in depth for every caller, including the one-shot session read:
+    // a placeholder id never becomes a request for a record it did not name.
+    let id = source_appeal_id(id)?;
     let mut url = Url::parse(IHOME_ORIGIN).map_err(|_| invalid_url())?;
     url.set_path(&format!("{IHOME_API_PATH}/{id}"));
     Ok(url)
@@ -1174,7 +1211,10 @@ fn allowed_url(url: &Url) -> bool {
     let Some(id) = path.strip_prefix(IHOME_DETAIL_PREFIX) else {
         return false;
     };
-    !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())
+    // Only the canonical decimal spelling of a positive source id is admitted,
+    // so `0`, `007` or an out-of-range digit run can never address a detail.
+    id.parse::<u64>()
+        .is_ok_and(|value| value >= MIN_APPEAL_ID && value.to_string() == id)
 }
 
 // ---------------------------------------------------------------------------
@@ -3374,6 +3414,13 @@ fn list_page(
 }
 
 /// Read one appeal by its upstream id.
+///
+/// The id must be supplied explicitly and be the positive id the source
+/// published for that appeal: an absent, null or `0` id is refused before any
+/// cache or network access. The envelope always reports
+/// `upstream.complete`, `upstream.incomplete` and
+/// `upstream.incomplete_reason`, so a withheld, unread or empty answer is
+/// never presented as a confirmed record.
 pub fn detail(input: &str, online: bool) -> Result<Value, Error> {
     let request = parse_detail_input(input)?;
     if request.refresh && !online {
@@ -3396,9 +3443,30 @@ pub fn detail(input: &str, online: bool) -> Result<Value, Error> {
     Ok(build_detail_envelope(&request, outcome))
 }
 
+/// Structure one single-record read. `complete` is true only for a record
+/// projected for the requested id; everything else carries the reason it is
+/// incomplete.
 fn build_detail_envelope(request: &DetailRequest, outcome: PageOutcome) -> Value {
     let degraded = outcome.evidence.is_some();
     let entry = outcome.entries.into_iter().next();
+    // A single-record read is complete only when the requested record was
+    // actually projected from an accepted positive envelope. A withheld,
+    // unparsable or mismatched response is incomplete with its own reason, and
+    // an accepted envelope that returns no record for this id stays incomplete
+    // too: an empty answer may reflect the account's visibility scope, so it is
+    // never promoted to a claimed authoritative absence.
+    let incomplete_reason: Option<String> = match outcome.evidence.as_ref() {
+        Some(evidence) => Some(
+            evidence
+                .get("fallback_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned(),
+        ),
+        None if entry.is_none() => Some("record_not_returned".to_owned()),
+        None => None,
+    };
+    let complete = incomplete_reason.is_none();
     let result = if degraded {
         "degraded"
     } else if entry.is_some() {
@@ -3419,7 +3487,13 @@ fn build_detail_envelope(request: &DetailRequest, outcome: PageOutcome) -> Value
         "schema_version": 1,
         "type": "ihome_appeal_detail",
         "result": result,
-        "upstream": {"success": outcome.success, "id": request.id},
+        "upstream": {
+            "success": outcome.success,
+            "id": request.id,
+            "complete": complete,
+            "incomplete": !complete,
+            "incomplete_reason": incomplete_reason,
+        },
         "entry": entry,
         "credential_source": request.token_source.map(TokenSource::label),
         "attachments": attachments_notice(),
@@ -3737,7 +3811,7 @@ fn detail_input_schema() -> Value {
             "token": token_schema(),
             "operation": {"enum": ["detail", null], "description": "Optional for direct detail calls; required and non-null by run."},
             "token_source": token_source_schema(),
-            "id": {"type": "integer", "minimum": 0, "maximum": u64::MAX, "description": "The upstream appeal id."},
+            "id": {"type": "integer", "minimum": MIN_APPEAL_ID, "maximum": u64::MAX, "description": "Required positive upstream appeal id observed from the source (for example from a listing entry). It is never defaulted: an absent or null id is refused, and 0 is refused as an invented placeholder before any cache or network access."},
             "refresh": {"type": ["boolean", "null"], "default": false, "description": "Explicitly fetch fresh data, bypassing the cache; requires --online. Absent or null is false."},
             "download_attachments": {"type": ["boolean", "null"], "default": false, "description": "true is refused with unsupported: attachment download is not implemented and the upstream attachment contract is unknown."}
         }
@@ -3762,7 +3836,7 @@ fn session_input_schema() -> Value {
                     "page":{"type":"integer","minimum":1,"maximum":MAX_PAGE,"default":1}}},
                 {"type":"object","additionalProperties":false,"required":["operation","enabled","id"],"properties":{
                     "operation":{"const":"detail"},"enabled":{"type":"boolean"},
-                    "id":{"type":"integer","minimum":0,"maximum":u64::MAX}}}
+                    "id":{"type":"integer","minimum":MIN_APPEAL_ID,"maximum":u64::MAX,"description":"Required positive upstream appeal id observed from the source; 0 is refused as an invented placeholder before any authentication or read."}}}
             ]}
         }
     })
@@ -3896,8 +3970,19 @@ pub fn schema() -> Value {
                 "properties": {
                     "schema_version": {"const": 1},
                     "type": {"const": "ihome_appeal_detail"},
-                    "result": {"enum": ["appeal","not_found","degraded"]},
-                    "upstream": {"type": "object", "additionalProperties": false, "required": ["success","id"], "properties": {"success": {"type": ["boolean", "null"]}, "id": {"type": "integer", "minimum": 0}}},
+                    "result": {"enum": ["appeal","not_found","degraded"], "description": "appeal carries one record projected for the requested id; not_found means the accepted positive envelope returned no record for that id and is reported as incomplete, because an empty answer may reflect the account's visibility scope; degraded reports a withheld, refused or unparsable response with its reason and never invents a record."},
+                    "upstream": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["success","id","complete","incomplete","incomplete_reason"],
+                        "properties": {
+                            "success": {"type": ["boolean", "null"], "description": "The observed Boolean upstream flag, not HTTP or business acceptance. Business acceptance separately requires numeric code=20000."},
+                            "id": {"type": "integer", "minimum": MIN_APPEAL_ID, "maximum": u64::MAX, "description": "The explicit positive source id this read requested; it is never defaulted or invented, and a projected record must carry the same id."},
+                            "complete": {"type": "boolean", "description": "True only when one record for the requested id was projected from an accepted numeric code=20000 and success=true envelope with no withheld evidence."},
+                            "incomplete": {"type": "boolean", "description": "True whenever nothing was acquired for the requested id, including a response that was withheld or unparsable and an accepted envelope that returned no record."},
+                            "incomplete_reason": {"type": ["string","null"], "description": "The fallback reason code of a withheld, refused or unparsable response, or record_not_returned when an accepted positive envelope declared no record for this id; null only when complete is true."}
+                        }
+                    },
                     "entry": {"anyOf": [entry_schema(false), {"type": "null"}]},
                     "credential_source": {"type": ["string", "null"], "enum": ["redirect_query_token","redirect_fragment_token","cookie_appeal_pc_token", null]},
                     "attachments": attachments_notice_schema(),
@@ -4328,6 +4413,113 @@ mod tests {
         assert!(outcome.evidence.is_none());
         assert_eq!(outcome.entries[0]["content"], "Synthetic appeal body");
         assert!(outcome.entries[0].get("title").is_none());
+    }
+
+    #[test]
+    fn a_detail_envelope_states_completeness_without_inventing_a_record() {
+        let request = parse_detail_input(r#"{"token":"synthetic-token","id":41}"#).unwrap();
+        let entry = r#"{"id":41,"title":"Quiet hallway","content":"ordinary appeal","created_at":"2026-10-20 08:30:00","publish_status_text":"Pending","departments":[],"appeal_reply":[]}"#;
+
+        // The requested record from an accepted positive envelope is complete.
+        let body = format!(r#"{{"code":20000,"success":true,"data":{entry}}}"#);
+        let original = response(
+            &detail_url(41).unwrap(),
+            body.as_bytes(),
+            Some("application/json"),
+        );
+        let facts = analyze_body(&original.body, request.token.as_str());
+        let envelope = build_detail_envelope(
+            &request,
+            detail_page(&request, &original, &ChallengeAssessment::Clear, &facts),
+        );
+        assert_eq!(envelope["result"], "appeal");
+        assert_eq!(envelope["upstream"]["id"], 41);
+        assert_eq!(envelope["upstream"]["complete"], true);
+        assert_eq!(envelope["upstream"]["incomplete"], false);
+        assert!(envelope["upstream"]["incomplete_reason"].is_null());
+        assert_eq!(envelope["entry"]["id"], 41);
+        assert!(envelope["upstream_evidence"].is_null());
+
+        // A record for another id is never relabeled as the requested appeal.
+        let body = format!(
+            r#"{{"code":20000,"success":true,"data":{}}}"#,
+            entry.replace("\"id\":41", "\"id\":42")
+        );
+        let original = response(
+            &detail_url(41).unwrap(),
+            body.as_bytes(),
+            Some("application/json"),
+        );
+        let facts = analyze_body(&original.body, request.token.as_str());
+        let envelope = build_detail_envelope(
+            &request,
+            detail_page(&request, &original, &ChallengeAssessment::Clear, &facts),
+        );
+        assert_eq!(envelope["result"], "degraded");
+        assert_eq!(envelope["upstream"]["id"], 41);
+        assert_eq!(envelope["upstream"]["complete"], false);
+        assert_eq!(envelope["upstream"]["incomplete"], true);
+        assert_eq!(envelope["upstream"]["incomplete_reason"], "upstream_shape");
+        assert!(envelope["entry"].is_null());
+
+        // An accepted envelope that returns no record for this id is not a
+        // claimed absence: it stays incomplete with an explicit reason.
+        let body = br#"{"code":20000,"success":true,"data":{"data":[]}}"#.as_slice();
+        let original = response(&detail_url(41).unwrap(), body, Some("application/json"));
+        let facts = analyze_body(&original.body, request.token.as_str());
+        let envelope = build_detail_envelope(
+            &request,
+            detail_page(&request, &original, &ChallengeAssessment::Clear, &facts),
+        );
+        assert_eq!(envelope["result"], "not_found");
+        assert!(envelope["entry"].is_null());
+        assert_eq!(envelope["upstream"]["id"], 41);
+        assert_eq!(envelope["upstream"]["complete"], false);
+        assert_eq!(envelope["upstream"]["incomplete"], true);
+        assert_eq!(
+            envelope["upstream"]["incomplete_reason"],
+            "record_not_returned"
+        );
+
+        // A refused response keeps its own reason instead of a placeholder.
+        let body =
+            br#"{"code":40001,"success":false,"message":"ordinary business rejection"}"#.as_slice();
+        let original = response(&detail_url(41).unwrap(), body, Some("application/json"));
+        let facts = analyze_body(&original.body, request.token.as_str());
+        let envelope = build_detail_envelope(
+            &request,
+            detail_page(&request, &original, &ChallengeAssessment::Clear, &facts),
+        );
+        assert_eq!(envelope["result"], "degraded");
+        assert_eq!(envelope["upstream"]["complete"], false);
+        assert_eq!(
+            envelope["upstream"]["incomplete_reason"],
+            "business_rejected"
+        );
+        assert!(envelope["entry"].is_null());
+
+        // The published contract states the same facts: a detail read requires
+        // a positive id and always reports completeness.
+        let contract = schema();
+        assert_eq!(
+            contract["detail"]["input"]["properties"]["id"]["minimum"],
+            1
+        );
+        let required = contract["detail"]["output"]["properties"]["upstream"]["required"]
+            .as_array()
+            .expect("upstream required members");
+        for field in [
+            "success",
+            "id",
+            "complete",
+            "incomplete",
+            "incomplete_reason",
+        ] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "{field}"
+            );
+        }
     }
 
     #[test]
@@ -5011,6 +5203,70 @@ mod tests {
         .err()
         .unwrap();
         assert_eq!(detail.code, "unsupported");
+    }
+
+    #[test]
+    fn a_detail_read_requires_an_explicit_source_shaped_id() {
+        // No defaulted id: an absent or null id is refused, never read as 0.
+        for input in [
+            r#"{"token":"synthetic-token"}"#,
+            r#"{"token":"synthetic-token","id":null}"#,
+        ] {
+            let error = parse_detail_input(input).err().unwrap();
+            assert_eq!(error.code, "invalid_input");
+            assert!(
+                error.message.contains("explicit upstream appeal id"),
+                "{}",
+                error.message
+            );
+            assert!(!error.message.contains("synthetic-token"));
+        }
+        // 0 is not an id the source produces: it can only be a placeholder for
+        // a record the caller never named, so it is refused before any access.
+        let zero = parse_detail_input(r#"{"token":"synthetic-token","id":0}"#)
+            .err()
+            .unwrap();
+        assert_eq!(zero.code, "invalid_input");
+        assert!(zero.message.contains("positive upstream appeal id"));
+        // Non-integer spellings never decode into an id at all.
+        for input in [
+            r#"{"token":"synthetic-token","id":-1}"#,
+            r#"{"token":"synthetic-token","id":1.5}"#,
+            r#"{"token":"synthetic-token","id":"41"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<DetailInput>(input).is_err(),
+                "{input}"
+            );
+            assert_eq!(
+                parse_detail_input(input).err().unwrap().code,
+                "invalid_input"
+            );
+        }
+        // A supplied source id is preserved verbatim.
+        assert_eq!(
+            parse_detail_input(r#"{"token":"synthetic-token","id":1}"#)
+                .unwrap()
+                .id,
+            1
+        );
+        assert_eq!(
+            parse_detail_input(r#"{"token":"synthetic-token","id":41}"#)
+                .unwrap()
+                .id,
+            41
+        );
+        // The same guard owns the URL: no invented path is ever built, and an
+        // admitted path must be the canonical decimal spelling of a positive
+        // id rather than merely all digits.
+        assert_eq!(detail_url(0).err().unwrap().code, "invalid_input");
+        let admitted = detail_url(41).unwrap();
+        assert_eq!(admitted.as_str(), "https://i.buaa.edu.cn/api/appeal/41");
+        assert!(allowed_url(&admitted));
+        for path in ["/api/appeal/0", "/api/appeal/007", "/api/appeal/"] {
+            let url = Url::parse(&format!("https://i.buaa.edu.cn{path}")).unwrap();
+            assert!(!allowed_url(&url), "{path}");
+        }
     }
 
     #[test]

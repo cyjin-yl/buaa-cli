@@ -132,12 +132,15 @@ fn physics_commands_report_results_and_reject_invalid_input() {
 
 #[test]
 fn physics_experiment_preview_cannot_authorize_an_unverified_service() {
-    let request = |experiment: &str| serde_json::json!({
-        "operation":"physics-select", "action":"preview", "selection":{
-            "type":0,"eid_prefix":"exp","week":"01","experiment":experiment,
-            "weekday":"1","period":"2"
-        }
-    }).to_string();
+    let request = |experiment: &str| {
+        serde_json::json!({
+            "operation":"physics-select", "action":"preview", "selection":{
+                "type":0,"eid_prefix":"exp","week":"01","experiment":experiment,
+                "weekday":"1","period":"2"
+            }
+        })
+        .to_string()
+    };
     let first = invoke(&["physics-experiment"], request("1011").as_bytes());
     let second = invoke(&["physics-experiment"], request("1021").as_bytes());
     assert!(first.status.success() && second.status.success());
@@ -146,8 +149,14 @@ fn physics_experiment_preview_cannot_authorize_an_unverified_service() {
     assert_eq!(a["result"], "preview");
     assert_eq!(a["preview"]["executable"], false);
     assert_eq!(a["preview"]["confirmation_authorizes_network"], false);
-    assert_ne!(a["preview"]["preview_digest"], b["preview"]["preview_digest"]);
-    let login = invoke(&["physics-experiment", "--online"], br#"{"operation":"physics-select","action":"login"}"#);
+    assert_ne!(
+        a["preview"]["preview_digest"],
+        b["preview"]["preview_digest"]
+    );
+    let login = invoke(
+        &["physics-experiment", "--online"],
+        br#"{"operation":"physics-select","action":"login"}"#,
+    );
     let refusal: Value = serde_json::from_slice(&login.stdout).unwrap();
     assert_eq!(refusal["result"], "unsupported");
     assert_eq!(refusal["network_request_performed"], false);
@@ -155,13 +164,13 @@ fn physics_experiment_preview_cannot_authorize_an_unverified_service() {
 
 #[test]
 fn electricity_does_not_probe_an_unverified_private_directory() {
-    let input = br#"{"operation":"balance","selector":{"identity_no":"synthetic-private-selector"},"authorization_confirmed":true}"#;
+    let input = br#"{"operation":"balance","binding":{"building":"synthetic-private-building","room":"synthetic-private-room","meter_no":"synthetic-private-meter"},"authorization_confirmed":true}"#;
     let output = invoke(&["electricity", "--online"], input);
     assert!(output.status.success());
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["result"], "blocked");
     assert_eq!(value["network_requests"], 0);
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-private-selector"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-private"));
 }
 
 #[test]
@@ -216,7 +225,10 @@ fn os_lab_read_requires_online_and_rejects_out_of_range_ports() {
     let plan: Value = serde_json::from_slice(&explicit_target.stdout).unwrap();
     assert_eq!(plan["executed"], false);
     assert_eq!(plan["target"], "192.0.2.1:22");
-    assert_eq!(plan["smux_connect_bytes"], serde_json::json!([0,192,0,2,1,22,0]));
+    assert_eq!(
+        plan["smux_connect_bytes"],
+        serde_json::json!([0, 192, 0, 2, 1, 22, 0])
+    );
 }
 
 #[test]

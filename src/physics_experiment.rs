@@ -21,13 +21,22 @@
 //! A supplied MIME must admit HTML semantics with valid, quote-aware charset
 //! parameters. XHTML and unknown media types remain unreviewed. No supplied
 //! Content-Type retains the explicit legacy GBK HTML-fixture convention.
+//!
+//! Every number this adapter admits is an integer from a closed set: a
+//! selection type is `0` or `1`, a seat count is an unsigned 32-bit value and
+//! evidence carries byte lengths. No floating-point value is accepted or
+//! produced, so a non-finite number cannot reach an output envelope. A count
+//! that continues with a further Unicode numeric character is one displayed
+//! number and is ambiguous rather than truncated. A request, an encoded
+//! fixture and a decoded fixture are each bounded, and an over-bound fixture
+//! is refused before it is decoded or parsed.
 
 use crate::html::{ChallengeAssessment, assess_challenge_body};
 use crate::net::Error;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ego_tree::NodeRef;
-use html5ever::tokenizer::{TagKind, Token};
 use html5ever::QualName;
+use html5ever::tokenizer::{TagKind, Token};
 use scraper::{ElementRef, Html, Node};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -38,6 +47,12 @@ use zeroize::Zeroizing;
 
 const MAX_INPUT: usize = 4 * 1024 * 1024;
 const MAX_BODY: usize = 2 * 1024 * 1024;
+/// Canonical base64 length of the largest admitted fixture body. A longer
+/// encoded string is refused before any decode buffer is allocated, and the
+/// published `data` `maxLength` is the same value. A canonical encoding of
+/// this length can still decode to one byte more than `MAX_BODY`, so the
+/// decoded size is checked too.
+const MAX_ENCODED_DATA: usize = MAX_BODY.div_ceil(3) * 4;
 const CODE_LABEL: &str = "分组代号：";
 const SEATS_LABEL: &str = "剩余空位：";
 /// Elements laid out inline. Their text keeps its adjacency, so a number split
@@ -407,6 +422,17 @@ impl Selection {
 enum ReplayKind {
     Groups,
     Verdict,
+}
+
+impl ReplayKind {
+    /// The reduction this fixture was requested for. It is echoed on every
+    /// replay result so a parsed or degraded body keeps its source identity.
+    fn label(self) -> &'static str {
+        match self {
+            ReplayKind::Groups => "groups",
+            ReplayKind::Verdict => "verdict",
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for ReplayKind {
@@ -1004,7 +1030,9 @@ impl PrivacyMatcher {
     }
 
     fn feed_character(&mut self, character: char) {
-        if character.is_whitespace() { return; }
+        if character.is_whitespace() {
+            return;
+        }
         let mut buffer = [0; 4];
         for byte in character.encode_utf8(&mut buffer).bytes() {
             for pattern in &mut self.patterns {
@@ -1015,7 +1043,9 @@ impl PrivacyMatcher {
     }
 
     fn feed_literal(&mut self, value: &str) {
-        for character in value.chars() { self.feed_character(character); }
+        for character in value.chars() {
+            self.feed_character(character);
+        }
     }
 
     fn feed(&mut self, value: &str, marker: char) -> Result<(), ()> {
@@ -1059,15 +1089,21 @@ struct SourcePrivacy {
 
 impl SourcePrivacy {
     fn new() -> Self {
-        Self { text: Zeroizing::new(String::new()), text_matcher: PrivacyMatcher::new(),
-            attribute_matcher: PrivacyMatcher::new(), attributes: Vec::new(),
-            sensitive: false, unreviewed: false }
+        Self {
+            text: Zeroizing::new(String::new()),
+            text_matcher: PrivacyMatcher::new(),
+            attribute_matcher: PrivacyMatcher::new(),
+            attributes: Vec::new(),
+            sensitive: false,
+            unreviewed: false,
+        }
     }
 
     fn observe(&mut self, token: &Token) {
         match token {
             Token::CharacterTokens(text) => {
-                self.text.extend(text.chars().filter(|character| !character.is_whitespace()));
+                self.text
+                    .extend(text.chars().filter(|character| !character.is_whitespace()));
                 self.text_matcher.feed_literal(text);
             }
             Token::TagToken(tag) if tag.kind == TagKind::StartTag => {
@@ -1080,11 +1116,15 @@ impl SourcePrivacy {
                         self.unreviewed = true;
                     }
                     self.attribute_matcher.reset();
-                    self.attribute_matcher.feed_literal(attribute.name.local.as_ref());
-                    self.attribute_matcher.feed_literal(attribute.value.as_ref());
+                    self.attribute_matcher
+                        .feed_literal(attribute.name.local.as_ref());
+                    self.attribute_matcher
+                        .feed_literal(attribute.value.as_ref());
                     self.sensitive |= self.attribute_matcher.hit;
-                    self.attributes.push(SourceAttribute { name: attribute.name.clone(),
-                        value: Zeroizing::new(attribute.value.to_string()) });
+                    self.attributes.push(SourceAttribute {
+                        name: attribute.name.clone(),
+                        value: Zeroizing::new(attribute.value.to_string()),
+                    });
                 }
             }
             Token::CommentToken(text) => {
@@ -1093,7 +1133,14 @@ impl SourcePrivacy {
                 self.sensitive |= self.attribute_matcher.hit;
             }
             Token::DoctypeToken(doctype) => {
-                for value in [doctype.name.as_deref(), doctype.public_id.as_deref(), doctype.system_id.as_deref()].into_iter().flatten() {
+                for value in [
+                    doctype.name.as_deref(),
+                    doctype.public_id.as_deref(),
+                    doctype.system_id.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
                     self.attribute_matcher.reset();
                     self.attribute_matcher.feed_literal(value);
                     self.sensitive |= self.attribute_matcher.hit;
@@ -1104,38 +1151,60 @@ impl SourcePrivacy {
                 // These character-reference errors preserve an inspectable
                 // literal or decoded token. Other tokenizer repairs, including
                 // duplicate attributes and unfinished tags, need review.
-                if !matches!(error.as_ref(),
+                if !matches!(
+                    error.as_ref(),
                     "Semicolon missing after numeric character reference"
-                    | "Numeric character reference without digits"
-                    | "Invalid numeric character reference"
-                    | "Invalid character reference"
-                    | "Character reference does not end with semicolon")
-                { self.unreviewed = true; }
+                        | "Numeric character reference without digits"
+                        | "Invalid numeric character reference"
+                        | "Invalid character reference"
+                        | "Character reference does not end with semicolon"
+                ) {
+                    self.unreviewed = true;
+                }
             }
             _ => {}
         }
     }
 
     fn reason(mut self, document: &Html) -> Option<&'static str> {
-        if self.sensitive || self.text_matcher.hit { return Some("sensitive_response_material"); }
-        if self.unreviewed { return Some("response_safety_unreviewed"); }
+        if self.sensitive || self.text_matcher.hit {
+            return Some("sensitive_response_material");
+        }
+        if self.unreviewed {
+            return Some("response_safety_unreviewed");
+        }
         let text = Zeroizing::new(privacy_text(document, false));
-        if self.text.as_str() != text.as_str() { return Some("response_safety_unreviewed"); }
+        if self.text.as_str() != text.as_str() {
+            return Some("response_safety_unreviewed");
+        }
         let mut observed = Vec::new();
         for node in document.tree.root().descendants() {
-            let Node::Element(element) = node.value() else { continue };
+            let Node::Element(element) = node.value() else {
+                continue;
+            };
             for (name, value) in element.attrs.iter() {
-                observed.push(SourceAttribute { name: name.clone(), value: Zeroizing::new(value.to_string()) });
+                observed.push(SourceAttribute {
+                    name: name.clone(),
+                    value: Zeroizing::new(value.to_string()),
+                });
             }
         }
         let compare = |a: &SourceAttribute, b: &SourceAttribute| {
-            a.name.cmp(&b.name).then_with(|| a.value.as_str().cmp(b.value.as_str()))
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.value.as_str().cmp(b.value.as_str()))
         };
         self.attributes.sort_unstable_by(compare);
         observed.sort_unstable_by(compare);
         if self.attributes.len() != observed.len()
-            || self.attributes.iter().zip(&observed).any(|(a, b)| compare(a, b) != std::cmp::Ordering::Equal)
-        { return Some("response_safety_unreviewed"); }
+            || self
+                .attributes
+                .iter()
+                .zip(&observed)
+                .any(|(a, b)| compare(a, b) != std::cmp::Ordering::Equal)
+        {
+            return Some("response_safety_unreviewed");
+        }
         None
     }
 }
@@ -1207,9 +1276,12 @@ fn reference_privacy_hit(
                     }
                     // Match complete qualified names independently of DOM
                     // attribute order; every original must be removed once.
-                    let mut attributes = std::collections::HashMap::with_capacity(a_element.attrs.len());
+                    let mut attributes =
+                        std::collections::HashMap::with_capacity(a_element.attrs.len());
                     for (name, value) in a_element.attrs.iter() {
-                        if attributes.insert(name.clone(), value.as_ref()).is_some() { return Err(()); }
+                        if attributes.insert(name.clone(), value.as_ref()).is_some() {
+                            return Err(());
+                        }
                     }
                     for (name, value) in b_element.attrs.iter() {
                         let local = unmark(name.local.as_ref(), marker, &mut counts)?;
@@ -1326,8 +1398,10 @@ fn privacy_reason(
     // in an unstructured body cannot hide from the admission check. HTML
     // reference syntax is not stripped here: raw text and attributes have
     // different native consumption rules.
-    if marker_hit(bytes, SENSITIVE_MARKERS) || json_sensitive(bytes)
-        || text.is_some_and(private_label_hit) {
+    if marker_hit(bytes, SENSITIVE_MARKERS)
+        || json_sensitive(bytes)
+        || text.is_some_and(private_label_hit)
+    {
         return Some("sensitive_response_material");
     }
     let (Some(text), Some(document)) = (text, document) else {
@@ -1387,8 +1461,17 @@ fn classify_verdict(text: &str) -> Option<&'static str> {
     found
 }
 
+/// Whether a text fragment starts with a Unicode numeric character.
+fn numeric_character(value: &str) -> bool {
+    value.chars().next().is_some_and(char::is_numeric)
+}
+
 /// Seat count of one group. A count that continues in a later field is
 /// ambiguous and is refused instead of being truncated.
+///
+/// Only ASCII digits are admitted as the count itself. A further Unicode
+/// numeric character — a full-width or another script's digit — continues the
+/// same displayed number, so the ASCII prefix is not the count.
 fn parse_remaining_seats(text: &str) -> Result<u32, &'static str> {
     let trimmed = text.trim_start();
     let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
@@ -1406,15 +1489,14 @@ fn parse_remaining_seats(text: &str) -> Result<u32, &'static str> {
     {
         return Err("invalid_remaining_seats");
     }
+    if numeric_character(rest) {
+        return Err("ambiguous_remaining_seats");
+    }
     let following = rest.trim_start();
-    if following.as_bytes().first().is_some_and(u8::is_ascii_digit)
+    if numeric_character(following)
         || following.chars().next().is_some_and(|separator| {
             matches!(separator, '.' | ',' | '．' | '，')
-                && following[separator.len_utf8()..]
-                    .trim_start()
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_digit)
+                && numeric_character(following[separator.len_utf8()..].trim_start())
         })
     {
         return Err("ambiguous_remaining_seats");
@@ -1526,6 +1608,9 @@ fn capability() -> Value {
 
 /// Replay of operator-supplied fixture bytes.
 fn replay(kind: ReplayKind, data: &str, content_type: Option<&str>) -> Result<Value, Error> {
+    if data.len() > MAX_ENCODED_DATA {
+        return Err(invalid());
+    }
     let bytes = STANDARD.decode(data).map_err(|_| invalid())?;
     if bytes.len() > MAX_BODY {
         return Err(invalid());
@@ -1535,26 +1620,42 @@ fn replay(kind: ReplayKind, data: &str, content_type: Option<&str>) -> Result<Va
         "schema_version": 1,
         "type": "physics_experiment_replay",
         "source": "operator_supplied_response_bytes",
+        "kind": kind.label(),
         "online_acceptance": false,
         "enrollment_verified": false,
         "network_request_performed": false,
+        "data": null,
+        "fallback_reason": null,
     });
     match decoded {
         Ok(text) => {
             let mut source = SourcePrivacy::new();
-            let document = crate::html::bounded_html_with_tokens(&text, |token| source.observe(token));
+            let document =
+                crate::html::bounded_html_with_tokens(&text, |token| source.observe(token));
             let reason = match &document {
                 Ok(document) => privacy_reason(&bytes, Some(&text), Some(document))
                     .or_else(|| source.reason(document)),
                 Err(()) => {
                     let reason = privacy_reason(&bytes, Some(&text), None);
                     if reason == Some("response_safety_unreviewed")
-                        && assess_challenge_body(text.as_bytes(), Some("text/html; charset=utf-8"), true) == ChallengeAssessment::Detected
-                    { Some("challenge_detected") } else { reason }
+                        && assess_challenge_body(
+                            text.as_bytes(),
+                            Some("text/html; charset=utf-8"),
+                            true,
+                        ) == ChallengeAssessment::Detected
+                    {
+                        Some("challenge_detected")
+                    } else {
+                        reason
+                    }
                 }
             };
             if reason.is_none() {
-                let active_text = Zeroizing::new(rendered_text(document.as_ref().expect("clear source has a complete document")));
+                let active_text = Zeroizing::new(rendered_text(
+                    document
+                        .as_ref()
+                        .expect("clear source has a complete document"),
+                ));
                 let parsed = match kind {
                     ReplayKind::Groups => {
                         parse_groups(active_text.as_str()).map(|groups| json!({"groups": groups}))
@@ -1879,7 +1980,7 @@ pub fn schema() -> Value {
                 branch("physics-select", json!({"const": "preview"}), json!(["operation", "action", "selection"]), json!({"selection": selection})),
                 branch("physics-select", json!({"const": "replay"}), json!(["operation", "action", "kind", "data"]), json!({
                     "kind": {"enum": ["groups", "verdict"]},
-                    "data": {"type": "string", "contentEncoding": "base64", "maxLength": 2796204},
+                    "data": {"type": "string", "contentEncoding": "base64", "maxLength": MAX_ENCODED_DATA, "description": "An encoded fixture longer than this is refused before it is decoded."},
                     "content_type": {"type": ["string", "null"], "description": "Missing and null both mean that no Content-Type was supplied."},
                 })),
                 branch("physics-select", json!({"enum": ["options", "submit", "captcha", "resume", "login", "verify_session", "logout_preview", "logout", "withdraw"]}), json!(["operation", "action"]), json!({})),
@@ -1893,6 +1994,9 @@ pub fn schema() -> Value {
                 "type": {"type": "string"},
                 "result": {"enum": ["capability", "preview", "parsed", "degraded", "unsupported"]},
                 "network_request_performed": {"const": false},
+                "kind": {"enum": ["groups", "verdict"], "description": "Replay results only: the reduction the fixture was submitted for, so a parsed or degraded body keeps its source identity."},
+                "data": {"type": ["object", "null"], "description": "Replay results only: parsed reduction facts, null when the body is withheld or unparsed."},
+                "fallback_reason": {"type": ["string", "null"], "description": "Replay results only: null for a parsed body."},
                 "raw_evidence": {
                     "type": "object",
                     "required": ["source", "encoding", "content_type", "byte_length", "sha256", "raw_withheld"],
@@ -2338,10 +2442,7 @@ mod tests {
         // other keeps it: stripping "ordinary" re-spells the private marker.
         let mut matcher = PrivacyMatcher::new();
         matcher
-            .feed(
-                &format!("pass{marker}ordinary{marker}word"),
-                marker,
-            )
+            .feed(&format!("pass{marker}ordinary{marker}word"), marker)
             .unwrap();
         assert!(matcher.hit);
         // An unterminated projected-reference stream (an odd marker count)
@@ -2778,5 +2879,205 @@ mod tests {
             "selection": [0, "exp", "01", "1011", "1", "2"],
         });
         assert!(run(&request.to_string(), false).is_err());
+    }
+
+    #[test]
+    fn request_bound_and_malformed_documents_are_refused() {
+        // The same document is admitted at the bound and refused one byte past
+        // it, so the bound is enforced before the document is parsed.
+        let document = r#"{"operation":"physics-select","action":"capability"}"#;
+        let admitted = format!("{document}{}", " ".repeat(MAX_INPUT - document.len()));
+        assert_eq!(admitted.len(), MAX_INPUT);
+        assert_eq!(run(&admitted, false).unwrap()["result"], "capability");
+        let oversized = format!("{admitted} ");
+        assert_eq!(run(&oversized, false).unwrap_err().code, "invalid_input");
+        for input in [
+            // A second document is not a request.
+            r#"{"operation":"physics-select","action":"capability"} {}"#,
+            // Duplicate and unknown members are refused at their key.
+            r#"{"operation":"physics-select","action":"capability","action":"preview"}"#,
+            r#"{"operation":"physics-select","action":"replay","kind":"groups","data":"AAAA","data":"AAAA"}"#,
+            r#"{"operation":"physics-select","action":"capability","unknown":1}"#,
+        ] {
+            assert_eq!(
+                run(input, false).unwrap_err().code,
+                "invalid_input",
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_fixture_bound_is_enforced_before_decoding() {
+        let oversized = "A".repeat(MAX_ENCODED_DATA + 4);
+        let request = json!({
+            "operation": "physics-select",
+            "action": "replay",
+            "kind": "groups",
+            "data": oversized,
+        });
+        assert_eq!(
+            run(&request.to_string(), false).unwrap_err().code,
+            "invalid_input"
+        );
+        for data in ["Q", "QQ", "AA=A", "A$AA", "@@@@"] {
+            let request = json!({
+                "operation": "physics-select",
+                "action": "replay",
+                "kind": "groups",
+                "data": data,
+            });
+            assert_eq!(
+                run(&request.to_string(), false).unwrap_err().code,
+                "invalid_input",
+                "{data}"
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_bound_still_requires_the_decoded_body_bound() {
+        // A canonical encoding of the admitted length can decode to one byte
+        // more than the admitted body, so the decoded size is checked too.
+        let encoded = "A".repeat(MAX_ENCODED_DATA);
+        assert_eq!(STANDARD.decode(&encoded).unwrap().len(), MAX_BODY + 1);
+        assert_eq!(
+            replay(ReplayKind::Groups, &encoded, None).unwrap_err().code,
+            "invalid_input"
+        );
+    }
+
+    #[test]
+    fn replay_keeps_the_requested_reduction_and_nulls_unknown_facts() {
+        let verdict = replay_request(
+            "verdict",
+            "恭喜你，选课成功！".as_bytes(),
+            Some("text/html; charset=utf-8"),
+        );
+        let parsed = run(&verdict, false).unwrap();
+        assert_eq!(parsed["kind"], "verdict");
+        assert_eq!(parsed["data"]["verdict"], "success_marker");
+        assert!(parsed["fallback_reason"].is_null());
+
+        let degraded = run(
+            &replay_request(
+                "groups",
+                b"<p>no labels</p>",
+                Some("text/html; charset=utf-8"),
+            ),
+            false,
+        )
+        .unwrap();
+        assert_eq!(degraded["kind"], "groups");
+        assert_eq!(degraded["result"], "degraded");
+        assert_eq!(degraded["fallback_reason"], "unrecognized_group_listing");
+        assert!(degraded["data"].is_null());
+        assert!(degraded["raw_evidence"]["content_type"].is_string());
+    }
+
+    #[test]
+    fn unknown_content_type_stays_null_in_evidence() {
+        let value = run(
+            &replay_request("groups", b"<p>plain</p>", Some("text/html; charset=utf-8")),
+            false,
+        )
+        .unwrap();
+        assert_eq!(value["raw_evidence"]["content_type"], "text/html");
+        let supplied = json!({
+            "operation": "physics-select",
+            "action": "replay",
+            "kind": "groups",
+            "data": STANDARD.encode(b"<p>plain</p>"),
+            "content_type": "application/x-unknown-essence; charset=utf-8",
+        });
+        let value = run(&supplied.to_string(), false).unwrap();
+        assert!(value["raw_evidence"]["content_type"].is_null());
+    }
+
+    #[test]
+    fn non_ascii_numeric_continuation_is_ambiguous_not_truncated() {
+        for count in ["5０", "5 ０", "5.３", "5 ٠", "5٠"] {
+            let body = format!("<p>分组代号：A 剩余空位：{count}</p>");
+            let request =
+                replay_request("groups", body.as_bytes(), Some("text/html; charset=utf-8"));
+            let value = run(&request, false).unwrap();
+            assert_eq!(value["result"], "degraded", "{count}");
+            assert_eq!(
+                value["fallback_reason"], "ambiguous_remaining_seats",
+                "{count}"
+            );
+        }
+        // Trailing non-numeric text still parses; only a numeric continuation
+        // is ambiguous.
+        let body = "<p>分组代号：A 剩余空位：12 个</p>";
+        let request = replay_request("groups", body.as_bytes(), Some("text/html; charset=utf-8"));
+        let value = run(&request, false).unwrap();
+        assert_eq!(value["result"], "parsed");
+        assert_eq!(value["data"]["groups"][0]["remaining_seats"], 12);
+    }
+
+    #[test]
+    fn seat_count_is_integer_only_and_never_wraps() {
+        assert_eq!(parse_remaining_seats("4294967295 剩余"), Ok(u32::MAX));
+        assert_eq!(
+            parse_remaining_seats("4294967296 剩余"),
+            Err("invalid_remaining_seats")
+        );
+        assert_eq!(
+            parse_remaining_seats("99999999999999999999999999"),
+            Err("invalid_remaining_seats")
+        );
+        // A count written only in another script is not read as a number.
+        assert_eq!(
+            parse_remaining_seats("１２"),
+            Err("invalid_remaining_seats")
+        );
+    }
+
+    #[test]
+    fn selection_refuses_ambiguous_numeric_types() {
+        let request = |kind: Value| {
+            json!({
+                "operation": "physics-select",
+                "action": "preview",
+                "selection": {
+                    "type": kind,
+                    "eid_prefix": "exp",
+                    "week": "01",
+                    "experiment": "1011",
+                    "weekday": "1",
+                    "period": "2",
+                },
+            })
+            .to_string()
+        };
+        for kind in [
+            json!(1.5),
+            json!(1e0),
+            json!(-1),
+            json!(2),
+            json!(255),
+            json!("1"),
+            json!(true),
+            json!(null),
+        ] {
+            assert!(run(&request(kind.clone()), false).is_err(), "{kind}");
+        }
+        let admitted = run(&request(json!(1)), false).unwrap();
+        assert_eq!(admitted["result"], "preview");
+        // A textual selection field does not accept a JSON number.
+        let numeric_week = json!({
+            "operation": "physics-select",
+            "action": "preview",
+            "selection": {
+                "type": 0,
+                "eid_prefix": "exp",
+                "week": 1,
+                "experiment": "1011",
+                "weekday": "1",
+                "period": "2",
+            },
+        });
+        assert!(run(&numeric_week.to_string(), false).is_err());
     }
 }

@@ -1,7 +1,10 @@
 //! Modern yjsxk existing-session selected-course observation.
 //!
 //! This is deliberately one read, not a login, CAS callback, mutation, or
-//! completeness oracle. Synthetic unit fixtures below are not live evidence.
+//! completeness oracle. It reports declared-total, duplicate-row, page and
+//! terminal facts and states `complete: false` with a reason list whenever one
+//! of them is unknown or inconsistent; a missing row is never synthesized.
+//! Synthetic unit fixtures below are not live evidence.
 use super::{deserialize_object, safe_content_type_of, withheld_evidence_parts};
 use crate::governor::{FollowupError, Governor, Outcome, RequestKind};
 use crate::html::{ChallengeAssessment, assess_challenge_body};
@@ -12,16 +15,25 @@ use base64::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::io::Read;
 use zeroize::{Zeroize, Zeroizing};
 
 pub(super) const SELECTED_URL: &str =
     "https://yjsxk.buaa.edu.cn/yjsxkapp/sys/xsxkappbuaa/xsxkCourse/loadKbxx.do?sfyx=1&sfjzsyzz=1";
 const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
-const SCOPE: &str = "one HTTPS response top-level xkjgList only; requested XNXQDM matches are projected in source order without deduplication or MXMK exclusion; no pagination, account, selection-phase or final-state completeness is inferred";
+const SCOPE: &str = "one HTTPS response top-level xkjgList only; requested XNXQDM matches are projected in source order without deduplication or MXMK exclusion; declared-total, duplicate-row, page and terminal facts are reported and any unknown or inconsistent fact keeps complete=false; no pagination, account, selection-phase or final-state completeness is inferred; no missing row is synthesized";
 const OTHER_TERM_SCOPE: &str = "records in that same xkjgList whose string XNXQDM differs from the requested term; other-term rows are counted, not projected";
+const UNREVIEWED_FIELD_SCOPE: &str = "top-level yjsxk envelope fields other than xkjgList, msg and message; only the name is retained so an unreviewed total or page field stays visible, and no value, type or meaning is admitted";
+const DECLARED_TOTAL_SCOPE: &str = "no yjsxk envelope field is a reviewed row total; declared_total therefore stays null and an observed row count is never promoted to it. absent_from_admitted_envelope means the whole envelope was exactly xkjgList, msg and message, so this response declares no total at all; unknown_unreviewed_field_present means another field may declare one and was never interpreted";
+const PAGE_SCOPE: &str = "one fixed GET without page or page-size parameters; no page index, page size, page count or terminal condition is reviewed, so those facts stay null";
+const DUPLICATE_ROW_BASIS: &str = "byte-equal JSON identity of the four projected native roles (BJDM, XNXQDM, WID, YYZ) within this one response; no identity, selection or ordering role is inferred";
 const MAX_SCALAR_REVIEW: usize = 64 * 1024;
 const MAX_REVIEW_DEPTH: usize = 4;
+/// An envelope carrying more or longer unreviewed names than this is refused;
+/// silently dropping the overflow could hide a declared total or page cursor.
+const MAX_UNREVIEWED_FIELDS: usize = 16;
+const MAX_UNREVIEWED_FIELD_NAME: usize = 64;
 
 fn blocked(reason: &'static str) -> Value {
     json!({"result":"blocked","reason":reason})
@@ -150,7 +162,11 @@ impl CookieGuard<'_> {
             })
         {
             let url_alphabet = run.iter().any(|&byte| matches!(byte, b'-' | b'_'));
-            let engine = if url_alphabet { &URL_SAFE_NO_PAD } else { &STANDARD_NO_PAD };
+            let engine = if url_alphabet {
+                &URL_SAFE_NO_PAD
+            } else {
+                &STANDARD_NO_PAD
+            };
             let mut decoded = Zeroizing::new(Vec::with_capacity(run.len() / 4 * 3 + 3));
             if engine.decode_vec(&run, &mut decoded).is_ok()
                 && self.review_decoded(&decoded, depth + 1, remaining)
@@ -359,24 +375,83 @@ struct SourceResponse {
     xkjg_list: Option<Vec<SourceRecord>>,
     msg: Option<Zeroizing<String>>,
     message: Option<Zeroizing<String>>,
+    /// Envelope names this reader does not interpret. The name is retained so
+    /// an unreviewed declared total or page field stays visible instead of
+    /// being silently dropped; its value is skipped without inspection.
+    unreviewed_fields: Vec<Zeroizing<String>>,
 }
 impl<'de> Deserialize<'de> for SourceResponse {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Raw {
-            #[serde(rename = "xkjgList")]
-            xkjg_list: Option<Vec<SourceRecord>>,
-            #[serde(default, deserialize_with = "optional_secret")]
-            msg: Option<Zeroizing<String>>,
-            #[serde(default, deserialize_with = "optional_secret")]
-            message: Option<Zeroizing<String>>,
+        struct Envelope;
+        impl<'de> serde::de::Visitor<'de> for Envelope {
+            type Value = SourceResponse;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut fields: A,
+            ) -> Result<SourceResponse, A::Error> {
+                let mut xkjg_list = None;
+                let mut msg = None;
+                let mut message = None;
+                let mut unreviewed_fields: Vec<Zeroizing<String>> = Vec::new();
+                let mut seen_list = false;
+                let mut seen_msg = false;
+                let mut seen_message = false;
+                while let Some(mut name) = fields.next_key::<String>()? {
+                    match name.as_str() {
+                        "xkjgList" => {
+                            if std::mem::replace(&mut seen_list, true) {
+                                name.zeroize();
+                                return Err(<A::Error as serde::de::Error>::custom(
+                                    "duplicate yjsxk envelope field",
+                                ));
+                            }
+                            xkjg_list = fields.next_value::<Option<Vec<SourceRecord>>>()?;
+                        }
+                        "msg" => {
+                            if std::mem::replace(&mut seen_msg, true) {
+                                name.zeroize();
+                                return Err(<A::Error as serde::de::Error>::custom(
+                                    "duplicate yjsxk envelope field",
+                                ));
+                            }
+                            msg = fields.next_value::<Option<String>>()?.map(Zeroizing::new);
+                        }
+                        "message" => {
+                            if std::mem::replace(&mut seen_message, true) {
+                                name.zeroize();
+                                return Err(<A::Error as serde::de::Error>::custom(
+                                    "duplicate yjsxk envelope field",
+                                ));
+                            }
+                            message = fields.next_value::<Option<String>>()?.map(Zeroizing::new);
+                        }
+                        _ => {
+                            fields.next_value::<serde::de::IgnoredAny>()?;
+                            if unreviewed_fields.len() >= MAX_UNREVIEWED_FIELDS
+                                || name.len() > MAX_UNREVIEWED_FIELD_NAME
+                            {
+                                name.zeroize();
+                                return Err(<A::Error as serde::de::Error>::custom(
+                                    "yjsxk envelope carries too many unreviewed fields",
+                                ));
+                            }
+                            unreviewed_fields.push(Zeroizing::new(std::mem::take(&mut name)));
+                        }
+                    }
+                    name.zeroize();
+                }
+                Ok(SourceResponse {
+                    xkjg_list,
+                    msg,
+                    message,
+                    unreviewed_fields,
+                })
+            }
         }
-        let raw: Raw = deserialize_object(deserializer)?;
-        Ok(Self {
-            xkjg_list: raw.xkjg_list,
-            msg: raw.msg,
-            message: raw.message,
-        })
+        deserializer.deserialize_map(Envelope)
     }
 }
 
@@ -450,7 +525,13 @@ fn project(
     requested_term: &str,
     cookie: &CookieGuard<'_>,
 ) -> Result<Value, ProjectionError> {
-    let messages = [source.msg.as_deref(), source.message.as_deref()];
+    let SourceResponse {
+        xkjg_list,
+        msg,
+        message,
+        unreviewed_fields,
+    } = source;
+    let messages = [msg.as_deref(), message.as_deref()];
     if messages
         .into_iter()
         .flatten()
@@ -476,7 +557,15 @@ fn project(
             "yjsxk response message semantics are unreviewed",
         ));
     }
-    let rows = source.xkjg_list.ok_or(ProjectionError::Unreviewed(
+    // A retained envelope name is projected, so it passes the same encoded
+    // credential review as a projected row value.
+    if unreviewed_fields
+        .iter()
+        .any(|name| cookie.sensitive_text(name.as_str()))
+    {
+        return Err(ProjectionError::Privacy);
+    }
+    let rows = xkjg_list.ok_or(ProjectionError::Unreviewed(
         "top-level xkjgList array is missing or null",
     ))?;
     if rows.iter().any(|row| {
@@ -491,6 +580,8 @@ fn project(
     let mut records = Vec::new();
     let mut other_term_count = 0usize;
     let mut unscoped_record_count = 0usize;
+    let mut duplicate_row_source_indices = Vec::new();
+    let mut row_identities: HashMap<String, usize> = HashMap::new();
     for (source_index, row) in rows.into_iter().enumerate() {
         let SourceRecord {
             bjdm,
@@ -515,6 +606,19 @@ fn project(
                     "YYZ".into(),
                     yyz.map_or(Value::Null, NativeScalar::into_value),
                 );
+                // Identity is the whole projected native row: no single role is
+                // an admitted key, so a repeated tuple is reported, never merged
+                // and never silently collapsed into one row.
+                let identity = Value::Array(
+                    ["BJDM", "XNXQDM", "WID", "YYZ"]
+                        .into_iter()
+                        .map(|role| record.get(role).cloned().unwrap_or(Value::Null))
+                        .collect(),
+                )
+                .to_string();
+                if row_identities.insert(identity, source_index).is_some() {
+                    duplicate_row_source_indices.push(source_index);
+                }
                 records.push(Value::Object(record));
             }
             Some(NativeScalar::String(_)) => other_term_count += 1,
@@ -527,6 +631,37 @@ fn project(
         }
     }
     let requested_term_match_count = records.len();
+    let duplicate_row_count = duplicate_row_source_indices.len();
+    // Two different facts: an envelope with no other top-level field cannot
+    // declare a total, while a retained name may, and is never interpreted.
+    let declared_total_status = if unreviewed_fields.is_empty() {
+        "absent_from_admitted_envelope"
+    } else {
+        "unknown_unreviewed_field_present"
+    };
+    // Order is fixed so a consumer can compare reason sets, not just lengths.
+    let mut reasons: Vec<&'static str> = vec![
+        "account_identity_unverified",
+        "declared_total_unavailable",
+        "no_pagination_contract",
+        "terminal_page_not_observed",
+    ];
+    if !unreviewed_fields.is_empty() {
+        reasons.push("unreviewed_top_level_fields");
+    }
+    if unscoped_record_count > 0 {
+        reasons.push("unscoped_unattributed_rows");
+    }
+    if duplicate_row_count > 0 {
+        reasons.push("duplicate_selected_rows");
+    }
+    // The first four reasons are unconditional, so one fixed read can never
+    // claim a complete list; the flag stays a computed fact, not a constant.
+    let complete = reasons.is_empty();
+    let unreviewed_top_level_fields: Vec<String> = unreviewed_fields
+        .into_iter()
+        .map(|mut name| std::mem::take(&mut *name))
+        .collect();
     let mut output = json!({
         "kind":"yjsxk_selected_courses",
         "application":"yjsxk",
@@ -543,7 +678,30 @@ fn project(
         "unscoped_record_scope":"records in the same xkjgList with missing/null XNXQDM; neither requested nor other-term membership is inferred",
         "records":null,
         "account_identity_verified":false,
-        "completeness":"unknown",
+        "completeness":{
+            "complete":complete,
+            "reasons":reasons,
+            "declared_total":null,
+            "declared_total_status":declared_total_status,
+            "declared_total_scope":DECLARED_TOTAL_SCOPE,
+            "observed_row_count":requested_term_match_count,
+            "observed_row_count_equals_declared_total":null,
+            "unreviewed_top_level_fields":unreviewed_top_level_fields,
+            "unreviewed_top_level_field_scope":UNREVIEWED_FIELD_SCOPE,
+            "duplicate_row_count":duplicate_row_count,
+            "duplicate_row_source_indices":duplicate_row_source_indices,
+            "duplicate_row_basis":DUPLICATE_ROW_BASIS,
+            "requests_issued":1,
+            "page":{
+                "request_page_parameter_present":false,
+                "response_page_index":null,
+                "response_page_size":null,
+                "response_page_count":null,
+                "terminal_page_observed":null,
+                "terminal_evidence":null,
+                "scope":PAGE_SCOPE
+            }
+        },
         "mutation_allowed":false,
         "current_app_authenticity":"not_asserted",
         "current_account_rights":"not_asserted",
@@ -948,7 +1106,45 @@ pub(super) fn schema() -> Value {
                 "YYZ":{"type":["string","number","null"]}
             }}},
             "account_identity_verified":{"const":false},
-            "completeness":{"const":"unknown"},
+            "completeness":{"type":"object","additionalProperties":false,"required":[
+                "complete","reasons","declared_total","declared_total_status","declared_total_scope",
+                "observed_row_count","observed_row_count_equals_declared_total",
+                "unreviewed_top_level_fields","unreviewed_top_level_field_scope",
+                "duplicate_row_count","duplicate_row_source_indices","duplicate_row_basis",
+                "requests_issued","page"
+            ],"properties":{
+                "complete":{"const":false},
+                "reasons":{"type":"array","uniqueItems":true,"items":{"enum":[
+                    "account_identity_unverified","declared_total_unavailable","no_pagination_contract",
+                    "terminal_page_not_observed","unreviewed_top_level_fields","unscoped_unattributed_rows",
+                    "duplicate_selected_rows"
+                ]}},
+                "declared_total":{"type":["integer","null"],"minimum":0},
+                "declared_total_status":{"enum":[
+                    "absent_from_admitted_envelope","unknown_unreviewed_field_present"
+                ]},
+                "declared_total_scope":{"const":DECLARED_TOTAL_SCOPE},
+                "observed_row_count":{"type":"integer","minimum":0},
+                "observed_row_count_equals_declared_total":{"type":["boolean","null"]},
+                "unreviewed_top_level_fields":{"type":"array","maxItems":MAX_UNREVIEWED_FIELDS,"items":{"type":"string","maxLength":MAX_UNREVIEWED_FIELD_NAME}},
+                "unreviewed_top_level_field_scope":{"const":UNREVIEWED_FIELD_SCOPE},
+                "duplicate_row_count":{"type":"integer","minimum":0},
+                "duplicate_row_source_indices":{"type":"array","items":{"type":"integer","minimum":0}},
+                "duplicate_row_basis":{"const":DUPLICATE_ROW_BASIS},
+                "requests_issued":{"const":1},
+                "page":{"type":"object","additionalProperties":false,"required":[
+                    "request_page_parameter_present","response_page_index","response_page_size",
+                    "response_page_count","terminal_page_observed","terminal_evidence","scope"
+                ],"properties":{
+                    "request_page_parameter_present":{"const":false},
+                    "response_page_index":{"type":["integer","null"],"minimum":0},
+                    "response_page_size":{"type":["integer","null"],"minimum":0},
+                    "response_page_count":{"type":["integer","null"],"minimum":0},
+                    "terminal_page_observed":{"type":["boolean","null"]},
+                    "terminal_evidence":{"type":["string","null"]},
+                    "scope":{"const":PAGE_SCOPE}
+                }}
+            }},
             "mutation_allowed":{"const":false},
             "current_app_authenticity":{"const":"not_asserted"},
             "current_account_rights":{"const":"not_asserted"},
@@ -956,8 +1152,9 @@ pub(super) fn schema() -> Value {
             "absence_proves_withdrawal":{"const":false}
         }},
         "source_roles":"BJDM, XNXQDM, WID and YYZ retain separate native source roles; WID is not BJDM, a course WID, or IEAS rwh; YYZ is not an IEAS category",
+        "completeness_contract":"declared_total stays null because no envelope field is a reviewed row total, and declared_total_status records whether the admitted envelope could declare one at all; observed_row_count counts only projected requested-term rows; duplicate_row_source_indices names repeated full native rows kept in source order; page and terminal facts stay null because exactly one fixed GET without page parameters is sent; complete stays false while any reason remains",
         "term_identity":"xnxqdm is the exact five-digit yjsxk XNXQDM filter, not IEAS page_xnxq/pageXnxq and not the historical academic-year-season spelling",
-        "unverified":["authenticated account identity and current application authenticity","account-specific read rights","xkjgList pagination and complete selected-state scope","selection phase","withdrawal from absence","all mutation and postcondition semantics"]
+        "unverified":["authenticated account identity and current application authenticity","account-specific read rights","declared row total, page index, page size, page count and terminal condition of xkjgList","complete selected-state scope","selection phase","withdrawal from absence","all mutation and postcondition semantics"]
     })
 }
 
@@ -1022,7 +1219,53 @@ mod tests {
         assert_eq!(rows[0]["YYZ"], 1);
         assert!(rows[0].get("rwh").is_none());
         assert_eq!(data["account_identity_verified"], false);
-        assert_eq!(data["completeness"], "unknown");
+        let completeness = &data["completeness"];
+        assert_eq!(completeness["complete"], false);
+        assert_eq!(completeness["declared_total"], Value::Null);
+        assert_eq!(
+            completeness["declared_total_status"],
+            "absent_from_admitted_envelope"
+        );
+        assert_eq!(completeness["observed_row_count"], 3);
+        assert_eq!(
+            completeness["observed_row_count_equals_declared_total"],
+            Value::Null
+        );
+        assert_eq!(completeness["unreviewed_top_level_fields"], json!([]));
+        assert_eq!(completeness["duplicate_row_count"], 1);
+        assert_eq!(completeness["duplicate_row_source_indices"], json!([1]));
+        assert_eq!(completeness["requests_issued"], 1);
+        assert_eq!(
+            completeness["page"]["request_page_parameter_present"],
+            false
+        );
+        for fact in [
+            "response_page_index",
+            "response_page_size",
+            "response_page_count",
+            "terminal_page_observed",
+            "terminal_evidence",
+        ] {
+            assert_eq!(completeness["page"][fact], Value::Null, "{fact}");
+        }
+        let reasons: Vec<&str> = completeness["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|reason| reason.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            reasons,
+            [
+                "account_identity_unverified",
+                "declared_total_unavailable",
+                "no_pagination_contract",
+                "terminal_page_not_observed",
+                "unscoped_unattributed_rows",
+                "duplicate_selected_rows",
+            ],
+            "every unknown or inconsistent fact keeps a named reason"
+        );
         assert_eq!(data["mutation_allowed"], false);
         assert_eq!(data["current_app_authenticity"], "not_asserted");
         assert_eq!(data["current_account_rights"], "not_asserted");
@@ -1052,9 +1295,91 @@ mod tests {
         let data = &admission.output["data"];
         assert_eq!(data["source_collection_observed_empty"], true);
         assert_eq!(data["requested_term_match_count"], 0);
-        assert_eq!(data["completeness"], "unknown");
+        let completeness = &data["completeness"];
+        assert_eq!(completeness["complete"], false);
+        assert_eq!(completeness["observed_row_count"], 0);
+        assert_eq!(completeness["declared_total"], Value::Null);
+        assert_eq!(
+            completeness["declared_total_status"], "absent_from_admitted_envelope",
+            "an envelope of xkjgList only cannot declare a total"
+        );
+        assert_eq!(completeness["duplicate_row_count"], 0);
+        assert_eq!(completeness["duplicate_row_source_indices"], json!([]));
+        assert_eq!(completeness["unreviewed_top_level_fields"], json!([]));
+        assert_eq!(
+            completeness["reasons"],
+            json!([
+                "account_identity_unverified",
+                "declared_total_unavailable",
+                "no_pagination_contract",
+                "terminal_page_not_observed",
+            ]),
+            "an empty collection is explicitly incomplete, not complete"
+        );
         assert_eq!(data["final_postcondition"], false);
         assert_eq!(data["absence_proves_withdrawal"], false);
+    }
+
+    #[test]
+    fn declared_total_and_page_evidence_is_named_never_promoted() {
+        // The envelope declares an unreviewed total and page index. Neither is
+        // interpreted: the names stay visible, every completeness fact stays
+        // unknown, and no row is synthesized to reach the advertised count.
+        let body = r#"{"total":2,"pageIndex":1,"xkjgList":[{"BJDM":"A","XNXQDM":"20261","WID":"one","YYZ":1}]}"#;
+        let admission = synthetic(body, "sid=synthetic-cookie");
+        assert_eq!(admission.output["result"], "completed");
+        let data = &admission.output["data"];
+        let completeness = &data["completeness"];
+        assert_eq!(completeness["complete"], false);
+        assert_eq!(completeness["declared_total"], Value::Null);
+        assert_eq!(
+            completeness["declared_total_status"],
+            "unknown_unreviewed_field_present"
+        );
+        assert_eq!(completeness["observed_row_count"], 1);
+        assert_eq!(
+            completeness["observed_row_count_equals_declared_total"],
+            Value::Null
+        );
+        assert_eq!(
+            completeness["unreviewed_top_level_fields"],
+            json!(["total", "pageIndex"])
+        );
+        assert_eq!(data["records"].as_array().unwrap().len(), 1);
+        assert!(
+            completeness["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| *reason == "unreviewed_top_level_fields")
+        );
+
+        // Unbounded unreviewed envelope names are refused, not truncated: a
+        // dropped name could be the undetected declared total or page cursor.
+        let mut envelope = serde_json::Map::new();
+        envelope.insert("xkjgList".to_owned(), json!([]));
+        for index in 0..=MAX_UNREVIEWED_FIELDS {
+            envelope.insert(
+                format!("extra_field_{index:02}"),
+                json!({"nested": [index]}),
+            );
+        }
+        let admission = synthetic(&Value::Object(envelope).to_string(), "sid=synthetic-cookie");
+        assert_eq!(admission.output["result"], "parsed");
+        assert_eq!(admission.output["data"]["kind"], "fallback");
+        let long_name = "n".repeat(MAX_UNREVIEWED_FIELD_NAME + 1);
+        let body = format!(r#"{{"xkjgList":[],"{long_name}":1}}"#);
+        let admission = synthetic(&body, "sid=synthetic-cookie");
+        assert_eq!(admission.output["result"], "parsed");
+        assert_eq!(admission.output["data"]["kind"], "fallback");
+
+        // A projected envelope name passes the same encoded credential review
+        // as a projected row value.
+        let encoded_name = STANDARD.encode("abc_123");
+        let body = format!(r#"{{"xkjgList":[],"{encoded_name}":1}}"#);
+        let admission = synthetic(&body, "sid=abc_123");
+        assert_eq!(admission.output["result"], "blocked");
+        assert!(admission.output.get("data").is_none());
     }
 
     #[test]
@@ -1172,10 +1497,7 @@ mod tests {
         // A composite carrier: an ordinary prefix plus a base64 payload must
         // not bypass the scalar review, or it could hide a reversibly encoded
         // credential the whole-scalar path cannot see.
-        let composite = format!(
-            "note:{}",
-            STANDARD.encode(r#"{"v":"abc_123"}"#)
-        );
+        let composite = format!("note:{}", STANDARD.encode(r#"{"v":"abc_123"}"#));
         let body = json!({"xkjgList":[{"XNXQDM":"20261","BJDM":composite}]});
         let admission = synthetic(&body.to_string(), "sid=abc_123");
         assert_eq!(admission.output["result"], "blocked");
@@ -1200,9 +1522,7 @@ mod tests {
         let body = json!({"xkjgList":[{"XNXQDM":"20261","BJDM":"note:plain"}]});
         let admission = synthetic(&body.to_string(), "sid=abc_123");
         assert_eq!(admission.output["result"], "completed");
-        assert_eq!(
-            admission.output["data"]["records"][0]["BJDM"], "note:plain"
-        );
+        assert_eq!(admission.output["data"]["records"][0]["BJDM"], "note:plain");
     }
 
     #[test]

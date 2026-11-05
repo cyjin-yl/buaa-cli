@@ -1,4 +1,15 @@
 //! Authoritative organization directory parsing over one fixed official source.
+//!
+//! `list` reports an admitted `200 text/html` directory response either as a
+//! `directory_snapshot` or as a documented `degraded` observation: when the
+//! official `.kyjg-box`/`.kyjg-tit h3`/`.kyjg-bd a` contract no longer matches
+//! the observed DOM, the command keeps exit code 0 and publishes the base64
+//! original bytes, SHA-256, media type, byte length, HTTP status and a
+//! `fallback_reason` so an agent can diff and re-parse without another request.
+//! `unavailable` stays reserved for a response that was never admitted:
+//! unreachable transport, no bytes, a non-200 status or a non-HTML media type.
+//! A body-level authentication, credential, CSRF or challenge screen is refused
+//! as an error so its bytes are neither exported nor retained as the capture.
 use crate::announcements::refuse_unsafe_listing;
 use crate::html::{
     css_trim, element_text, inert_element, split_declarations, split_important, strip_css_comments,
@@ -45,6 +56,19 @@ fn unavailable() -> Error {
     )
 }
 
+/// A fetched page that offends the shared public-safety scan is not this
+/// directory at all: it carries authentication, credential, CSRF, challenge or
+/// redirect semantics, or an active `<base href>`. It is refused as an error so
+/// that no bytes leave this process and the response is never retained in the
+/// local cache as if it were the official capture. This is a refusal, not a
+/// transport failure, so it never reports `unavailable`.
+fn source_refused() -> Error {
+    Error::new(
+        "source_refused",
+        "official organization directory response carries authentication, credential, CSRF, challenge or redirect semantics; it was refused without interpretation, byte export or cache retention",
+    )
+}
+
 /// Parse the official directory document. This is public for offline evidence
 /// validation and library consumers; it performs no network or cache access.
 pub fn parse_html(bytes: &[u8]) -> Result<DirectoryDocument, Error> {
@@ -57,11 +81,18 @@ fn admitted_html(bytes: &[u8]) -> Result<Html, Error> {
     }
     let input = std::str::from_utf8(bytes).map_err(|_| unavailable())?;
     let document = Html::parse_document(input);
-    let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
-    if document.select(&bases).any(|base| !inert_element(base)) {
+    if active_base(&document)? {
         return Err(unavailable());
     }
     Ok(document)
+}
+
+/// An active `<base href>` can redirect member resolution away from the fixed
+/// official source. It forbids interpretation; it cannot make admitted bytes
+/// unsafe to export.
+fn active_base(document: &Html) -> Result<bool, Error> {
+    let bases = Selector::parse("base[href]").map_err(|_| unavailable())?;
+    Ok(document.select(&bases).any(|base| !inert_element(base)))
 }
 
 /// Organization markers use the shared CSS lexer, but resolve their own
@@ -150,22 +181,20 @@ fn marker_style(style: &str) -> NodeMarkers {
             *target = Some((hide, important));
         }
     }
-    markers.hides_subtree = matches!(display, Some((true, _)))
-        || matches!(content_visibility, Some((true, _)));
+    markers.hides_subtree =
+        matches!(display, Some((true, _))) || matches!(content_visibility, Some((true, _)));
     markers.visibility = visibility.map(|(hide, _)| hide);
     markers
 }
 
 fn hidden_in_source(element: ElementRef<'_>) -> bool {
     let mut visibility_decided = false;
-    for node in std::iter::once(element)
-        .chain(element.ancestors().filter_map(ElementRef::wrap))
-    {
+    for node in std::iter::once(element).chain(element.ancestors().filter_map(ElementRef::wrap)) {
         let value = node.value();
         if value.attr("hidden").is_some()
-            || value.attr("class").is_some_and(|classes| {
-                classes.split_ascii_whitespace().any(|class| class == "xbt")
-            })
+            || value
+                .attr("class")
+                .is_some_and(|classes| classes.split_ascii_whitespace().any(|class| class == "xbt"))
         {
             return true;
         }
@@ -201,7 +230,13 @@ fn decode_numeric_entities(source: &str) -> Option<String> {
             None => (after, false),
         };
         let end = digits
-            .find(|c: char| if hex { !c.is_ascii_hexdigit() } else { !c.is_ascii_digit() })
+            .find(|c: char| {
+                if hex {
+                    !c.is_ascii_hexdigit()
+                } else {
+                    !c.is_ascii_digit()
+                }
+            })
             .unwrap_or(digits.len());
         if end == 0 || end == digits.len() || digits.as_bytes()[end] != b';' {
             decoded.push_str("&#");
@@ -228,25 +263,33 @@ fn decode_numeric_entities(source: &str) -> Option<String> {
 /// attributes still occur in the source. Known vocabulary markers are checked
 /// literally, after numeric-entity decoding, and per identifier token.
 fn raw_export_safe(bytes: &[u8], document: &Html) -> bool {
-    let Ok(source) = std::str::from_utf8(bytes) else { return false };
+    let Ok(source) = std::str::from_utf8(bytes) else {
+        return false;
+    };
     let source_safe = !sensitive_text_marker(source)
         && decode_numeric_entities(source).is_none_or(|decoded| !sensitive_text_marker(&decoded));
-    source_safe && !document.tree.root().descendants().any(|node| match node.value() {
-        Node::Text(text) => sensitive_text_marker(&text.text),
-        Node::Comment(comment) => sensitive_text_marker(&comment.comment),
-        Node::Element(element) => element.attrs.iter().any(|(name, value)| {
-            sensitive_text_marker(name.local.as_ref()) || sensitive_text_marker(value.as_ref())
-        }),
-        Node::Doctype(doctype) => {
-            sensitive_text_marker(&doctype.name)
-                || sensitive_text_marker(&doctype.public_id)
-                || sensitive_text_marker(&doctype.system_id)
-        }
-        Node::ProcessingInstruction(pi) => {
-            sensitive_text_marker(&pi.target) || sensitive_text_marker(&pi.data)
-        }
-        Node::Document | Node::Fragment => false,
-    })
+    source_safe
+        && !document
+            .tree
+            .root()
+            .descendants()
+            .any(|node| match node.value() {
+                Node::Text(text) => sensitive_text_marker(&text.text),
+                Node::Comment(comment) => sensitive_text_marker(&comment.comment),
+                Node::Element(element) => element.attrs.iter().any(|(name, value)| {
+                    sensitive_text_marker(name.local.as_ref())
+                        || sensitive_text_marker(value.as_ref())
+                }),
+                Node::Doctype(doctype) => {
+                    sensitive_text_marker(&doctype.name)
+                        || sensitive_text_marker(&doctype.public_id)
+                        || sensitive_text_marker(&doctype.system_id)
+                }
+                Node::ProcessingInstruction(pi) => {
+                    sensitive_text_marker(&pi.target) || sensitive_text_marker(&pi.data)
+                }
+                Node::Document | Node::Fragment => false,
+            })
 }
 
 fn parse_document(document: &Html) -> Result<DirectoryDocument, Error> {
@@ -361,34 +404,69 @@ fn retrieval(response: &Response) -> Value {
     })
 }
 
-fn normalize(response: &Response, admission: CookieAdmission) -> Result<Value, Error> {
-    if response.url != ORGANIZATIONS_URL
-        || response.status != 200
-        || !response.headers.get("content-type").is_some_and(|value| {
-            value.split(';').next().unwrap_or_default()
-                .trim_matches([' ', '\t']).eq_ignore_ascii_case("text/html")
+/// The fixed target is admitted only as a complete `200 text/html` response.
+/// Anything short of that has no source bytes to degrade into: it stays
+/// unavailable rather than being reported as an observed document.
+fn response_admitted(response: &Response) -> bool {
+    response.url == ORGANIZATIONS_URL
+        && response.status == 200
+        && !response.body.is_empty()
+        && response.headers.get("content-type").is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim_matches([' ', '\t'])
+                .eq_ignore_ascii_case("text/html")
         })
-    {
+}
+
+fn normalize(response: &Response, admission: CookieAdmission) -> Result<Value, Error> {
+    if !response_admitted(response) {
         return Err(unavailable());
     }
-    let document = admitted_html(&response.body)?;
-    refuse_unsafe_listing(response, &document)?;
     if admission == CookieAdmission::Unknown {
         // A legacy body might contain opaque private strings even in valid
         // directory fields: no source-derived projection is safe to emit.
-        return Ok(directory_fallback(response, None,
-            "organization_directory_provenance_unknown"));
+        return Ok(degraded(
+            response,
+            Exposure::Withheld("cookie_provenance_unavailable"),
+            "organization_directory_provenance_unknown",
+        ));
     }
-    // Cookie-freeness is only a transport fact. Both structured fields and
-    // original-byte fallback must pass the complete source/DOM privacy gate.
-    // A known sensitive document is outer Err: ArchiveClient never saves it.
-    if !raw_export_safe(&response.body, &document) {
-        return Err(unavailable());
+    // The module bound is not a transport failure: the complete original was
+    // read, so it is reported without exporting an unbounded body.
+    if response.body.len() > MAX_HTML {
+        return Ok(degraded(
+            response,
+            Exposure::Withheld("source_bounds_exceeded"),
+            "organization_directory_document_admission",
+        ));
     }
+    let Ok(text) = std::str::from_utf8(&response.body) else {
+        return Ok(degraded(
+            response,
+            Exposure::Withheld("source_not_interpretable"),
+            "organization_directory_document_admission",
+        ));
+    };
+    let document = Html::parse_document(text);
+    // A document carrying authentication, credential, CSRF or challenge
+    // semantics, or an active `<base href>` that could redirect member
+    // resolution, is failed closed by the shared public-safety scan. Returning
+    // a value here would persist it as the official capture, so the refusal
+    // stays an error.
+    refuse_unsafe_listing(response, &document).map_err(|_| source_refused())?;
+    // The admitted document itself is only ever reported, never repaired: a
+    // selector contract that no longer matches the observed DOM degrades to an
+    // inspectable result carrying the exact bytes instead of escaping as
+    // `unavailable`.
     match normalize_document(response, &document) {
         Ok(value) => Ok(value),
-        Err(_) => Ok(directory_fallback(response, Some(STANDARD.encode(&response.body)),
-            "organization_directory_selector_contract")),
+        Err(_) => Ok(uninterpretable(
+            response,
+            raw_export_safe(&response.body, &document),
+        )),
     }
 }
 
@@ -419,31 +497,63 @@ fn normalize_document(response: &Response, document: &Html) -> Result<Value, Err
     }))
 }
 
-fn directory_fallback(response: &Response, raw: Option<String>, reason: &str) -> Value {
-    let withheld = raw.is_none();
+/// Original-byte exposure of one degraded observation. Both halves are built
+/// together so a withheld result can never carry bytes or lose its reason.
+enum Exposure {
+    /// Exact fetched bytes admitted by the source/DOM export gate, base64 for
+    /// JSON transport. The shared public-safety refusal never reaches here.
+    Exact(String),
+    /// Why the exact bytes are not published with this observation.
+    Withheld(&'static str),
+}
+
+fn degraded(response: &Response, exposure: Exposure, reason: &str) -> Value {
+    let (raw_html, raw_withheld_reason) = match exposure {
+        Exposure::Exact(encoded) => (Some(encoded), None),
+        Exposure::Withheld(why) => (None, Some(why)),
+    };
     // Retained header values may themselves be opaque private strings. A
-    // metadata-only legacy result must not echo ETag or Content-Type parameters.
+    // metadata-only result must not echo ETag or Content-Type parameters.
     let mut provenance = retrieval(response);
-    provenance["http"] = json!({"status": response.status, "headers": {}, "headers_withheld": true});
+    provenance["http"] =
+        json!({"status": response.status, "headers": {}, "headers_withheld": true});
     json!({
         "schema_version": 1,
         "type": "organization_directory",
-        "result": "fallback",
+        "result": "degraded",
         "authority": {
             "publisher": "北京航空航天大学",
             "directory_label": "教学科研机构",
             "source_url": ORGANIZATIONS_URL
         },
         "entries": [],
-        "raw_html": raw,
-        "raw_withheld": withheld,
-        "raw_withheld_reason": if withheld { Some("cookie_provenance_unavailable") } else { None },
+        "raw_html": raw_html,
+        "raw_withheld": raw_withheld_reason.is_some(),
+        "raw_withheld_reason": raw_withheld_reason,
         "raw_html_sha256": response.sha256,
         "content_type": "text/html",
         "body_byte_length": response.body.len(),
+        "http_status": response.status,
         "fallback_reason": reason,
         "retrieval": provenance
     })
+}
+
+/// A document that cannot supply directory members still reports the exact
+/// passed bytes when the source/DOM export gate admits them; otherwise the
+/// gate's refusal is the published fact and no bytes leave this process. The
+/// parsed contract, not the export gate, is the reported fallback reason.
+fn uninterpretable(response: &Response, exportable: bool) -> Value {
+    let exposure = if exportable {
+        Exposure::Exact(STANDARD.encode(&response.body))
+    } else {
+        Exposure::Withheld("source_screening_refused")
+    };
+    degraded(
+        response,
+        exposure,
+        "organization_directory_selector_contract",
+    )
 }
 
 pub fn list(mode: CacheMode) -> Result<Value, Error> {
@@ -478,31 +588,37 @@ pub fn schema() -> Value {
     let mut retrieval = snapshot["properties"]["retrieval"].take();
     retrieval["properties"]["http"]["properties"]["headers_withheld"] = json!({"type":"boolean"});
     snapshot["properties"]["retrieval"] = json!({"$ref":"#/$defs/retrieval"});
-    snapshot["properties"]["entries"]["items"]["properties"]["hidden_in_source"]["description"] =
-        json!("Source hidden markers or unresolved inline visibility; not computed browser layout.");
+    snapshot["properties"]["entries"]["items"]["properties"]["hidden_in_source"]["description"] = json!(
+        "Source hidden markers or unresolved inline visibility; not computed browser layout."
+    );
     schema["list"]["output"] = json!({
         "$schema":"https://json-schema.org/draft/2020-12/schema",
         "$defs":{"retrieval":retrieval},
         "oneOf":[snapshot,{
             "type":"object","additionalProperties":false,
-            "description":"Legacy provenance is metadata-only. Known cookie-free, privacy-admitted originals with selector drift include exact raw HTML. No degraded result authorizes members.",
-            "required":["schema_version","type","result","authority","entries","raw_html","raw_withheld","raw_withheld_reason","raw_html_sha256","content_type","body_byte_length","fallback_reason","retrieval"],
+            "description":"A fetched, admitted official document that could not be interpreted as the directory: the .kyjg-box/.kyjg-tit h3/.kyjg-bd a contract no longer matches the observed DOM, or the document is a legacy response whose provenance cannot be verified. This is an inspectable degraded success, not a transport failure, and it never authorizes members. Exact original bytes accompany the result unless the source/DOM export gate refuses them; a withheld result names that refusal instead. A challenge or credential screen is refused as an error, and a response that was not admitted (unreachable transport, no bytes, non-200 status or non-HTML media type) stays unavailable.",
+            "required":["schema_version","type","result","authority","entries","raw_html","raw_withheld","raw_withheld_reason","raw_html_sha256","content_type","body_byte_length","http_status","fallback_reason","retrieval"],
             "properties":{
-                "schema_version":{"const":1},"type":{"const":"organization_directory"},"result":{"const":"fallback"},
+                "schema_version":{"const":1},"type":{"const":"organization_directory"},"result":{"const":"degraded"},
                 "authority":{"type":"object","additionalProperties":false,"required":["publisher","directory_label","source_url"],"properties":{"publisher":{"const":"北京航空航天大学"},"directory_label":{"const":"教学科研机构"},"source_url":{"const":ORGANIZATIONS_URL}}},
-                "entries":{"type":"array","maxItems":0},
-                "raw_html":{"type":["string","null"],"contentEncoding":"base64"},
-                "raw_withheld":{"type":"boolean"},
-                "raw_withheld_reason":{"enum":[null,"cookie_provenance_unavailable"]},
-                "raw_html_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
-                "content_type":{"const":"text/html"},
-                "body_byte_length":{"type":"integer","minimum":1,"maximum":MAX_HTML},
-                "fallback_reason":{"enum":["organization_directory_provenance_unknown","organization_directory_selector_contract"]},
+                "entries":{"type":"array","maxItems":0,"description":"Always empty: a degraded result supplies no organization members."},
+                "raw_html":{"type":["string","null"],"contentEncoding":"base64","description":"Exact fetched bytes, base64 for JSON transport; null only when a raw_withheld_reason names why they were not published."},
+                "raw_withheld":{"type":"boolean","description":"True when no bytes are published; always consistent with raw_html."},
+                "raw_withheld_reason":{"enum":[null,"cookie_provenance_unavailable","source_bounds_exceeded","source_not_interpretable","source_screening_refused"],
+                    "description":"cookie_provenance_unavailable: a legacy response whose cookie provenance cannot be verified. source_bounds_exceeded: the original exceeds the module bound. source_not_interpretable: the bytes are not UTF-8 HTML. source_screening_refused: the source/DOM export gate found credential-shaped material."},
+                "raw_html_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Transport SHA-256 of the exact received bytes; the retrieval digest repeats it."},
+                "content_type":{"const":"text/html","description":"Media type the response was admitted under."},
+                "body_byte_length":{"type":"integer","minimum":1,"description":"Bytes actually received."},
+                "http_status":{"const":200,"description":"Observed HTTP status of the fetched body. A non-200 response is a transport refusal, not a degraded observation, so it stays unavailable."},
+                "fallback_reason":{"enum":["organization_directory_provenance_unknown","organization_directory_document_admission","organization_directory_selector_contract"],
+                    "description":"Which bounded admission or selector assumption failed: unverifiable cookie provenance, the module's own document bound/encoding, or the official directory selectors."},
                 "retrieval":{"$ref":"#/$defs/retrieval"}
             },
             "oneOf":[
                 {"properties":{"raw_html":{"type":"string"},"raw_withheld":{"const":false},"raw_withheld_reason":{"type":"null"},"fallback_reason":{"const":"organization_directory_selector_contract"}}},
-                {"properties":{"raw_html":{"type":"null"},"raw_withheld":{"const":true},"raw_withheld_reason":{"const":"cookie_provenance_unavailable"},"fallback_reason":{"const":"organization_directory_provenance_unknown"}}}
+                {"properties":{"raw_html":{"type":"null"},"raw_withheld":{"const":true},"raw_withheld_reason":{"const":"source_screening_refused"},"fallback_reason":{"const":"organization_directory_selector_contract"}}},
+                {"properties":{"raw_html":{"type":"null"},"raw_withheld":{"const":true},"raw_withheld_reason":{"const":"cookie_provenance_unavailable"},"fallback_reason":{"const":"organization_directory_provenance_unknown"}}},
+                {"properties":{"raw_html":{"type":"null"},"raw_withheld":{"const":true},"raw_withheld_reason":{"enum":["source_bounds_exceeded","source_not_interpretable"]},"fallback_reason":{"const":"organization_directory_document_admission"}}}
             ]
         }]
     });
@@ -533,7 +649,9 @@ mod tests {
     }
 
     fn directory(member: &str) -> String {
-        format!("<html><title>Official</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'>{member}</div></div></html>")
+        format!(
+            "<html><title>Official</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'>{member}</div></div></html>"
+        )
     }
 
     #[test]
@@ -543,54 +661,105 @@ mod tests {
             "<base href='https://foreign.example/'>",
             "<base href='https://www.buaa.edu.cn/'>",
         ] {
-            assert_eq!(parse_html(format!("{base}{directory}").as_bytes()).unwrap_err().code,
-                "unavailable");
+            assert_eq!(
+                parse_html(format!("{base}{directory}").as_bytes())
+                    .unwrap_err()
+                    .code,
+                "unavailable"
+            );
         }
-        let inert = format!("<template><base href='https://foreign.example/'></template><noscript><base href='https://foreign.example/'></noscript>{directory}");
+        let inert = format!(
+            "<template><base href='https://foreign.example/'></template><noscript><base href='https://foreign.example/'></noscript>{directory}"
+        );
         let parsed = parse_html(inert.as_bytes()).unwrap();
-        assert_eq!(parsed.entries[0].resolved_http_url.as_deref(),
-            Some("https://www.buaa.edu.cn/relative"));
+        assert_eq!(
+            parsed.entries[0].resolved_http_url.as_deref(),
+            Some("https://www.buaa.edu.cn/relative")
+        );
     }
 
     #[test]
     fn directory_source_metadata_requires_exact_html_mime() {
         let body = directory("<a href='https://one.buaa.edu.cn/'>One</a>");
         let mut response = response(body.as_bytes());
-        for content_type in [None, Some("text/plain"), Some("text/html-unknown"),
-            Some("text/html\u{00a0}"), Some("text/html\n"), Some("text/html\u{000b}")] {
+        for content_type in [
+            None,
+            Some("text/plain"),
+            Some("text/html-unknown"),
+            Some("text/html\u{00a0}"),
+            Some("text/html\n"),
+            Some("text/html\u{000b}"),
+        ] {
             response.headers.clear();
             if let Some(value) = content_type {
                 response.headers.insert("content-type".into(), value.into());
             }
-            assert_eq!(normalize(&response, CookieAdmission::CookieFree).unwrap_err().code,
-                "unavailable", "{content_type:?}");
+            assert_eq!(
+                normalize(&response, CookieAdmission::CookieFree)
+                    .unwrap_err()
+                    .code,
+                "unavailable",
+                "{content_type:?}"
+            );
         }
         for value in ["text/html; charset=utf-8", "TeXt/HtMl; charset=utf-8"] {
             response.headers.insert("content-type".into(), value.into());
-            assert_eq!(normalize(&response, CookieAdmission::CookieFree).unwrap()["result"],
-                "directory_snapshot", "{value:?}");
+            assert_eq!(
+                normalize(&response, CookieAdmission::CookieFree).unwrap()["result"],
+                "directory_snapshot",
+                "{value:?}"
+            );
         }
         assert!(parse_html(&[0xff]).is_err());
     }
 
     #[test]
     fn hidden_source_markers_resolve_comments_and_inline_cascade() {
-        for style in ["display:none", "/*x*/display:none", "display:/*x*/none",
-            "display:none /*x*/", "display:none!important;display:block",
-            "display:block;display:none", "display:none!important;display:block!important;display:none!important",
-            "visibility:hidden", "visibility:collapse", "content-visibility:hidden",
-            "display:none;all:initial", "display:var(--x)", "display:none;/*unclosed"] {
-            let input = directory(&format!("<div style='{style}'><a href='/x'>Fixture</a></div>"));
-            assert!(parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source, "{style}");
+        for style in [
+            "display:none",
+            "/*x*/display:none",
+            "display:/*x*/none",
+            "display:none /*x*/",
+            "display:none!important;display:block",
+            "display:block;display:none",
+            "display:none!important;display:block!important;display:none!important",
+            "visibility:hidden",
+            "visibility:collapse",
+            "content-visibility:hidden",
+            "display:none;all:initial",
+            "display:var(--x)",
+            "display:none;/*unclosed",
+        ] {
+            let input = directory(&format!(
+                "<div style='{style}'><a href='/x'>Fixture</a></div>"
+            ));
+            assert!(
+                parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source,
+                "{style}"
+            );
         }
-        for style in ["x-display:none", "display:none2", "display:none;display:block",
-            "display:none;display:block!important", "display:none!important;display:block!important",
-            "visibility:hidden;visibility:visible", "visibility:visible", "color:red"] {
-            let input = directory(&format!("<div style='{style}'><a href='/x'>Fixture</a></div>"));
-            assert!(!parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source, "{style}");
+        for style in [
+            "x-display:none",
+            "display:none2",
+            "display:none;display:block",
+            "display:none;display:block!important",
+            "display:none!important;display:block!important",
+            "visibility:hidden;visibility:visible",
+            "visibility:visible",
+            "color:red",
+        ] {
+            let input = directory(&format!(
+                "<div style='{style}'><a href='/x'>Fixture</a></div>"
+            ));
+            assert!(
+                !parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source,
+                "{style}"
+            );
         }
         for attributes in ["hidden", "class='xbt'"] {
-            let input = directory(&format!("<div {attributes}><a style='display:block;visibility:visible' href='/x'>Fixture</a></div>"));
+            let input = directory(&format!(
+                "<div {attributes}><a style='display:block;visibility:visible' href='/x'>Fixture</a></div>"
+            ));
             assert!(parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source);
         }
         for attributes in ["class='xbtx'", "data-hidden='true'"] {
@@ -601,13 +770,31 @@ mod tests {
 
     #[test]
     fn nearest_visibility_can_reveal_but_subtree_hiding_cannot() {
-        for ancestor in ["visibility:hidden", "visibility:hidden!important", "visibility:collapse"] {
-            let input = directory(&format!("<div style='{ancestor}'><span><a style='visibility:visible' href='/x'>Fixture</a></span></div>"));
-            assert!(!parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source, "{ancestor}");
+        for ancestor in [
+            "visibility:hidden",
+            "visibility:hidden!important",
+            "visibility:collapse",
+        ] {
+            let input = directory(&format!(
+                "<div style='{ancestor}'><span><a style='visibility:visible' href='/x'>Fixture</a></span></div>"
+            ));
+            assert!(
+                !parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source,
+                "{ancestor}"
+            );
         }
-        for ancestor in ["display:none", "display:none!important", "content-visibility:hidden"] {
-            let input = directory(&format!("<div style='{ancestor}'><a style='display:block;visibility:visible' href='/x'>Fixture</a></div>"));
-            assert!(parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source, "{ancestor}");
+        for ancestor in [
+            "display:none",
+            "display:none!important",
+            "content-visibility:hidden",
+        ] {
+            let input = directory(&format!(
+                "<div style='{ancestor}'><a style='display:block;visibility:visible' href='/x'>Fixture</a></div>"
+            ));
+            assert!(
+                parse_html(input.as_bytes()).unwrap().entries[0].hidden_in_source,
+                "{ancestor}"
+            );
         }
     }
 
@@ -615,17 +802,45 @@ mod tests {
     fn safe_drift_exports_exact_original_with_real_digest() {
         let body = b"<html><title>Public fixture</title><p>Ordinary public prose.</p><script>var n=1;</script></html>";
         let output = normalize(&response(body), CookieAdmission::CookieFree).unwrap();
-        assert_eq!(output["result"], "fallback");
-        assert_eq!(output["fallback_reason"], "organization_directory_selector_contract");
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(
+            output["fallback_reason"],
+            "organization_directory_selector_contract"
+        );
         assert_eq!(output["entries"], json!([]));
         assert_eq!(output["raw_withheld"], false);
         assert_eq!(output["raw_withheld_reason"], Value::Null);
-        let decoded = STANDARD.decode(output["raw_html"].as_str().unwrap()).unwrap();
+        let decoded = STANDARD
+            .decode(output["raw_html"].as_str().unwrap())
+            .unwrap();
         assert_eq!(decoded.as_slice(), body.as_slice());
         assert_eq!(output["raw_html_sha256"], body_sha256(&decoded));
-        assert_eq!(output["retrieval"]["response_body_sha256"], body_sha256(&decoded));
+        assert_eq!(
+            output["retrieval"]["response_body_sha256"],
+            body_sha256(&decoded)
+        );
         assert_eq!(output["body_byte_length"], decoded.len());
         assert_eq!(output["content_type"], "text/html");
+        assert_eq!(output["http_status"], 200);
+        assert_eq!(output["retrieval"]["http"]["status"], 200);
+        assert!(output.get("document_title").is_none());
+        // A document that kept the outer box but lost the entry contract is the
+        // observed directory drift, not a transport failure: the exact bytes
+        // still leave the process.
+        let drifted = b"<html><title>Official</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Empty</h3></div><div class='kyjg-bd'></div></div></html>";
+        let output = normalize(&response(drifted), CookieAdmission::CookieFree).unwrap();
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(
+            output["fallback_reason"],
+            "organization_directory_selector_contract"
+        );
+        assert_eq!(
+            STANDARD
+                .decode(output["raw_html"].as_str().unwrap())
+                .unwrap(),
+            drifted
+        );
+        assert_eq!(output["http_status"], 200);
     }
 
     #[test]
@@ -633,15 +848,26 @@ mod tests {
         let private_marker = "opaqueFixturePrivate42";
         let body = directory(&format!("<a href='/x'>{private_marker}</a>"));
         let mut response = response(body.as_bytes());
-        response.headers.insert("etag".into(), format!("\"{private_marker}\""));
-        response.headers.insert("content-type".into(), format!("text/html; note={private_marker}"));
+        response
+            .headers
+            .insert("etag".into(), format!("\"{private_marker}\""));
+        response.headers.insert(
+            "content-type".into(),
+            format!("text/html; note={private_marker}"),
+        );
         let output = normalize(&response, CookieAdmission::Unknown).unwrap();
-        assert_eq!(output["result"], "fallback");
-        assert_eq!(output["fallback_reason"], "organization_directory_provenance_unknown");
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(
+            output["fallback_reason"],
+            "organization_directory_provenance_unknown"
+        );
         assert_eq!(output["entries"], json!([]));
         assert_eq!(output["raw_html"], Value::Null);
         assert_eq!(output["raw_withheld"], true);
-        assert_eq!(output["raw_withheld_reason"], "cookie_provenance_unavailable");
+        assert_eq!(
+            output["raw_withheld_reason"],
+            "cookie_provenance_unavailable"
+        );
         assert_eq!(output["retrieval"]["http"]["headers"], json!({}));
         assert_eq!(output["retrieval"]["http"]["headers_withheld"], true);
         assert_eq!(output["content_type"], "text/html");
@@ -651,11 +877,29 @@ mod tests {
     }
 
     #[test]
-    fn sensitive_attributes_and_raw_payloads_refuse_before_any_projection() {
+    fn authentication_screens_are_refused_by_code_not_as_unavailable() {
         for markup in [
             "<form action='/login'><input type='password' name='password'></form>",
             "<input type='hidden' name='csrf_token'>",
             "<div id='cf-challenge-form'></div>",
+        ] {
+            for body in [
+                format!("<title>Drift</title>{markup}"),
+                directory(&format!("<a href='/x'>One</a>{markup}")),
+            ] {
+                let error =
+                    normalize(&response(body.as_bytes()), CookieAdmission::CookieFree).unwrap_err();
+                // A challenge or credential screen is a refusal, never a
+                // transport failure and never an inspectable directory.
+                assert_eq!(error.code, "source_refused", "{markup}");
+                assert!(!error.message.contains("fixturePrivate42"));
+            }
+        }
+    }
+
+    #[test]
+    fn raw_payload_markers_withhold_bytes_without_leaking_them() {
+        for markup in [
             "<script>const csrfToken='fixturePrivate42';</script>",
             "<script type=\"application/json\">{\"authenticity_token\":\"fixturePrivate42\"}</script>",
             "<script type=\"application/json\">{\"passwd\":\"fixturePrivate42\"}</script>",
@@ -666,13 +910,31 @@ mod tests {
             "<p title='public' title='c&#115;rfToken=fixturePrivate42'>Text</p>",
             "<p title='public' title='p&#x61;ssword=fixturePrivate42'>Text</p>",
         ] {
-            for body in [format!("<title>Drift</title>{markup}"),
-                directory(&format!("<a href='/x'>One</a>{markup}"))] {
-                let error = normalize(&response(body.as_bytes()), CookieAdmission::CookieFree)
-                    .unwrap_err();
-                assert_eq!(error.code, "unavailable", "{markup}");
-                assert!(!error.message.contains("fixturePrivate42"));
-            }
+            // Uninterpretable bytes whose raw payload carries credential
+            // vocabulary stay a degraded result with the reason named, but no
+            // bytes are published.
+            let body = format!("<title>Drift</title>{markup}");
+            let output =
+                normalize(&response(body.as_bytes()), CookieAdmission::CookieFree).unwrap();
+            assert_eq!(output["result"], "degraded", "{markup}");
+            assert_eq!(
+                output["fallback_reason"],
+                "organization_directory_selector_contract"
+            );
+            assert_eq!(output["raw_html"], Value::Null, "{markup}");
+            assert_eq!(output["raw_withheld"], true);
+            assert_eq!(output["raw_withheld_reason"], "source_screening_refused");
+            assert_eq!(output["http_status"], 200);
+            assert!(!output.to_string().contains("fixturePrivate42"), "{markup}");
+
+            // The same inert payload inside an otherwise valid directory still
+            // supplies source members, and only those members are projected.
+            let body = directory(&format!("<a href='/x'>One</a>{markup}"));
+            let output =
+                normalize(&response(body.as_bytes()), CookieAdmission::CookieFree).unwrap();
+            assert_eq!(output["result"], "directory_snapshot", "{markup}");
+            assert_eq!(output["entries"].as_array().unwrap().len(), 1);
+            assert!(!output.to_string().contains("fixturePrivate42"), "{markup}");
         }
     }
 
@@ -755,7 +1017,10 @@ mod tests {
             output["entries"][0]["resolved_http_url"],
             "https://one.buaa.edu.cn/"
         );
-        assert_eq!(output["retrieval"]["response_body_sha256"], body_sha256(body));
+        assert_eq!(
+            output["retrieval"]["response_body_sha256"],
+            body_sha256(body)
+        );
         assert_eq!(output["retrieval"]["source_url"], ORGANIZATIONS_URL);
         let mut wrong = response;
         wrong.url = "https://www.buaa.edu.cn/".into();

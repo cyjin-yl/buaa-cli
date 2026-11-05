@@ -25,6 +25,11 @@
 //! object hash before they become rights-reviewed material; mismatches remain
 //! rejected raw evidence. Active HTML challenges latch the shared governor.
 //!
+//! An inventory is either the whole admitted recursive tree or a refusal: the
+//! surface holds one immutable object, so it has one page and no continuation
+//! cursor, and a tree that is short of its own extent states why it is
+//! incomplete instead of being published as a partial material set.
+//!
 //! Every response body is assessed in three states. A confirmed challenge
 //! latches the shared governor. An unreviewed body is refused without a
 //! CAPTCHA claim and without a cache write. A clear body is admitted only
@@ -35,6 +40,9 @@
 //! material the operator supplies, records the operator's own answers, and
 //! reports a local self-check only. It never asserts an official grade, never
 //! reports completion, and never answers on behalf of an assessment system.
+//! Generation requires the operator's explicit rights attestation, and a
+//! question with no local or operator key stays unverifiable rather than
+//! acquiring an answer this client would have to invent.
 
 use crate::net::Error;
 use serde::Deserialize;
@@ -122,11 +130,17 @@ pub(crate) mod learning {
     }
 
     pub(crate) fn cache_error() -> Error {
-        Error::new("cache_error", "the learning-material response cache is unavailable")
+        Error::new(
+            "cache_error",
+            "the learning-material response cache is unavailable",
+        )
     }
 
     pub(crate) fn corrupt_cache() -> Error {
-        Error::new("corrupt_cache", "the learning-material response cache is invalid")
+        Error::new(
+            "corrupt_cache",
+            "the learning-material response cache is invalid",
+        )
     }
 
     pub(crate) fn governor_error() -> Error {
@@ -137,11 +151,17 @@ pub(crate) mod learning {
     }
 
     pub(crate) fn network_error() -> Error {
-        Error::new("network_error", "the learning-material request did not complete")
+        Error::new(
+            "network_error",
+            "the learning-material request did not complete",
+        )
     }
 
     pub(crate) fn body_limit() -> Error {
-        Error::new("body_limit", "the learning-material response exceeded its size bound")
+        Error::new(
+            "body_limit",
+            "the learning-material response exceeded its size bound",
+        )
     }
 
     pub(crate) fn unexpected_content() -> Error {
@@ -159,7 +179,10 @@ pub(crate) mod learning {
     }
 
     fn rejected_cache() -> Error {
-        Error::new("cache_error", "the learning-material rejected-evidence cache is unavailable")
+        Error::new(
+            "cache_error",
+            "the learning-material rejected-evidence cache is unavailable",
+        )
     }
 
     pub(crate) fn incomplete_tree() -> Error {
@@ -184,7 +207,10 @@ pub(crate) mod learning {
     }
 
     fn unreviewed_cache() -> Error {
-        Error::new("unreviewed_cache", "learning-material cache predates session-cookie admission; original retained without reuse or automatic refetch")
+        Error::new(
+            "unreviewed_cache",
+            "learning-material cache predates session-cookie admission; original retained without reuse or automatic refetch",
+        )
     }
 
     fn sensitive_refusal() -> Error {
@@ -331,7 +357,9 @@ pub(crate) mod learning {
         bound: bool,
     ) -> ChallengeAssessment {
         match surface {
-            Surface::Tree | Surface::Commit => crate::html::assess_challenge_body(bytes, declared, complete),
+            Surface::Tree | Surface::Commit => {
+                crate::html::assess_challenge_body(bytes, declared, complete)
+            }
             Surface::Raw => {
                 if bound && complete {
                     return ChallengeAssessment::Clear;
@@ -356,9 +384,11 @@ pub(crate) mod learning {
         response: &Response,
         identity: &ObservedIdentity,
     ) -> ChallengeAssessment {
-        if response.headers.iter().any(|(name, value)| {
-            net::challenge_header(name, value.as_bytes())
-        }) {
+        if response
+            .headers
+            .iter()
+            .any(|(name, value)| net::challenge_header(name, value.as_bytes()))
+        {
             return ChallengeAssessment::Detected;
         }
         let declared = response.headers.get("content-type").map(String::as_str);
@@ -388,9 +418,12 @@ pub(crate) mod learning {
         let Some((kind, subtype)) = essence.split_once('/') else {
             return false;
         };
-        let token = |part: &str| !part.is_empty() && part.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
-        });
+        let token = |part: &str| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+        };
         token(kind) && token(subtype)
     }
 
@@ -424,15 +457,31 @@ pub(crate) mod learning {
 
         impl TransportFixture {
             fn new() -> Self {
-                let root = std::env::temp_dir().join(format!("buaa-learning-transport-{}-{}-{}",
-                    std::process::id(), unix_ms().unwrap(), NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)));
-                std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+                let root = std::env::temp_dir().join(format!(
+                    "buaa-learning-transport-{}-{}-{}",
+                    std::process::id(),
+                    unix_ms().unwrap(),
+                    NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+                ));
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&root)
+                    .unwrap();
                 let cache_dir = root.join("cache");
                 let governor_dir = root.join("governor");
                 let rejected_dir = root.join("rejected");
-                std::fs::DirBuilder::new().mode(0o700).create(&cache_dir).unwrap();
-                std::fs::DirBuilder::new().mode(0o700).create(&governor_dir).unwrap();
-                std::fs::DirBuilder::new().mode(0o700).create(&rejected_dir).unwrap();
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&cache_dir)
+                    .unwrap();
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&governor_dir)
+                    .unwrap();
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&rejected_dir)
+                    .unwrap();
                 Self {
                     cache: ResponseCache {
                         directory: File::open(cache_dir).unwrap(),
@@ -442,23 +491,37 @@ pub(crate) mod learning {
                     },
                     transport: Transport {
                         governor: Governor::isolated_for_test(&governor_dir).unwrap(),
-                        http: Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
-                            .retry(reqwest::retry::never()).timeout(Duration::from_secs(5)).build().unwrap(),
+                        http: Client::builder()
+                            .no_proxy()
+                            .redirect(reqwest::redirect::Policy::none())
+                            .retry(reqwest::retry::never())
+                            .timeout(Duration::from_secs(5))
+                            .build()
+                            .unwrap(),
                     },
                     root,
                 }
             }
 
             fn fetch(&self, url: &Url) -> Result<Value, Error> {
-                self.transport.fetch(&self.cache, url, Surface::Tree, |response, identity| {
-                    inventory_output(&super::super::SOURCE, super::super::TYPE_LABEL, url,
-                        response, identity, &super::super::classify)
-                })
+                self.transport
+                    .fetch(&self.cache, url, Surface::Tree, |response, identity| {
+                        inventory_output(
+                            &super::super::SOURCE,
+                            super::super::TYPE_LABEL,
+                            url,
+                            response,
+                            identity,
+                            &super::super::classify,
+                        )
+                    })
             }
         }
 
         impl Drop for TransportFixture {
-            fn drop(&mut self) { std::fs::remove_dir_all(&self.root).unwrap(); }
+            fn drop(&mut self) {
+                std::fs::remove_dir_all(&self.root).unwrap();
+            }
         }
 
         struct ServerWorker(Option<std::thread::JoinHandle<()>>);
@@ -480,21 +543,29 @@ pub(crate) mod learning {
         fn server(response: Vec<u8>) -> (Url, ServerWorker) {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
-            let url = Url::parse(&format!("http://{}/tree", listener.local_addr().unwrap())).unwrap();
+            let url =
+                Url::parse(&format!("http://{}/tree", listener.local_addr().unwrap())).unwrap();
             let worker = std::thread::spawn(move || {
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
                 let (mut stream, _) = loop {
                     match listener.accept() {
                         Ok(connection) => break connection,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            assert!(std::time::Instant::now() < deadline, "loopback request was not received");
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "loopback request was not received"
+                            );
                             std::thread::sleep(Duration::from_millis(10));
                         }
                         Err(error) => panic!("loopback accept failed: {error}"),
                     }
                 };
-                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
                 let mut request = [0; 4096];
                 assert!(stream.read(&mut request).unwrap() > 0);
                 stream.write_all(&response).unwrap();
@@ -514,36 +585,77 @@ pub(crate) mod learning {
                 let fixture = TransportFixture::new();
                 let body = b"ordinary current response";
                 let requested = git_blob_sha(b"different requested object", 40);
-                let (mut url, worker) = server(http_response("200 OK", "Content-Type: text/plain\r\n", body, body.len()));
+                let (mut url, worker) = server(http_response(
+                    "200 OK",
+                    "Content-Type: text/plain\r\n",
+                    body,
+                    body.len(),
+                ));
                 url.set_path(&format!("/{requested}"));
                 let old_body = b"older rejected response";
-                let old = Cached { version, url: url.to_string(), status: 200,
+                let old = Cached {
+                    version,
+                    url: url.to_string(),
+                    status: 200,
                     headers: BTreeMap::from([("content-type".into(), "text/plain".into())]),
-                    body_base64: STANDARD.encode(old_body), sha256: sha256_hex(old_body), fetched_at_unix_ms: 1 };
+                    body_base64: STANDARD.encode(old_body),
+                    sha256: sha256_hex(old_body),
+                    fetched_at_unix_ms: 1,
+                };
                 let old_bytes = serde_json::to_vec(&old).unwrap();
-                let path = fixture.root.join("rejected").join(ResponseCache::name(&url));
-                let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap();
+                let path = fixture
+                    .root
+                    .join("rejected")
+                    .join(ResponseCache::name(&url));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .unwrap();
                 file.write_all(&old_bytes).unwrap();
                 drop(file);
-                let result = fixture.transport.fetch(&fixture.cache, &url, Surface::Raw, |response, identity| {
-                    assert_ne!(identity.blob_sha(), Some(requested.as_str()));
-                    degraded_admission_output(&super::super::SOURCE, super::super::RAW_TYPE_LABEL,
-                        "synthetic.txt", response, identity, "blob_identity_mismatch")
-                });
+                let result = fixture.transport.fetch(
+                    &fixture.cache,
+                    &url,
+                    Surface::Raw,
+                    |response, identity| {
+                        assert_ne!(identity.blob_sha(), Some(requested.as_str()));
+                        degraded_admission_output(
+                            &super::super::SOURCE,
+                            super::super::RAW_TYPE_LABEL,
+                            "synthetic.txt",
+                            response,
+                            identity,
+                            "blob_identity_mismatch",
+                        )
+                    },
+                );
                 worker.join();
                 assert_eq!(std::fs::read(&path).unwrap(), old_bytes);
-                assert!(!fixture.root.join("cache").join(ResponseCache::name(&url)).exists());
+                assert!(
+                    !fixture
+                        .root
+                        .join("cache")
+                        .join(ResponseCache::name(&url))
+                        .exists()
+                );
                 let output = result.unwrap();
                 assert_eq!(output["result"], "degraded");
                 assert_eq!(output["fallback_reason"], "blob_identity_mismatch");
                 assert_eq!(output["bytes"], Value::Null);
-                assert_eq!(output["raw_evidence"], json!({
-                    "kind": "remote_response", "content_type": "text/plain", "byte_length": body.len(),
-                    "sha256": sha256_hex(body), "encoding": "base64", "data": STANDARD.encode(body),
-                    "fallback_reason": "blob_identity_mismatch"
-                }));
+                assert_eq!(
+                    output["raw_evidence"],
+                    json!({
+                        "kind": "remote_response", "content_type": "text/plain", "byte_length": body.len(),
+                        "sha256": sha256_hex(body), "encoding": "base64", "data": STANDARD.encode(body),
+                        "fallback_reason": "blob_identity_mismatch"
+                    })
+                );
                 let entries: Vec<_> = std::fs::read_dir(fixture.root.join("rejected"))
-                    .unwrap().map(|entry| entry.unwrap().path()).collect();
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect();
                 assert_eq!(entries.len(), 2);
                 let retained_path = entries.iter().find(|entry| **entry != path).unwrap();
                 let retained_bytes = std::fs::read(retained_path).unwrap();
@@ -553,9 +665,18 @@ pub(crate) mod learning {
                 assert_eq!(retained.version, 2);
                 assert_eq!(retained.url, url.as_str());
                 assert_eq!(retained.status, 200);
-                assert_eq!(retained.headers.get("content-type").map(String::as_str), Some("text/plain"));
-                assert_eq!(serde_json::to_value(&retained.headers).unwrap(), output["retrieval"]["http"]["headers"]);
-                assert_eq!(retained.fetched_at_unix_ms, output["retrieval"]["fetched_at_unix_ms"].as_u64().unwrap());
+                assert_eq!(
+                    retained.headers.get("content-type").map(String::as_str),
+                    Some("text/plain")
+                );
+                assert_eq!(
+                    serde_json::to_value(&retained.headers).unwrap(),
+                    output["retrieval"]["http"]["headers"]
+                );
+                assert_eq!(
+                    retained.fetched_at_unix_ms,
+                    output["retrieval"]["fetched_at_unix_ms"].as_u64().unwrap()
+                );
                 assert_eq!(retained.sha256, sha256_hex(body));
                 let retained_body = STANDARD.decode(&retained.body_base64).unwrap();
                 assert_eq!(retained_body, body);
@@ -574,7 +695,9 @@ pub(crate) mod learning {
                 assert_eq!(std::fs::read(&path).unwrap(), old_bytes);
                 assert_eq!(std::fs::read(retained_path).unwrap(), retained_bytes);
                 let entries: Vec<_> = std::fs::read_dir(fixture.root.join("rejected"))
-                    .unwrap().map(|entry| entry.unwrap().path()).collect();
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect();
                 assert_eq!(entries.len(), 3);
                 for entry in entries.iter().filter(|entry| **entry != path) {
                     let mut file = File::open(entry).unwrap();
@@ -591,35 +714,65 @@ pub(crate) mod learning {
             const BODY: &[u8] = b"published synthetic response";
             fn read_published(cache: &ResponseCache, url: &Url) {
                 PUBLICATION_SEEN.store(true, Ordering::Relaxed);
-                let (response, admission) = cache.load(url).expect("visible cache entry must be readable").expect("published entry must exist");
+                let (response, admission) = cache
+                    .load(url)
+                    .expect("visible cache entry must be readable")
+                    .expect("published entry must exist");
                 assert_eq!(response.body, BODY);
                 assert_eq!(response.sha256, sha256_hex(BODY));
                 assert!(matches!(admission, CacheAdmission::CookieReviewed));
-                let file = governor::open_child(&cache.directory, &ResponseCache::name(url), libc::O_RDONLY).unwrap();
-                governor::validate_private_file(&file).expect("published entry must remain a private single-link file");
+                let file = governor::open_child(
+                    &cache.directory,
+                    &ResponseCache::name(url),
+                    libc::O_RDONLY,
+                )
+                .unwrap();
+                governor::validate_private_file(&file)
+                    .expect("published entry must remain a private single-link file");
                 assert_eq!(file.metadata().unwrap().nlink(), 1);
             }
             PUBLICATION_SEEN.store(false, Ordering::Relaxed);
             let mut fixture = TransportFixture::new();
             fixture.cache.test_after_publication = Some(read_published);
-            let (url, worker) = server(http_response("200 OK", "Content-Type: text/plain\r\n", BODY, BODY.len()));
+            let (url, worker) = server(http_response(
+                "200 OK",
+                "Content-Type: text/plain\r\n",
+                BODY,
+                BODY.len(),
+            ));
             let result = fixture.fetch(&url);
             worker.join();
             assert!(result.is_ok());
-            assert!(PUBLICATION_SEEN.load(Ordering::Relaxed), "the reader must observe publication before the writer returns");
+            assert!(
+                PUBLICATION_SEEN.load(Ordering::Relaxed),
+                "the reader must observe publication before the writer returns"
+            );
         }
 
         #[test]
         fn transport_rejects_cookie_echo_without_output_or_cache() {
             let fixture = TransportFixture::new();
             let body = br#"{"data":"q7Z","tree":[]}"#;
-            let (url, worker) = server(http_response("200 OK", "Content-Type: application/json\r\nSet-Cookie: arbitrary=q7Z; Path=/\r\n", body, body.len()));
+            let (url, worker) = server(http_response(
+                "200 OK",
+                "Content-Type: application/json\r\nSet-Cookie: arbitrary=q7Z; Path=/\r\n",
+                body,
+                body.len(),
+            ));
             let result = fixture.fetch(&url);
             worker.join();
             let cache_path = fixture.root.join("cache").join(ResponseCache::name(&url));
-            assert!(result.is_err(), "cookie-bearing response must not become output");
+            assert!(
+                result.is_err(),
+                "cookie-bearing response must not become output"
+            );
             assert!(!cache_path.exists());
-            assert!(std::fs::read_dir(fixture.root.join("rejected")).unwrap().next().is_none());
+            assert!(
+                std::fs::read_dir(fixture.root.join("rejected"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
             let status = fixture.transport.governor.status().unwrap();
             assert!(!status.safety_latched);
             assert_eq!(status.consecutive_network_failures, 0);
@@ -629,21 +782,41 @@ pub(crate) mod learning {
         fn cookie_free_unparseable_tree_retains_safe_degraded_evidence() {
             let fixture = TransportFixture::new();
             let body = br#"{"data":"ordinary","tree":[]}"#;
-            let (url, worker) = server(http_response("200 OK", "Content-Type: application/json\r\n", body, body.len()));
+            let (url, worker) = server(http_response(
+                "200 OK",
+                "Content-Type: application/json\r\n",
+                body,
+                body.len(),
+            ));
             let result = fixture.fetch(&url);
             worker.join();
             let output = result.unwrap();
             assert_eq!(output["result"], "degraded");
             assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body));
-            assert!(std::fs::read_dir(fixture.root.join("rejected")).unwrap().next().is_none());
-            let retained = std::fs::read(fixture.root.join("cache").join(ResponseCache::name(&url))).unwrap();
+            assert!(
+                std::fs::read_dir(fixture.root.join("rejected"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+            let retained =
+                std::fs::read(fixture.root.join("cache").join(ResponseCache::name(&url))).unwrap();
             let cached: Cached = serde_json::from_slice(&retained).unwrap();
             assert_eq!(cached.version, 2);
             assert_eq!(STANDARD.decode(cached.body_base64).unwrap(), body);
-            let replay = fixture.cache.get(&url, Surface::Tree, false, |response, identity| {
-                inventory_output(&super::super::SOURCE, super::super::TYPE_LABEL, &url,
-                    response, identity, &super::super::classify)
-            }).unwrap();
+            let replay = fixture
+                .cache
+                .get(&url, Surface::Tree, false, |response, identity| {
+                    inventory_output(
+                        &super::super::SOURCE,
+                        super::super::TYPE_LABEL,
+                        &url,
+                        response,
+                        identity,
+                        &super::super::classify,
+                    )
+                })
+                .unwrap();
             assert_eq!(replay["result"], output["result"]);
             assert_eq!(replay["raw_evidence"], output["raw_evidence"]);
         }
@@ -652,7 +825,12 @@ pub(crate) mod learning {
         fn transport_preserves_rate_limit_and_challenge_read_failure_facts_with_cookies() {
             let fixture = TransportFixture::new();
             let body = br#"{"data":"q7Z"}"#;
-            let (url, worker) = server(http_response("429 Too Many Requests", "Content-Type: application/json\r\nSet-Cookie: arbitrary=q7Z\r\nRetry-After: 120\r\n", body, body.len()));
+            let (url, worker) = server(http_response(
+                "429 Too Many Requests",
+                "Content-Type: application/json\r\nSet-Cookie: arbitrary=q7Z\r\nRetry-After: 120\r\n",
+                body,
+                body.len(),
+            ));
             let result = fixture.fetch(&url);
             worker.join();
             assert!(result.is_err());
@@ -660,20 +838,47 @@ pub(crate) mod learning {
             assert!(status.cooldown_wait > Duration::from_secs(100));
             assert!(!status.safety_latched);
             assert_eq!(status.consecutive_network_failures, 0);
-            assert!(!fixture.root.join("cache").join(ResponseCache::name(&url)).exists());
-            assert!(std::fs::read_dir(fixture.root.join("rejected")).unwrap().next().is_none());
+            assert!(
+                !fixture
+                    .root
+                    .join("cache")
+                    .join(ResponseCache::name(&url))
+                    .exists()
+            );
+            assert!(
+                std::fs::read_dir(fixture.root.join("rejected"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
 
             let fixture = TransportFixture::new();
             let body = b"<input name=captcha>";
-            let (url, worker) = server(http_response("200 OK", "Content-Type: text/html\r\nSet-Cookie: arbitrary=q7Z\r\n", body, body.len() + 20));
+            let (url, worker) = server(http_response(
+                "200 OK",
+                "Content-Type: text/html\r\nSet-Cookie: arbitrary=q7Z\r\n",
+                body,
+                body.len() + 20,
+            ));
             let result = fixture.fetch(&url);
             worker.join();
             assert!(result.is_err());
             let status = fixture.transport.governor.status().unwrap();
             assert!(!status.safety_latched);
             assert_eq!(status.consecutive_network_failures, 1);
-            assert!(!fixture.root.join("cache").join(ResponseCache::name(&url)).exists());
-            assert!(std::fs::read_dir(fixture.root.join("rejected")).unwrap().next().is_none());
+            assert!(
+                !fixture
+                    .root
+                    .join("cache")
+                    .join(ResponseCache::name(&url))
+                    .exists()
+            );
+            assert!(
+                std::fs::read_dir(fixture.root.join("rejected"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
         }
 
         #[test]
@@ -681,22 +886,35 @@ pub(crate) mod learning {
             let fixture = TransportFixture::new();
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
-            let url = Url::parse(&format!("http://{}/tree", listener.local_addr().unwrap())).unwrap();
+            let url =
+                Url::parse(&format!("http://{}/tree", listener.local_addr().unwrap())).unwrap();
             let body = br#"{"data":"q7Z","tree":[]}"#;
             let cached = Cached {
-                version: 1, url: url.to_string(), status: 200,
+                version: 1,
+                url: url.to_string(),
+                status: 200,
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body_base64: STANDARD.encode(body), sha256: sha256_hex(body), fetched_at_unix_ms: 1,
+                body_base64: STANDARD.encode(body),
+                sha256: sha256_hex(body),
+                fetched_at_unix_ms: 1,
             };
             let bytes = serde_json::to_vec(&cached).unwrap();
             let path = fixture.root.join("cache").join(ResponseCache::name(&url));
-            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap();
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap();
             file.write_all(&bytes).unwrap();
             drop(file);
             let result = fixture.fetch(&url);
             let unchanged = std::fs::read(&path).unwrap() == bytes;
             let no_connection = matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock);
-            assert!(result.is_err(), "unproven legacy cache must not become output");
+            assert!(
+                result.is_err(),
+                "unproven legacy cache must not become output"
+            );
             assert!(unchanged);
             assert!(no_connection);
         }
@@ -706,28 +924,56 @@ pub(crate) mod learning {
             let fixture = TransportFixture::new();
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
-            let url = Url::parse(&format!("http://{}/tree", listener.local_addr().unwrap())).unwrap();
+            let url =
+                Url::parse(&format!("http://{}/tree", listener.local_addr().unwrap())).unwrap();
             let body = br#"{"data":"q7Z","tree":[]}"#;
             let cached = Cached {
-                version: 1, url: url.to_string(), status: 200,
+                version: 1,
+                url: url.to_string(),
+                status: 200,
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body_base64: STANDARD.encode(body), sha256: sha256_hex(body), fetched_at_unix_ms: 1,
+                body_base64: STANDARD.encode(body),
+                sha256: sha256_hex(body),
+                fetched_at_unix_ms: 1,
             };
             let bytes = serde_json::to_vec(&cached).unwrap();
             let path = fixture.root.join("cache").join(ResponseCache::name(&url));
-            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap();
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap();
             file.write_all(&bytes).unwrap();
             drop(file);
-            let result = fixture.cache.get(&url, Surface::Tree, true, |response, identity| {
-                inventory_output(&super::super::SOURCE, super::super::TYPE_LABEL, &url,
-                    response, identity, &super::super::classify)
-            });
+            let result = fixture
+                .cache
+                .get(&url, Surface::Tree, true, |response, identity| {
+                    inventory_output(
+                        &super::super::SOURCE,
+                        super::super::TYPE_LABEL,
+                        &url,
+                        response,
+                        identity,
+                        &super::super::classify,
+                    )
+                });
             let unchanged = std::fs::read(&path).unwrap() == bytes;
             let no_connection = matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock);
-            let attempts = fixture.cache.test_forbidden_operations.as_ref().unwrap().get();
-            assert!(result.is_err(), "unproven initial legacy cache must not become output");
-            assert_eq!(attempts, 0,
-                "initial cache handling must not attempt production governor operations or refetch");
+            let attempts = fixture
+                .cache
+                .test_forbidden_operations
+                .as_ref()
+                .unwrap()
+                .get();
+            assert!(
+                result.is_err(),
+                "unproven initial legacy cache must not become output"
+            );
+            assert_eq!(
+                attempts, 0,
+                "initial cache handling must not attempt production governor operations or refetch"
+            );
             assert!(unchanged);
             assert!(no_connection);
         }
@@ -744,8 +990,14 @@ pub(crate) mod learning {
             assert_eq!(single_content_type(&headers), None);
             headers.insert("content-type", HeaderValue::from_static("not a media type"));
             assert_eq!(single_content_type(&headers), None);
-            assert_eq!(ambiguous_content_assessment(b"ordinary", true), ChallengeAssessment::Unreviewed);
-            assert_eq!(ambiguous_content_assessment(b"<input name=captcha>", true), ChallengeAssessment::Detected);
+            assert_eq!(
+                ambiguous_content_assessment(b"ordinary", true),
+                ChallengeAssessment::Unreviewed
+            );
+            assert_eq!(
+                ambiguous_content_assessment(b"<input name=captcha>", true),
+                ChallengeAssessment::Detected
+            );
         }
 
         #[test]
@@ -754,8 +1006,11 @@ pub(crate) mod learning {
             headers.append("retry-after", HeaderValue::from_static("5"));
             headers.append("retry-after", HeaderValue::from_static("120"));
             headers.append("retry-after", HeaderValue::from_bytes(b"\xff").unwrap());
-            let observed: Vec<_> = headers.get_all("retry-after").iter()
-                .map(|value| value.to_str().ok()).collect();
+            let observed: Vec<_> = headers
+                .get_all("retry-after")
+                .iter()
+                .map(|value| value.to_str().ok())
+                .collect();
             assert_eq!(observed, vec![Some("5"), Some("120"), None]);
         }
 
@@ -764,15 +1019,34 @@ pub(crate) mod learning {
             for cookie in ["Set-Cookie: \r\n", "sEt-CoOkIe: a=b\r\nSet-Cookie: c=d\r\n"] {
                 let fixture = TransportFixture::new();
                 let body = b"ordinary raw source";
-                let (mut url, worker) = server(http_response("200 OK", &format!("Content-Type: application/octet-stream\r\n{cookie}"), body, body.len()));
+                let (mut url, worker) = server(http_response(
+                    "200 OK",
+                    &format!("Content-Type: application/octet-stream\r\n{cookie}"),
+                    body,
+                    body.len(),
+                ));
                 url.set_path(&format!("/{}", git_blob_sha(body, 40)));
-                let result = fixture.transport.fetch(&fixture.cache, &url, Surface::Raw, |_, _| -> Result<(), Error> {
-                    panic!("cookie response reached consumer")
-                });
+                let result = fixture.transport.fetch(
+                    &fixture.cache,
+                    &url,
+                    Surface::Raw,
+                    |_, _| -> Result<(), Error> { panic!("cookie response reached consumer") },
+                );
                 worker.join();
                 assert_eq!(result.err().unwrap().code, "sensitive_response_withheld");
-                assert!(!fixture.root.join("cache").join(ResponseCache::name(&url)).exists());
-                assert!(std::fs::read_dir(fixture.root.join("rejected")).unwrap().next().is_none());
+                assert!(
+                    !fixture
+                        .root
+                        .join("cache")
+                        .join(ResponseCache::name(&url))
+                        .exists()
+                );
+                assert!(
+                    std::fs::read_dir(fixture.root.join("rejected"))
+                        .unwrap()
+                        .next()
+                        .is_none()
+                );
                 let status = fixture.transport.governor.status().unwrap();
                 assert!(!status.safety_latched);
                 assert_eq!(status.consecutive_network_failures, 0);
@@ -788,12 +1062,23 @@ pub(crate) mod learning {
             ] {
                 let fixture = TransportFixture::new();
                 let url = Url::parse("http://127.0.0.1:9/tree").unwrap();
-                let cached = Cached { version: 1, url: url.to_string(), status: 200,
+                let cached = Cached {
+                    version: 1,
+                    url: url.to_string(),
+                    status: 200,
                     headers: BTreeMap::from([("content-type".into(), mime.into())]),
-                    body_base64: STANDARD.encode(body), sha256: sha256_hex(body), fetched_at_unix_ms: 1 };
+                    body_base64: STANDARD.encode(body),
+                    sha256: sha256_hex(body),
+                    fetched_at_unix_ms: 1,
+                };
                 let bytes = serde_json::to_vec(&cached).unwrap();
                 let path = fixture.root.join("cache").join(ResponseCache::name(&url));
-                let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap();
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .unwrap();
                 file.write_all(&bytes).unwrap();
                 drop(file);
                 let (response, admission) = fixture.cache.load(&url).unwrap().unwrap();
@@ -804,18 +1089,46 @@ pub(crate) mod learning {
                     assert!(!fixture.transport.governor.status().unwrap().safety_latched);
                 } else {
                     for online in [false, true] {
-                        let result = fixture.cache.get(&url, Surface::Tree, online, |_, _| -> Result<(), Error> { panic!("legacy reached consumer") });
+                        let result = fixture.cache.get(
+                            &url,
+                            Surface::Tree,
+                            online,
+                            |_, _| -> Result<(), Error> { panic!("legacy reached consumer") },
+                        );
                         assert!(result.is_err());
                     }
-                    assert_eq!(fixture.cache.test_forbidden_operations.as_ref().unwrap().get(), 0);
+                    assert_eq!(
+                        fixture
+                            .cache
+                            .test_forbidden_operations
+                            .as_ref()
+                            .unwrap()
+                            .get(),
+                        0
+                    );
                     let lease = net::acquire(&fixture.transport.governor).unwrap();
-                    let result = process_cached(Surface::Tree, &response, &identity, admission, lease, |_, _| -> Result<(), Error> { panic!("legacy reached consumer") });
+                    let result = process_cached(
+                        Surface::Tree,
+                        &response,
+                        &identity,
+                        admission,
+                        lease,
+                        |_, _| -> Result<(), Error> { panic!("legacy reached consumer") },
+                    );
                     assert!(result.is_err());
                     assert!(!fixture.transport.governor.status().unwrap().safety_latched);
                 }
                 assert_eq!(std::fs::read(&path).unwrap(), bytes);
-                let rejected = fixture.root.join("rejected").join(ResponseCache::name(&url));
-                let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&rejected).unwrap();
+                let rejected = fixture
+                    .root
+                    .join("rejected")
+                    .join(ResponseCache::name(&url));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&rejected)
+                    .unwrap();
                 file.write_all(&bytes).unwrap();
                 drop(file);
                 fixture.cache.save_rejected(&response).unwrap();
@@ -830,15 +1143,31 @@ pub(crate) mod learning {
             let fixture = TransportFixture::new();
             let url = Url::parse("http://127.0.0.1:9/tree").unwrap();
             let body = b"<input name=captcha>";
-            let cached = Cached { version: 1, url: url.to_string(), status: 200,
+            let cached = Cached {
+                version: 1,
+                url: url.to_string(),
+                status: 200,
                 headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
-                body_base64: STANDARD.encode(body), sha256: sha256_hex(body), fetched_at_unix_ms: 1 };
+                body_base64: STANDARD.encode(body),
+                sha256: sha256_hex(body),
+                fetched_at_unix_ms: 1,
+            };
             let bytes = serde_json::to_vec(&cached).unwrap();
             let path = fixture.root.join("cache").join(ResponseCache::name(&url));
-            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap();
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap();
             file.write_all(&bytes).unwrap();
             drop(file);
-            let result = fixture.transport.fetch(&fixture.cache, &url, Surface::Tree, |_, _| -> Result<(), Error> { panic!("legacy reached consumer") });
+            let result = fixture.transport.fetch(
+                &fixture.cache,
+                &url,
+                Surface::Tree,
+                |_, _| -> Result<(), Error> { panic!("legacy reached consumer") },
+            );
             assert_eq!(result.err().unwrap().code, "safety_latched");
             assert!(!fixture.transport.governor.status().unwrap().safety_latched);
             assert_eq!(std::fs::read(path).unwrap(), bytes);
@@ -849,28 +1178,61 @@ pub(crate) mod learning {
             for (version, digest) in [(3, sha256_hex(b"ordinary")), (2, "0".repeat(64))] {
                 let fixture = TransportFixture::new();
                 let url = Url::parse("http://127.0.0.1:9/tree").unwrap();
-                let cached = Cached { version, url: url.to_string(), status: 200,
+                let cached = Cached {
+                    version,
+                    url: url.to_string(),
+                    status: 200,
                     headers: BTreeMap::from([("content-type".into(), "text/plain".into())]),
-                    body_base64: STANDARD.encode(b"ordinary"), sha256: digest, fetched_at_unix_ms: 1 };
+                    body_base64: STANDARD.encode(b"ordinary"),
+                    sha256: digest,
+                    fetched_at_unix_ms: 1,
+                };
                 let bytes = serde_json::to_vec(&cached).unwrap();
                 let path = fixture.root.join("cache").join(ResponseCache::name(&url));
-                let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap();
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .unwrap();
                 file.write_all(&bytes).unwrap();
                 drop(file);
                 for online in [false, true] {
-                    assert!(fixture.cache.get(&url, Surface::Tree, online, |_, _| -> Result<(), Error> { panic!("corrupt cache reached consumer") }).is_err());
+                    assert!(
+                        fixture
+                            .cache
+                            .get(&url, Surface::Tree, online, |_, _| -> Result<(), Error> {
+                                panic!("corrupt cache reached consumer")
+                            })
+                            .is_err()
+                    );
                 }
-                assert_eq!(fixture.cache.test_forbidden_operations.as_ref().unwrap().get(), 0);
+                assert_eq!(
+                    fixture
+                        .cache
+                        .test_forbidden_operations
+                        .as_ref()
+                        .unwrap()
+                        .get(),
+                    0
+                );
                 assert_eq!(std::fs::read(path).unwrap(), bytes);
             }
         }
 
         fn retained_json(url: &Url, body: &[u8]) -> Response {
             Response {
-                url: url.to_string(), status: 200,
-                headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
-                body: body.to_vec(), sha256: sha256_hex(body), fetched_at_unix_ms: 1,
-                cache_status: CacheStatus::Miss, revalidated_at_unix_ms: None,
+                url: url.to_string(),
+                status: 200,
+                headers: BTreeMap::from([(
+                    "content-type".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                body: body.to_vec(),
+                sha256: sha256_hex(body),
+                fetched_at_unix_ms: 1,
+                cache_status: CacheStatus::Miss,
+                revalidated_at_unix_ms: None,
                 revalidation_status: None,
             }
         }
@@ -882,7 +1244,8 @@ pub(crate) mod learning {
             let root = "17ba6f4f78b8480cfd0746758b08bacb877d0c9c";
             let commit = json!({"sha":"1111111111111111111111111111111111111111",
                 "commit":{"tree":{"sha":root}},"author":{"login":"course-owner"},
-                "committer":{"login":"web-flow"}}).to_string();
+                "committer":{"login":"web-flow"}})
+            .to_string();
             let body = br#"{"sha":"17ba6f4f78b8480cfd0746758b08bacb877d0c9c","truncated":false,"tree":[
                 {"path":"docs","mode":"040000","type":"tree","sha":"640ba63b141ba35b527fee65e78140148c8d0a5b"},
                 {"path":"docs/note.txt","mode":"100644","type":"blob","sha":"ce013625030ba8dba906f756967f9e9ca394464a","size":6}
@@ -890,33 +1253,76 @@ pub(crate) mod learning {
             let branch = spec.tree_url().unwrap();
             let old = retained_json(&branch, b"{\"sha\":\"old-branch-evidence\"}");
             fixture.cache.save(&old).unwrap();
-            let original_path = fixture.root.join("cache").join(ResponseCache::name(&branch));
+            let original_path = fixture
+                .root
+                .join("cache")
+                .join(ResponseCache::name(&branch));
             let original = std::fs::read(&original_path).unwrap();
-            fixture.cache.save(&retained_json(&spec.commit_url().unwrap(), commit.as_bytes())).unwrap();
+            fixture
+                .cache
+                .save(&retained_json(
+                    &spec.commit_url().unwrap(),
+                    commit.as_bytes(),
+                ))
+                .unwrap();
             let immutable = spec.tree_at(root).unwrap();
-            fixture.cache.save(&retained_json(&immutable, body)).unwrap();
-            let output = with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
-                inventory_output(spec, super::super::TYPE_LABEL, url, response, identity, &super::super::classify)
-            }).unwrap();
+            fixture
+                .cache
+                .save(&retained_json(&immutable, body))
+                .unwrap();
+            let output =
+                with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
+                    inventory_output(
+                        spec,
+                        super::super::TYPE_LABEL,
+                        url,
+                        response,
+                        identity,
+                        &super::super::classify,
+                    )
+                })
+                .unwrap();
             assert_eq!(output["result"], "inventory_snapshot");
             assert_eq!(output["tree_sha"], root);
             assert_eq!(output["entries"][1]["path"], "docs/note.txt");
             assert_eq!(output["retrieval"]["source_url"], immutable.as_str());
             assert_eq!(std::fs::read(original_path).unwrap(), original);
-            assert_eq!(fixture.cache.test_forbidden_operations.as_ref().unwrap().get(), 0);
+            assert_eq!(
+                fixture
+                    .cache
+                    .test_forbidden_operations
+                    .as_ref()
+                    .unwrap()
+                    .get(),
+                0
+            );
         }
 
         #[test]
         fn another_valid_tree_cannot_replace_the_requested_immutable_tree() {
             let spec = &super::super::SOURCE;
-            let url = spec.tree_at("17ba6f4f78b8480cfd0746758b08bacb877d0c9c").unwrap();
+            let url = spec
+                .tree_at("17ba6f4f78b8480cfd0746758b08bacb877d0c9c")
+                .unwrap();
             let body = br#"{"sha":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","truncated":false,"tree":[]}"#;
             let response = retained_json(&url, body);
             let identity = observed_identity(Surface::Tree, &url, body, Some("application/json"));
-            let output = inventory_output(spec, super::super::TYPE_LABEL, &url, &response, &identity, &super::super::classify).unwrap();
+            let output = inventory_output(
+                spec,
+                super::super::TYPE_LABEL,
+                &url,
+                &response,
+                &identity,
+                &super::super::classify,
+            )
+            .unwrap();
             assert_eq!(output["result"], "degraded");
             assert_eq!(output["fallback_reason"], "tree_identity_mismatch");
             assert_eq!(output["entries"], json!([]));
+            assert_eq!(output["complete"], false);
+            assert_eq!(output["complete_reason"], "extent_not_verified");
+            assert_eq!(output["pagination"]["state"], "refused");
+            assert_eq!(output["pagination"]["drift"], "identity_mismatch");
             assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body));
         }
 
@@ -926,26 +1332,84 @@ pub(crate) mod learning {
             let spec = &super::super::SOURCE;
             let commit_url = spec.commit_url().unwrap();
             let body = br#"{"sha":"1111111111111111111111111111111111111111","commit":{"tree":{"sha":"invalid","url":"https://foreign.invalid/tree"}},"author":{"login":"course-owner"},"committer":{"login":"web-flow"}}"#;
-            fixture.cache.save(&retained_json(&commit_url, body)).unwrap();
+            fixture
+                .cache
+                .save(&retained_json(&commit_url, body))
+                .unwrap();
             for action in ["inventory", "search", "fetch"] {
-                let output = with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
-                    match action {
-                        "inventory" => inventory_output(spec, super::super::TYPE_LABEL, url, response, identity, &super::super::classify),
-                        "search" => search_output(spec, super::super::TYPE_LABEL, url, response, identity, "note", &super::super::classify),
-                        _ => degraded_admission_output(spec, super::super::RAW_TYPE_LABEL, "note.txt", response, identity, identity.tree_error().unwrap_or("upstream_parse")),
-                    }
-                }).unwrap();
+                let output =
+                    with_resolved_tree(&fixture.cache, spec, true, |response, identity, url| {
+                        match action {
+                            "inventory" => inventory_output(
+                                spec,
+                                super::super::TYPE_LABEL,
+                                url,
+                                response,
+                                identity,
+                                &super::super::classify,
+                            ),
+                            "search" => search_output(
+                                spec,
+                                super::super::TYPE_LABEL,
+                                url,
+                                response,
+                                identity,
+                                "note",
+                                &super::super::classify,
+                            ),
+                            _ => degraded_admission_output(
+                                spec,
+                                super::super::RAW_TYPE_LABEL,
+                                "note.txt",
+                                response,
+                                identity,
+                                identity.tree_error().unwrap_or("upstream_parse"),
+                            ),
+                        }
+                    })
+                    .unwrap();
                 assert_eq!(output["result"], "degraded", "{action}");
-                assert_eq!(output["fallback_reason"], "commit_tree_unresolved", "{action}");
-                assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body), "{action}");
-                assert_eq!(output["retrieval"]["source_url"], commit_url.as_str(), "{action}");
+                assert_eq!(
+                    output["fallback_reason"], "commit_tree_unresolved",
+                    "{action}"
+                );
+                assert_eq!(
+                    output["raw_evidence"]["data"],
+                    STANDARD.encode(body),
+                    "{action}"
+                );
+                assert_eq!(
+                    output["retrieval"]["source_url"],
+                    commit_url.as_str(),
+                    "{action}"
+                );
                 match action {
-                    "inventory" => assert_eq!(output["entries"], json!([])),
-                    "search" => assert_eq!(output["matches"], json!([])),
+                    "inventory" => {
+                        assert_eq!(output["entries"], json!([]));
+                        assert_eq!(output["complete"], false);
+                        assert_eq!(output["complete_reason"], "extent_not_verified");
+                        assert_eq!(output["pagination"]["state"], "refused");
+                        assert_eq!(output["pagination"]["drift"], "identity_unverified");
+                    }
+                    "search" => {
+                        assert_eq!(output["matches"], json!([]));
+                        assert_eq!(output["complete"], false);
+                        assert_eq!(output["complete_reason"], "extent_not_verified");
+                        assert_eq!(output["pagination"]["state"], "refused");
+                        assert_eq!(output["pagination"]["drift"], "identity_unverified");
+                    }
                     _ => assert!(output["bytes"].is_null()),
                 }
             }
-            assert_eq!(fixture.cache.test_forbidden_operations.as_ref().unwrap().get(), 0);
+            assert_eq!(
+                fixture
+                    .cache
+                    .test_forbidden_operations
+                    .as_ref()
+                    .unwrap()
+                    .get(),
+                0
+            );
         }
     }
 
@@ -984,18 +1448,26 @@ pub(crate) mod learning {
         fn member_name(bytes: &[u8], author: Option<PublicAuthor<'_>>) -> Option<(usize, usize)> {
             let login = author?.login;
             let handle = login.strip_suffix("[bot]").unwrap_or(login);
-            if handle.is_empty() || handle.len() > 39
-                || handle.starts_with('-') || handle.ends_with('-')
-                || !handle.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            if handle.is_empty()
+                || handle.len() > 39
+                || handle.starts_with('-')
+                || handle.ends_with('-')
+                || !handle
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
             {
                 return None;
             }
             // Borrowed strings point into these original bytes. An escaped
             // value cannot be borrowed; an escaped member fails this suffix.
             let value_start = (login.as_ptr() as usize)
-                .checked_sub(bytes.as_ptr() as usize)?.checked_sub(1)?;
-            let prefix = bytes.get(..value_start)?.trim_ascii_end()
-                .strip_suffix(b":")?.trim_ascii_end();
+                .checked_sub(bytes.as_ptr() as usize)?
+                .checked_sub(1)?;
+            let prefix = bytes
+                .get(..value_start)?
+                .trim_ascii_end()
+                .strip_suffix(b":")?
+                .trim_ascii_end();
             let start = prefix.strip_suffix(b"\"login\"")?.len() + 1;
             Some((start, prefix.len() - 1))
         }
@@ -1006,7 +1478,10 @@ pub(crate) mod learning {
         let Ok(authors) = serde_json::from_slice::<PublicAuthors<'_>>(bytes) else {
             return private_evidence(bytes, mime);
         };
-        let public_names = [member_name(bytes, authors.author), member_name(bytes, authors.committer)];
+        let public_names = [
+            member_name(bytes, authors.author),
+            member_name(bytes, authors.committer),
+        ];
         private_evidence_with_public_names(bytes, mime, Some(&public_names))
     }
 
@@ -1109,11 +1584,11 @@ pub(crate) mod learning {
         }
 
         // An HTML form control that carries a credential by name or type.
-        let html = mime.is_some_and(|mime| {
-            matches!(mime, "text/html" | "application/xhtml+xml")
-        }) || bytes.iter()
-            .find(|byte| !byte.is_ascii_whitespace())
-            .is_some_and(|byte| *byte == b'<');
+        let html = mime.is_some_and(|mime| matches!(mime, "text/html" | "application/xhtml+xml"))
+            || bytes
+                .iter()
+                .find(|byte| !byte.is_ascii_whitespace())
+                .is_some_and(|byte| *byte == b'<');
         if html {
             // Bytes that are not UTF-8 text are unreviewable, not a
             // credential claim: the assessment refuses them separately.
@@ -1126,9 +1601,13 @@ pub(crate) mod learning {
             };
             return document.select(&selector).any(|element| {
                 let element = element.value();
-                element.attr("type").is_some_and(|value| value.eq_ignore_ascii_case("password"))
+                element
+                    .attr("type")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("password"))
                     || ["name", "id", "autocomplete"].iter().any(|attribute| {
-                        element.attr(attribute).is_some_and(|value| private_name(value))
+                        element
+                            .attr(attribute)
+                            .is_some_and(|value| private_name(value))
                     })
             });
         }
@@ -1146,20 +1625,28 @@ pub(crate) mod learning {
         let url = Url::parse(&response.url).map_err(|_| upstream_parse())?;
         match response_assessment(surface, &url, response, identity) {
             ChallengeAssessment::Detected => {
-                lease.finish_without_request().map_err(|_| governor_error())?;
+                lease
+                    .finish_without_request()
+                    .map_err(|_| governor_error())?;
                 Err(challenge_refusal())
             }
             ChallengeAssessment::Unreviewed => {
-                lease.finish_without_request().map_err(|_| governor_error())?;
+                lease
+                    .finish_without_request()
+                    .map_err(|_| governor_error())?;
                 Err(unreviewed_refusal())
             }
             ChallengeAssessment::Clear => {
                 if matches!(admission, CacheAdmission::Legacy) {
-                    lease.finish_without_request().map_err(|_| governor_error())?;
+                    lease
+                        .finish_without_request()
+                        .map_err(|_| governor_error())?;
                     return Err(unreviewed_cache());
                 }
                 let result = process(response, identity);
-                lease.finish_without_request().map_err(|_| governor_error())?;
+                lease
+                    .finish_without_request()
+                    .map_err(|_| governor_error())?;
                 result
             }
         }
@@ -1197,8 +1684,11 @@ pub(crate) mod learning {
             if !valid_upstream_sha(sha) {
                 return Err(upstream_parse());
             }
-            Url::parse(&format!("https://api.github.com/repos/{}/{}/git/blobs/{sha}", self.owner, self.name))
-                .map_err(|_| invalid_url())
+            Url::parse(&format!(
+                "https://api.github.com/repos/{}/{}/git/blobs/{sha}",
+                self.owner, self.name
+            ))
+            .map_err(|_| invalid_url())
         }
         pub(crate) fn full_name(&self) -> String {
             format!("{}/{}", self.owner, self.name)
@@ -1243,7 +1733,6 @@ pub(crate) mod learning {
             url.query_pairs_mut().append_pair("recursive", "1");
             Ok(url)
         }
-
     }
 
     /// The shared learning classifier's material classes. `AnswerMaterial`
@@ -1295,11 +1784,13 @@ pub(crate) mod learning {
     /// answer directory. Components are compared whole, so a root-level
     /// `answers/` directory is classified exactly like a nested one.
     pub(crate) fn answer_path_component(path: &str) -> bool {
-        path.split('/')
-            .any(|component| {
-                let component = component.to_ascii_lowercase();
-                matches!(component.as_str(), "answer" | "answers" | "answerkey" | "solutions")
-            })
+        path.split('/').any(|component| {
+            let component = component.to_ascii_lowercase();
+            matches!(
+                component.as_str(),
+                "answer" | "answers" | "answerkey" | "solutions"
+            )
+        })
     }
 
     /// A blob identity that is also listed as answer material in the same
@@ -1313,8 +1804,7 @@ pub(crate) mod learning {
             .iter()
             .filter(|entry| entry.sha == blob_sha)
             .any(|entry| {
-                !classify(&entry.path).retrieval_allowed()
-                    || answer_path_component(&entry.path)
+                !classify(&entry.path).retrieval_allowed() || answer_path_component(&entry.path)
             })
     }
 
@@ -1361,8 +1851,7 @@ pub(crate) mod learning {
             return false;
         }
         subtype.eq_ignore_ascii_case("json")
-            || (subtype.ends_with("+json")
-                && !subtype.eq_ignore_ascii_case("vnd.github.raw+json"))
+            || (subtype.ends_with("+json") && !subtype.eq_ignore_ascii_case("vnd.github.raw+json"))
     }
 
     pub(crate) fn parse_tree(
@@ -1372,8 +1861,7 @@ pub(crate) mod learning {
         if !content_type.is_some_and(json_media_type) {
             return Err(unexpected_content());
         }
-        let envelope: TreeEnvelope =
-            serde_json::from_slice(body).map_err(|_| upstream_parse())?;
+        let envelope: TreeEnvelope = serde_json::from_slice(body).map_err(|_| upstream_parse())?;
         if !valid_upstream_sha(&envelope.sha) || envelope.tree.len() > MAX_ENTRIES {
             return Err(upstream_parse());
         }
@@ -1412,14 +1900,15 @@ pub(crate) mod learning {
     }
 
     pub(crate) fn verify_tree(root_sha: &str, entries: &[TreeEntry]) -> Result<(), Error> {
-        crate::git_tree::verify_recursive_tree(root_sha, entries.iter().map(|entry| {
-            crate::git_tree::GitTreeEntry {
+        crate::git_tree::verify_recursive_tree(
+            root_sha,
+            entries.iter().map(|entry| crate::git_tree::GitTreeEntry {
                 path: &entry.path,
                 mode: &entry.mode,
                 object_type: &entry.object_type,
                 sha: &entry.sha,
-            }
-        }))
+            }),
+        )
         .map_err(|_| upstream_parse())
     }
 
@@ -1427,7 +1916,12 @@ pub(crate) mod learning {
     /// license file name rather than by any module-specific classification.
     pub(crate) fn repository_license(entries: &[TreeEntry]) -> Option<(String, u64)> {
         let entry = entries.iter().find(|entry| {
-            let name = entry.path.rsplit('/').next().unwrap_or(&entry.path).to_ascii_lowercase();
+            let name = entry
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&entry.path)
+                .to_ascii_lowercase();
             entry.kind() == Some("file")
                 && (name.starts_with("license") || name.starts_with("copying"))
         })?;
@@ -1438,10 +1932,7 @@ pub(crate) mod learning {
     /// The license object provenance for an admitted tree. A historical SPDX
     /// reference is unknown for this version until its text identity has
     /// actually been reviewed; a conventional filename is not that review.
-    pub(crate) fn verified_license(
-        spec: &SourceSpec,
-        entries: &[TreeEntry],
-    ) -> Value {
+    pub(crate) fn verified_license(spec: &SourceSpec, entries: &[TreeEntry]) -> Value {
         let Some((blob_sha, size)) = repository_license(entries) else {
             return unknown_license();
         };
@@ -1476,8 +1967,7 @@ pub(crate) mod learning {
     /// The immutable blob identity a blob URL requests.
     fn requested_blob_sha(url: &Url) -> Option<&str> {
         let segment = url.path_segments()?.next_back()?;
-        (segment.len() == 40 || segment.len() == 64)
-            .then_some(segment)
+        (segment.len() == 40 || segment.len() == 64).then_some(segment)
     }
 
     /// A complete, object-verified tree and the entries it is bound to.
@@ -1526,11 +2016,16 @@ pub(crate) mod learning {
     ) -> ObservedIdentity {
         match surface {
             Surface::Tree => match admit_tree(body, content_type).and_then(|(tree_sha, entries)| {
-                if url.path_segments().and_then(|mut segments| segments.next_back())
+                if url
+                    .path_segments()
+                    .and_then(|mut segments| segments.next_back())
                     .filter(|segment| valid_upstream_sha(segment))
                     .is_some_and(|requested| requested != tree_sha)
                 {
-                    return Err(Error::new("tree_identity_mismatch", "the response is not the requested immutable tree"));
+                    return Err(Error::new(
+                        "tree_identity_mismatch",
+                        "the response is not the requested immutable tree",
+                    ));
                 }
                 Ok((tree_sha, entries))
             }) {
@@ -1548,11 +2043,21 @@ pub(crate) mod learning {
                 },
             },
             Surface::Raw => {
-                let blob_sha = requested_blob_sha(url)
-                    .map(|requested| git_blob_sha(body, requested.len()));
-                ObservedIdentity { surface, tree: None, tree_error: None, blob_sha }
+                let blob_sha =
+                    requested_blob_sha(url).map(|requested| git_blob_sha(body, requested.len()));
+                ObservedIdentity {
+                    surface,
+                    tree: None,
+                    tree_error: None,
+                    blob_sha,
+                }
             }
-            Surface::Commit => ObservedIdentity { surface, tree: None, tree_error: None, blob_sha: None },
+            Surface::Commit => ObservedIdentity {
+                surface,
+                tree: None,
+                tree_error: None,
+                blob_sha: None,
+            },
         }
     }
 
@@ -1560,11 +2065,7 @@ pub(crate) mod learning {
     /// response is the original inventory evidence and stays re-readable even
     /// when it cannot be normalized. A blob response is reusable material only
     /// when its bytes are exactly the immutable object its URL requests.
-    fn surface_reusable(
-        surface: Surface,
-        url: &Url,
-        identity: &ObservedIdentity,
-    ) -> bool {
+    fn surface_reusable(surface: Surface, url: &Url, identity: &ObservedIdentity) -> bool {
         match surface {
             // A tree response is the original inventory evidence. It stays
             // re-readable offline even when it cannot be normalized, and it
@@ -1610,8 +2111,7 @@ pub(crate) mod learning {
         let forbidden: BTreeSet<&str> = all_entries
             .iter()
             .filter(|entry| {
-                !classify(&entry.path).retrieval_allowed()
-                    || answer_path_component(&entry.path)
+                !classify(&entry.path).retrieval_allowed() || answer_path_component(&entry.path)
             })
             .map(|entry| entry.sha.as_str())
             .collect();
@@ -1811,18 +2311,25 @@ pub(crate) mod learning {
             if body.len() > MAX_TREE_BODY || sha256_hex(&body) != cached.sha256 {
                 return Err(corrupt_cache());
             }
-            let admission = if cached.version == 1 { CacheAdmission::Legacy } else { CacheAdmission::CookieReviewed };
-            Ok(Some((Response {
-                url: cached.url,
-                status: cached.status,
-                headers: cached.headers,
-                body,
-                sha256: cached.sha256,
-                fetched_at_unix_ms: cached.fetched_at_unix_ms,
-                cache_status: CacheStatus::Hit,
-                revalidated_at_unix_ms: None,
-                revalidation_status: None,
-            }, admission)))
+            let admission = if cached.version == 1 {
+                CacheAdmission::Legacy
+            } else {
+                CacheAdmission::CookieReviewed
+            };
+            Ok(Some((
+                Response {
+                    url: cached.url,
+                    status: cached.status,
+                    headers: cached.headers,
+                    body,
+                    sha256: cached.sha256,
+                    fetched_at_unix_ms: cached.fetched_at_unix_ms,
+                    cache_status: CacheStatus::Hit,
+                    revalidated_at_unix_ms: None,
+                    revalidation_status: None,
+                },
+                admission,
+            )))
         }
 
         fn save(&self, response: &Response) -> Result<(), Error> {
@@ -1836,7 +2343,12 @@ pub(crate) mod learning {
             self.save_in(&directory, response, true)
         }
 
-        fn save_in(&self, directory: &File, response: &Response, rejected: bool) -> Result<(), Error> {
+        fn save_in(
+            &self,
+            directory: &File,
+            response: &Response,
+            rejected: bool,
+        ) -> Result<(), Error> {
             let url = Url::parse(&response.url).map_err(|_| invalid_url())?;
             let name = Self::name(&url);
             if !rejected {
@@ -1899,15 +2411,21 @@ pub(crate) mod learning {
                             target.as_ptr(),
                             libc::RENAME_NOREPLACE,
                         )
-                    } == 0 {
+                    } == 0
+                    {
                         published = true;
                         break;
                     }
-                    if !rejected || std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists {
+                    if !rejected
+                        || std::io::Error::last_os_error().kind()
+                            != std::io::ErrorKind::AlreadyExists
+                    {
                         return Err(cache_error());
                     }
                 }
-                if !published { return Err(cache_error()); }
+                if !published {
+                    return Err(cache_error());
+                }
                 #[cfg(test)]
                 if let Some(callback) = self.test_after_publication {
                     callback(self, &url);
@@ -1916,13 +2434,7 @@ pub(crate) mod learning {
             })();
             if result.is_err() && !published {
                 // SAFETY: this is our exclusively created temporary, not user input.
-                unsafe {
-                    libc::unlinkat(
-                        directory.as_raw_fd(),
-                        temporary_name.as_ptr(),
-                        0,
-                    )
-                };
+                unsafe { libc::unlinkat(directory.as_raw_fd(), temporary_name.as_ptr(), 0) };
             }
             result
         }
@@ -2021,7 +2533,9 @@ pub(crate) mod learning {
                         &response.body,
                         response.headers.get("content-type").map(String::as_str),
                     );
-                    return process_cached(surface, &response, &identity, admission, lease, process);
+                    return process_cached(
+                        surface, &response, &identity, admission, lease, process,
+                    );
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -2068,9 +2582,10 @@ pub(crate) mod learning {
                 .map(str::to_owned);
             let declared_content_type = single_content_type(raw.headers()).map(str::to_owned);
             let issues_cookie = net::issues_session_cookie(raw.headers());
-            let mut challenge = raw.headers().iter().any(|(name, value)| {
-                net::challenge_header(name.as_str(), value.as_bytes())
-            });
+            let mut challenge = raw
+                .headers()
+                .iter()
+                .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
             // Whether the response body was consumed. An early refusal that
             // never read the body must not clear the shared failure history.
             let mut body_consumed = false;
@@ -2091,32 +2606,38 @@ pub(crate) mod learning {
                     return Err(body_limit());
                 }
                 let mut body = Vec::new();
-                let read = raw.by_ref()
-                    .take(limit as u64 + 1)
-                    .read_to_end(&mut body);
+                let read = raw.by_ref().take(limit as u64 + 1).read_to_end(&mut body);
                 body_consumed = read.is_ok();
                 let complete = read.is_ok() && !declared_oversize && body.len() <= limit;
-                let identity = observed_identity(surface, url, &body, declared_content_type.as_deref());
+                let identity =
+                    observed_identity(surface, url, &body, declared_content_type.as_deref());
                 // The retained prefix is assessed too: an interrupted or
                 // oversized body is never success, but a visible challenge
                 // still has to latch the shared governor.
                 let assessment = if declared_content_type.is_none() {
                     ambiguous_content_assessment(&body, complete)
-                } else { surface_assessment(
-                    surface,
-                    &body,
-                    declared_content_type.as_deref(),
-                    complete,
-                    matches!(surface, Surface::Raw)
-                        && identity.blob_sha().is_some()
-                        && identity.blob_sha() == requested_blob_sha(url),
-                ) };
+                } else {
+                    surface_assessment(
+                        surface,
+                        &body,
+                        declared_content_type.as_deref(),
+                        complete,
+                        matches!(surface, Surface::Raw)
+                            && identity.blob_sha().is_some()
+                            && identity.blob_sha() == requested_blob_sha(url),
+                    )
+                };
                 challenge |= assessment == ChallengeAssessment::Detected;
                 read.map_err(|_| network_error())?;
                 if body.len() > limit {
                     return Err(body_limit());
                 }
-                classify_status(status, challenge, retry_after.as_deref(), rate_remaining.as_deref())?;
+                classify_status(
+                    status,
+                    challenge,
+                    retry_after.as_deref(),
+                    rate_remaining.as_deref(),
+                )?;
                 if assessment == ChallengeAssessment::Unreviewed {
                     return Err(unreviewed_refusal());
                 }
@@ -2152,21 +2673,24 @@ pub(crate) mod learning {
                     Err(error) => Err(error),
                 }
             })();
-            let network_failure = result
-                .as_ref()
-                .is_err_and(|error| {
-                    if !body_consumed {
-                        // The body was never consumed, so the response is an
-                        // incomplete interaction whatever the reason.
-                        return true;
-                    }
-                    matches!(error.code, "network_error" | "body_limit")
-                });
-            lease.observe_http_many(
-                status,
-                raw.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()),
-                challenge,
-            ).map_err(|_| governor_error())?;
+            let network_failure = result.as_ref().is_err_and(|error| {
+                if !body_consumed {
+                    // The body was never consumed, so the response is an
+                    // incomplete interaction whatever the reason.
+                    return true;
+                }
+                matches!(error.code, "network_error" | "body_limit")
+            });
+            lease
+                .observe_http_many(
+                    status,
+                    raw.headers()
+                        .get_all("retry-after")
+                        .iter()
+                        .map(|value| value.to_str().ok()),
+                    challenge,
+                )
+                .map_err(|_| governor_error())?;
             drop(raw);
             lease
                 .finish(Outcome::Http {
@@ -2261,17 +2785,30 @@ pub(crate) mod learning {
         if response.url != expected.as_str() || response.status != 200 {
             return Err(upstream_parse());
         }
-        if !response.headers.get("content-type").is_some_and(|value| json_media_type(value)) {
+        if !response
+            .headers
+            .get("content-type")
+            .is_some_and(|value| json_media_type(value))
+        {
             return Err(unexpected_content());
         }
         #[derive(Deserialize)]
-        struct ObjectId { sha: String }
+        struct ObjectId {
+            sha: String,
+        }
         #[derive(Deserialize)]
-        struct CommitData { tree: ObjectId }
+        struct CommitData {
+            tree: ObjectId,
+        }
         #[derive(Deserialize)]
-        struct Commit { sha: String, commit: CommitData }
-        let commit: Commit = serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
-        if !valid_upstream_sha(&commit.sha) || !valid_upstream_sha(&commit.commit.tree.sha)
+        struct Commit {
+            sha: String,
+            commit: CommitData,
+        }
+        let commit: Commit =
+            serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
+        if !valid_upstream_sha(&commit.sha)
+            || !valid_upstream_sha(&commit.commit.tree.sha)
             || commit.sha.len() != commit.commit.tree.sha.len()
         {
             return Err(upstream_parse());
@@ -2285,25 +2822,37 @@ pub(crate) mod learning {
         online: bool,
         process: impl FnOnce(&Response, &ObservedIdentity, &Url) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        enum Resolution<T> { Tree(String), Degraded(T) }
+        enum Resolution<T> {
+            Tree(String),
+            Degraded(T),
+        }
         let commit_url = spec.commit_url()?;
         let mut process = Some(process);
         // A branch resolves to a commit, not a tree object. Keep that response
         // separate from the immutable tree request and never waive root proof.
-        let resolution = cache.get(&commit_url, Surface::Commit, online, |response, _| {
-            match resolved_tree_sha(response, &commit_url) {
-                Ok(tree_sha) => Ok(Resolution::Tree(tree_sha)),
-                Err(_) => {
-                    let identity = ObservedIdentity {
-                        surface: Surface::Commit, tree: None, tree_error: Some("commit_tree_unresolved"), blob_sha: None,
-                    };
-                    let output = process.take().expect("one resolution consumer")(
-                        response, &identity, &commit_url,
-                    )?;
-                    Ok(Resolution::Degraded(output))
-                }
-            }
-        })?;
+        let resolution =
+            cache.get(
+                &commit_url,
+                Surface::Commit,
+                online,
+                |response, _| match resolved_tree_sha(response, &commit_url) {
+                    Ok(tree_sha) => Ok(Resolution::Tree(tree_sha)),
+                    Err(_) => {
+                        let identity = ObservedIdentity {
+                            surface: Surface::Commit,
+                            tree: None,
+                            tree_error: Some("commit_tree_unresolved"),
+                            blob_sha: None,
+                        };
+                        let output = process.take().expect("one resolution consumer")(
+                            response,
+                            &identity,
+                            &commit_url,
+                        )?;
+                        Ok(Resolution::Degraded(output))
+                    }
+                },
+            )?;
         match resolution {
             Resolution::Degraded(output) => Ok(output),
             Resolution::Tree(tree_sha) => {
@@ -2326,16 +2875,28 @@ pub(crate) mod learning {
         if response.url != expected.as_str() || response.status != 200 {
             return Err(upstream_parse());
         }
-        if !response.headers.get("content-type").is_some_and(|value| json_media_type(value)) {
+        if !response
+            .headers
+            .get("content-type")
+            .is_some_and(|value| json_media_type(value))
+        {
             return Err(unexpected_content());
         }
         #[derive(Deserialize)]
-        struct ObjectId { sha: String }
+        struct ObjectId {
+            sha: String,
+        }
         #[derive(Deserialize)]
-        struct CommitData { tree: ObjectId }
+        struct CommitData {
+            tree: ObjectId,
+        }
         #[derive(Deserialize)]
-        struct Commit { sha: String, commit: CommitData }
-        let commit: Commit = serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
+        struct Commit {
+            sha: String,
+            commit: CommitData,
+        }
+        let commit: Commit =
+            serde_json::from_slice(&response.body).map_err(|_| upstream_parse())?;
         if !valid_upstream_sha(&commit.sha) || !valid_upstream_sha(&commit.commit.tree.sha) {
             return Err(upstream_parse());
         }
@@ -2356,25 +2917,37 @@ pub(crate) mod learning {
         online: bool,
         process: impl FnOnce(&Response, &ObservedIdentity, &Url) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        enum Resolution<T> { Tree(String), Degraded(T) }
+        enum Resolution<T> {
+            Tree(String),
+            Degraded(T),
+        }
         let commit_url = spec.commit_url_at(revision.commit)?;
         let tree_url = spec.tree_at(revision.tree)?;
         let cache = ResponseCache::open()?;
         let mut process = Some(process);
-        let resolution = cache.get(&commit_url, Surface::Commit, online, |response, _| {
-            match resolved_revision(response, &commit_url, revision) {
-                Ok(tree_sha) => Ok(Resolution::Tree(tree_sha)),
-                Err(_) => {
-                    let identity = ObservedIdentity {
-                        surface: Surface::Commit, tree: None, tree_error: Some("commit_tree_unresolved"), blob_sha: None,
-                    };
-                    let output = process.take().expect("one resolution consumer")(
-                        response, &identity, &commit_url,
-                    )?;
-                    Ok(Resolution::Degraded(output))
-                }
-            }
-        })?;
+        let resolution =
+            cache.get(
+                &commit_url,
+                Surface::Commit,
+                online,
+                |response, _| match resolved_revision(response, &commit_url, revision) {
+                    Ok(tree_sha) => Ok(Resolution::Tree(tree_sha)),
+                    Err(_) => {
+                        let identity = ObservedIdentity {
+                            surface: Surface::Commit,
+                            tree: None,
+                            tree_error: Some("commit_tree_unresolved"),
+                            blob_sha: None,
+                        };
+                        let output = process.take().expect("one resolution consumer")(
+                            response,
+                            &identity,
+                            &commit_url,
+                        )?;
+                        Ok(Resolution::Degraded(output))
+                    }
+                },
+            )?;
         match resolution {
             Resolution::Degraded(output) => Ok(output),
             Resolution::Tree(tree_sha) => {
@@ -2398,6 +2971,57 @@ pub(crate) mod learning {
     }
 
     // ---------------------------------------------------------------- output
+
+    /// The completeness and pagination facts of one listing response.
+    ///
+    /// The reviewed material surface is exactly one immutable recursive tree
+    /// object, so a listing holds one page and advertises no continuation: an
+    /// admitted tree is the terminal extent of the inventory, and a refused
+    /// one is reported as a refusal instead of a partial page. A tree that
+    /// declares itself truncated is short of its own extent; any other
+    /// unadmitted object leaves the extent unverified. `drift` names the
+    /// observed disagreement with the reviewed object identity and is null
+    /// exactly when the listing is terminal. `tree_error` is the observed
+    /// refusal code, or the empty string when the listing was admitted.
+    fn extent_facts(tree: Option<&AdmittedTree>, tree_error: &str) -> (bool, &'static str, Value) {
+        let Some(tree) = tree else {
+            let (reason, drift) = match tree_error {
+                "incomplete_tree" => ("tree_truncated", json!("tree_truncated")),
+                "tree_identity_mismatch" => ("extent_not_verified", json!("identity_mismatch")),
+                _ => ("extent_not_verified", json!("identity_unverified")),
+            };
+            return (
+                false,
+                reason,
+                json!({
+                    // No listing was admitted, so the duplicate count of the
+                    // entries is not observed rather than zero.
+                    "state": "refused",
+                    "pages": 1,
+                    "duplicate_entry_count": Value::Null,
+                    "drift": drift
+                }),
+            );
+        };
+        let distinct = tree
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+        (
+            true,
+            "terminal_single_object",
+            json!({
+                // A repeated path is refused during tree admission, so an admitted
+                // listing has none; the count is computed, never assumed.
+                "state": "terminal",
+                "pages": 1,
+                "duplicate_entry_count": tree.entries.len() - distinct,
+                "drift": Value::Null
+            }),
+        )
+    }
 
     pub(crate) fn inventory_output(
         spec: &SourceSpec,
@@ -2429,7 +3053,9 @@ pub(crate) mod learning {
             "tree_sha": Value::Null,
             "truncated": Value::Null,
             "complete": false,
+            "complete_reason": Value::Null,
             "next_cursor": Value::Null,
+            "pagination": Value::Null,
             "entries": Value::Null,
             "entry_count": 0,
             "fallback_reason": Value::Null,
@@ -2442,10 +3068,13 @@ pub(crate) mod learning {
                 let entries = admitted.entries.as_slice();
                 let license = verified_license(spec, entries);
                 let values = inventory_entries(spec, entries, entries, classify, &license);
+                let (complete, complete_reason, pagination) = extent_facts(Some(admitted), "");
                 output["result"] = json!("inventory_snapshot");
                 output["tree_sha"] = json!(tree_sha);
                 output["truncated"] = json!(false);
-                output["complete"] = json!(true);
+                output["complete"] = json!(complete);
+                output["complete_reason"] = json!(complete_reason);
+                output["pagination"] = pagination;
                 output["entries"] = json!(values.clone());
                 output["entry_count"] = json!(values.len());
                 output["license"] = license;
@@ -2453,7 +3082,11 @@ pub(crate) mod learning {
             }
             None => {
                 let reason = identity.tree_error().unwrap_or("upstream_parse");
+                let (complete, complete_reason, pagination) = extent_facts(None, reason);
                 output["result"] = json!("degraded");
+                output["complete"] = json!(complete);
+                output["complete_reason"] = json!(complete_reason);
+                output["pagination"] = pagination;
                 output["entries"] = json!([]);
                 output["fallback_reason"] = json!(reason);
                 output["raw_evidence"] = degraded_evidence(response, identity, reason)?;
@@ -2495,7 +3128,9 @@ pub(crate) mod learning {
             "tree_sha": Value::Null,
             "truncated": Value::Null,
             "complete": false,
+            "complete_reason": Value::Null,
             "next_cursor": Value::Null,
+            "pagination": Value::Null,
             "matches": Value::Null,
             "match_count": 0,
             "fallback_reason": Value::Null,
@@ -2517,10 +3152,13 @@ pub(crate) mod learning {
                 }
                 let license = verified_license(spec, entries);
                 let values = inventory_entries(spec, &matched, entries, classify, &license);
+                let (complete, complete_reason, pagination) = extent_facts(Some(admitted), "");
                 output["result"] = json!("search_snapshot");
                 output["tree_sha"] = json!(tree_sha);
                 output["truncated"] = json!(false);
-                output["complete"] = json!(true);
+                output["complete"] = json!(complete);
+                output["complete_reason"] = json!(complete_reason);
+                output["pagination"] = pagination;
                 output["matches"] = json!(values.clone());
                 output["match_count"] = json!(values.len());
                 output["license"] = license;
@@ -2528,7 +3166,11 @@ pub(crate) mod learning {
             }
             None => {
                 let reason = identity.tree_error().unwrap_or("upstream_parse");
+                let (complete, complete_reason, pagination) = extent_facts(None, reason);
                 output["result"] = json!("degraded");
+                output["complete"] = json!(complete);
+                output["complete_reason"] = json!(complete_reason);
+                output["pagination"] = pagination;
                 output["matches"] = json!([]);
                 output["fallback_reason"] = json!(reason);
                 output["raw_evidence"] = degraded_evidence(response, identity, reason)?;
@@ -2550,7 +3192,10 @@ pub(crate) mod learning {
         expected_size: u64,
     ) -> Result<Value, Error> {
         let expected = spec.blob_url(blob_sha)?;
-        if response.url != expected.as_str() || response.status != 200 || response.body.len() > MAX_RAW_BODY {
+        if response.url != expected.as_str()
+            || response.status != 200
+            || response.body.len() > MAX_RAW_BODY
+        {
             return Err(upstream_parse());
         }
         if identity.blob_sha() != Some(blob_sha) {
@@ -2578,14 +3223,7 @@ pub(crate) mod learning {
             );
         }
         let mut output = raw_output_at(
-            spec,
-            type_label,
-            path,
-            response,
-            identity,
-            class,
-            &expected,
-            license,
+            spec, type_label, path, response, identity, class, &expected, license,
         )?;
         output["retrieval"]["admitted_tree_sha"] = json!(tree_sha);
         output["retrieval"]["verified_git_blob_sha"] = json!(blob_sha);
@@ -2650,8 +3288,7 @@ pub(crate) mod learning {
                 };
                 output["result"] = json!("degraded");
                 output["fallback_reason"] = json!(reason);
-                output["raw_evidence"] =
-                    degraded_evidence(response, identity, reason)?;
+                output["raw_evidence"] = degraded_evidence(response, identity, reason)?;
                 Ok(output)
             }
         }
@@ -2823,10 +3460,38 @@ pub(crate) mod learning {
         ])
     }
 
+    /// The completeness and pagination contract of one listing. The reviewed
+    /// surface is exactly one immutable recursive tree object: the enumeration
+    /// has one page, it advertises no continuation cursor, and a listing that
+    /// cannot be proven whole is refused instead of being forwarded as a
+    /// partial page. Duplicate paths are refused during tree admission, so an
+    /// admitted listing reports a verified duplicate count and a refused one
+    /// reports null because no listing was admitted.
+    fn extent_schema() -> Value {
+        json!({
+            "type":"object","additionalProperties":false,
+            "required":["state","pages","duplicate_entry_count","drift"],
+            "properties":{
+                "state":{"enum":["terminal","refused"],"description":"terminal: the one immutable tree object was admitted whole; refused: no partial listing is emitted."},
+                "pages":{"const":1,"description":"The number of tree objects this enumeration requested. The reviewed surface is one immutable recursive tree, so no continuation page is requested or followed."},
+                "duplicate_entry_count":{"type":["integer","null"],"minimum":0,"maximum":MAX_ENTRIES,"description":"Listed paths that repeat another listed path. Null when no listing was admitted."},
+                "drift":{"enum":["tree_truncated","identity_mismatch","identity_unverified",null],"description":"The observed disagreement with the reviewed object identity. Null exactly when the listing is terminal."}
+            }
+        })
+    }
+
+    fn complete_reasons() -> Value {
+        json!([
+            "terminal_single_object",
+            "tree_truncated",
+            "extent_not_verified"
+        ])
+    }
+
     pub(crate) fn inventory_schema(type_label: &str) -> Value {
         json!({
             "type":"object","additionalProperties":false,
-            "required":["schema_version","type","result","source","source_url","branch","license","attribution","rights_reviewed","tree_sha","truncated","complete","next_cursor","entries","entry_count","fallback_reason","raw_evidence","retrieval"],
+            "required":["schema_version","type","result","source","source_url","branch","license","attribution","rights_reviewed","tree_sha","truncated","complete","complete_reason","next_cursor","pagination","entries","entry_count","fallback_reason","raw_evidence","retrieval"],
             "properties":{
                 "schema_version":{"const":1},
                 "type":{"const":type_label},
@@ -2840,7 +3505,9 @@ pub(crate) mod learning {
                 "tree_sha":{"type":["string","null"],"pattern":"^([0-9a-f]{40}|[0-9a-f]{64})$","description":"The verified root tree object identity; null only in the degraded variant."},
                 "truncated":{"type":["boolean","null"]},
                 "complete":{"type":"boolean"},
+                "complete_reason":{"enum":complete_reasons(),"description":"Why this snapshot is or is not the terminal extent of the reviewed inventory."},
                 "next_cursor":{"type":"null","description":"The recursive tree response supplies no continuation cursor; a truncated tree is refused rather than reported as a partial inventory."},
+                "pagination":extent_schema(),
                 "entries":{"type":"array","maxItems":MAX_ENTRIES,"items":entry_schema()},
                 "entry_count":{"type":"integer","minimum":0},
                 "fallback_reason":{"type":["string","null"],"enum":fallback_reasons()},
@@ -2850,6 +3517,13 @@ pub(crate) mod learning {
             "oneOf":[
                 {"properties":{
                     "result":{"const":"inventory_snapshot"},
+                    "complete":{"const":true},
+                    "complete_reason":{"const":"terminal_single_object"},
+                    "pagination":{"properties":{
+                        "state":{"const":"terminal"},
+                        "duplicate_entry_count":{"type":"integer"},
+                        "drift":{"type":"null"}
+                    }},
                     "fallback_reason":{"type":"null"},
                     "raw_evidence":{"type":"null"},
                     "tree_sha":{"type":"string"},
@@ -2858,6 +3532,13 @@ pub(crate) mod learning {
                 }},
                 {"properties":{
                     "result":{"const":"degraded"},
+                    "complete":{"const":false},
+                    "complete_reason":{"enum":["tree_truncated","extent_not_verified"]},
+                    "pagination":{"properties":{
+                        "state":{"const":"refused"},
+                        "duplicate_entry_count":{"type":"null"},
+                        "drift":{"enum":["tree_truncated","identity_mismatch","identity_unverified"]}
+                    }},
                     "fallback_reason":{"type":"string"},
                     "raw_evidence":{"type":"object"},
                     "tree_sha":{"type":"null"},
@@ -2871,7 +3552,7 @@ pub(crate) mod learning {
     pub(crate) fn search_schema(type_label: &str) -> Value {
         json!({
             "type":"object","additionalProperties":false,
-            "required":["schema_version","type","result","query","rights_reviewed","source","source_url","branch","license","attribution","tree_sha","truncated","complete","next_cursor","matches","match_count","fallback_reason","raw_evidence","retrieval"],
+            "required":["schema_version","type","result","query","rights_reviewed","source","source_url","branch","license","attribution","tree_sha","truncated","complete","complete_reason","next_cursor","pagination","matches","match_count","fallback_reason","raw_evidence","retrieval"],
             "properties":{
                 "schema_version":{"const":1},
                 "type":{"const":type_label},
@@ -2886,7 +3567,9 @@ pub(crate) mod learning {
                 "tree_sha":{"type":["string","null"],"pattern":"^([0-9a-f]{40}|[0-9a-f]{64})$"},
                 "truncated":{"type":["boolean","null"]},
                 "complete":{"type":"boolean"},
+                "complete_reason":{"enum":complete_reasons(),"description":"Why this search is or is not complete over the whole reviewed inventory. A search is terminal only when the whole tree was admitted; a refusal is never a partial match list."},
                 "next_cursor":{"type":"null"},
+                "pagination":extent_schema(),
                 "matches":{"type":"array","maxItems":MAX_ENTRIES,"items":entry_schema()},
                 "match_count":{"type":"integer","minimum":0},
                 "fallback_reason":{"type":["string","null"],"enum":fallback_reasons()},
@@ -2896,6 +3579,13 @@ pub(crate) mod learning {
             "oneOf":[
                 {"properties":{
                     "result":{"const":"search_snapshot"},
+                    "complete":{"const":true},
+                    "complete_reason":{"const":"terminal_single_object"},
+                    "pagination":{"properties":{
+                        "state":{"const":"terminal"},
+                        "duplicate_entry_count":{"type":"integer"},
+                        "drift":{"type":"null"}
+                    }},
                     "fallback_reason":{"type":"null"},
                     "raw_evidence":{"type":"null"},
                     "tree_sha":{"type":"string"},
@@ -2904,6 +3594,13 @@ pub(crate) mod learning {
                 }},
                 {"properties":{
                     "result":{"const":"degraded"},
+                    "complete":{"const":false},
+                    "complete_reason":{"enum":["tree_truncated","extent_not_verified"]},
+                    "pagination":{"properties":{
+                        "state":{"const":"refused"},
+                        "duplicate_entry_count":{"type":"null"},
+                        "drift":{"enum":["tree_truncated","identity_mismatch","identity_unverified"]}
+                    }},
                     "fallback_reason":{"type":"string"},
                     "raw_evidence":{"type":"object"},
                     "tree_sha":{"type":"null"},
@@ -3072,7 +3769,9 @@ pub(crate) mod learning {
                 || question.prompt.chars().count() > MAX_PROMPT_CHARS
                 || !identifiers.insert(question.question_id.clone())
             {
-                return Err(invalid_input("the practice session carries an invalid question"));
+                return Err(invalid_input(
+                    "the practice session carries an invalid question",
+                ));
             }
             match question.kind.as_str() {
                 "cloze" | "choice" | "fill" | "other" => {}
@@ -3100,6 +3799,17 @@ pub(crate) mod learning {
             if question.key_source == "none" && question.local_self_check_key.is_some() {
                 return Err(invalid_input(
                     "a practice question carries a key without a key source",
+                ));
+            }
+            // The converse holds too: a question may not claim a local or
+            // operator key and then carry none. Such a claim would let a
+            // session assert an answer it never actually holds.
+            let key_present = question.local_self_check_key.as_ref().is_some_and(|key| {
+                !key.is_empty() && key.iter().all(|entry| !entry.trim().is_empty())
+            });
+            if question.key_source != "none" && !key_present {
+                return Err(invalid_input(
+                    "a practice question claims a key source without a key",
                 ));
             }
         }
@@ -3130,10 +3840,9 @@ pub(crate) mod learning {
             if answer.text.is_some() {
                 return Err(invalid_input("a choice answer must not carry free text"));
             }
-            let choices = answer
-                .choices
-                .as_ref()
-                .ok_or_else(|| invalid_input("a choice answer requires the selected option letters"))?;
+            let choices = answer.choices.as_ref().ok_or_else(|| {
+                invalid_input("a choice answer requires the selected option letters")
+            })?;
             if choices.is_empty() || choices.len() > MAX_OPTIONS {
                 return Err(invalid_input("a choice answer must select 1 to 8 options"));
             }
@@ -3309,9 +4018,9 @@ pub(crate) mod learning {
         let Some(key) = key else {
             return Ok(());
         };
-        let entries = key.as_array().ok_or_else(|| {
-            invalid_input("a local answer key must be an array of keyed entries")
-        })?;
+        let entries = key
+            .as_array()
+            .ok_or_else(|| invalid_input("a local answer key must be an array of keyed entries"))?;
         if entries.len() > MAX_ANSWERS {
             return Err(invalid_input("a local answer key carries too many entries"));
         }
@@ -3327,17 +4036,13 @@ pub(crate) mod learning {
             let question = questions
                 .iter_mut()
                 .find(|question| question.question_id == question_id)
-                .ok_or_else(|| {
-                    invalid_input("a local answer key refers to an unknown question")
-                })?;
+                .ok_or_else(|| invalid_input("a local answer key refers to an unknown question"))?;
             let choices = object.get("choices").and_then(Value::as_array);
             let text = object.get("text").and_then(Value::as_str);
             match (choices, text) {
                 (Some(choices), None) => {
                     if question.kind != "choice" {
-                        return Err(invalid_input(
-                            "an option key needs a choice question",
-                        ));
+                        return Err(invalid_input("an option key needs a choice question"));
                     }
                     if choices.is_empty() || choices.len() > MAX_OPTIONS {
                         return Err(invalid_input(
@@ -3370,9 +4075,7 @@ pub(crate) mod learning {
                 }
                 (None, Some(text)) => {
                     if question.kind == "choice" {
-                        return Err(invalid_input(
-                            "a written key needs a written question",
-                        ));
+                        return Err(invalid_input("a written key needs a written question"));
                     }
                     if text.trim().is_empty() || text.len() > MAX_ANSWER_BYTES {
                         return Err(invalid_input(
@@ -3385,7 +4088,7 @@ pub(crate) mod learning {
                 _ => {
                     return Err(invalid_input(
                         "a local answer key entry needs exactly one of choices or text",
-                    ))
+                    ));
                 }
             }
         }
@@ -3456,8 +4159,8 @@ pub(crate) mod learning {
                 character,
                 '。' | '！' | '？' | '!' | '?' | ';' | '；' | '\n' | '\r'
             );
-            let sentence_end = character == '.'
-                && matches!(characters.peek(), None | Some(&' ') | Some(&'\t'));
+            let sentence_end =
+                character == '.' && matches!(characters.peek(), None | Some(&' ') | Some(&'\t'));
             if punctuation || sentence_end {
                 let trimmed = current.trim();
                 if !trimmed.is_empty() {
@@ -3737,7 +4440,9 @@ fn parse_search_input(input: &str) -> Result<SearchInput, Error> {
     }
     let query = parsed.query.trim();
     if query.is_empty() || query.len() > learning::MAX_QUERY_BYTES {
-        return Err(learning::invalid_input("the search query is empty or too long"));
+        return Err(learning::invalid_input(
+            "the search query is empty or too long",
+        ));
     }
     Ok(SearchInput {
         query: query.to_owned(),
@@ -3769,8 +4474,12 @@ fn parse_fetch_input(input: &str) -> Result<FetchInput, Error> {
         mode: parsed.mode,
         size: parsed.size,
     };
-    let provided = [parsed.tree_sha.is_some(), parsed.blob_sha.is_some(),
-        parsed.mode.is_some(), parsed.size.is_some()];
+    let provided = [
+        parsed.tree_sha.is_some(),
+        parsed.blob_sha.is_some(),
+        parsed.mode.is_some(),
+        parsed.size.is_some(),
+    ];
     if provided.iter().any(|provided| *provided) && !provided.iter().all(|provided| *provided) {
         return Err(learning::invalid_input(
             "the rights-review attestation must carry the complete reviewed tree, blob, mode and size",
@@ -3878,7 +4587,11 @@ pub fn fetch(input: &str, online: bool) -> Result<Value, Error> {
                         "the requested path is not present in the reviewed material inventory",
                     )));
                 };
-                let Some(mode) = entry.kind().filter(|kind| *kind == "file").map(|_| entry.mode.as_str()) else {
+                let Some(mode) = entry
+                    .kind()
+                    .filter(|kind| *kind == "file")
+                    .map(|_| entry.mode.as_str())
+                else {
                     return Ok(Admission::Refused(learning::invalid_input(
                         "only regular inventory files can be retrieved",
                     )));
@@ -3906,26 +4619,39 @@ pub fn fetch(input: &str, online: bool) -> Result<Value, Error> {
                     license: learning::verified_license(&SOURCE, entries),
                 })
             }
-            None => Ok(Admission::Degraded(
-                learning::degraded_admission_output(
-                    &SOURCE,
-                    RAW_TYPE_LABEL,
-                    &request.path,
-                    response,
-                    identity,
-                    identity.tree_error().unwrap_or("upstream_parse"),
-                )?,
-            )),
+            None => Ok(Admission::Degraded(learning::degraded_admission_output(
+                &SOURCE,
+                RAW_TYPE_LABEL,
+                &request.path,
+                response,
+                identity,
+                identity.tree_error().unwrap_or("upstream_parse"),
+            )?)),
         }
     })?;
     match admission {
         Admission::Degraded(output) => Ok(output),
         Admission::Refused(error) => Err(error),
-        Admission::Classified { class, tree_sha, blob_sha, size, license } => {
-            learning::with_raw_response(&SOURCE, &blob_sha, online, |response, identity| {
-                learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, &request.path, response, identity, class, &tree_sha, &blob_sha, &license, size)
-            })
-        }
+        Admission::Classified {
+            class,
+            tree_sha,
+            blob_sha,
+            size,
+            license,
+        } => learning::with_raw_response(&SOURCE, &blob_sha, online, |response, identity| {
+            learning::verified_blob_output(
+                &SOURCE,
+                RAW_TYPE_LABEL,
+                &request.path,
+                response,
+                identity,
+                class,
+                &tree_sha,
+                &blob_sha,
+                &license,
+                size,
+            )
+        }),
     }
 }
 
@@ -3977,6 +4703,24 @@ fn parse_session(object: &Map<String, Value>) -> Result<learning::PracticeSessio
         .map_err(|_| learning::invalid_input("the practice session is malformed"))
 }
 
+/// The operator's explicit rights attestation for practice generation.
+///
+/// Practice generation imports material the operator supplies, so the
+/// attestation must be present and exactly `true`. It is never defaulted and
+/// never inferred from another field; a missing or false attestation is
+/// refused before any question, key or session is produced.
+fn attested_rights(object: &Map<String, Value>) -> Result<(), Error> {
+    match object.get("rights_reviewed") {
+        Some(Value::Bool(true)) => Ok(()),
+        Some(Value::Bool(false)) | None => Err(learning::authorization_required(
+            "practice generation requires the operator's explicit rights attestation",
+        )),
+        Some(_) => Err(learning::invalid_input(
+            "the rights attestation must be a boolean",
+        )),
+    }
+}
+
 fn generate_practice(object: &Map<String, Value>) -> Result<Value, Error> {
     learning::only_keys(
         object,
@@ -3994,7 +4738,10 @@ fn generate_practice(object: &Map<String, Value>) -> Result<Value, Error> {
         .get("mode")
         .and_then(Value::as_str)
         .ok_or_else(|| learning::invalid_input("a practice generation mode is required"))?;
-    let rights_reviewed = learning::optional_bool(object, "rights_reviewed")?;
+    attested_rights(object)?;
+    // The attestation is verified above, so every session this module
+    // generates carries the reviewed fact rather than a default.
+    let rights_reviewed = true;
     let (questions, practice_source): (Vec<learning::PracticeQuestion>, Value) = match mode {
         "cloze" => {
             learning::only_keys(
@@ -4013,14 +4760,17 @@ fn generate_practice(object: &Map<String, Value>) -> Result<Value, Error> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| learning::invalid_input("the cloze mode requires material_text"))?;
             if material.trim().is_empty() || material.len() > learning::MAX_MATERIAL_TEXT {
-                return Err(learning::invalid_input("the material text is empty or too large"));
+                return Err(learning::invalid_input(
+                    "the material text is empty or too large",
+                ));
             }
-            let count = object
-                .get("count")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| learning::invalid_input("the cloze mode requires a question count"))?;
+            let count = object.get("count").and_then(Value::as_u64).ok_or_else(|| {
+                learning::invalid_input("the cloze mode requires a question count")
+            })?;
             if count == 0 || count > learning::MAX_QUESTIONS as u64 {
-                return Err(learning::invalid_input("the question count is out of range"));
+                return Err(learning::invalid_input(
+                    "the question count is out of range",
+                ));
             }
             let questions = learning::generate_cloze_questions(material, count as usize);
             let source = json!({
@@ -4046,9 +4796,13 @@ fn generate_practice(object: &Map<String, Value>) -> Result<Value, Error> {
             let html = object
                 .get("practice_page_html")
                 .and_then(Value::as_str)
-                .ok_or_else(|| learning::invalid_input("the page mode requires practice_page_html"))?;
+                .ok_or_else(|| {
+                    learning::invalid_input("the page mode requires practice_page_html")
+                })?;
             if html.trim().is_empty() || html.len() > learning::MAX_PRACTICE_PAGE_HTML {
-                return Err(learning::invalid_input("the practice page is empty or too large"));
+                return Err(learning::invalid_input(
+                    "the practice page is empty or too large",
+                ));
             }
             let (questions, scan) = questions_from_practice_page(html)?;
             let source = json!({
@@ -4060,12 +4814,20 @@ fn generate_practice(object: &Map<String, Value>) -> Result<Value, Error> {
             });
             (questions, source)
         }
-        _ => return Err(learning::invalid_input("the practice generation mode is unknown")),
+        _ => {
+            return Err(learning::invalid_input(
+                "the practice generation mode is unknown",
+            ));
+        }
     };
     let mut questions = questions;
     learning::apply_operator_key(&mut questions, object.get("local_answer_key"))?;
-    let session =
-        learning::new_session(PRACTICE_TYPE_LABEL, practice_source, questions, rights_reviewed)?;
+    let session = learning::new_session(
+        PRACTICE_TYPE_LABEL,
+        practice_source,
+        questions,
+        rights_reviewed,
+    )?;
     serde_json::to_value(session)
         .map_err(|_| learning::invalid_input("the practice session is not serializable"))
 }
@@ -4308,7 +5070,10 @@ fn walk_text(
             if matches!(name, "script" | "style" | "noscript" | "template") {
                 return;
             }
-            if element.classes().any(|class| class == "wl-answer-helper-hint") {
+            if element
+                .classes()
+                .any(|class| class == "wl-answer-helper-hint")
+            {
                 *dropped += 1;
                 return;
             }
@@ -4337,7 +5102,7 @@ pub fn schema() -> Value {
                 "type":"object","additionalProperties":false,"properties":{},"required":[],
                 "description":"The reviewed source, branch and license are pinned; this request accepts no parameter. An empty input is accepted as this empty object."
             },
-            "options":{"--online":"Permit cache-first commit resolution and its immutable recursive-tree request; no automatic retry, refresh or pagination."},
+            "options":{"--online":"Permit cache-first commit resolution and its immutable recursive-tree request; no automatic retry, refresh or pagination. The listing is the whole admitted tree or a refusal with the reason, never a partial page."},
             "output":learning::inventory_schema(TYPE_LABEL)
         },
         "search": {
@@ -4370,25 +5135,25 @@ pub fn schema() -> Value {
             "input":learning::practice_schema(PRACTICE_TYPE_LABEL, vec![
                 json!({
                     "type":"object","additionalProperties":false,
-                    "required":["action","mode","material_text","count"],
+                    "required":["action","mode","material_text","count","rights_reviewed"],
                     "properties":{
                         "action":{"const":"generate"},
                         "mode":{"const":"cloze"},
                         "material_text":{"type":"string","minLength":1,"maxLength":learning::MAX_MATERIAL_TEXT,"description":"Local material the operator supplies; the cloze key is derived from this text only."},
                         "count":{"type":"integer","minimum":1,"maximum":learning::MAX_QUESTIONS},
                         "local_answer_key":learning::operator_key_schema(),
-                        "rights_reviewed":{"type":"boolean","description":"The operator's own attestation that the supplied material may be used."}
+                        "rights_reviewed":{"const":true,"description":"Required operator attestation that the supplied material may be used. False or omitted is refused before any question is generated; the fact is carried in the session."}
                     }
                 }),
                 json!({
                     "type":"object","additionalProperties":false,
-                    "required":["action","mode","practice_page_html"],
+                    "required":["action","mode","practice_page_html","rights_reviewed"],
                     "properties":{
                         "action":{"const":"generate"},
                         "mode":{"const":"we_learn_page"},
                         "practice_page_html":{"type":"string","minLength":1,"maxLength":learning::MAX_PRACTICE_PAGE_HTML,"description":"A locally captured WE Learn practice page. Answer-bearing attributes are never read."},
                         "local_answer_key":learning::operator_key_schema(),
-                        "rights_reviewed":{"type":"boolean"}
+                        "rights_reviewed":{"const":true,"description":"Required operator attestation for the locally captured page. False or omitted is refused before any question is generated."}
                     }
                 })
             ]),
@@ -4419,7 +5184,11 @@ mod tests {
         }
     }
 
-    fn tree_identity(url: &url::Url, body: &[u8], content_type: &str) -> learning::ObservedIdentity {
+    fn tree_identity(
+        url: &url::Url,
+        body: &[u8],
+        content_type: &str,
+    ) -> learning::ObservedIdentity {
         learning::observed_identity(learning::Surface::Tree, url, body, Some(content_type))
     }
 
@@ -4454,6 +5223,12 @@ mod tests {
         .unwrap();
         assert_eq!(output["result"], "inventory_snapshot");
         assert_eq!(output["complete"], true);
+        assert_eq!(output["complete_reason"], "terminal_single_object");
+        assert_eq!(output["pagination"]["state"], "terminal");
+        assert_eq!(output["pagination"]["pages"], 1);
+        assert_eq!(output["pagination"]["duplicate_entry_count"], 0);
+        assert_eq!(output["pagination"]["drift"], Value::Null);
+        assert_eq!(output["next_cursor"], Value::Null);
         assert_eq!(output["entry_count"], 3);
         assert_eq!(output["entries"][0]["material_class"], "license");
         assert_eq!(output["entries"][1]["material_class"], "documentation");
@@ -4482,26 +5257,53 @@ mod tests {
         assert!(!url.as_str().contains("master"));
         let identity = raw_identity(&url, b"", "application/octet-stream");
         let license = learning::verified_license(&SOURCE, &[]);
-        let output = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, "README.md",
+        let output = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            "README.md",
             &response(&url, b"", "application/octet-stream"),
             &identity,
-            learning::MaterialClass::Documentation, tree, sha, &license, 0).unwrap();
+            learning::MaterialClass::Documentation,
+            tree,
+            sha,
+            &license,
+            0,
+        )
+        .unwrap();
         assert_eq!(output["result"], "raw_snapshot");
         assert_eq!(output["retrieval"]["verified_git_blob_sha"], sha);
         let vendor_identity = raw_identity(&url, b"", "application/vnd.github.raw+json");
-        let vendor = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, "README.md",
+        let vendor = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            "README.md",
             &response(&url, b"", "application/vnd.github.raw+json"),
             &vendor_identity,
-            learning::MaterialClass::Documentation, tree, sha, &license, 0).unwrap();
+            learning::MaterialClass::Documentation,
+            tree,
+            sha,
+            &license,
+            0,
+        )
+        .unwrap();
         assert_eq!(vendor["result"], "raw_snapshot");
         assert_eq!(vendor["content_type"], "application/vnd.github.raw+json");
         assert_eq!(vendor["retrieval"]["verified_git_blob_sha"], sha);
-        let replaced_identity = raw_identity(&url, b"changed branch bytes", "application/octet-stream");
-        let replaced = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, "README.md",
+        let replaced_identity =
+            raw_identity(&url, b"changed branch bytes", "application/octet-stream");
+        let replaced = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            "README.md",
             &response(&url, b"changed branch bytes", "application/octet-stream"),
             &replaced_identity,
-            learning::MaterialClass::Documentation, tree, sha, &license, 16)
-            .unwrap();
+            learning::MaterialClass::Documentation,
+            tree,
+            sha,
+            &license,
+            16,
+        )
+        .unwrap();
         assert_eq!(replaced["result"], "degraded");
         assert_eq!(replaced["fallback_reason"], "blob_identity_mismatch");
         assert_eq!(replaced["bytes"], Value::Null);
@@ -4518,11 +5320,19 @@ mod tests {
         let url = SOURCE.blob_url(sha).unwrap();
         let identity = raw_identity(&url, b"", "application/octet-stream");
         let license = learning::verified_license(&SOURCE, &[]);
-        let refused = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, "README.md",
+        let refused = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            "README.md",
             &response(&url, b"", "application/octet-stream"),
             &identity,
-            learning::MaterialClass::Documentation, tree, sha, &license, 500)
-            .unwrap();
+            learning::MaterialClass::Documentation,
+            tree,
+            sha,
+            &license,
+            500,
+        )
+        .unwrap();
         assert_eq!(refused["result"], "degraded");
         assert_eq!(refused["fallback_reason"], "blob_size_mismatch");
         assert_eq!(refused["bytes"], Value::Null);
@@ -4542,11 +5352,23 @@ mod tests {
         }"#;
         let identity = tree_identity(&url, body, "application/json");
         assert!(identity.tree().is_none());
-        let output = learning::inventory_output(&SOURCE, TYPE_LABEL, &url,
-            &response(&url, body, "application/json"), &identity, &classify).unwrap();
+        let output = learning::inventory_output(
+            &SOURCE,
+            TYPE_LABEL,
+            &url,
+            &response(&url, body, "application/json"),
+            &identity,
+            &classify,
+        )
+        .unwrap();
         assert_eq!(output["result"], "degraded");
         assert_eq!(output["entries"], json!([]));
         assert_eq!(output["tree_sha"], Value::Null);
+        assert_eq!(output["complete"], false);
+        assert_eq!(output["complete_reason"], "extent_not_verified");
+        assert_eq!(output["pagination"]["state"], "refused");
+        assert_eq!(output["pagination"]["duplicate_entry_count"], Value::Null);
+        assert_eq!(output["pagination"]["drift"], "identity_unverified");
     }
 
     #[test]
@@ -4562,6 +5384,29 @@ mod tests {
         let identity = tree_identity(&url, body, "application/json");
         assert!(identity.tree().is_none());
         assert_eq!(identity.tree_error(), Some("incomplete_tree"));
+        let output = learning::inventory_output(
+            &SOURCE,
+            TYPE_LABEL,
+            &url,
+            &response(&url, body, "application/json"),
+            &identity,
+            &classify,
+        )
+        .unwrap();
+        // The upstream object declares itself short of its own extent, so the
+        // inventory says why it is incomplete instead of claiming the listed
+        // prefix is the material set.
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(output["complete"], false);
+        assert_eq!(output["complete_reason"], "tree_truncated");
+        assert_eq!(output["pagination"]["state"], "refused");
+        assert_eq!(output["pagination"]["pages"], 1);
+        assert_eq!(output["pagination"]["duplicate_entry_count"], Value::Null);
+        assert_eq!(output["pagination"]["drift"], "tree_truncated");
+        assert_eq!(output["entries"], json!([]));
+        assert_eq!(output["entry_count"], 0);
+        assert_eq!(output["next_cursor"], Value::Null);
+        assert_eq!(output["fallback_reason"], "incomplete_tree");
     }
 
     #[test]
@@ -4577,7 +5422,11 @@ mod tests {
                 {"path":"answers/key.txt","mode":"100644","type":"blob","sha":"73d2307db42f448c677d732fb825d31afe5586ff","size":17}
             ]
         }"#;
-        assert!(tree_identity(&url, body, "application/json").tree().is_none());
+        assert!(
+            tree_identity(&url, body, "application/json")
+                .tree()
+                .is_none()
+        );
     }
 
     #[test]
@@ -4604,8 +5453,11 @@ mod tests {
             // transport still reports the independent read failure.
             "<html><form><input name='captcha'>partial",
         ] {
-            assert_eq!(crate::html::assess_challenge_body(html.as_bytes(), Some("text/html"), true),
-                crate::html::ChallengeAssessment::Detected, "{html}");
+            assert_eq!(
+                crate::html::assess_challenge_body(html.as_bytes(), Some("text/html"), true),
+                crate::html::ChallengeAssessment::Detected,
+                "{html}"
+            );
         }
         for html in [
             "<p>This course explains captcha and challenge protocols.</p>",
@@ -4614,12 +5466,17 @@ mod tests {
             "<template><input name='captcha'></template>",
             "<input name='ordinary'>",
         ] {
-            assert_eq!(crate::html::assess_challenge_body(html.as_bytes(), Some("text/html"), true),
-                crate::html::ChallengeAssessment::Clear, "{html}");
+            assert_eq!(
+                crate::html::assess_challenge_body(html.as_bytes(), Some("text/html"), true),
+                crate::html::ChallengeAssessment::Clear,
+                "{html}"
+            );
         }
         assert!(crate::net::challenge_header("x-captcha", b"required"));
-        assert_eq!(crate::html::assess_challenge_body(&[0xff, 0xfe], Some("text/html"), true),
-            crate::html::ChallengeAssessment::Unreviewed);
+        assert_eq!(
+            crate::html::assess_challenge_body(&[0xff, 0xfe], Some("text/html"), true),
+            crate::html::ChallengeAssessment::Unreviewed
+        );
     }
 
     #[test]
@@ -4631,16 +5488,28 @@ mod tests {
             (1, b"ordinary".as_slice(), true, false),
             (2, b"<iframe src='/challenge'>".as_slice(), false, true),
         ] {
-            let directory = std::env::temp_dir().join(format!("buaa-learning-challenge-{}-{}-{index}",
-                std::process::id(), learning::unix_ms().unwrap()));
-            std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+            let directory = std::env::temp_dir().join(format!(
+                "buaa-learning-challenge-{}-{}-{index}",
+                std::process::id(),
+                learning::unix_ms().unwrap()
+            ));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .unwrap();
             let governor = Governor::isolated_for_test(&directory).unwrap();
             let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
             let mut requests = 1;
-            lease.finish(Outcome::Http { status: 200, retry_after: None,
-                challenge: header || crate::html::assess_challenge_body(body, Some("text/html"), !incomplete)
-                    == crate::html::ChallengeAssessment::Detected,
-                network_failure: incomplete }).unwrap();
+            lease
+                .finish(Outcome::Http {
+                    status: 200,
+                    retry_after: None,
+                    challenge: header
+                        || crate::html::assess_challenge_body(body, Some("text/html"), !incomplete)
+                            == crate::html::ChallengeAssessment::Detected,
+                    network_failure: incomplete,
+                })
+                .unwrap();
             if let Ok(second) = governor.try_acquire(RequestKind::Interactive) {
                 requests += 1;
                 second.finish_without_request().unwrap();
@@ -4657,29 +5526,77 @@ mod tests {
         use crate::governor::{Governor, RequestKind};
         use std::os::unix::fs::DirBuilderExt;
         for (index, body, mime, header, expected, latched) in [
-            (0, b"ordinary material".as_slice(), "text/plain", false, None, false),
-            (1, b"\xff\xfe".as_slice(), "text/html", false, Some("response_safety_unreviewed"), false),
-            (2, b"<input name=captcha>".as_slice(), "text/html", false, Some("safety_latched"), true),
-            (3, b"ordinary material".as_slice(), "text/plain", true, Some("safety_latched"), true),
-            (4, b"\xff\x00binary".as_slice(), "application/vnd.github.raw+json", false, None, false),
-            (5, b"\xff\x00binary".as_slice(), "application/octet-stream", false, None, false),
+            (
+                0,
+                b"ordinary material".as_slice(),
+                "text/plain",
+                false,
+                None,
+                false,
+            ),
+            (
+                1,
+                b"\xff\xfe".as_slice(),
+                "text/html",
+                false,
+                Some("response_safety_unreviewed"),
+                false,
+            ),
+            (
+                2,
+                b"<input name=captcha>".as_slice(),
+                "text/html",
+                false,
+                Some("safety_latched"),
+                true,
+            ),
+            (
+                3,
+                b"ordinary material".as_slice(),
+                "text/plain",
+                true,
+                Some("safety_latched"),
+                true,
+            ),
+            (
+                4,
+                b"\xff\x00binary".as_slice(),
+                "application/vnd.github.raw+json",
+                false,
+                None,
+                false,
+            ),
+            (
+                5,
+                b"\xff\x00binary".as_slice(),
+                "application/octet-stream",
+                false,
+                None,
+                false,
+            ),
         ] {
-            let directory = std::env::temp_dir().join(format!("buaa-learning-cache-{}-{}-{index}",
-                std::process::id(), learning::unix_ms().unwrap()));
-            std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+            let directory = std::env::temp_dir().join(format!(
+                "buaa-learning-cache-{}-{}-{index}",
+                std::process::id(),
+                learning::unix_ms().unwrap()
+            ));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .unwrap();
             let governor = Governor::isolated_for_test(&directory).unwrap();
             let lease = governor.try_acquire(RequestKind::Interactive).unwrap();
             let url = SOURCE.tree_url().unwrap();
             let mut retained = response(&url, body, mime);
             retained.cache_status = CacheStatus::Hit;
-            if header { retained.headers.insert("cf-mitigated".into(), "challenge".into()); }
+            if header {
+                retained
+                    .headers
+                    .insert("cf-mitigated".into(), "challenge".into());
+            }
             let mut processed = false;
-            let identity = learning::observed_identity(
-                learning::Surface::Tree,
-                &url,
-                body,
-                Some(mime),
-            );
+            let identity =
+                learning::observed_identity(learning::Surface::Tree, &url, body, Some(mime));
             let result = learning::process_cached(
                 learning::Surface::Tree,
                 &retained,
@@ -4703,15 +5620,24 @@ mod tests {
     fn initial_cached_challenges_refuse_without_reuse() {
         let url = SOURCE.tree_url().unwrap();
         for (body, mime, expected, _publish_flag) in [
-            (b"<input name=captcha>".as_slice(), "text/html", Some("safety_latched"), true),
-            (b"\xff\xfe".as_slice(), "text/html", Some("response_safety_unreviewed"), false),
+            (
+                b"<input name=captcha>".as_slice(),
+                "text/html",
+                Some("safety_latched"),
+                true,
+            ),
+            (
+                b"\xff\xfe".as_slice(),
+                "text/html",
+                Some("response_safety_unreviewed"),
+                false,
+            ),
             (b"ordinary".as_slice(), "text/plain", None, false),
         ] {
             let retained = response(&url, body, mime);
             let identity = tree_identity(&url, body, mime);
-            let result = learning::review_initial_cache(
-                learning::Surface::Tree, &url, &retained, &identity,
-            );
+            let result =
+                learning::review_initial_cache(learning::Surface::Tree, &url, &retained, &identity);
             assert_eq!(result.err().map(|error| error.code), expected);
             let _ = _publish_flag;
         }
@@ -4719,11 +5645,13 @@ mod tests {
         let sha = learning::git_blob_sha(b"ordinary", 40);
         let url = SOURCE.blob_url(&sha).unwrap();
         let mut retained = response(&url, b"ordinary", "application/vnd.github.raw+json");
-        retained.headers.insert("cf-mitigated".into(), "challenge".into());
+        retained
+            .headers
+            .insert("cf-mitigated".into(), "challenge".into());
         let identity = raw_identity(&url, b"ordinary", "application/vnd.github.raw+json");
-        let error = learning::review_initial_cache(
-            learning::Surface::Raw, &url, &retained, &identity,
-        ).unwrap_err();
+        let error =
+            learning::review_initial_cache(learning::Surface::Raw, &url, &retained, &identity)
+                .unwrap_err();
         assert_eq!(error.code, "safety_latched");
     }
 
@@ -4731,25 +5659,71 @@ mod tests {
     fn unsafe_raw_fallback_is_withheld_but_safe_evidence_remains_exact() {
         let url = SOURCE.tree_url().unwrap();
         for (body, mime, expected) in [
-            (br#"{"token":"private-token"}"#.as_slice(), "application/json", "sensitive_response_withheld"),
-            (br#"{"accessToken":"private-token"}"#.as_slice(), "application/vnd.github+json", "sensitive_response_withheld"),
-            (br#"{"client_secret":"private-secret","client_secret":null}"#.as_slice(), "application/json", "sensitive_response_withheld"),
-            (br#"{"to\u006ben":"private-token"}"#.as_slice(), "application/json", "sensitive_response_withheld"),
-            (br#"{"cookie":"private-cookie"}"#.as_slice(), "application/json", "sensitive_response_withheld"),
-            (b"<input name=password value=private-password>".as_slice(), "text/html", "sensitive_response_withheld"),
-            (b"<input name=captcha value=private-answer>".as_slice(), "text/html", "safety_latched"),
-            (b"\xff\xfe".as_slice(), "text/html", "response_safety_unreviewed"),
+            (
+                br#"{"token":"private-token"}"#.as_slice(),
+                "application/json",
+                "sensitive_response_withheld",
+            ),
+            (
+                br#"{"accessToken":"private-token"}"#.as_slice(),
+                "application/vnd.github+json",
+                "sensitive_response_withheld",
+            ),
+            (
+                br#"{"client_secret":"private-secret","client_secret":null}"#.as_slice(),
+                "application/json",
+                "sensitive_response_withheld",
+            ),
+            (
+                br#"{"to\u006ben":"private-token"}"#.as_slice(),
+                "application/json",
+                "sensitive_response_withheld",
+            ),
+            (
+                br#"{"cookie":"private-cookie"}"#.as_slice(),
+                "application/json",
+                "sensitive_response_withheld",
+            ),
+            (
+                b"<input name=password value=private-password>".as_slice(),
+                "text/html",
+                "sensitive_response_withheld",
+            ),
+            (
+                b"<input name=captcha value=private-answer>".as_slice(),
+                "text/html",
+                "safety_latched",
+            ),
+            (
+                b"\xff\xfe".as_slice(),
+                "text/html",
+                "response_safety_unreviewed",
+            ),
         ] {
             let identity = tree_identity(&url, body, mime);
-            let error = learning::inventory_output(&SOURCE, TYPE_LABEL, &url,
-                &response(&url, body, mime), &identity, &classify).unwrap_err();
+            let error = learning::inventory_output(
+                &SOURCE,
+                TYPE_LABEL,
+                &url,
+                &response(&url, body, mime),
+                &identity,
+                &classify,
+            )
+            .unwrap_err();
             assert_eq!(error.code, expected);
             assert!(!format!("{error:?}").contains("private-"));
         }
         let body = br#"{"sha":"invalid","tree":[],"truncated":false}"#;
         let identity = tree_identity(&url, body, "application/json");
-        let output = learning::inventory_output(&SOURCE, TYPE_LABEL, &url,
-            &response(&url, body, "application/json"), &identity, &classify).unwrap();
+        let output = learning::inventory_output(
+            &SOURCE,
+            TYPE_LABEL,
+            &url,
+            &response(&url, body, "application/json"),
+            &identity,
+            &classify,
+        )
+        .unwrap();
         assert_eq!(output["raw_evidence"]["data"], STANDARD.encode(body));
         assert_eq!(output["retrieval"]["source_url"], url.as_str());
     }
@@ -4761,7 +5735,9 @@ mod tests {
         let original = response(&url, body, "application/json");
         let identity = tree_identity(&url, body, "application/json");
         assert_eq!(identity.tree_error(), Some("upstream_parse"));
-        let output = learning::inventory_output(&SOURCE, TYPE_LABEL, &url, &original, &identity, &classify).unwrap();
+        let output =
+            learning::inventory_output(&SOURCE, TYPE_LABEL, &url, &original, &identity, &classify)
+                .unwrap();
         assert_eq!(output["result"], "degraded");
         assert_eq!(output["fallback_reason"], "upstream_parse");
         assert_eq!(output["entries"], json!([]));
@@ -4775,7 +5751,9 @@ mod tests {
         let html = response(&url, b"<html>not a tree</html>", "text/html");
         let html_identity = tree_identity(&url, b"<html>not a tree</html>", "text/html");
         assert_eq!(html_identity.tree_error(), Some("unexpected_content"));
-        let degraded = learning::inventory_output(&SOURCE, TYPE_LABEL, &url, &html, &html_identity, &classify).unwrap();
+        let degraded =
+            learning::inventory_output(&SOURCE, TYPE_LABEL, &url, &html, &html_identity, &classify)
+                .unwrap();
         assert_eq!(degraded["fallback_reason"], "unexpected_content");
         assert_eq!(degraded["raw_evidence"]["content_type"], "text/html");
     }
@@ -4833,11 +5811,19 @@ mod tests {
         let identity = raw_identity(&url, b"changed branch bytes", "application/octet-stream");
         assert_ne!(identity.blob_sha(), Some(sha));
         let license = learning::verified_license(&SOURCE, &[]);
-        let refused = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, "README.md",
+        let refused = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            "README.md",
             &response(&url, b"changed branch bytes", "application/octet-stream"),
             &identity,
-            learning::MaterialClass::Documentation, tree, sha, &license, 16)
-            .unwrap();
+            learning::MaterialClass::Documentation,
+            tree,
+            sha,
+            &license,
+            16,
+        )
+        .unwrap();
         assert_eq!(refused["result"], "degraded");
         assert_eq!(refused["fallback_reason"], "blob_identity_mismatch");
         assert_eq!(refused["bytes"], Value::Null);
@@ -4852,14 +5838,18 @@ mod tests {
         let identity = raw_identity(&url, body, "application/vnd.github.raw+json");
         assert_eq!(identity.blob_sha(), Some(sha.as_str()));
         let license = learning::verified_license(&SOURCE, &[]);
-        let output = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, "README.md",
+        let output = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            "README.md",
             &response(&url, body, "application/vnd.github.raw+json"),
             &identity,
             learning::MaterialClass::Documentation,
             "f93e3a1a1525fb5b91020da86e44810c87a2d7bc",
             &sha,
             &license,
-            body.len() as u64)
+            body.len() as u64,
+        )
         .unwrap();
         assert_eq!(output["result"], "raw_snapshot");
         assert_eq!(output["content_type"], "application/vnd.github.raw+json");
@@ -4867,9 +5857,18 @@ mod tests {
 
     #[test]
     fn a_root_level_answer_directory_is_answer_material() {
-        assert_eq!(classify("answers/key.txt"), learning::MaterialClass::AnswerMaterial);
-        assert_eq!(classify("docs/answers/key.txt"), learning::MaterialClass::AnswerMaterial);
-        assert_eq!(classify("README.md"), learning::MaterialClass::Documentation);
+        assert_eq!(
+            classify("answers/key.txt"),
+            learning::MaterialClass::AnswerMaterial
+        );
+        assert_eq!(
+            classify("docs/answers/key.txt"),
+            learning::MaterialClass::AnswerMaterial
+        );
+        assert_eq!(
+            classify("README.md"),
+            learning::MaterialClass::Documentation
+        );
         assert!(learning::answer_path_component("answers/key.txt"));
         assert!(learning::answer_path_component("docs/answers/key.txt"));
         assert!(!learning::answer_path_component("docs/answering-notes.md"));
@@ -4890,7 +5889,10 @@ mod tests {
         let identity = tree_identity(&url, body, "application/json");
         let admitted = identity.tree().expect("the tree verifies");
         assert_eq!(
-            admitted.entries.iter().find(|entry| entry.path == "answers/key.txt")
+            admitted
+                .entries
+                .iter()
+                .find(|entry| entry.path == "answers/key.txt")
                 .map(|entry| entry.sha.as_str()),
             Some("73d2307db42f448c677d732fb825d31afe5586ff")
         );
@@ -4907,10 +5909,7 @@ mod tests {
         let identity = tree_identity(&url, TREE, "application/json");
         let admitted = identity.tree().expect("the tree verifies");
         let license = learning::verified_license(&SOURCE, &admitted.entries);
-        assert_eq!(
-            license["operator_reference"],
-            Value::Null
-        );
+        assert_eq!(license["operator_reference"], Value::Null);
         assert_eq!(
             license["bound_license_blob_sha"],
             "1123456789abcdef0123456789abcdef01234567"
@@ -4927,8 +5926,15 @@ mod tests {
     fn the_inventory_never_advertises_a_mutable_branch_url() {
         let url = SOURCE.tree_url().unwrap();
         let identity = tree_identity(&url, TREE, "application/json");
-        let output = learning::inventory_output(&SOURCE, TYPE_LABEL, &url,
-            &response(&url, TREE, "application/json"), &identity, &classify).unwrap();
+        let output = learning::inventory_output(
+            &SOURCE,
+            TYPE_LABEL,
+            &url,
+            &response(&url, TREE, "application/json"),
+            &identity,
+            &classify,
+        )
+        .unwrap();
         for entry in output["entries"].as_array().unwrap() {
             let advertised = entry["url"].as_str().unwrap_or("");
             assert!(!advertised.contains("/master/"), "{}", entry["path"]);
@@ -4977,8 +5983,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output["result"], "search_snapshot");
+        assert_eq!(output["complete"], true);
+        assert_eq!(output["complete_reason"], "terminal_single_object");
+        assert_eq!(output["pagination"]["state"], "terminal");
+        assert_eq!(output["pagination"]["pages"], 1);
+        assert_eq!(output["pagination"]["duplicate_entry_count"], 0);
+        assert_eq!(output["pagination"]["drift"], Value::Null);
         assert_eq!(output["match_count"], 1);
-        assert_eq!(output["matches"][0]["path"], "welearn-answer-helper.user.js");
+        assert_eq!(
+            output["matches"][0]["path"],
+            "welearn-answer-helper.user.js"
+        );
         assert_eq!(output["matches"][0]["retrieval_allowed"], false);
     }
 
@@ -4990,14 +6005,18 @@ mod tests {
         let url = SOURCE.blob_url(&sha).unwrap();
         let identity = raw_identity(&url, body, "text/plain; charset=utf-8");
         let license = learning::verified_license(&SOURCE, &[]);
-        let output = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, path,
+        let output = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            path,
             &response(&url, body, "text/plain; charset=utf-8"),
             &identity,
             learning::MaterialClass::Documentation,
             "f93e3a1a1525fb5b91020da86e44810c87a2d7bc",
             &sha,
             &license,
-            body.len() as u64)
+            body.len() as u64,
+        )
         .unwrap();
         assert_eq!(output["result"], "raw_snapshot");
         assert_eq!(output["bytes"], STANDARD.encode(body));
@@ -5011,14 +6030,18 @@ mod tests {
         let binary_sha = learning::git_blob_sha(binary, 40);
         let binary_url = SOURCE.blob_url(&binary_sha).unwrap();
         let binary_identity = raw_identity(&binary_url, binary, "application/x-unknown-binary");
-        let degraded = learning::verified_blob_output(&SOURCE, RAW_TYPE_LABEL, path,
+        let degraded = learning::verified_blob_output(
+            &SOURCE,
+            RAW_TYPE_LABEL,
+            path,
             &response(&binary_url, binary, "application/x-unknown-binary"),
             &binary_identity,
             learning::MaterialClass::Documentation,
             "f93e3a1a1525fb5b91020da86e44810c87a2d7bc",
             &binary_sha,
             &license,
-            binary.len() as u64)
+            binary.len() as u64,
+        )
         .unwrap();
         assert_eq!(degraded["result"], "degraded");
         assert_eq!(degraded["bytes"], Value::Null);
@@ -5087,13 +6110,17 @@ mod tests {
         assert_eq!(answered["results"], Value::Null);
         assert_eq!(answered["answers"].as_array().unwrap().len(), 1);
 
-        let checked = practice(&json!({"action": "check", "session": answered}).to_string()).unwrap();
+        let checked =
+            practice(&json!({"action": "check", "session": answered}).to_string()).unwrap();
         assert_eq!(checked["results"]["authority"], "local_self_check");
         assert_eq!(checked["results"]["official_grade"], Value::Null);
         assert_eq!(checked["results"]["local_match_count"], 1);
         assert_eq!(checked["results"]["local_unanswered_count"], 1);
         assert_eq!(checked["results"]["completion_reported"], false);
-        assert_eq!(checked["results"]["completion_state"], "local_practice_only");
+        assert_eq!(
+            checked["results"]["completion_state"],
+            "local_practice_only"
+        );
     }
 
     #[test]
@@ -5134,4 +6161,72 @@ mod tests {
         assert_eq!(refused.code, "invalid_input");
     }
 
+    #[test]
+    fn practice_generation_requires_an_explicit_rights_attestation() {
+        let material = "The gyroscope keeps a stable axis in flight. Angular momentum resists change of orientation.";
+        let unattested =
+            json!({"action":"generate","mode":"cloze","material_text":material,"count":1});
+        let denied = json!({"action":"generate","mode":"cloze","material_text":material,"count":1,"rights_reviewed":false});
+        let non_boolean = json!({"action":"generate","mode":"cloze","material_text":material,"count":1,"rights_reviewed":"true"});
+        for (request, code) in [
+            (unattested, "authorization_required"),
+            (denied, "authorization_required"),
+            (non_boolean, "invalid_input"),
+        ] {
+            let refused = practice(&request.to_string()).err().unwrap();
+            assert_eq!(refused.code, code, "{request}");
+        }
+        let attested = json!({"action":"generate","mode":"cloze","material_text":material,"count":1,"rights_reviewed":true});
+        let generated = practice(&attested.to_string()).unwrap();
+        // The attested fact travels in the session; it is never a default.
+        assert_eq!(generated["rights_reviewed"], true);
+        assert_eq!(generated["practice_source"]["rights_reviewed"], true);
+    }
+
+    #[test]
+    fn a_page_question_without_a_key_is_never_scored_as_an_answer() {
+        let html = r#"<html><body>
+            <div class="stem">Which hosts serve WE Learn courseware?</div>
+            <ul data-controltype="Radio">
+                <li data-solution="B">welearn.sflep.com</li>
+                <li data-solution="A">centercourseware.sflep.com</li>
+            </ul>
+            </body></html>"#;
+        let request = json!({
+            "action":"generate",
+            "mode":"we_learn_page",
+            "practice_page_html": html,
+            "rights_reviewed": true
+        });
+        let generated = practice(&request.to_string()).unwrap();
+        assert_eq!(generated["questions"][0]["key_source"], "none");
+        assert_eq!(
+            generated["questions"][0]["local_self_check_key"],
+            Value::Null
+        );
+        let answer = json!({
+            "action":"answer",
+            "session": generated,
+            "answers": [{"question_id": "q1", "choices": ["B"]}]
+        });
+        let answered = practice(&answer.to_string()).unwrap();
+        let check = json!({"action":"check","session":answered});
+        let checked = practice(&check.to_string()).unwrap();
+        assert_eq!(checked["results"]["items"][0]["status"], "unverifiable");
+        assert_eq!(checked["results"]["items"][0]["key_available"], false);
+        assert_eq!(checked["results"]["local_match_count"], 0);
+        assert_eq!(checked["results"]["local_mismatch_count"], 0);
+        assert_eq!(checked["results"]["local_unverifiable_count"], 1);
+    }
+
+    #[test]
+    fn a_session_claiming_a_key_source_without_a_key_is_refused() {
+        let material = "The gyroscope keeps a stable axis in flight. Angular momentum resists change of orientation.";
+        let request = json!({"action":"generate","mode":"cloze","material_text":material,"count":1,"rights_reviewed":true});
+        let mut session = practice(&request.to_string()).unwrap();
+        session["questions"][0]["local_self_check_key"] = Value::Null;
+        let check = json!({"action":"check","session":session});
+        let refused = practice(&check.to_string()).err().unwrap();
+        assert_eq!(refused.code, "invalid_input");
+    }
 }

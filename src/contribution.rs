@@ -1,5 +1,8 @@
 //! Bounded authenticated read-only issue discovery on GitHub or the fixed
-//! Gitea primary. No lifecycle writes.
+//! Gitea primary, plus a request-free rendering of the contribution lifecycle
+//! policy. No lifecycle writes exist here: `scan` only reads, and `plan`
+//! prints the claim, pull request, review and merge gates and refuses each of
+//! those writes by name.
 use chrono::DateTime;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -173,19 +176,45 @@ impl ScanRequest {
 
 impl ScanRequest {
     fn from_input(input: &str) -> Result<Self, ()> {
-        // A struct visitor silently accepts positional arrays, so the input
-        // must be declared an object before any field (including the
-        // credential) is read. The gate inspects leading JSON whitespace and
-        // the first byte only, allocating nothing and materializing no Value;
-        // serde_json then parses the typed request with its own depth limit.
-        let first = input
-            .bytes()
-            .find(|byte| !byte.is_ascii_whitespace())
-            .ok_or(())?;
-        if first != b'{' {
-            return Err(());
-        }
+        // The object-root gate runs before any field (including the
+        // credential) is read; serde_json then parses the typed request with
+        // its own depth limit.
+        object_root(input)?;
         serde_json::from_str::<ScanRequest>(input).map_err(|_| ())
+    }
+}
+
+/// A request must be a JSON object: a struct visitor silently accepts
+/// positional arrays, which no schema here declares. The gate inspects
+/// leading JSON whitespace and the first byte only, allocating nothing and
+/// materializing no Value. Shared by `scan` and the request-free `plan`.
+fn object_root(input: &str) -> Result<(), ()> {
+    let first = input
+        .bytes()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .ok_or(())?;
+    if first != b'{' {
+        return Err(());
+    }
+    Ok(())
+}
+
+/// `plan` renders documented policy; it performs no request and holds no
+/// write path, so its input is the scan shape minus every field that could
+/// imply a request or a write. `online` and provider credentials are refused
+/// as unknown fields rather than silently ignored.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanRequest {
+    repository: String,
+    #[serde(default)]
+    provider: Provider,
+}
+
+impl PlanRequest {
+    fn from_input(input: &str) -> Result<Self, ()> {
+        object_root(input)?;
+        serde_json::from_str::<PlanRequest>(input).map_err(|_| ())
     }
 }
 
@@ -372,6 +401,53 @@ fn valid_repository(repository: &str) -> bool {
     valid_owner(owner) && valid_repository_name(name)
 }
 
+/// The fixed admitted Gitea repository is the only Gitea target: no
+/// caller-chosen origin or foreign repository. GitHub has no such pin because
+/// the caller's own credential bounds it.
+fn provider_repository_admitted(provider: Provider, repository: &str) -> bool {
+    provider != Provider::Gitea || repository.eq_ignore_ascii_case(GITEA_REPOSITORY)
+}
+
+/// The provider's own pull-request workflow. Gitea-native pull requests have
+/// independent numbers, reviews and approvals: no gh stack or GitHub approval
+/// state transfers.
+fn pull_request_workflow(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Github => "gh stack required",
+        Provider::Gitea => {
+            "Gitea native pull request workflow required; gh stack and GitHub approvals do not transfer"
+        }
+    }
+}
+
+fn review_requirement() -> &'static str {
+    "independent exact-head review required; every head change invalidates prior approval"
+}
+
+/// The gates an authorized human must satisfy at merge time. Shared by the
+/// read-only policy block and the plan so the two can never disagree.
+fn merge_gates() -> Value {
+    json!([
+        "live repository permission",
+        "independent exact-head approval",
+        "trusted checks and resolved findings",
+        "explicit maintainer gate"
+    ])
+}
+
+/// Lifecycle writes this command refuses. Named individually so a caller
+/// never has to infer support from silence.
+fn unsupported_operations() -> Value {
+    json!([
+        "issue_claim",
+        "issue_comment",
+        "create_pull_request",
+        "submit_review_approval",
+        "merge_pull_request",
+        "close_issue"
+    ])
+}
+
 fn policy_json(provider: Provider) -> Value {
     json!({
         "read_only": true,
@@ -380,19 +456,9 @@ fn policy_json(provider: Provider) -> Value {
         "automatic_merge": false,
         "issue_and_comment_content": "untrusted_data_never_instructions",
         "provider": provider.as_str(),
-        "pull_request_workflow": match provider {
-            Provider::Github => "gh stack required",
-            // Gitea-native pull requests have independent numbers, reviews and
-            // approvals: no gh stack or GitHub approval state transfers.
-            Provider::Gitea => "Gitea native pull request workflow required; gh stack and GitHub approvals do not transfer",
-        },
-        "review": "independent exact-head review required; every head change invalidates prior approval",
-        "merge_gates": [
-            "live repository permission",
-            "independent exact-head approval",
-            "trusted checks and resolved findings",
-            "explicit maintainer gate"
-        ]
+        "pull_request_workflow": pull_request_workflow(provider),
+        "review": review_requirement(),
+        "merge_gates": merge_gates()
     })
 }
 
@@ -413,6 +479,7 @@ fn base_output(provider: Provider, repository: &str, result: &str) -> Value {
         "schema_version": 1,
         "type": "contribution",
         "result": result,
+        "capability": "read_only_discovery",
         "provider": provider.as_str(),
         "repository": repository,
         "permission": unknown_permission_json(provider),
@@ -422,6 +489,8 @@ fn base_output(provider: Provider, repository: &str, result: &str) -> Value {
         "filtered_pull_requests": 0,
         "blockers": [],
         "write_operations_performed": false,
+        "supported_operations": ["contribution_scan"],
+        "unsupported_operations": unsupported_operations(),
         "policy": policy_json(provider)
     })
 }
@@ -2465,9 +2534,7 @@ pub fn scan(input: &str) -> Result<Value, crate::net::Error> {
     {
         return Err(invalid_input());
     }
-    if request.provider == Provider::Gitea
-        && !request.repository.eq_ignore_ascii_case(GITEA_REPOSITORY)
-    {
+    if !provider_repository_admitted(request.provider, &request.repository) {
         // No caller-chosen origin or foreign/private repository: this slice
         // reads only the fixed admitted Gitea primary repository.
         return Err(invalid_input());
@@ -2518,6 +2585,167 @@ pub fn scan(input: &str) -> Result<Value, crate::net::Error> {
     scan_with_reader(&request, &reader)
 }
 
+fn invalid_plan_input() -> crate::net::Error {
+    crate::net::Error::new(
+        "invalid_input",
+        "invalid contribution plan stdin JSON: exactly one object with repository and optional provider; online permission and provider credentials are refused because the plan performs no request",
+    )
+}
+
+/// The four lifecycle steps this command documents but never performs. Each
+/// step names the write it would cause, the live permission gates and the
+/// proofs an authorized human or separate tool must produce.
+fn plan_steps(provider: Provider) -> Value {
+    json!([
+        {
+            "step": 1,
+            "id": "claim",
+            "operation": "issue_claim",
+            "implemented": false,
+            "performed_by": "authorized_human_or_separate_tool",
+            "description": format!(
+                "Select one open, unassigned issue that no open pull request already links and that carries no claim or lease marker and no discussion inside the {} hour claim window; then record the claim on that issue.",
+                CLAIM_WINDOW_SECONDS / 3600
+            ),
+            "mutates": "issue comment and/or assignee on the selected issue",
+            "permission_gates": [
+                "live repository triage or write permission at claim time",
+                "repository neither archived nor disabled"
+            ],
+            "required_proofs": [
+                "fresh bounded contribution scan listing the issue as a candidate, never as an excluded entry",
+                "the claim window applied to that decision",
+                "explicit maintainer decision recorded outside this command"
+            ]
+        },
+        {
+            "step": 2,
+            "id": "pull_request",
+            "operation": "create_pull_request",
+            "implemented": false,
+            "performed_by": "authorized_human_or_separate_tool",
+            "description": format!(
+                "Push one bounded branch and open its pull request through the provider's own workflow: {}. Bind the exact head SHA and its immediate base in the description.",
+                pull_request_workflow(provider)
+            ),
+            "mutates": "new branch, push and pull request",
+            "permission_gates": [
+                "live repository write permission at push time",
+                "repository neither archived nor disabled"
+            ],
+            "required_proofs": [
+                "exact head SHA and immediate base read back from the provider after the push",
+                "sanitized evidence, test results and known gaps in the pull request body"
+            ]
+        },
+        {
+            "step": 3,
+            "id": "review",
+            "operation": "submit_review_approval",
+            "implemented": false,
+            "performed_by": "independent_reviewer",
+            "description": format!("Request an independent review of that exact head: {}.", review_requirement()),
+            "mutates": "review submission on the pull request",
+            "permission_gates": [
+                "reviewer independent of the author of that head",
+                "review permission on the repository"
+            ],
+            "required_proofs": [
+                "approval bound to the current head SHA",
+                "every review finding answered; any later head change invalidates the prior approval"
+            ]
+        },
+        {
+            "step": 4,
+            "id": "merge",
+            "operation": "merge_pull_request",
+            "implemented": false,
+            "performed_by": "authorized_maintainer",
+            "description": "Merge only while every gate still holds at merge time, then close the linked acceptance item after the merge is observed on the base branch.",
+            "mutates": "merge on the pull request base branch",
+            "permission_gates": merge_gates(),
+            "required_proofs": [
+                "live permission and trusted check results read at merge time",
+                "independent exact-head approval still valid for the head being merged",
+                "resolved findings for that head",
+                "explicit maintainer gate for source, credential or campus-contract changes",
+                "merge observed on the base branch before the acceptance item is closed"
+            ]
+        }
+    ])
+}
+
+/// Every lifecycle write this command refuses, with the specific reason
+/// instead of a silent omission: this module holds no write path, no write
+/// credential and no authorization to mutate a forge.
+fn lifecycle_refusals() -> Value {
+    json!([
+        {
+            "operation": "issue_claim",
+            "step": "claim",
+            "reason": "claim_not_implemented",
+            "explanation": "buaa-cli exposes bounded authenticated reads only; claiming an issue needs a live comment or assignee mutation, live triage or write permission and an explicit maintainer decision outside this command."
+        },
+        {
+            "operation": "create_pull_request",
+            "step": "pull_request",
+            "reason": "pull_request_creation_not_implemented",
+            "explanation": "No branch, push or pull-request write exists in this command; the pull request must be created by the provider's authorized workflow and read back at its exact head SHA."
+        },
+        {
+            "operation": "submit_review_approval",
+            "step": "review",
+            "reason": "review_approval_not_implemented",
+            "explanation": "An approval is a write bound to one exact head SHA and must come from an independent reviewer; this command cannot produce or attest one."
+        },
+        {
+            "operation": "merge_pull_request",
+            "step": "merge",
+            "reason": "merge_not_implemented",
+            "explanation": "Merging needs live repository permission, an independent exact-head approval, satisfied trusted checks and resolved findings, and an explicit maintainer gate at merge time; no merge or auto-merge path is implemented here."
+        }
+    ])
+}
+
+fn plan_output(provider: Provider, repository: &str) -> Value {
+    json!({
+        "schema_version": 1,
+        "type": "contribution",
+        "result": "plan",
+        "intent": "render_contribution_lifecycle_plan",
+        "capability": "lifecycle_plan_only",
+        "provider": provider.as_str(),
+        "repository": repository,
+        "permission": unknown_permission_json(provider),
+        "write_operations_performed": false,
+        "network_requests_performed": false,
+        "executed": false,
+        "claim_window_seconds": CLAIM_WINDOW_SECONDS,
+        "supported_operations": ["contribution_scan"],
+        "unsupported_operations": unsupported_operations(),
+        "steps": plan_steps(provider),
+        "refusals": lifecycle_refusals(),
+        "policy": policy_json(provider)
+    })
+}
+
+/// Render the documented contribution lifecycle without performing any part
+/// of it. Input is secret-free stdin JSON: the plan needs no credential and
+/// no network permission, and both are refused when supplied. No request is
+/// made, no credential is looked up and no state is mutated.
+pub fn plan(input: &str) -> Result<Value, crate::net::Error> {
+    if input.len() > MAX_INPUT {
+        return Err(invalid_plan_input());
+    }
+    let request = PlanRequest::from_input(input).map_err(|_| invalid_plan_input())?;
+    if !valid_repository(&request.repository)
+        || !provider_repository_admitted(request.provider, &request.repository)
+    {
+        return Err(invalid_plan_input());
+    }
+    Ok(plan_output(request.provider, &request.repository))
+}
+
 pub fn schema() -> Value {
     json!({
         "input": {"type":"object", "additionalProperties":false, "required":["repository"],
@@ -2533,9 +2761,13 @@ pub fn schema() -> Value {
                     "pattern":"^[A-Za-z0-9_]+$","description":"GitHub credential for provider github only; rejected when provider is gitea. stdin JSON only; decoded credential must match the ASCII pattern; zeroizing typed credential; never argv, URL, log, error or output"},
                 "gitea_token":{"type":"string","writeOnly":true,"minLength":8,"maxLength":4096,
                     "pattern":"^[A-Za-z0-9_]+$","description":"Gitea credential for provider gitea only; rejected when provider is github. Same stdin/zeroizing/non-disclosure rules as github_token"}}},
-        "output":{"type":"object","required":["schema_version","type","result","provider","repository","permission","candidates","excluded","blockers","write_operations_performed","policy"],
+        "output":{"type":"object","required":["schema_version","type","result","capability","provider","repository","permission","candidates","excluded","blockers","write_operations_performed","supported_operations","unsupported_operations","policy"],
             "properties":{"schema_version":{"const":1},"type":{"const":"contribution"},
                 "result":{"enum":["blocked","scan_completed"]},"write_operations_performed":{"const":false},
+                "capability":{"const":"read_only_discovery","description":"This command implements bounded authenticated reads only; lifecycle writes are absent, not deferred"},
+                "supported_operations":{"type":"array","items":{"const":"contribution_scan"}},
+                "unsupported_operations":{"type":"array","items":{"enum":["issue_claim","issue_comment","create_pull_request","submit_review_approval","merge_pull_request","close_issue"]},
+                    "description":"Named refusals, so compliance is never inferred from silence"},
                 "provider":{"type":"string","enum":["github","gitea"]},
                 "repository":{"type":"string"},
                 "reason":{"type":"string","description":"Present when the scan is blocked"},
@@ -2552,6 +2784,51 @@ pub fn schema() -> Value {
                 "candidates":{"type":"array","description":"Untrusted issue metadata, not authorization to claim or create a PR"},
                 "excluded":{"type":"array"},"filtered_pull_requests":{"type":"integer","minimum":0},
                 "blockers":{"type":"array"},"policy":{"type":"object"}}},
+        "plan":{"description":"Renders the documented claim, pull request, review and merge lifecycle with its live permission gates and required proofs. It performs no request, looks up no credential and mutates nothing; every lifecycle write is refused by name.",
+            "input":{"type":"object","additionalProperties":false,"required":["repository"],
+                "description":"Exactly one JSON object; top-level arrays and other JSON values are refused. plan renders policy only, so online permission and provider credentials are refused as unknown fields instead of being silently ignored.",
+                "properties":{"repository":{"type":"string",
+                        "pattern":"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9._-]{1,100}$",
+                        "not":{"pattern":"^[^/]+/(\\.\\.?)$"},
+                        "description":"owner/repository, not a URL. provider gitea admits only ezra/buaa-cli"},
+                    "provider":{"type":"string","enum":["github","gitea"],"default":"github",
+                        "description":"Forge whose lifecycle policy is rendered. gitea is pinned to the fixed primary and repository ezra/buaa-cli; no caller-chosen origin"}}},
+            "output":{"type":"object","required":["schema_version","type","result","intent","capability","provider","repository","permission","write_operations_performed","network_requests_performed","executed","claim_window_seconds","supported_operations","unsupported_operations","steps","refusals","policy"],
+                "properties":{"schema_version":{"const":1},"type":{"const":"contribution"},
+                    "result":{"const":"plan"},"intent":{"const":"render_contribution_lifecycle_plan"},
+                    "capability":{"const":"lifecycle_plan_only"},
+                    "provider":{"type":"string","enum":["github","gitea"]},
+                    "repository":{"type":"string"},
+                    "permission":{"type":"object","description":"Always the explicit unknown shape: the plan performs no authenticated request and establishes no permission"},
+                    "write_operations_performed":{"const":false},"network_requests_performed":{"const":false},
+                    "executed":{"const":false},
+                    "claim_window_seconds":{"const":CLAIM_WINDOW_SECONDS},
+                    "supported_operations":{"type":"array","items":{"const":"contribution_scan"}},
+                    "unsupported_operations":{"type":"array","items":{"enum":["issue_claim","issue_comment","create_pull_request","submit_review_approval","merge_pull_request","close_issue"]}},
+                    "steps":{"type":"array","minItems":4,"maxItems":4,
+                        "description":"Policy only: implemented is false for every step and this command has no write path for any of them",
+                        "items":{"type":"object","additionalProperties":false,
+                            "required":["step","id","operation","implemented","performed_by","description","mutates","permission_gates","required_proofs"],
+                            "properties":{"step":{"type":"integer","minimum":1,"maximum":4},
+                                "id":{"enum":["claim","pull_request","review","merge"]},
+                                "operation":{"enum":["issue_claim","create_pull_request","submit_review_approval","merge_pull_request"]},
+                                "implemented":{"const":false},"performed_by":{"type":"string"},
+                                "description":{"type":"string"},"mutates":{"type":"string"},
+                                "permission_gates":{"type":"array","minItems":1,"items":{"type":"string"}},
+                                "required_proofs":{"type":"array","minItems":1,"items":{"type":"string"}}}}},
+                    "refusals":{"type":"array","minItems":4,
+                        "description":"One specific refusal per lifecycle write; unsupported is stated, never implied",
+                        "items":{"type":"object","additionalProperties":false,
+                            "required":["operation","step","reason","explanation"],
+                            "properties":{"operation":{"enum":["issue_claim","create_pull_request","submit_review_approval","merge_pull_request"]},
+                                "step":{"enum":["claim","pull_request","review","merge"]},
+                                "reason":{"enum":["claim_not_implemented","pull_request_creation_not_implemented","review_approval_not_implemented","merge_not_implemented"]},
+                                "explanation":{"type":"string"}}}},
+                    "policy":{"type":"object"}}}},
+        "operations":{"scan":{"online_required":true,"writes_performed":false,"blocked_without_online_or_token":true},
+            "plan":{"online_required":false,"requests_performed":0,"writes_performed":false,"executed":false}},
+        "capability":{"implemented":["contribution_scan"],"plan_only":["contribution_plan"],
+            "not_implemented":unsupported_operations()},
         "limits":{"response_bytes":MAX_BODY,"issue_pages":MAX_LIST_PAGES,"issue_items":MAX_LIST_ITEMS,
             "timeline_pages_per_issue":MAX_TIMELINE_PAGES,"timeline_items_per_issue":MAX_TIMELINE_ITEMS,
             "linked_pr_reads_per_issue":MAX_PR_CANDIDATES,"comment_pages_per_issue":MAX_COMMENT_PAGES,
@@ -4274,5 +4551,147 @@ mod tests {
             request.provider_token().unwrap().unwrap().0.as_str(),
             "gt_secret"
         );
+    }
+
+    #[test]
+    fn plan_renders_policy_and_refuses_every_lifecycle_write() {
+        let output = plan(r#"{"repository":"octo/repo"}"#).unwrap();
+        assert_eq!(output["result"], "plan");
+        assert_eq!(output["capability"], "lifecycle_plan_only");
+        assert_eq!(output["write_operations_performed"], false);
+        assert_eq!(output["network_requests_performed"], false);
+        assert_eq!(output["executed"], false);
+        assert_eq!(output["permission"]["metadata_present"], false);
+        assert_eq!(output["permission"]["can_write"], Value::Null);
+        let mut ids = Vec::new();
+        for step in output["steps"].as_array().unwrap() {
+            // No step may claim an implementation or a write path this
+            // command does not have.
+            assert_eq!(step["implemented"], false);
+            assert!(!step["performed_by"].as_str().unwrap().is_empty());
+            assert!(!step["mutates"].as_str().unwrap().is_empty());
+            assert!(!step["permission_gates"].as_array().unwrap().is_empty());
+            assert!(!step["required_proofs"].as_array().unwrap().is_empty());
+            ids.push(step["id"].as_str().unwrap().to_owned());
+        }
+        assert_eq!(ids, ["claim", "pull_request", "review", "merge"]);
+        for operation in [
+            "issue_claim",
+            "create_pull_request",
+            "submit_review_approval",
+            "merge_pull_request",
+        ] {
+            let refusal = output["refusals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|refusal| refusal["operation"] == operation)
+                .unwrap_or_else(|| panic!("missing refusal for {operation}"));
+            assert!(
+                refusal["reason"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("_not_implemented")
+            );
+            assert!(!refusal["explanation"].as_str().unwrap().is_empty());
+        }
+        assert_eq!(output["supported_operations"], json!(["contribution_scan"]));
+        assert!(output["unsupported_operations"].as_array().unwrap().len() >= 4);
+        // The plan is request-free, so a credential or online permission is
+        // refused instead of being accepted and silently ignored.
+        for input in [
+            r#"{"repository":"octo/repo","online":true}"#,
+            r#"{"repository":"octo/repo","github_token":"gh_credential"}"#,
+        ] {
+            let error = plan(input).unwrap_err();
+            assert_eq!(error.code, "invalid_input");
+            assert!(!format!("{error:?}").contains("gh_credential"));
+        }
+        // Shape screening is shared with scan: exactly one JSON object.
+        assert!(plan(r#" ["octo/repo"] "#).is_err());
+        assert!(plan("").is_err());
+        assert!(plan(r#"{"repository":"octo/repo","provider":"gitlab"}"#).is_err());
+        assert_eq!(
+            plan(r#"{"repository":"other/private","provider":"gitea"}"#)
+                .unwrap_err()
+                .code,
+            "invalid_input"
+        );
+        let gitea = plan(r#"{"repository":"ezra/buaa-cli","provider":"gitea"}"#).unwrap();
+        assert_eq!(gitea["provider"], "gitea");
+        assert!(
+            gitea["steps"][1]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Gitea native")
+        );
+    }
+
+    #[test]
+    fn schema_declares_scan_and_plan_capabilities() {
+        let schema = schema();
+        let plan_output = plan(r#"{"repository":"octo/repo"}"#).unwrap();
+        let declared = &schema["plan"]["output"];
+        for field in declared["required"].as_array().unwrap() {
+            assert!(
+                plan_output.get(field.as_str().unwrap()).is_some(),
+                "undeclared plan output field {field}"
+            );
+        }
+        assert_eq!(
+            declared["properties"]["capability"]["const"],
+            plan_output["capability"]
+        );
+        assert_eq!(
+            declared["properties"]["steps"]["minItems"],
+            plan_output["steps"].as_array().unwrap().len()
+        );
+        assert_eq!(
+            declared["properties"]["refusals"]["minItems"],
+            plan_output["refusals"].as_array().unwrap().len()
+        );
+        let step_schema = &declared["properties"]["steps"]["items"];
+        for step in plan_output["steps"].as_array().unwrap() {
+            for field in step_schema["required"].as_array().unwrap() {
+                assert!(step.get(field.as_str().unwrap()).is_some());
+            }
+            for key in step.as_object().unwrap().keys() {
+                assert!(
+                    step_schema["properties"].get(key).is_some(),
+                    "undocumented step field {key}"
+                );
+            }
+        }
+        // The read-only boundary is declared for discovery too, and every
+        // discovery result carries it.
+        let scan_schema = &schema["output"];
+        assert_eq!(
+            scan_schema["properties"]["capability"]["const"],
+            "read_only_discovery"
+        );
+        assert_eq!(
+            scan_schema["properties"]["write_operations_performed"]["const"],
+            false
+        );
+        let scan_output = blocked_before_permission(
+            Provider::Github,
+            "octo/repo",
+            "explicit_online_permission_required",
+            None,
+        );
+        for field in scan_schema["required"].as_array().unwrap() {
+            assert!(
+                scan_output.get(field.as_str().unwrap()).is_some(),
+                "undeclared scan output field {field}"
+            );
+        }
+        assert!(
+            schema["capability"]["not_implemented"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("merge_pull_request"))
+        );
+        assert_eq!(schema["operations"]["plan"]["requests_performed"], 0);
+        assert_eq!(schema["operations"]["plan"]["executed"], false);
     }
 }

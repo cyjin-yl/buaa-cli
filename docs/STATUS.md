@@ -1,53 +1,83 @@
 ## Development status
 
-## 2026-11-05: offline governor outcome review plus Boya/GSMIS one-login reads
+## 2026-11-05: offline governor outcome review, unexercised Boya/GSMIS session paths
 
-Credential-free reachability was re-established first: `sso.buaa.edu.cn`,
+Credential-free reachability was checked first: `sso.buaa.edu.cn`,
 `gsmis.buaa.edu.cn` and `bykc.buaa.edu.cn` all complete TLS with
-`ssl_verify_result=0`. The two service entries answer `302` to
-`sso.buaa.edu.cn/login?service=…` with the exact service URLs held in
-`GSMIS_CAS_SERVICE` and `BYKC_CAS_SERVICE`, so the configured CAS profiles
-match the current deployment. The redirects were read, never followed with a
-ticket, and no credential was submitted — this is deployment identity, not an
+`ssl_verify_result=0`. The GSMIS portal entry answers `302` to
+`sso.buaa.edu.cn/login?service=…`; the bykc entry answers `302` to
+`sso.buaa.edu.cn/login?noAutoRedirect=true&service=…`. Each `service=` value
+equals the `GSMIS_CAS_SERVICE` / `BYKC_CAS_SERVICE` constant in
+`src/recordings/session.rs` byte-for-byte, so the configured CAS profiles
+match the current sign-on entries. The redirects were read, never followed
+with a ticket, and no credential was submitted: deployment identity, not an
 authenticated session.
 
-Three bounded additions landed together in commit `6d4bafd`. None of them
-performs a campus write, retry, refresh, persistence or second authentication;
-each keeps the existing Authentication lease and settlement contract.
+Three bounded additions are carried by commits `6d4bafd` (both session read
+paths and the outcome-review commands), `bd4e455` (outcome-review hardening,
+both session schemas, acceptance evidence) and `98c05d3` (bounded
+outcome-review archive readback). None performs a campus write, retry,
+refresh, persistence or second authentication: the two session paths keep the
+existing Authentication lease and settlement contract, while the outcome
+review only settles an already-observed pending outcome offline. Neither
+session path has transmitted a credential or read a service response online —
+see the blockers below.
 
-`buaa governor review-outcome-plan` / `review-outcome-commit --offline` give
-the operator a deliberate, offline way to resolve one unknown request outcome
-(`pending`). The preview reports the retained state SHA-256, pending kind,
-latch, failure count and retained waits; the commit requires an exact intent
-`REVIEW GOVERNOR OUTCOME <state_sha256>` plus one explicit settlement
-(`success`, `no_request_sent`, `network_failure`, `credential_rejected`,
-`captcha_required`, or `cooldown{until_ms}` for a server-directed Retry-After).
-`success` clears the failure streak; only `network_failure` advances the
-backoff. The original state bytes are preserved as `outcome-review-<sha>.json`
-before the atomic rewrite — an existing archive must read back byte-identical
-or the commit refuses, and the directory entry is synchronized. The plan
-anchors retained waits to the persisted `last_observed_ms`, matching the
-boot-review contract, so a preview cannot drift against its own commit. When
-the pending state survived a reboot, every deadline stays in the dead boot's
-clock domain rather than mixing the new uptime; the commit also reserves the
-same post-completion request gap a real `finish` performs. The outcome
-commands are now declared in the published governor schema.
+`buaa governor review-outcome-plan` / `review-outcome-commit --offline` resolve
+exactly one unknown (`pending`) outcome offline, under the permanent governor
+lock. The preview refuses when nothing is pending and reports the retained
+state SHA-256, pending kind, latch, failure count and the waits anchored to
+the persisted `last_observed_ms`; the commit rechecks that exact plan and
+requires intent `REVIEW GOVERNOR OUTCOME <state_sha256>` plus one settlement:
+`success` (clears the failure streak), `no_request_sent`, `network_failure`
+(increments the streak and its capped backoff), `credential_rejected`,
+`captcha_required`, `request_answered` (a truthful state no-op) or
+`cooldown{wait_ms}`, applied relative to the state's own clock domain and
+never as an absolute `until_ms`. The original bytes are preserved as
+`outcome-review-<sha>.json` before the atomic rewrite — an existing archive
+must read back byte-identical or the commit refuses — and the directory entry
+is synchronized. A pending state that survived a reboot keeps every deadline
+in the dead boot's clock domain, and the commit reserves the post-completion
+request gap a real `finish` performs, plus the background gap for a killed
+`BackgroundPoll`. It still cannot clear a latch, grant authentication or
+migrate unknown/corrupt history. Both commands, with plan/stdin/stdout
+schemas, are declared in the published governor schema.
 
 `buaa timetable session [--online]` performs one explicit in-memory CAS login
-to GSMIS followed by exactly one `loadXskbData.do` read. Input is a strict
-object (`authorized`, `username`, `password`, `intent`, `read`); `read` must
-select `operation=xskb` with a five-ASCII-digit `xnxqdm`. A disabled read
-performs no I/O. The issued session cookie is consumed once for that read and
-never persisted; credential/cookie echoes, challenges and newly issued cookies
-withhold the body rather than exporting it. The module's own schema now
-documents the session contract.
+to GSMIS followed by exactly one `loadXskbData.do` read. Input is object-only
+and rejects duplicate fields and trailing documents: `authorized`,
+`username`, `password`, `intent` (`LOGIN <username> timetable`) and
+`read{operation=xskb, enabled, xnxqdm}`, where `xnxqdm` is exactly five ASCII
+digits. A disabled read returns `result=disabled` with
+`network_performed=false` before any governor or network access; without
+`--online` the command refuses before a request. The issued cookie is used
+only by that single read and is never stored; credential/cookie echoes,
+challenges and responses that newly issue a session cookie are withheld with
+length and SHA-256 only, never raw bytes.
 
-`buaa boya session [--online]` performs the same pattern for the bykc CAS
-service: one login yields the handoff token via `take_service_credential`,
-then exactly one prepared `sscv` read reuses `BoyaClient::prepare`/`execute`.
-The token is consumed once and never persisted; `preview_write` stays blocked.
-The `login` schema text was corrected from "token issuance blocked before
-transport" to describe the implemented one-login contract.
+`buaa boya session [--online]` performs the same pattern for the bykc service:
+one login, the handoff token taken once via `take_service_credential`, then
+exactly one prepared `sscv` read through `BoyaClient::prepare`/`execute`. The
+token is never persisted and `preview_write` stays blocked. In `bd4e455` the
+module's `login` text changed from "token issuance blocked before transport…"
+to describe that implemented one-login contract.
+
+Verified offline: six focused outcome-review cases (nothing-pending refusal,
+wrong-intent refusal with unchanged bytes, recorded settlement with preserved
+pre-review bytes, `success` clearing the streak, relative cooldown, cross-boot
+clock domain), four focused timetable-session cases and the full 1217-test
+library gate with three existing ignored workers. Native CLI smoke refused
+before transport; both session schemas and the governor outcome-review
+schemas passed a Draft 2020-12 check, which accepted valid inputs and rejected
+`until_ms`, unknown settlements and 4- or 6-digit `xnxqdm`.
+
+Blocked, not done: no authenticated GSMIS or BYKC session, no real
+`loadXskbData.do` body, no parsed live schedule, no live encrypted Boya
+response and no paginated read. The only recorded `--online` invocation
+refused for missing authorization before transport. The post-login read
+endpoints and the encrypted Boya response contract therefore stay unverified,
+so the postgraduate timetable acceptance remains `partial-offline` and Boya
+remains `pending`. Matching sign-on entries does not establish either login.
 
 ## 2026-11-04: online CAS reads verified for Smart classrooms and iHome
 

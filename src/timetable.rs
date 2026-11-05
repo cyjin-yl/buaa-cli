@@ -412,8 +412,15 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
             Err(message) => return invalid(message),
         }
     }
-    if source_ids.is_some_and(|ids| ids.len() != courses.len() || ids.iter().any(|id|
-        id.len() != 64 || !id.bytes().all(|byte|byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))) {
+    if source_ids.is_some_and(|ids| {
+        ids.len() != courses.len()
+            || ids.iter().any(|id| {
+                id.len() != 64
+                    || !id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+    }) {
         return invalid("invalid or mismatched source identities".into());
     }
 
@@ -441,9 +448,15 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
                 if !seen_source_occurrences.insert((id, occ.date_z)) {
                     return invalid("ambiguous duplicate source occurrence".into());
                 }
-                format!("buaa-cli/timetable-pg/{semester_start_iso}/{id}/{}", occ.date_z)
+                format!(
+                    "buaa-cli/timetable-pg/{semester_start_iso}/{id}/{}",
+                    occ.date_z
+                )
             } else {
-                format!("buaa-cli/timetable/{semester_start_iso}/{ci}/{}", occ.date_z)
+                format!(
+                    "buaa-cli/timetable/{semester_start_iso}/{ci}/{}",
+                    occ.date_z
+                )
             };
             logical.push("BEGIN:VEVENT".into());
             logical.push(format!("UID:{uid}"));
@@ -490,10 +503,8 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
 
 const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
 const SESSION_MAX_INPUT: usize = 65536;
-const TIMETABLE_URL: &str =
-    "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do";
-const TIMETABLE_REFERER: &str =
-    "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
+const TIMETABLE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do";
+const TIMETABLE_REFERER: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
 
 fn error(code: &'static str, message: &'static str) -> Error {
     Error::new(code, message)
@@ -654,9 +665,9 @@ fn withheld(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'sta
         .map(str::trim)
         .filter(|value| {
             !value.is_empty()
-                && value
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'+' | b'-' | b'_'))
+                && value.bytes().all(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'+' | b'-' | b'_')
+                })
         });
     json!({
         "schema_version": 1,
@@ -692,7 +703,9 @@ fn contains_cookie(bytes: &[u8], cookie: &str) -> bool {
 fn value_contains_secret(value: &Value, contains: &dyn Fn(&[u8]) -> bool) -> bool {
     match value {
         Value::String(text) => contains(text.as_bytes()),
-        Value::Array(values) => values.iter().any(|value| value_contains_secret(value, contains)),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_contains_secret(value, contains)),
         Value::Object(fields) => fields
             .values()
             .any(|value| value_contains_secret(value, contains)),
@@ -719,6 +732,96 @@ fn session_denied(bytes: &[u8]) -> bool {
         .any(|marker| message.contains(marker))
 }
 
+/// Header and body facts the response-backed read has already established.
+/// The caller derives them from the response headers, the transmitted cookie
+/// and the issued session jar; they never carry secret material themselves.
+#[derive(Default)]
+struct ReadScreening {
+    /// The response re-issued session material, so its body is not exportable.
+    issued_session_cookie: bool,
+    /// A challenge signal was present in the response headers.
+    header_challenge: bool,
+    /// The declared Content-Type itself echoes credential material.
+    metadata_echo: bool,
+    /// The body, raw or JSON-decoded, echoes credential material.
+    echo: bool,
+}
+
+/// The value one read body is admitted as, plus the denial signal the governor
+/// records for it.
+struct ReadAdmission {
+    output: Value,
+    denied: bool,
+}
+
+/// Screen one completely read, in-limit response body. This is pure: it
+/// performs no I/O, no retry and no parsing of the request. A recognized
+/// session denial is refused before the parser is consulted, so a denial body
+/// can never be presented as timetable rows, and every non-2xx, non-UTF-8 or
+/// unparsable body keeps byte-exact degraded evidence (base64, sha256,
+/// Content-Type, reason and status) instead of an empty schedule.
+fn admit_read_body(
+    status: u16,
+    content_type: Option<&str>,
+    bytes: &[u8],
+    term: &str,
+    assessment: crate::html::ChallengeAssessment,
+    screening: ReadScreening,
+) -> ReadAdmission {
+    let header_challenge = screening.header_challenge;
+    let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
+    let safe_content_type = if screening.metadata_echo {
+        None
+    } else {
+        content_type
+    };
+    let denied = !screening.echo && session_denied(bytes);
+    let output = if screening.issued_session_cookie {
+        // The read response may not re-issue session material; the MIME
+        // essence itself can echo the issued value, so withhold it too.
+        let mut output = withheld(status, None, bytes, "session_cookie_issued");
+        output["content_type_parameters_withheld"] = json!(content_type.is_some());
+        output
+    } else if screening.echo {
+        withheld(status, safe_content_type, bytes, "credential_echo")
+    } else if assessment == crate::html::ChallengeAssessment::Unreviewed && !challenge {
+        withheld(
+            status,
+            safe_content_type,
+            bytes,
+            "response_safety_unreviewed",
+        )
+    } else if challenge {
+        let mut output = withheld(status, safe_content_type, bytes, "challenge_requires_human");
+        output["challenge_required"] = json!(true);
+        output
+    } else if denied {
+        let mut output = withheld(status, safe_content_type, bytes, "session_expired");
+        output["result"] = json!("session_expired");
+        output
+    } else if !(200..300).contains(&status) {
+        degraded(
+            status,
+            safe_content_type,
+            bytes,
+            "http_status_unsafe_response",
+        )
+    } else {
+        match std::str::from_utf8(bytes) {
+            Err(_) => degraded(status, safe_content_type, bytes, "utf8_decode_failed"),
+            Ok(body) => {
+                let mut output = crate::timetable_pg::parse_timetable(body, term);
+                if output.get("result").and_then(Value::as_str) == Some("fallback") {
+                    output["content_type"] = json!(safe_content_type);
+                    output["http_status"] = json!(status);
+                }
+                output
+            }
+        }
+    };
+    ReadAdmission { output, denied }
+}
+
 /// One explicit in-memory CAS login to the graduate timetable service followed
 /// by exactly one `loadXskbData.do` read. The session never persists, refreshes
 /// or retries; the issued cookie is used for the single read only.
@@ -741,13 +844,11 @@ pub(crate) fn session_with_network(
         return Err(session_invalid());
     }
     let mut deserializer = serde_json::Deserializer::from_str(input);
-    let input: SessionInput = deserialize_object(&mut deserializer).map_err(|_| session_invalid())?;
+    let input: SessionInput =
+        deserialize_object(&mut deserializer).map_err(|_| session_invalid())?;
     deserializer.end().map_err(|_| session_invalid())?;
     if !input.read.enabled {
-        return Ok(with_provenance(
-            json!({"result": "disabled"}),
-            false,
-        ));
+        return Ok(with_provenance(json!({"result": "disabled"}), false));
     }
     if !valid_term_code(&input.read.xnxqdm) {
         return Err(session_invalid());
@@ -810,7 +911,10 @@ pub(crate) fn session_with_network(
                 _ => lease.finish_without_request(),
             };
             settled.map_err(|_| {
-                error("governor_error", "cannot settle timetable authentication attempt")
+                error(
+                    "governor_error",
+                    "cannot settle timetable authentication attempt",
+                )
             })?;
             return Err(failure);
         }
@@ -885,86 +989,57 @@ pub(crate) fn session_with_network(
                 .map(|value| value.to_str().ok()),
             header_challenge,
         )
-        .map_err(|_| error("governor_error", "cannot persist timetable response headers"))?;
+        .map_err(|_| {
+            error(
+                "governor_error",
+                "cannot persist timetable response headers",
+            )
+        })?;
     let mut bytes = Zeroizing::new(Vec::new());
     let read_result = response
         .by_ref()
         .take(SESSION_BODY_LIMIT + 1)
         .read_to_end(&mut bytes);
     let incomplete = read_result.is_err() || bytes.len() as u64 > SESSION_BODY_LIMIT;
-    let assessment = crate::html::assess_challenge_body(&bytes, content_type.as_deref(), !incomplete);
-    let challenge =
-        header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
+    let assessment =
+        crate::html::assess_challenge_body(&bytes, content_type.as_deref(), !incomplete);
+    let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
     let metadata_echo = content_type
         .as_deref()
         .is_some_and(|value| contains(value.as_bytes()));
-    let safe_content_type = if metadata_echo { None } else { content_type.as_deref() };
     let echo = contains(&bytes)
         || metadata_echo
         || std::str::from_utf8(&bytes)
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(text).ok())
             .is_some_and(|value| value_contains_secret(&value, &contains));
-    let denied = !incomplete && !echo && session_denied(&bytes);
+    let mut denied = false;
     let result = if read_result.is_err() {
-        Err(error("network_error", "timetable response body read failed"))
+        Err(error(
+            "network_error",
+            "timetable response body read failed",
+        ))
     } else if bytes.len() as u64 > SESSION_BODY_LIMIT {
         Err(error(
             "body_limit",
             "timetable response exceeds bounded body limit",
         ))
-    } else if issues_session_cookie {
-        // The read response may not re-issue session material; the MIME
-        // essence itself can echo the issued value, so withhold it too.
-        let mut output = withheld(status, None, &bytes, "session_cookie_issued");
-        output["content_type_parameters_withheld"] = json!(content_type.is_some());
-        Ok(output)
-    } else if echo {
-        Ok(withheld(
-            status,
-            safe_content_type,
-            &bytes,
-            "credential_echo",
-        ))
-    } else if assessment == crate::html::ChallengeAssessment::Unreviewed && !challenge {
-        Ok(withheld(
-            status,
-            safe_content_type,
-            &bytes,
-            "response_safety_unreviewed",
-        ))
-    } else if challenge {
-        let mut output = withheld(status, safe_content_type, &bytes, "challenge_requires_human");
-        output["challenge_required"] = json!(true);
-        Ok(output)
-    } else if denied {
-        let mut output = withheld(status, safe_content_type, &bytes, "session_expired");
-        output["result"] = json!("session_expired");
-        Ok(output)
-    } else if !(200..300).contains(&status) {
-        Ok(degraded(
-            status,
-            safe_content_type,
-            &bytes,
-            "http_status_unsafe_response",
-        ))
     } else {
-        match std::str::from_utf8(&bytes) {
-            Err(_) => Ok(degraded(
-                status,
-                safe_content_type,
-                &bytes,
-                "utf8_decode_failed",
-            )),
-            Ok(body) => {
-                let mut output = crate::timetable_pg::parse_timetable(body, &input.read.xnxqdm);
-                if output.get("result").and_then(Value::as_str) == Some("fallback") {
-                    output["content_type"] = json!(safe_content_type);
-                    output["http_status"] = json!(status);
-                }
-                Ok(output)
-            }
-        }
+        let admission = admit_read_body(
+            status,
+            content_type.as_deref(),
+            &bytes,
+            &input.read.xnxqdm,
+            assessment,
+            ReadScreening {
+                issued_session_cookie: issues_session_cookie,
+                header_challenge,
+                metadata_echo,
+                echo,
+            },
+        );
+        denied = admission.denied;
+        Ok(admission.output)
     };
     drop(response);
     if denied {
@@ -1039,7 +1114,7 @@ pub fn schema() -> Value {
         "intent": "LOGIN <username> timetable",
         "read_url": TIMETABLE_URL,
         "read_method": "POST form ZC=&XNXQDM={term}&XH=&XQDM=",
-        "output": "timetable_pg parsed shape, or result degraded/fallback with raw_response_base64+sha256+content_type+fallback_reason, or sensitive_response_withheld when credentials/challenge/cookie material is detected; plus service, source, network_performed, write_operations_performed",
+        "output": "timetable_pg parsed shape, or result degraded/fallback with raw_response_base64+raw_response_sha256+content_type+fallback_reason+http_status for a non-2xx, non-UTF-8 or unparsable body that clears the safety screens, or sensitive_response_withheld when credential/challenge/cookie material or an unreviewed body is detected, or result session_expired (evidence withheld) when the body is a recognized login denial and no rows are emitted; plus service, source, network_performed, write_operations_performed",
         "validation": "object root only; disabled read performs no I/O; enabled read requires authorized=true, exact intent, five-ASCII-digit xnxqdm and --online before transport or admission"
     });
     schema
@@ -1345,8 +1420,14 @@ mod session_tests {
         // A non-object read or unknown operation fails at the object boundary.
         for (read, label) in [
             (json!("xskb"), "non-object read"),
-            (json!({"operation": "terms", "enabled": true, "xnxqdm": "20261"}), "unknown operation"),
-            (json!({"operation": "xskb", "xnxqdm": "20261"}), "missing enabled"),
+            (
+                json!({"operation": "terms", "enabled": true, "xnxqdm": "20261"}),
+                "unknown operation",
+            ),
+            (
+                json!({"operation": "xskb", "xnxqdm": "20261"}),
+                "missing enabled",
+            ),
         ] {
             let mut request = session_input();
             request["read"] = read;
@@ -1392,5 +1473,266 @@ mod session_tests {
         })
         .unwrap_err();
         assert_eq!(failure.code, "online_required");
+    }
+
+    /// Synthesized GSMIS `loadXskbData.do` envelope with one scheduled row.
+    /// Every value here is a fixture; nothing is derived from a real response.
+    fn timetable_body() -> Value {
+        json!({
+            "code": 1,
+            "rwList": [{
+                "BJDM": "class-1",
+                "XNXQDM": "20261",
+                "SCSKRQ": "2026-09-08"
+            }],
+            "jgList": [{
+                "BJDM": "class-1",
+                "KCDM": "course-1",
+                "KCMC": "Synthetic postgraduate course",
+                "XQ": 2,
+                "KSJCDM": 1,
+                "JSJCDM": 2,
+                "ZCBH": "1100",
+                "JCFADM": "01",
+                "JASMC": "Synthetic room",
+                "JGJSXM": "Synthetic teacher"
+            }],
+            "jcfaList": [{
+                "JCFADM": "01",
+                "skjcList": [
+                    {"JCFADM": "01", "DM": "1", "KSSJ": 800, "JSSJ": 845},
+                    {"JCFADM": "01", "DM": "2", "KSSJ": 850, "JSSJ": 935},
+                    {"JCFADM": "01", "DM": "3", "KSSJ": 950, "JSSJ": 1035}
+                ]
+            }]
+        })
+    }
+
+    fn complete_assessment(
+        content_type: Option<&str>,
+        body: &[u8],
+    ) -> crate::html::ChallengeAssessment {
+        crate::html::assess_challenge_body(body, content_type, true)
+    }
+
+    /// Degraded evidence must be bound to the exact bytes and must never be
+    /// accompanied by a schedule.
+    fn assert_byte_exact_evidence(output: &Value, body: &[u8], digest: &str) {
+        let encoded = output["raw_response_base64"].as_str().unwrap();
+        assert_eq!(encoded, STANDARD.encode(body));
+        assert_eq!(STANDARD.decode(encoded).unwrap(), body);
+        assert_eq!(output["raw_response_sha256"], digest);
+        assert_eq!(output["body_byte_length"], body.len());
+        for key in [
+            "calendar",
+            "event_count",
+            "ics",
+            "normalized",
+            "schedule_row_count",
+            "semester_start",
+        ] {
+            assert!(output.get(key).is_none(), "{key} emitted: {output}");
+        }
+    }
+
+    #[test]
+    fn non_json_body_is_degraded_with_exact_evidence() {
+        let body = b"<html><body>unexpected upstream page</body></html>";
+        let content_type = Some("text/html; charset=utf-8");
+        // Precondition: the page carries no challenge control, so it is
+        // screened as Clear and reaches the parser rather than a withholding.
+        assert_eq!(
+            complete_assessment(content_type, body),
+            crate::html::ChallengeAssessment::Clear
+        );
+        let admission = admit_read_body(
+            200,
+            content_type,
+            body,
+            "20261",
+            complete_assessment(content_type, body),
+            ReadScreening::default(),
+        );
+        assert!(!admission.denied);
+        let output = &admission.output;
+        assert_eq!(output["result"], "fallback");
+        assert_eq!(output["type"], "timetable_pg");
+        assert_eq!(output["fallback_reason"], "invalid_json");
+        assert_eq!(output["http_status"], 200);
+        assert_eq!(output["content_type"], "text/html; charset=utf-8");
+        assert_byte_exact_evidence(
+            output,
+            body,
+            "2a08126e5971c80a0e2ff3c9c2589e7773da9c021e8c6cab4cb2d7d59345b603",
+        );
+    }
+
+    #[test]
+    fn non_utf8_body_is_degraded_with_exact_evidence() {
+        let body: &[u8] = b"\x89PNG\r\n\x1a\n\xff\xfe";
+        let content_type = Some("application/octet-stream");
+        assert_eq!(
+            complete_assessment(content_type, body),
+            crate::html::ChallengeAssessment::Clear
+        );
+        let admission = admit_read_body(
+            200,
+            content_type,
+            body,
+            "20261",
+            complete_assessment(content_type, body),
+            ReadScreening::default(),
+        );
+        let output = &admission.output;
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(output["fallback_reason"], "utf8_decode_failed");
+        assert_eq!(output["http_status"], 200);
+        assert_eq!(output["content_type"], "application/octet-stream");
+        assert_byte_exact_evidence(
+            output,
+            body,
+            "608b46bb11fb3fd7be889e6e75fb4deee0ea15be13ad778fef9d04007828b877",
+        );
+    }
+
+    #[test]
+    fn unsafe_status_body_is_degraded_with_exact_evidence() {
+        let body = br#"{"code":-1,"error":"synthetic upstream failure"}"#;
+        let content_type = Some("application/json");
+        assert_eq!(
+            complete_assessment(content_type, body),
+            crate::html::ChallengeAssessment::Clear
+        );
+        let admission = admit_read_body(
+            500,
+            content_type,
+            body,
+            "20261",
+            complete_assessment(content_type, body),
+            ReadScreening::default(),
+        );
+        let output = &admission.output;
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(output["fallback_reason"], "http_status_unsafe_response");
+        assert_eq!(output["http_status"], 500);
+        assert_eq!(output["content_type"], "application/json");
+        assert_byte_exact_evidence(
+            output,
+            body,
+            "ea88af9b744f083d937e256d5743cec0a480796251b4b043c00eca3f74b09e67",
+        );
+        // The same bytes are a parseable schedule at HTTP 200, but a 2xx
+        // check alone must never turn a non-2xx status into rows.
+        let payload = timetable_body().to_string();
+        assert_eq!(
+            crate::timetable_pg::parse_timetable(&payload, "20261")["result"],
+            "parsed"
+        );
+        let unsafe_payload = admit_read_body(
+            503,
+            content_type,
+            payload.as_bytes(),
+            "20261",
+            complete_assessment(content_type, payload.as_bytes()),
+            ReadScreening::default(),
+        );
+        assert_eq!(unsafe_payload.output["result"], "degraded");
+        assert_eq!(
+            unsafe_payload.output["fallback_reason"],
+            "http_status_unsafe_response"
+        );
+        let digest = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        assert_byte_exact_evidence(&unsafe_payload.output, payload.as_bytes(), &digest);
+    }
+
+    #[test]
+    fn session_denial_never_emits_rows() {
+        let mut payload = timetable_body();
+        payload["message"] = json!("登录失效，请重新登录");
+        let body = payload.to_string();
+        // The bytes are a complete, parseable timetable payload on their own,
+        // so only the denial screen can keep rows out of the output.
+        assert_eq!(
+            crate::timetable_pg::parse_timetable(&body, "20261")["result"],
+            "parsed"
+        );
+        assert!(session_denied(body.as_bytes()));
+        let content_type = Some("application/json");
+        let admission = admit_read_body(
+            200,
+            content_type,
+            body.as_bytes(),
+            "20261",
+            complete_assessment(content_type, body.as_bytes()),
+            ReadScreening::default(),
+        );
+        assert!(admission.denied);
+        let output = &admission.output;
+        assert_eq!(output["result"], "session_expired");
+        assert_eq!(output["fallback_reason"], "session_expired");
+        assert_eq!(output["raw_evidence_withheld"], true);
+        for key in [
+            "calendar",
+            "event_count",
+            "ics",
+            "normalized",
+            "raw_response_base64",
+            "schedule_row_count",
+            "semester_start",
+        ] {
+            assert!(output.get(key).is_none(), "{key} emitted: {output}");
+        }
+        // A denial that also echoes credential material is withheld instead,
+        // and still never reaches the parser.
+        let echoing = admit_read_body(
+            200,
+            content_type,
+            body.as_bytes(),
+            "20261",
+            complete_assessment(content_type, body.as_bytes()),
+            ReadScreening {
+                echo: true,
+                ..ReadScreening::default()
+            },
+        );
+        assert!(!echoing.denied);
+        assert_eq!(echoing.output["result"], "sensitive_response_withheld");
+        assert_eq!(echoing.output["fallback_reason"], "credential_echo");
+        for key in ["calendar", "event_count", "schedule_row_count"] {
+            assert!(echoing.output.get(key).is_none(), "{key} emitted");
+        }
+    }
+
+    /// The module's synthetic session fixture with one term substituted.
+    fn term_request(term: &str) -> String {
+        let mut request = session_input();
+        request["read"]["xnxqdm"] = json!(term);
+        request.to_string()
+    }
+
+    #[test]
+    fn five_digit_term_accepted_while_other_lengths_are_refused() {
+        for term in ["20261", "20253", "00000"] {
+            assert!(valid_term_code(term), "{term}");
+        }
+        for term in ["2026", "202612", "202611", "2026x", "20261 ", "", "2026１"] {
+            assert!(!valid_term_code(term), "{term}");
+        }
+        // Only the five-digit shape reaches the online gate; four- and
+        // six-digit terms are refused before any credential or transport work.
+        for term in ["2026", "202612"] {
+            let failure = session_with_network(&term_request(term), true, || {
+                panic!("refused term {term} opened network resources")
+            })
+            .unwrap_err();
+            assert_eq!(failure.code, "invalid_input", "{term}");
+        }
+        for term in ["20261", "20253"] {
+            let failure = session_with_network(&term_request(term), false, || {
+                panic!("offline session opened network resources")
+            })
+            .unwrap_err();
+            assert_eq!(failure.code, "online_required", "{term}");
+        }
     }
 }

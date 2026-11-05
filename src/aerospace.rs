@@ -28,6 +28,14 @@
 //! the notice-obligation flag do not attest redistribution compliance, and
 //! no upstream prose or implementation is copied into this project.
 //!
+//! That per-item decision is published exhaustively and structurally: every
+//! entry carries `admission: "admitted"` or `admission: "excluded"`, an
+//! excluded entry always names its reason and carries neither a retrieval
+//! URL nor license evidence, and an admitted entry carries the reviewed
+//! license evidence that covers it. Naming a reviewed path is not enough to
+//! be admitted: a directory, symlink or submodule at that path stays
+//! excluded with its own reason.
+//!
 //! That question bank stores the correct answer of every question. It is
 //! answer-bearing material: it is listed in the inventory for transparency,
 //! it is never retrievable, and it is never mirrored. The module implements
@@ -47,7 +55,11 @@
 //! operator-supplied question set keeps the upstream identifier, chapter and
 //! single/multiple-choice type, but no answer field is ever accepted. The
 //! practice result reflects only the operator's own local answers, and never
-//! claims an official grade, a completion state or a submission.
+//! claims an official grade, a completion state or a submission. The practice
+//! request is decoded strictly, so a repeated object member at any depth or a
+//! second JSON document is refused before use, and a submitted session is
+//! admitted only when its rights attestation is present at both published
+//! depths and both agree.
 //!
 //! Every remote read takes one shared-governor lease, holds it until the
 //! response body is processed, settles it against the observed HTTP status
@@ -124,12 +136,18 @@ const FORBIDDEN_ANSWER_KEYS: &[&str] = &[
     "data-solution",
 ];
 
+/// The exact members of the practice-source attestation this module
+/// publishes. A source object carrying any other member is not that
+/// attestation.
+const PRACTICE_SOURCE_KEYS: &[&str] = &["kind", "origin", "rights_reviewed", "digest", "scan"];
+
 /// The reviewed material class of one item of the pinned tree.
 /// `AnswerMaterial` is the strongest category: it is never retrievable and
 /// never mirrorable, and the answer bank keeps it under any aliased path.
 /// `AssessmentContent` carries course question renderings; it is never
 /// mirrorable in bulk and this reviewed tree does not clear it for
-/// retrieval either. `Excluded` is every other unreviewed item.
+/// retrieval either. `Excluded` is every other unreviewed item. A class is
+/// only ever published together with the verdict that decides admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MaterialClass {
     Documentation,
@@ -151,52 +169,151 @@ impl MaterialClass {
     }
 }
 
-/// Whether one item of the pinned tree may be retrieved at all. Only the
-/// two reviewed objects are admitted; every other item is refused before
-/// any byte request.
-fn retrievable(class: MaterialClass) -> bool {
-    matches!(class, MaterialClass::Documentation | MaterialClass::License)
+/// The reviewed license evidence of one admitted object. It binds the exact
+/// admitted entry to the exact license object of the pinned tree; it is an
+/// operator review of that object, not an independent rights proof, and it
+/// does not attest redistribution compliance.
+#[derive(Clone, Copy)]
+struct LicenseEvidence {
+    basis: &'static str,
+    spdx_id: &'static str,
+    name: &'static str,
+    license_blob_sha: &'static str,
+    license_size: u64,
 }
 
-/// The reviewed per-item decision, keyed on the exact repository path, the
-/// immutable blob identity and the declared size. Only the two reviewed
-/// objects are admitted; every other item of the pinned tree keeps its
-/// exclusion reason.
-fn classify(path: &str, blob_sha: &str, size: Option<u64>) -> (MaterialClass, &'static str) {
-    match path {
-        "README.md" if blob_sha == REVIEWED_README_BLOB && size == Some(REVIEWED_README_SIZE) => (
-            MaterialClass::Documentation,
-            "author_written_description_covered_by_the_repository_license",
-        ),
-        "README.md" => (
-            MaterialClass::Excluded,
-            "the_root_readme_is_not_the_reviewed_object",
-        ),
-        "LICENSE" if blob_sha == REVIEWED_LICENSE_BLOB && size == Some(REVIEWED_LICENSE_SIZE) => (
-            MaterialClass::License,
-            "verbatim_license_notice_of_the_reviewed_work",
-        ),
-        "LICENSE" => (
-            MaterialClass::Excluded,
-            "the_license_object_is_not_the_reviewed_license_identity",
-        ),
-        _ => classify_excluded(path, blob_sha),
+impl LicenseEvidence {
+    fn value(self) -> Value {
+        json!({
+            "basis": self.basis,
+            "spdx_id": self.spdx_id,
+            "name": self.name,
+            "license_blob_sha": self.license_blob_sha,
+            "license_size": self.license_size,
+            "independently_verified": false,
+        })
     }
 }
 
-/// The exclusion class and reason of an item that is not one of the two
-/// reviewed objects. Answer-bearing material is detected by exact object
-/// identity as well as by path, so an alias of the bundled answer bank is
-/// answer material under any name.
-fn classify_excluded(path: &str, blob_sha: &str) -> (MaterialClass, &'static str) {
-    let lower = path.to_ascii_lowercase();
-    let name = lower.rsplit('/').next().unwrap_or(&lower);
-    if path == ANSWER_BANK_PATH || blob_sha == REVIEWED_ANSWER_BANK_BLOB {
+/// The reviewed evidence of the author's own description: the description is
+/// covered by the repository license, whose verbatim notice is a separate
+/// admitted object of the same pinned tree.
+const README_LICENSE_EVIDENCE: LicenseEvidence = LicenseEvidence {
+    basis: "author_written_description_covered_by_the_repository_license",
+    spdx_id: REVIEWED_LICENSE_SPDX,
+    name: REVIEWED_LICENSE_NAME,
+    license_blob_sha: REVIEWED_LICENSE_BLOB,
+    license_size: REVIEWED_LICENSE_SIZE,
+};
+
+/// The reviewed evidence of the license object itself: the emitted bytes are
+/// the verbatim notice the operator reviewed.
+const LICENSE_EVIDENCE: LicenseEvidence = LicenseEvidence {
+    basis: "verbatim_license_notice_of_the_reviewed_work",
+    spdx_id: REVIEWED_LICENSE_SPDX,
+    name: REVIEWED_LICENSE_NAME,
+    license_blob_sha: REVIEWED_LICENSE_BLOB,
+    license_size: REVIEWED_LICENSE_SIZE,
+};
+
+/// The exhaustive per-item rights verdict of one entry of the pinned tree.
+/// Exactly one of the two outcomes applies to every entry, so an entry can
+/// never be published without an explicit rights decision: either the
+/// reviewed object is admitted under its exact identity together with the
+/// license evidence that covers it, or the entry is excluded with its reason
+/// and is never advertised as retrievable or mirrorable.
+enum Verdict {
+    Admitted {
+        class: MaterialClass,
+        evidence: LicenseEvidence,
+    },
+    Excluded {
+        class: MaterialClass,
+        reason: &'static str,
+    },
+}
+
+impl Verdict {
+    fn admitted(&self) -> bool {
+        matches!(self, Self::Admitted { .. })
+    }
+}
+
+/// The reviewed per-item decision, keyed on the exact repository path, the
+/// entry kind, the immutable blob identity and the declared size. Only a
+/// regular file at the reviewed path with the reviewed object identity is
+/// admitted; every other entry keeps its exclusion reason, including a
+/// directory, symlink or submodule at a reviewed path and an alias of a
+/// reviewed object under another path.
+fn verdict_of(entry: &learning::TreeEntry) -> Verdict {
+    if entry.kind() == Some("file") {
+        match entry.path.as_str() {
+            "README.md"
+                if entry.sha == REVIEWED_README_BLOB
+                    && entry.size == Some(REVIEWED_README_SIZE) =>
+            {
+                return Verdict::Admitted {
+                    class: MaterialClass::Documentation,
+                    evidence: README_LICENSE_EVIDENCE,
+                };
+            }
+            "LICENSE"
+                if entry.sha == REVIEWED_LICENSE_BLOB
+                    && entry.size == Some(REVIEWED_LICENSE_SIZE) =>
+            {
+                return Verdict::Admitted {
+                    class: MaterialClass::License,
+                    evidence: LICENSE_EVIDENCE,
+                };
+            }
+            _ => {}
+        }
+    }
+    let (class, reason) = excluded_verdict(entry);
+    Verdict::Excluded { class, reason }
+}
+
+/// The exclusion class and reason of an entry that is not admitted. The
+/// bundled answer bank is recognized by exact object identity before its
+/// path, so an alias or a non-file object of its bytes is answer material
+/// under any name; a reviewed path carrying any other kind is excluded
+/// because only a regular file can be retrieved.
+fn excluded_verdict(entry: &learning::TreeEntry) -> (MaterialClass, &'static str) {
+    if entry.path == ANSWER_BANK_PATH || entry.sha == REVIEWED_ANSWER_BANK_BLOB {
         return (
             MaterialClass::AnswerMaterial,
             "bundled_answer_bank_is_never_retrieved",
         );
     }
+    if entry.kind() != Some("file") {
+        return match entry.path.as_str() {
+            "README.md" | "LICENSE" => (
+                MaterialClass::Excluded,
+                "the_reviewed_path_is_not_a_regular_file",
+            ),
+            _ => classify_excluded(&entry.path),
+        };
+    }
+    match entry.path.as_str() {
+        "README.md" => (
+            MaterialClass::Excluded,
+            "the_root_readme_is_not_the_reviewed_object",
+        ),
+        "LICENSE" => (
+            MaterialClass::Excluded,
+            "the_license_object_is_not_the_reviewed_license_identity",
+        ),
+        _ => classify_excluded(&entry.path),
+    }
+}
+
+/// The path-based exclusion class and reason of a regular file that is not
+/// one of the two reviewed objects. Answer material is detected here by
+/// path, and by exact object identity in `excluded_verdict`, so an alias of
+/// the bundled answer bank is answer material under any name.
+fn classify_excluded(path: &str) -> (MaterialClass, &'static str) {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
     if name.ends_with(".db")
         || name.ends_with(".sqlite")
         || name.ends_with(".sqlite3")
@@ -310,13 +427,20 @@ fn revision_value() -> Value {
     json!({"commit": REVISION.commit, "tree": REVISION.tree})
 }
 
-/// One published inventory entry with its per-item rights verdict. Only a
-/// reviewed admitted object advertises its immutable blob URL; every other
-/// entry carries its exclusion reason and no retrieval URL.
+/// One published inventory entry with its exhaustive per-item rights
+/// verdict. An admitted entry advertises its immutable blob URL and the
+/// reviewed license evidence that covers it; every excluded entry carries
+/// `admission: "excluded"` with its reason, a null license evidence and no
+/// retrieval URL.
 fn inventory_entry(license: &Value, item: &learning::TreeEntry) -> Value {
-    let (class, reason) = classify(&item.path, &item.sha, item.size);
-    let kind = item.kind().unwrap_or("other");
-    let retrievable = kind == "file" && retrievable(class);
+    let verdict = verdict_of(item);
+    let retrievable = verdict.admitted();
+    let (admission, class, reason, evidence) = match &verdict {
+        Verdict::Admitted { class, evidence } => {
+            ("admitted", *class, evidence.basis, evidence.value())
+        }
+        Verdict::Excluded { class, reason } => ("excluded", *class, *reason, Value::Null),
+    };
     let url = if retrievable {
         SOURCE
             .blob_url(&item.sha)
@@ -333,10 +457,12 @@ fn inventory_entry(license: &Value, item: &learning::TreeEntry) -> Value {
         "path": item.path,
         "url": url,
         "size": item.size,
-        "kind": kind,
+        "kind": item.kind().unwrap_or("other"),
         "mode": item.mode,
         "material_class": class.as_str(),
+        "admission": admission,
         "admission_reason": reason,
+        "license_evidence": evidence,
         "mirror_allowed": retrievable,
         "retrieval_allowed": retrievable,
         "rights_review_required": true,
@@ -575,7 +701,7 @@ fn materials_output(
                 .collect();
             let admitted_count = values
                 .iter()
-                .filter(|value| value["retrieval_allowed"].as_bool() == Some(true))
+                .filter(|value| value["admission"].as_str() == Some("admitted"))
                 .count();
             output["result"] = json!("inventory_snapshot");
             output["tree_sha"] = json!(tree_sha);
@@ -692,7 +818,7 @@ enum Admission {
 
 /// The reviewed membership of the pinned tree for one requested item. The
 /// complete reviewed attestation must match the entry's immutable identity;
-/// the class is then resolved from the per-item review, so the bundled
+/// the verdict is then resolved from the per-item review, so the bundled
 /// answer bank, every excluded item and every nonadmitted alias is refused
 /// before any byte request is made.
 fn select_item(
@@ -732,22 +858,22 @@ fn select_item(
             "the requested material does not match the reviewed immutable identity",
         ));
     }
-    let (class, reason) = classify(&entry.path, &entry.sha, entry.size);
-    if class == MaterialClass::AnswerMaterial {
-        return Err(learning::answer_material_forbidden());
-    }
-    if !retrievable(class) {
-        return Err(learning::authorization_required(
+    match verdict_of(entry) {
+        Verdict::Admitted { class, evidence } => Ok((
+            class,
+            evidence.basis,
+            entry.sha.clone(),
+            size,
+            license_value(entries),
+        )),
+        Verdict::Excluded {
+            class: MaterialClass::AnswerMaterial,
+            ..
+        } => Err(learning::answer_material_forbidden()),
+        Verdict::Excluded { .. } => Err(learning::authorization_required(
             "the requested item has no documented per-item rights and is never retrievable",
-        ));
+        )),
     }
-    Ok((
-        class,
-        reason,
-        entry.sha.clone(),
-        size,
-        license_value(entries),
-    ))
 }
 
 /// Fetch the bytes of one reviewed material entry. The material class is
@@ -1111,8 +1237,61 @@ fn parse_session(object: &Map<String, Value>) -> Result<learning::PracticeSessio
     let session = object
         .get("session")
         .ok_or_else(|| learning::invalid_input("the practice action requires a session"))?;
-    serde_json::from_value(session.clone())
-        .map_err(|_| learning::invalid_input("the practice session is malformed"))
+    let session: learning::PracticeSession = serde_json::from_value(session.clone())
+        .map_err(|_| learning::invalid_input("the practice session is malformed"))?;
+    validate_practice_attestation(&session)?;
+    Ok(session)
+}
+
+/// The session contract publishes the rights attestation twice: on the
+/// session itself and inside the practice source. Both must be present
+/// booleans at their own depth and must agree, so a short (missing)
+/// attestation, a contradicting duplicate one or an unexpected nested member
+/// is refused before the session is used. Once unescaped, a repeated object
+/// member at any depth never reaches this check: the strict decoder already
+/// refused the request.
+fn validate_practice_attestation(session: &learning::PracticeSession) -> Result<(), Error> {
+    let source = session.practice_source.as_object().ok_or_else(|| {
+        learning::invalid_input("the practice source is not an attestation object")
+    })?;
+    if source.len() != PRACTICE_SOURCE_KEYS.len()
+        || !PRACTICE_SOURCE_KEYS
+            .iter()
+            .all(|key| source.contains_key(*key))
+    {
+        return Err(learning::invalid_input(
+            "the practice source is not a complete attestation object",
+        ));
+    }
+    match source.get("rights_reviewed") {
+        Some(Value::Bool(attested)) if *attested == session.rights_reviewed => {}
+        _ => {
+            return Err(learning::invalid_input(
+                "the practice session does not carry one consistent rights attestation",
+            ));
+        }
+    }
+    for key in ["kind", "origin"] {
+        match source.get(key).and_then(Value::as_str) {
+            Some(value) if !value.is_empty() => {}
+            _ => {
+                return Err(learning::invalid_input(
+                    "the practice source attestation is incomplete",
+                ));
+            }
+        }
+    }
+    if !source
+        .get("digest")
+        .and_then(Value::as_str)
+        .is_some_and(learning::valid_sha256)
+        || !source.get("scan").is_some_and(Value::is_null)
+    {
+        return Err(learning::invalid_input(
+            "the practice source attestation is incomplete",
+        ));
+    }
+    Ok(())
 }
 
 fn generate_practice(object: &Map<String, Value>) -> Result<Value, Error> {
@@ -1332,7 +1511,7 @@ fn questions_from_question_set(
 fn entry_schema() -> Value {
     json!({
         "type":"object","additionalProperties":false,
-        "required":["title","source","source_url","branch","path","url","size","kind","mode","material_class","admission_reason","mirror_allowed","retrieval_allowed","rights_review_required","rights_reviewed","license","attribution","upstream_sha"],
+        "required":["title","source","source_url","branch","path","url","size","kind","mode","material_class","admission","admission_reason","license_evidence","mirror_allowed","retrieval_allowed","rights_review_required","rights_reviewed","license","attribution","upstream_sha"],
         "properties":{
             "title":{"type":"string","minLength":1,"maxLength":learning::MAX_TITLE_BYTES},
             "source":{"type":"string","minLength":1},
@@ -1344,7 +1523,9 @@ fn entry_schema() -> Value {
             "kind":{"enum":["file","directory","symlink","submodule","other"]},
             "mode":{"enum":["100644","100755","040000","120000","160000"],"description":"The exact source Git mode, required with the tree and blob identities when selecting a file for retrieval."},
             "material_class":{"enum":["documentation","license","answer_material","assessment_content","excluded"]},
-            "admission_reason":{"type":"string","minLength":1,"description":"The per-item rights verdict of this reviewed entry."},
+            "admission":{"enum":["admitted","excluded"],"description":"The exhaustive per-item rights decision: every reviewed entry is either admitted or excluded, never unstated."},
+            "admission_reason":{"type":"string","minLength":1,"description":"The reviewed retention basis of an admitted entry, or the exclusion reason of an excluded one."},
+            "license_evidence": {"oneOf":[{"type":"null"},entry_license_evidence_schema()],"description":"The reviewed license evidence of an admitted entry; always null for an excluded entry."},
             "mirror_allowed":{"type":"boolean","description":"True only for the two reviewed admitted objects; this module implements no bulk mirror operation at all."},
             "retrieval_allowed":{"type":"boolean","description":"True only for the two reviewed admitted objects; every excluded or answer-bearing item is refused before any byte request."},
             "rights_review_required":{"const":true},
@@ -1352,6 +1533,47 @@ fn entry_schema() -> Value {
             "license":learning::license_schema(),
             "attribution":{"type":"string","minLength":1},
             "upstream_sha":{"type":"string","pattern":"^([0-9a-f]{40}|[0-9a-f]{64})$"}
+        },
+        "allOf":[
+            {"if":{"properties":{"admission":{"const":"admitted"}},"required":["admission"]},
+             "then":{"required":["admission","admission_reason","license_evidence"],
+                     "properties":{
+                         "kind":{"const":"file"},
+                         "material_class":{"enum":["documentation","license"]},
+                         "admission_reason":{"type":"string","minLength":1},
+                         "license_evidence":{"type":"object"},
+                         "url":{"type":"string","minLength":1},
+                         "mirror_allowed":{"const":true},
+                         "retrieval_allowed":{"const":true}
+                     }}},
+            {"if":{"properties":{"admission":{"const":"excluded"}},"required":["admission"]},
+             "then":{"required":["admission","admission_reason","license_evidence"],
+                     "properties":{
+                         "material_class":{"enum":["answer_material","assessment_content","excluded"]},
+                         "admission_reason":{"type":"string","minLength":1},
+                         "license_evidence":{"type":"null"},
+                         "url":{"type":"null"},
+                         "mirror_allowed":{"const":false},
+                         "retrieval_allowed":{"const":false}
+                     }}}
+        ]
+    })
+}
+
+/// The reviewed license evidence of one admitted entry: the exact license
+/// object of the pinned tree and the basis on which the admitted object is
+/// covered by it. It is an operator review, not an independent rights proof.
+fn entry_license_evidence_schema() -> Value {
+    json!({
+        "type":"object","additionalProperties":false,
+        "required":["basis","spdx_id","name","license_blob_sha","license_size","independently_verified"],
+        "properties":{
+            "basis":{"type":"string","minLength":1,"description":"The reviewed basis on which this admitted object is covered by the license object."},
+            "spdx_id":{"const":REVIEWED_LICENSE_SPDX},
+            "name":{"const":REVIEWED_LICENSE_NAME},
+            "license_blob_sha":{"const":REVIEWED_LICENSE_BLOB},
+            "license_size":{"const":REVIEWED_LICENSE_SIZE},
+            "independently_verified":{"const":false,"description":"Always false: the evidence is an operator review of the license object, not an independent rights or compliance proof."}
         }
     })
 }
@@ -1553,13 +1775,22 @@ fn bytes_output_schema() -> Value {
                 "fallback_reason":{"type":"string"},
                 "raw_evidence":{"type":"object"}
             }}
+        ],
+        "allOf":[
+            {"if":{"properties":{"result":{"const":"raw_snapshot"}},"required":["result"]},
+             "then":{"properties":{"retrieval":{"type":"object","required":["verified_git_blob_sha"],
+                 "properties":{"verified_git_blob_sha":{"type":"string","pattern":"^([0-9a-f]{40}|[0-9a-f]{64})$"}}}}}},
+            {"if":{"properties":{"raw_evidence":{"type":"object","required":["kind"],
+                    "properties":{"kind":{"const":"withheld_response"}}}},
+                  "required":["raw_evidence"]},
+             "then":{"properties":{"retrieval":{"type":"object","not":{"required":["verified_git_blob_sha"]}}}}}
         ]
     })
 }
 
 /// Machine-readable stdin/output contracts for CLI integration.
 pub fn schema() -> Value {
-    json!({
+    let mut schema = json!({
         "materials": {
             "input":{
                 "type":"object","additionalProperties":false,"properties":{},"required":[],
@@ -1623,7 +1854,11 @@ pub fn schema() -> Value {
             "options":{},
             "output":learning::session_schema(PRACTICE_TYPE_LABEL)
         }
-    })
+    });
+    schema["practice"]["input"]["description"] = json!(
+        "A local-only practice request. The input is decoded strictly: a repeated object member at any depth or a second JSON document is refused before use. A submitted session is admitted only when its rights attestation is a boolean at both published depths — the session and its practice source — and both values agree; an omitted or contradicting attestation is refused rather than defaulted."
+    );
+    schema
 }
 
 /// The accepted question-set shape. No answer field is part of it, and a
@@ -1749,6 +1984,31 @@ mod tests {
         }
     }
 
+    /// One regular-file entry with the given identity, or a directory entry
+    /// when the object declares no size.
+    fn tree_entry(path: &str, sha: &str, size: Option<u64>) -> learning::TreeEntry {
+        let (mode, object_type) = if size.is_some() {
+            ("100644", "blob")
+        } else {
+            ("040000", "tree")
+        };
+        learning::TreeEntry {
+            path: path.to_owned(),
+            mode: mode.to_owned(),
+            object_type: object_type.to_owned(),
+            sha: sha.to_owned(),
+            size,
+        }
+    }
+
+    /// One symbolic-link entry whose target bytes have the given identity.
+    fn symlink_entry(path: &str, sha: &str, size: u64) -> learning::TreeEntry {
+        learning::TreeEntry {
+            mode: "120000".to_owned(),
+            ..tree_entry(path, sha, Some(size))
+        }
+    }
+
     #[test]
     fn only_the_reviewed_readme_and_license_are_admitted() {
         let (tree_sha, entries, response) = admitted();
@@ -1780,20 +2040,47 @@ mod tests {
         };
         let readme = find("README.md");
         assert_eq!(readme["material_class"], json!("documentation"));
+        assert_eq!(readme["admission"], json!("admitted"));
         assert_eq!(readme["retrieval_allowed"], json!(true));
         assert_eq!(readme["mirror_allowed"], json!(true));
         assert_eq!(
             readme["admission_reason"],
             json!("author_written_description_covered_by_the_repository_license")
         );
+        assert_eq!(
+            readme["license_evidence"],
+            json!({
+                "basis": "author_written_description_covered_by_the_repository_license",
+                "spdx_id": REVIEWED_LICENSE_SPDX,
+                "name": REVIEWED_LICENSE_NAME,
+                "license_blob_sha": REVIEWED_LICENSE_BLOB,
+                "license_size": REVIEWED_LICENSE_SIZE,
+                "independently_verified": false
+            })
+        );
         assert!(readme["url"].is_string());
         let license = find("LICENSE");
         assert_eq!(license["material_class"], json!("license"));
+        assert_eq!(license["admission"], json!("admitted"));
         assert_eq!(license["retrieval_allowed"], json!(true));
+        assert_eq!(
+            license["license_evidence"]["basis"],
+            json!("verbatim_license_notice_of_the_reviewed_work")
+        );
+        assert_eq!(
+            license["license_evidence"]["license_blob_sha"],
+            json!(REVIEWED_LICENSE_BLOB)
+        );
+        assert_eq!(
+            license["license_evidence"]["license_size"],
+            json!(REVIEWED_LICENSE_SIZE)
+        );
         // The answer bank and its alias are answer material.
         for path in [ANSWER_BANK_PATH, "HangGai/Assets/DB/backup.db"] {
             let entry = find(path);
             assert_eq!(entry["material_class"], json!("answer_material"), "{path}");
+            assert_eq!(entry["admission"], json!("excluded"), "{path}");
+            assert_eq!(entry["license_evidence"], Value::Null, "{path}");
             assert_eq!(entry["retrieval_allowed"], json!(false));
             assert_eq!(entry["mirror_allowed"], json!(false));
             assert_eq!(entry["url"], Value::Null);
@@ -1802,6 +2089,7 @@ mod tests {
         // excluded: an alias of an admitted object is never admitted.
         let aliased_readme = find("HangGai/Assets/DB/README.md");
         assert_eq!(aliased_readme["material_class"], json!("excluded"));
+        assert_eq!(aliased_readme["admission"], json!("excluded"));
         assert_eq!(aliased_readme["retrieval_allowed"], json!(false));
         // The course question images are assessment content.
         for path in [
@@ -1841,8 +2129,81 @@ mod tests {
         // A directory is never advertised as retrievable.
         let directory = find("HangGai");
         assert_eq!(directory["kind"], json!("directory"));
+        assert_eq!(directory["admission"], json!("excluded"));
+        assert_eq!(
+            directory["admission_reason"],
+            json!("repository_metadata_or_unreviewed_item")
+        );
+        assert_eq!(directory["license_evidence"], Value::Null);
         assert_eq!(directory["retrieval_allowed"], json!(false));
         assert_eq!(directory["url"], Value::Null);
+
+        // Every entry carries exactly one verdict, and the verdict decides
+        // every derivative field: no entry is admitted silently and no
+        // excluded entry keeps an admission artifact.
+        let mut admitted_count = 0usize;
+        for value in values {
+            let admission = value["admission"]
+                .as_str()
+                .unwrap_or_else(|| panic!("every entry carries an admission verdict: {value}"));
+            assert!(
+                !value["admission_reason"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .is_empty(),
+                "every verdict carries a reason: {value}"
+            );
+            match admission {
+                "admitted" => {
+                    admitted_count += 1;
+                    assert_eq!(value["kind"], json!("file"), "{value}");
+                    assert!(
+                        matches!(
+                            value["material_class"].as_str(),
+                            Some("documentation" | "license")
+                        ),
+                        "{value}"
+                    );
+                    assert_eq!(value["retrieval_allowed"], json!(true), "{value}");
+                    assert_eq!(value["mirror_allowed"], json!(true), "{value}");
+                    assert!(value["url"].is_string(), "{value}");
+                    assert_eq!(
+                        value["license_evidence"]["basis"],
+                        value["admission_reason"]
+                    );
+                    assert_eq!(
+                        value["license_evidence"]["license_blob_sha"],
+                        json!(REVIEWED_LICENSE_BLOB),
+                        "{value}"
+                    );
+                    assert_eq!(
+                        value["license_evidence"]["independently_verified"],
+                        json!(false),
+                        "{value}"
+                    );
+                }
+                "excluded" => {
+                    assert!(
+                        !matches!(
+                            value["material_class"].as_str(),
+                            Some("documentation" | "license")
+                        ),
+                        "{value}"
+                    );
+                    assert_eq!(value["retrieval_allowed"], json!(false), "{value}");
+                    assert_eq!(value["mirror_allowed"], json!(false), "{value}");
+                    assert_eq!(value["url"], Value::Null, "{value}");
+                    assert_eq!(value["license_evidence"], Value::Null, "{value}");
+                }
+                other => panic!("an unknown admission verdict {other}"),
+            }
+        }
+        assert_eq!(admitted_count, 2);
+        assert_eq!(output["admitted_count"], json!(admitted_count));
+        assert_eq!(
+            output["excluded_count"],
+            json!(values.len() - admitted_count)
+        );
     }
 
     fn identity_of(response: &Response) -> learning::ObservedIdentity {
@@ -1880,33 +2241,65 @@ mod tests {
                 Some(REVIEWED_LICENSE_SIZE + 1),
             ),
         ] {
-            let (class, _) = classify(path, sha, size);
+            let verdict = verdict_of(&tree_entry(path, sha, size));
+            let Verdict::Excluded { class, reason } = verdict else {
+                panic!("{path} {sha} was admitted");
+            };
             assert_eq!(class, MaterialClass::Excluded, "{path} {sha}");
-            assert!(!retrievable(class));
+            assert!(!reason.is_empty(), "{path} {sha}");
         }
-        let (class, _) = classify(
+        let verdict = verdict_of(&tree_entry(
             "LICENSE",
             REVIEWED_LICENSE_BLOB,
             Some(REVIEWED_LICENSE_SIZE),
-        );
+        ));
+        let Verdict::Admitted { class, evidence } = verdict else {
+            panic!("the reviewed license object is admitted");
+        };
         assert_eq!(class, MaterialClass::License);
-        assert!(retrievable(class));
+        assert_eq!(
+            evidence.basis,
+            "verbatim_license_notice_of_the_reviewed_work"
+        );
+        assert_eq!(evidence.license_blob_sha, REVIEWED_LICENSE_BLOB);
         // An alias of the admitted readme object under a foreign path is
         // never admitted.
-        let (class, _) = classify(
+        let verdict = verdict_of(&tree_entry(
             "HangGai/Assets/DB/README.md",
             REVIEWED_README_BLOB,
             Some(REVIEWED_README_SIZE),
-        );
+        ));
+        let Verdict::Excluded { class, .. } = verdict else {
+            panic!("an alias of an admitted object is never admitted");
+        };
         assert_eq!(class, MaterialClass::Excluded);
         // An alias of the answer-bank object under a foreign path stays
         // answer material, the stronger category.
-        let (class, _) = classify(
+        let verdict = verdict_of(&tree_entry(
             "HangGai/Assets/DB/backup.db",
             REVIEWED_ANSWER_BANK_BLOB,
             Some(352256),
-        );
+        ));
+        let Verdict::Excluded { class, .. } = verdict else {
+            panic!("an alias of the answer bank is never admitted");
+        };
         assert_eq!(class, MaterialClass::AnswerMaterial);
+        // A symlink or a directory at a reviewed path is excluded: naming the
+        // reviewed path is not the reviewed object, and only a regular file
+        // can ever be retrieved.
+        for entry in [
+            symlink_entry("README.md", REVIEWED_README_BLOB, REVIEWED_README_SIZE),
+            tree_entry("README.md", REVIEWED_README_BLOB, None),
+            symlink_entry("LICENSE", REVIEWED_LICENSE_BLOB, REVIEWED_LICENSE_SIZE),
+            tree_entry("LICENSE", REVIEWED_LICENSE_BLOB, None),
+        ] {
+            let verdict = verdict_of(&entry);
+            let Verdict::Excluded { class, reason } = verdict else {
+                panic!("{} is not a regular file", entry.path);
+            };
+            assert_eq!(class, MaterialClass::Excluded, "{}", entry.path);
+            assert_eq!(reason, "the_reviewed_path_is_not_a_regular_file");
+        }
     }
 
     #[test]
@@ -2007,14 +2400,45 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(refused.code, "path_not_in_inventory");
+        // A symlink at a reviewed path with the reviewed identity is still
+        // not a regular file: the entry is excluded and never retrievable,
+        // even when the whole attestation matches its bytes.
+        let mut entries = entries;
+        let readme = entries
+            .iter_mut()
+            .find(|entry| entry.path == "README.md")
+            .expect("the fixture readme");
+        readme.mode = "120000".to_owned();
+        let refused = select_item(
+            &entries,
+            &request("README.md", REVIEWED_README_BLOB, REVIEWED_README_SIZE),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, "invalid_input");
     }
 
     #[test]
     fn a_root_level_answer_directory_is_answer_material() {
         let other = "ad1fa0d43c170e76768c04152e1d6ddfe3879f7c";
         for path in ["answers/key.txt", "docs/answers/key.txt"] {
-            let (class, _) = classify(path, other, Some(3));
+            let verdict = verdict_of(&tree_entry(path, other, Some(3)));
+            let Verdict::Excluded { class, .. } = verdict else {
+                panic!("{path} was admitted");
+            };
             assert_eq!(class, MaterialClass::AnswerMaterial, "{path}");
+        }
+        // A directory named like answer material stays answer material, and
+        // an alias of the answer-bank bytes is answer material even under a
+        // reviewed path.
+        for entry in [
+            tree_entry("answers", other, None),
+            symlink_entry("LICENSE", REVIEWED_ANSWER_BANK_BLOB, 352256),
+        ] {
+            let verdict = verdict_of(&entry);
+            let Verdict::Excluded { class, .. } = verdict else {
+                panic!("{} was admitted", entry.path);
+            };
+            assert_eq!(class, MaterialClass::AnswerMaterial, "{}", entry.path);
         }
         assert!(learning::answer_path_component("answers/key.txt"));
     }
@@ -2311,5 +2735,163 @@ mod tests {
         assert_eq!(refused.code, "invalid_input");
         let refused = practice(r#"["generate"]"#).err().unwrap();
         assert_eq!(refused.code, "invalid_input");
+    }
+
+    #[test]
+    fn one_consistent_practice_attestation_is_required_at_every_depth() {
+        let generated = practice(
+            r#"{"action":"generate","mode":"question_set","question_set":{"questions":[{"id":7,"question":"Which discipline studies aircraft motion?","options":["Aerodynamics","Optics"],"type":1}]},"rights_reviewed":true}"#,
+        )
+        .unwrap();
+        assert_eq!(generated["rights_reviewed"], true);
+        assert_eq!(generated["practice_source"]["rights_reviewed"], true);
+        // The session contract publishes the attestation twice, and the two
+        // published values agree, so the session is admitted.
+        let checked =
+            practice(&json!({"action": "check", "session": generated}).to_string()).unwrap();
+        assert_eq!(checked["rights_reviewed"], true);
+        assert_eq!(checked["practice_source"]["rights_reviewed"], true);
+
+        // A short attestation: the source loses the member while the session
+        // still claims it. It is refused instead of defaulting.
+        let mut short = generated.clone();
+        short["practice_source"]
+            .as_object_mut()
+            .unwrap()
+            .remove("rights_reviewed");
+        let refused = practice(&json!({"action": "check", "session": short}).to_string())
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "invalid_input");
+        // The same short attestation cannot pass as an answer action either.
+        let mut short = generated.clone();
+        short["practice_source"]
+            .as_object_mut()
+            .unwrap()
+            .remove("rights_reviewed");
+        let refused = practice(
+            &json!({
+                "action": "answer",
+                "session": short,
+                "answers": [{"question_id": "q7", "choices": ["A"]}]
+            })
+            .to_string(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(refused.code, "invalid_input");
+        // A duplicate attestation at the nested depth that contradicts the
+        // session attestation is refused, never last-key-wins.
+        let mut contradicting = generated.clone();
+        contradicting["practice_source"]["rights_reviewed"] = json!(false);
+        let refused = practice(&json!({"action": "check", "session": contradicting}).to_string())
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "invalid_input");
+        // The session-root attestation is required as well: removing it is
+        // malformed, not an implicit false.
+        let mut root_short = generated.clone();
+        root_short
+            .as_object_mut()
+            .unwrap()
+            .remove("rights_reviewed");
+        let refused = practice(&json!({"action": "check", "session": root_short}).to_string())
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "invalid_input");
+        // An unexpected member cannot smuggle a second attestation into the
+        // source object, and the source must be complete.
+        let mut unexpected = generated.clone();
+        unexpected["practice_source"]["scan"] = json!({"rights_reviewed": true});
+        let refused = practice(&json!({"action": "check", "session": unexpected}).to_string())
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "invalid_input");
+        let mut extra = generated.clone();
+        extra["practice_source"]["nested"] = json!({"rights_reviewed": true});
+        let refused = practice(&json!({"action": "check", "session": extra}).to_string())
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "invalid_input");
+        // A repeated member inside the source object is a duplicate at that
+        // depth and never collapses into one attested value.
+        let session = serde_json::to_string(&generated).unwrap();
+        let duplicated = session.replacen(
+            "\"origin\":\"operator_local_question_set\",\"rights_reviewed\":true",
+            "\"origin\":\"operator_local_question_set\",\"rights_reviewed\":false,\"rights_reviewed\":true",
+            1,
+        );
+        assert_ne!(session, duplicated);
+        let refused = practice(&format!(
+            "{{\"action\":\"check\",\"session\":{duplicated}}}"
+        ))
+        .err()
+        .unwrap();
+        assert_eq!(refused.code, "invalid_input");
+    }
+
+    #[test]
+    fn the_published_schemas_require_the_exhaustive_verdict() {
+        let schema = entry_schema();
+        let required: Vec<String> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect();
+        for key in ["admission", "admission_reason", "license_evidence"] {
+            assert!(required.contains(&key.to_owned()), "{key}");
+        }
+        let branches = schema["allOf"].as_array().unwrap();
+        assert_eq!(branches.len(), 2);
+        assert_eq!(
+            branches[0]["if"]["properties"]["admission"]["const"],
+            json!("admitted")
+        );
+        assert_eq!(
+            branches[0]["then"]["properties"]["retrieval_allowed"]["const"],
+            json!(true)
+        );
+        assert_eq!(
+            branches[0]["then"]["properties"]["mirror_allowed"]["const"],
+            json!(true)
+        );
+        assert_eq!(
+            branches[1]["if"]["properties"]["admission"]["const"],
+            json!("excluded")
+        );
+        assert_eq!(
+            branches[1]["then"]["properties"]["retrieval_allowed"]["const"],
+            json!(false)
+        );
+        assert_eq!(
+            branches[1]["then"]["properties"]["license_evidence"]["type"],
+            json!("null")
+        );
+        let evidence = entry_license_evidence_schema();
+        assert_eq!(
+            evidence["properties"]["license_blob_sha"]["const"],
+            json!(REVIEWED_LICENSE_BLOB)
+        );
+        assert_eq!(
+            evidence["properties"]["license_size"]["const"],
+            json!(REVIEWED_LICENSE_SIZE)
+        );
+        assert_eq!(
+            evidence["properties"]["independently_verified"]["const"],
+            json!(false)
+        );
+        // A raw snapshot must publish the verified object identity, while a
+        // withheld response must never publish it.
+        let bytes = bytes_output_schema();
+        let branches = bytes["allOf"].as_array().unwrap();
+        assert_eq!(
+            branches[0]["then"]["properties"]["retrieval"]["required"],
+            json!(["verified_git_blob_sha"])
+        );
+        assert_eq!(
+            branches[1]["then"]["properties"]["retrieval"]["not"]["required"],
+            json!(["verified_git_blob_sha"])
+        );
     }
 }
