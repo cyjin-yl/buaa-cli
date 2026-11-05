@@ -8,6 +8,9 @@
   projection; raw fallback and real authentication/challenge controls remain
   subject to the complete-document safety screen. Preserve `source_refused`
   as a distinct public error with exit 3.
+- Screen nested organization targets at every URL level, including relative
+  credential queries and URL user information. Preserve harmless empty query
+  values instead of recursively rejecting the enclosing URL.
 - Inspect every repeated credential assignment before publishing a report,
   including a secret that follows a harmless placeholder on the same line.
 - Reject repeated rights attestations throughout WE Learn practice requests
@@ -24,6 +27,9 @@
   decoded output against authentication secrets and all issued values across
   the invocation. Keep those values in bounded zeroizing memory without
   adopting or forwarding them; malformed or exhausted history still refuses.
+- Screen escaped response strings when strict JSON admission fails, including
+  duplicate keys. Withhold undecodable escaped strings with
+  `response_safety_unreviewed`; preserve exact harmless duplicate-key bodies.
 - Clarify that archive transport refuses redirects before reading their
   bodies; the command does not export a fetched redirect body.
 

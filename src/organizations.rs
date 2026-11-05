@@ -22,6 +22,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use scraper::{ElementRef, Html, Node, Selector};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use url::Url;
 
@@ -421,27 +422,65 @@ fn response_admitted(response: &Response) -> bool {
         })
 }
 
-fn query_carries_credentials(url: &Url, depth: usize) -> bool {
-    if depth == 4 {
-        return url.query().is_some();
+// A nested value that resolves to an absolute http(s) URL — either already
+// absolute, or relative to the URL that carries it — is admitted only when
+// that resolved target itself carries no credentials. Anything that cannot be
+// resolved to such a target is treated as credential-bearing rather than
+// silently skipped, so a relative `?ticket=…` or unparseable redirect value
+// can never bypass the query screening its resolved form would have failed.
+fn parameter_carries_credentials(key: &str, value: &str, enclosing: &Url, depth: usize) -> bool {
+    sensitive_text_marker(key)
+        || security_token(key)
+        || [
+            "ticket",
+            "code",
+            "sid",
+            "st",
+            "tgt",
+            "access_token",
+            "refresh_token",
+        ]
+        .iter()
+        .any(|reserved| key.eq_ignore_ascii_case(reserved))
+        || sensitive_text_marker(value)
+        // An empty scalar is a parameter value, not another nested URL:
+        // joining it would reproduce the enclosing target and cycle to the
+        // depth cap, so screening stops after the reserved-key/marker checks.
+        || (!value.is_empty()
+            && match enclosing.join(value) {
+                Ok(nested) => {
+                    !matches!(nested.scheme(), "http" | "https")
+                        || nested.host_str().is_none()
+                        || target_carries_credentials(&nested, depth + 1)
+                }
+                Err(_) => true,
+            })
+}
+
+fn pairs_carry_credentials<'a>(
+    mut pairs: impl Iterator<Item = (Cow<'a, str>, Cow<'a, str>)>,
+    enclosing: &Url,
+    depth: usize,
+) -> bool {
+    pairs.any(|(key, value)| parameter_carries_credentials(&key, &value, enclosing, depth))
+}
+
+// The whole target is screened at every level, not only its query: an
+// admitted navigation target never carries userinfo, and its query and
+// fragment parameter values must resolve to credential-free http(s) targets.
+// At the depth cap every credential-bearing component is refused without
+// further resolution, so recursion always fails closed.
+fn target_carries_credentials(url: &Url, depth: usize) -> bool {
+    if !url.username().is_empty() || url.password().is_some() {
+        return true;
     }
-    url.query_pairs().any(|(key, value)| {
-        sensitive_text_marker(&key)
-            || security_token(&key)
-            || [
-                "ticket",
-                "code",
-                "sid",
-                "st",
-                "tgt",
-                "access_token",
-                "refresh_token",
-            ]
-            .iter()
-            .any(|reserved| key.eq_ignore_ascii_case(reserved))
-            || sensitive_text_marker(&value)
-            || Url::parse(&value).is_ok_and(|nested| query_carries_credentials(&nested, depth + 1))
-    })
+    if depth == 4 {
+        return url.query().is_some() || url.fragment().is_some();
+    }
+    pairs_carry_credentials(url.query_pairs(), url, depth)
+        || url.fragment().is_some_and(|fragment| {
+            pairs_carry_credentials(url::form_urlencoded::parse(fragment.as_bytes()), url, depth)
+        })
 }
 
 fn harmless_navigation(element: ElementRef<'_>, target: Option<&Url>) -> bool {
@@ -473,7 +512,7 @@ fn harmless_navigation(element: ElementRef<'_>, target: Option<&Url>) -> bool {
             && url.username().is_empty()
             && url.password().is_none()
             && url.fragment().is_none()
-            && !query_carries_credentials(url, 0)
+            && !target_carries_credentials(url, 0)
     })
 }
 
@@ -501,11 +540,9 @@ fn admit_projection(response: &Response, document: &Html) -> Result<(), Error> {
             .flatten();
         let target = href.and_then(|href| base.join(href.trim()).ok());
         if href.is_some_and(|href| href.len() > MAX_HREF || href.chars().any(char::is_control))
-            || target.as_ref().is_some_and(|url| {
-                !url.username().is_empty()
-                    || url.password().is_some()
-                    || query_carries_credentials(url, 0)
-            })
+            || target
+                .as_ref()
+                .is_some_and(|url| target_carries_credentials(url, 0))
             || (public_security_element(element) && !harmless_navigation(element, target.as_ref()))
         {
             return Err(source_refused());

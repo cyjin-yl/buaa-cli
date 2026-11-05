@@ -574,7 +574,22 @@
           "source_matched_refusal": "session_cookie_refused",
           "phase_evidence": "The retained static diagnostic exactly matches the business handler's response-cookie refusal. Source inspection places that branch after its HTTP-200, complete-body and challenge checks; the receipt does not separately capture a wire HTTP status or admit course values.",
           "credential_echo_detected_locally": false,
-          "remaining": "No course list was emitted. Ordinary cookie-issued response handling is under repair; current encrypted payload compatibility, complete pagination and authorized mutation postconditions are unverified."
+          "remaining": "No course list was emitted. This observation preceded the offline response-cookie and literal-screening repair; a post-repair admitted live payload, complete pagination and authorized mutation postconditions are unverified."
+        },
+        "response_cookie_privacy_repair_2026_11_05": {
+          "scope": "synthetic_offline",
+          "loopback_exchanges": 6,
+          "escaped_duplicate_echo_withheld": true,
+          "unterminated_escaped_literal_withheld": true,
+          "invalid_escaped_literal_withheld": true,
+          "harmless_original_bytes_preserved": true,
+          "unreviewable_reason": "response_safety_unreviewed",
+          "focused_cases_passed": 62,
+          "library_cases_passed": 1326,
+          "integration_cases_passed": 116,
+          "existing_ignored_cases": 3,
+          "new_campus_request": false,
+          "live_acceptance_upgraded": false
         },
         "cas_identity_online_2026_11_05": {
           "command": "credential-free HTTPS header read of the bykc CAS entry",
@@ -583,7 +598,7 @@
           "scope": "Deployment identity only. No credential, session, token or read."
         }
       },
-      "blocker": "The authorized semester-course request reached the business handler's session_cookie_refused branch and returned unavailable exit 7 without a list. Response-cookie handling, an admitted decoded live payload and complete source-declared pagination remain unverified. Offline totals/source-preservation repairs do not establish live completeness; select/cancel still need an authoritative endpoint, exact operation data and verified postconditions.",
+      "blocker": "The authorized semester-course observation preceded the repaired response-cookie path and returned unavailable exit 7 without a list. Offline cookie admission and escaped-literal privacy are now proved, but a post-repair admitted decoded live payload and complete source-declared pagination remain unverified. Offline totals/source-preservation repairs do not establish live completeness; select/cancel still need an authoritative endpoint, exact operation data and verified postconditions.",
       "sources": [
         "https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/local/LocalBykcApi.kt#L478-L482",
         "https://github.com/Colorfulshadow/buaa_course_enrollment",
@@ -1146,6 +1161,20 @@
           "admission_repair": "Projected credential-shaped titles, labels and decoded URLs refuse before output/cache. Harmless login navigation outside every active directory group is admitted only for a successful structured projection; raw fallback and active authentication, base and challenge controls retain complete-document screening.",
           "offline_proof": "Loopback regressions cover credential withholding/no cache, external navigation/query/control cases and drift preserving the prior capture. Native source_refused now exits 3; safe drift preserves exact raw bytes, while invalid UTF-8 and oversized bodies remain withheld."
         },
+        "recursive_navigation_admission_2026_11_05": {
+          "scope": "synthetic_offline_and_retained_source_replay",
+          "nested_userinfo_refused": true,
+          "relative_credential_query_refused": true,
+          "fresh_refused_capture_not_cached": true,
+          "harmless_empty_query_preserved": true,
+          "native_refused_cases": 4,
+          "native_accepted_controls": 2,
+          "source_refused_exit_code": 3,
+          "retained_official_entries": 50,
+          "retained_official_categories": 6,
+          "retained_source_digest_unchanged": true,
+          "new_campus_request": false
+        },
         "coverage": {
           "categories": 6,
           "entries": 50,
@@ -1153,7 +1182,7 @@
           "missing_hrefs": 5,
           "non_http_hrefs": 1
         },
-        "proof": "Three owner-authorized official reads through the production shared governor. Rust production parser processed the private observed HTML offline. Synthetic loopback tests cover robots, real >=5s spacing, fixed egress and cache. Full offline suite: 54 passed, one ignored subprocess worker; strict clippy and formatting passed. Actual CLI help/schema/offline-miss/conflicting-mode paths exercised without further network.",
+        "proof": "Historical 2026-09-20 evidence: three owner-authorized official reads through the then-production shared governor. Rust production parser processed the private observed HTML offline. Synthetic loopback tests covered robots, the then-required >=5s spacing, fixed egress and cache. That full offline suite passed 54 cases with one ignored subprocess worker; strict clippy and formatting passed. Actual CLI help/schema/offline-miss/conflicting-mode paths exercised without further network. The process-shared pacing governor has since been removed.",
         "snapshot": "docs/data/organizations-2026-09-20.json",
         "limits": "Complete only for entries in the captured official 教学科研机构 document. Missing/non-HTTP URLs remain unresolved; linked-site reachability and announcement content are not claimed.",
         "review": "Independent safety review found no concrete transport defect. Contract review found and reconciled three fixed parser findings: empty-group omission, trimmed literal href, and category-control acceptance. Focused static re-review reported no remaining concrete finding."

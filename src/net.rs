@@ -5430,6 +5430,7 @@ mod tests {
                 true,
             ),
             (NAVIGATION, "<a href='/public?lang=en'>One</a>", true),
+            ("", "<a href='/public?lang='>One</a>", true),
             (
                 "<template><a href='/login'>Inert navigation</a></template>",
                 MEMBER,
@@ -5462,6 +5463,16 @@ mod tests {
                 false,
             ),
             (
+                "<a href='/login?service=https%3A%2F%2Fuser%3Afixture42%40portal.example.invalid%2F'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?service=%2Fcallback%3Fticket%3Dfixture42'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
                 "",
                 "<a href='/public?passwd=synthetic-private'>One</a>",
                 false,
@@ -5469,6 +5480,16 @@ mod tests {
             (
                 "",
                 "<a href='/public?%70asswd=synthetic-private'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?service=https%3A%2F%2Fuser%3Afixture42%40portal.example.invalid%2F'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?service=%2Fcallback%3Fticket%3Dfixture42'>One</a>",
                 false,
             ),
             (

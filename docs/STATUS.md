@@ -26,21 +26,45 @@ error `unavailable`. The retained diagnostic exactly matches the business
 handler's `session_cookie_refused` branch; source inspection places that
 branch after its HTTP-200, complete-body and challenge checks. No course
 list was emitted, and encryption compatibility or complete pagination is
-not established. Response-cookie handling remains under repair. Neither
+not established. This observation predates the response-cookie admission
+and privacy repairs below. Neither
 attempt is counted as completed authenticated service acceptance.
 
-The current complete offline gate passed 1,322 library tests and all 116
-integration tests, with three existing ignored workers. Earlier failed
-receipts remain retained. These offline passes do not upgrade the two
-service observations above. Gitea publication is also incomplete. The
-canonical hostname failed DNS resolution and the known LAN HTTPS address
-did not connect. Its existing SSH endpoint subsequently passed strict host
-key checking and returned main at
+The repaired Boya path retains issued values in bounded, zeroizing,
+invocation-only memory and screens escaped literals even when strict JSON
+admission rejects duplicate keys. An escaped literal without a closing quote
+or with an invalid escape is withheld with `response_safety_unreviewed`;
+this reason distinguishes an incomplete safety review from a confirmed echo.
+Six real loopback exchanges prove Unicode and solidus-escaped withholding,
+both malformed-string boundaries, and exact original-byte preservation for
+harmless ordinary and escaped duplicate-key bodies. The original Unicode
+example was already withheld by a generic guard; the failing-before proof
+used a solidus-escaped issued value instead.
+
+Directory URL screening now checks every nested authority and query,
+resolves relative targets against their enclosing URL, and refuses before
+output or fresh cache retention. Empty harmless query values remain valid.
+Six actual native CLI cases in isolated mount/network namespaces returned
+four `source_refused` refusals (exit 3) and two one-entry cache snapshots.
+The retained official document also replayed as the same 50 entries and six
+categories with its unchanged source digest, without another campus read.
+
+The current complete offline gate passed 62 focused cases, 1,326 library
+tests and all 116 integration tests, with three existing ignored workers.
+Earlier failing receipts remain retained. These offline passes do not
+upgrade the two service observations above.
+
+Gitea publication remains incomplete. Initial DNS and LAN HTTPS observations
+failed; the existing SSH endpoint passed strict host key checking and
+returned main at
 `53553e58b6223a5bf6730b77cae47cc8123a7f69`; an exact main fetch succeeded.
-The current feature branch and that live main have diverged, so both
-histories need reconciliation. The existing Tailnet service address also
-completed strict TLS but its anonymous API returned HTTP 403. No push or
-merge is claimed.
+Main and local history diverge, while main's tree equals the common-base
+tree. The published leaf and its immediate parent are ancestors of the
+local head. Native metadata confirms that PR 164 remains based on PR 163;
+both are open with work-in-progress title prefixes. No review, commit-status
+or Actions-run records were found for their observed published tips. The
+Tailnet service completed strict TLS but its anonymous API required sign-in
+with HTTP 403. No push or merge is claimed.
 
 ## 2026-11-05: earlier offline governor outcome review and session implementation
 

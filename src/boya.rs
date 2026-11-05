@@ -318,22 +318,130 @@ fn fallback(bytes: &[u8], content_type: Option<&str>, reason: &str) -> Value {
 fn withheld_fallback(bytes: &[u8], content_type: Option<&str>) -> Value {
     json!({"result":"fallback","fallback_reason":"sensitive_response_withheld","raw_evidence":evidence(bytes,content_type,Some("credential_echo"))})
 }
-fn response_carries_secret(
+
+fn unreviewed_fallback(bytes: &[u8], content_type: Option<&str>) -> Value {
+    json!({"result":"fallback","fallback_reason":"response_safety_unreviewed","raw_evidence":evidence(bytes,content_type,Some("response_safety_unreviewed"))})
+}
+
+/// The outcome of screening untrusted response material against every
+/// secret the invocation holds. `Echo` is a definite credential match.
+/// `Unreviewable` means part of the material could not be screened — an
+/// escaped JSON literal a strict decoder rejects — so neither a definite
+/// echo nor safety was established. `Clear` means every check ran to
+/// completion without a match.
+#[derive(Clone, Copy)]
+enum ResponseScreening {
+    Clear,
+    Echo,
+    Unreviewable,
+}
+
+fn response_screening(
     bytes: &[u8],
     content_type: Option<&str>,
     contains_secret: impl Fn(&[u8]) -> bool,
-) -> bool {
-    contains_secret(bytes)
-        || content_type.is_some_and(|value| contains_secret(value.as_bytes()))
-        || serde_json::from_slice::<PrivateValue>(bytes)
-            .ok()
-            .is_some_and(|value| value_carries_secret(&value, &contains_secret))
+) -> ResponseScreening {
+    if contains_secret(bytes) || content_type.is_some_and(|value| contains_secret(value.as_bytes()))
+    {
+        ResponseScreening::Echo
+    } else {
+        match serde_json::from_slice::<PrivateValue>(bytes) {
+            // Strict typed admission succeeded: `value_carries_secret` has
+            // already screened every decoded string, key and scalar, which
+            // is exactly the decoded view the lexical scan would rebuild.
+            // No literal is decoded a second time.
+            Ok(value) => {
+                if value_carries_secret(&value, &contains_secret) {
+                    ResponseScreening::Echo
+                } else {
+                    ResponseScreening::Clear
+                }
+            }
+            // Strict admission failed (a duplicate key, a positional root,
+            // truncated structure): only the lexical fallback can still
+            // review the decoded spellings.
+            Err(_) => escaped_string_screening(bytes, &contains_secret),
+        }
+    }
 }
+
+/// Screen JSON string spellings that only exist after decoding. A body that
+/// fails strict `PrivateValue` parsing (a duplicate key, a positional root,
+/// truncated structure) can still encode a retained credential inside an
+/// escaped string (`\u0061`, `\/`, `\\`), and the raw bytes never contain
+/// the decoded spelling. Only literals that carry a JSON escape need
+/// decoding; every unescaped spelling is already covered by the byte-level
+/// check. An escaped literal that cannot be decoded — a string cut off
+/// before its closing quote or an invalid escape — cannot be screened at
+/// all: a lenient consumer may still recover a credential spelling from
+/// it, so it is unreviewable rather than presumed safe or presumed an
+/// echo.
+fn escaped_string_screening(
+    bytes: &[u8],
+    contains_secret: &dyn Fn(&[u8]) -> bool,
+) -> ResponseScreening {
+    let mut cursor = 0;
+    let mut unreviewable = false;
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'"' {
+            cursor += 1;
+            continue;
+        }
+        let opening = cursor;
+        cursor += 1;
+        let mut escaped = false;
+        let mut terminated = false;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'\\' => {
+                    escaped = true;
+                    cursor = cursor.saturating_add(2);
+                }
+                b'"' => {
+                    terminated = true;
+                    break;
+                }
+                _ => cursor += 1,
+            }
+        }
+        if !terminated {
+            // A cut-off literal carrying an escape is never presumed safe:
+            // a lenient consumer may recover the credential spelling a
+            // strict decoder rejects.
+            unreviewable |= escaped;
+            break;
+        }
+        if escaped {
+            match serde_json::from_slice::<String>(&bytes[opening..=cursor]) {
+                Ok(value) => {
+                    let value = Zeroizing::new(value);
+                    if contains_secret(value.as_bytes()) {
+                        return ResponseScreening::Echo;
+                    }
+                }
+                // An escaped literal that cannot be decoded cannot be
+                // screened; record it and keep looking for a definite
+                // echo, which outranks the unreviewable verdict.
+                Err(_) => unreviewable = true,
+            }
+        }
+        cursor += 1;
+    }
+    if unreviewable {
+        ResponseScreening::Unreviewable
+    } else {
+        ResponseScreening::Clear
+    }
+}
+
 #[cfg(test)]
 fn response_contains_secret(bytes: &[u8], content_type: Option<&str>, secret: &str) -> bool {
-    response_carries_secret(bytes, content_type, |candidate| {
-        crate::net::carries_secret(candidate, secret)
-    })
+    matches!(
+        response_screening(bytes, content_type, |candidate| {
+            crate::net::carries_secret(candidate, secret)
+        }),
+        ResponseScreening::Echo
+    )
 }
 fn value_carries_secret(value: &Value, contains_secret: &dyn Fn(&[u8]) -> bool) -> bool {
     match value {
@@ -1426,19 +1534,23 @@ fn admit_response(
         body_failed,
         assessment,
     } = response;
-    let secret_echo = response_carries_secret(bytes, ct, contains_secret);
+    let screening = response_screening(bytes, ct, contains_secret);
     let safe_ct = ct.filter(|value| !contains_secret(value.as_bytes()));
     let (value, fields) = if assessment == crate::html::ChallengeAssessment::Clear {
-        if secret_echo {
-            (withheld_fallback(bytes, safe_ct), SourceFields::default())
-        } else {
-            decode_response_with_fields(bytes, ct, key)
+        match screening {
+            ResponseScreening::Echo => (withheld_fallback(bytes, safe_ct), SourceFields::default()),
+            ResponseScreening::Unreviewable => {
+                (unreviewed_fallback(bytes, safe_ct), SourceFields::default())
+            }
+            ResponseScreening::Clear => decode_response_with_fields(bytes, ct, key),
         }
     } else {
         (Value::Null, SourceFields::default())
     };
     let mut decoded = PrivateValue(value);
-    if !secret_echo && projected_source_carries_secret(&decoded, fields, contains_secret) {
+    if matches!(screening, ResponseScreening::Clear)
+        && projected_source_carries_secret(&decoded, fields, contains_secret)
+    {
         decoded = PrivateValue(withheld_fallback(bytes, safe_ct));
     }
     if matches!(req, ReadRequest::Courses(_))
@@ -2420,6 +2532,168 @@ mod tests {
             );
         }
         assert!(!governor.status().unwrap().safety_latched);
+        drop(governor);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// The consumer invariant for unscreened bodies: a cookie-issuing HTTP
+    /// 200 whose plaintext body cannot be parsed for privacy screening must
+    /// never publish raw evidence when an escaped spelling of a retained
+    /// secret appears in it, while a harmless unparseable body keeps its
+    /// exact original bytes in base64. The first case is the control the
+    /// generic escape heuristic already covers; the second decodes to the
+    /// issued value without any byte the heuristic recognizes. The last two
+    /// hold the same recoverable escaped value inside literals a strict
+    /// decoder rejects entirely: one cut off before its closing quote and
+    /// one followed by an invalid escape.
+    #[test]
+    fn escaped_issued_value_in_unparseable_body_is_withheld() {
+        use std::io::Write;
+        use std::os::unix::fs::DirBuilderExt;
+        let escaped_unicode = br#"{"note":"\u0061bc_123","note":"ordinary"}"#.as_slice();
+        let escaped_solidus = br#"{"note":"abc\/123","note":"ordinary"}"#.as_slice();
+        let harmless = br#"{"note":"ordinary","note":"ordinary"}"#.as_slice();
+        let unterminated = br#"{"note":"abc\/123"#.as_slice();
+        let invalid_escape = br#"{"note":"abc\/123\q"}"#.as_slice();
+        let harmless_escaped = br#"{"note":"abc\/124","note":"ordinary"}"#.as_slice();
+        let server = Server::new(move |socket, index| {
+            let (extra, body): (&'static str, &[u8]) = match index {
+                0 => ("Set-Cookie: sid=abc_123; Path=/\r\n", escaped_unicode),
+                1 => ("Set-Cookie: sid=abc/123; Path=/\r\n", escaped_solidus),
+                2 => ("", harmless),
+                3 => ("", unterminated),
+                4 => ("", invalid_escape),
+                _ => ("", harmless_escaped),
+            };
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+                        body.len(),
+                        extra
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            socket.write_all(body).unwrap();
+        });
+        let client = reqwest::blocking::Client::builder()
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .build()
+            .unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "boya-escaped-echo-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        let governor = Governor::isolated_for_test(&path).unwrap();
+        let mut lease = net::acquire(&governor).unwrap();
+        let token = "synthetic-auth-token-value";
+        let mut secrets = ScreenedSecrets {
+            token,
+            session: None,
+            password: None,
+            issued: IssuedCookies::default(),
+        };
+        let route = |request: &mut reqwest::blocking::Request| {
+            let url = request.url_mut();
+            url.set_scheme("http").expect("test loopback scheme");
+            url.set_host(Some(&server.address.ip().to_string()))
+                .expect("test loopback host");
+            url.set_port(Some(server.address.port()))
+                .expect("test loopback port");
+        };
+        let key = [0u8; 16];
+        let mut values = Vec::new();
+        let mut last = None;
+        for _ in 0..6 {
+            if !values.is_empty() {
+                let reservation = lease.reserve_followup().unwrap();
+                assert!(reservation.cooldown_wait.is_zero());
+            }
+            let mut request = BoyaClient::prepare(&client, token, &ReadRequest::Profile)
+                .unwrap()
+                .0;
+            route(&mut request);
+            let exchange = BoyaClient::exchange(
+                &client,
+                &mut lease,
+                request,
+                Zeroizing::new(key),
+                &mut secrets,
+                &ReadRequest::Profile,
+            )
+            .map_err(|_| err("test_exchange", "exchange transport failed"))
+            .unwrap();
+            let Exchange {
+                value,
+                status,
+                retry_after,
+                challenge,
+                body_failed,
+            } = exchange;
+            last = Some((status, retry_after, challenge, body_failed));
+            values.push(value);
+        }
+        let (last_status, last_retry, last_challenge, last_body_failed) = last.unwrap();
+        let mut values = values.into_iter();
+        // Control: the `\u0061` spelling is already caught by the generic
+        // escape heuristic, so its raw data stays withheld.
+        let value = values.next().unwrap().unwrap();
+        assert_eq!(value["raw_evidence"]["data"], Value::Null);
+        // A `\/` escape contains no byte the heuristic recognizes and the
+        // duplicate key rejects the privacy parse: the decoded value is the
+        // issued cookie, so the raw data must be withheld.
+        let value = values.next().unwrap().unwrap();
+        assert_eq!(value["raw_evidence"]["data"], Value::Null);
+        // Harmless control: the same unparseable shape carrying no secret
+        // preserves the exact source bytes in base64.
+        let value = values.next().unwrap().unwrap();
+        assert_eq!(value["raw_evidence"]["data"], STANDARD.encode(harmless));
+        // An escaped cookie spelling the literal scan cannot terminate is
+        // still recoverable credential material: the raw data must be
+        // withheld rather than published.
+        let value = values.next().unwrap().unwrap();
+        assert_eq!(value["raw_evidence"]["data"], Value::Null);
+        // The same escaped value followed by an invalid escape is equally
+        // recoverable by a lenient consumer; it must not publish either.
+        let value = values.next().unwrap().unwrap();
+        assert_eq!(value["raw_evidence"]["data"], Value::Null);
+        // A harmless escaped literal that decodes cleanly is not a
+        // disclosure even next to a similar retained value: the exact
+        // source bytes stay published.
+        let value = values.next().unwrap().unwrap();
+        assert_eq!(
+            value["raw_evidence"]["data"],
+            STANDARD.encode(harmless_escaped)
+        );
+        assert!(secrets.issued.carries(b"abc_123"));
+        assert!(secrets.issued.carries(b"abc/123"));
+        settle(
+            lease,
+            last_status,
+            last_retry.as_deref(),
+            last_challenge,
+            last_body_failed,
+        )
+        .unwrap();
+        assert!(
+            !server
+                .requests
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .lines()
+                .any(|line| line.to_ascii_lowercase().starts_with("cookie:")),
+            "an issued value must never be retransmitted"
+        );
         drop(governor);
         std::fs::remove_dir_all(path).unwrap();
     }
