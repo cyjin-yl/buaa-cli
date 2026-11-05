@@ -933,7 +933,10 @@ impl Governor {
                     .map_err(|_| unavailable())?;
                 validate_private_file(&existing).map_err(|_| unavailable())?;
                 let mut retained = Vec::new();
-                std::io::Read::read_to_end(&mut &existing, &mut retained)
+                std::io::Read::read_to_end(
+                    &mut std::io::Read::take(&existing, MAX_STATE_BYTES + 1),
+                    &mut retained,
+                )
                     .map_err(|_| unavailable())?;
                 if retained != bytes {
                     return Err(unavailable());
