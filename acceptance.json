@@ -92,8 +92,16 @@
           "original_runtime": "Existing UID1000 runtime built its own target and ran help/schema/manifest; source stable, no campus requests or authentication attempts.",
           "independent_review": "Fresh full-source review explicitly APPROVE; no concrete P1/P2 findings.",
           "github_checks": [
-            {"id":120234498579,"app_id":15368,"conclusion":"success"},
-            {"id":120234481912,"app_id":15368,"conclusion":"success"}
+            {
+              "id": 120234498579,
+              "app_id": 15368,
+              "conclusion": "success"
+            },
+            {
+              "id": 120234481912,
+              "app_id": 15368,
+              "conclusion": "success"
+            }
           ],
           "copilot_review": "The review bot reported requester quota exhaustion; COMMENTED is not approval.",
           "remaining": "PR remains draft pending safe current online session acceptance and independent platform review. No linked Issue exists."
@@ -163,6 +171,17 @@
             "authentication_attempts": 0
           },
           "limits": "The deliberately committed local history now matches the current boot; this environment blocker is resolved without reset or an alternate account key. Recorded carryover delays are migration-time reservations, not current wait durations. Normal open/status/auth resume still reject any new boot mismatch until a deliberate reviewed migration. Same-UID/local-filesystem boundary; comprehensive power-loss/fsync/rename fault injection and campus capability completion are not claimed."
+        },
+        "outcome_review_2026_11_05": {
+          "commands": [
+            "buaa governor review-outcome-plan",
+            "buaa governor review-outcome-commit --offline"
+          ],
+          "contract": "Deliberate offline resolution of exactly one unknown request outcome. Preview reports the retained state SHA-256, pending kind, latch, failure count and waits anchored to the persisted last_observed_ms, so it cannot drift against its own commit. Commit requires intent REVIEW GOVERNOR OUTCOME <sha> and one settlement: success (clears the streak), no_request_sent, network_failure (advances backoff), credential_rejected, captcha_required, request_answered (state no-op), or cooldown{wait_ms} applied relatively in the state's own clock domain. Cross-boot pending states keep every deadline in the dead boot's clock domain rather than mixing the new uptime; the commit also reserves the post-completion request and background gaps a real finish performs. Original bytes are preserved as outcome-review-<sha>.json with byte-equality readback and a directory fsync before the atomic rewrite.",
+          "verification": "Six focused outcome tests pass (nothing-pending refusal, wrong-intent refusal with unchanged bytes, recorded settlement + preserved pre-review bytes, success clears streak, relative cooldown applied, cross-boot clock domain preserved). Full library gate 1217 passed with 3 existing ignored workers. Published governor schema now declares both commands; the plan/commit-stdin/commit-stdout schemas pass Draft 2020-12 check_schema, accept every real settlement form including the cooldown object, and reject until_ms and unknown settlements.",
+          "network_requests": 0,
+          "review": "An independent reviewer found preview drift, cross-clock corruption, partial-archive acceptance, missing schema, missing success/cooldown settlement, a missing post-completion gap and receipt gaps; all were fixed and re-verified in a second pass, which raised the enum-as-literal, dangling $ref, absolute-deadline, BackgroundPoll and truthfulness defects. Those are fixed too.",
+          "limits": "Does not infer anything from the clock, does not clear a latch or grant authentication, and cannot migrate unknown/corrupt history."
         }
       }
     },
@@ -201,11 +220,11 @@
       },
       "remaining": "The 2026-09-25 and 2026-09-28 governed usage attempts failed at the network edge with a severed TLS handshake and zero response bytes; those failures stay on record. The 2026-10-21 governed usage read succeeded and is recorded in online_usage_observation_2026_10_21, so live usage compatibility is now established. Login, logout, recovery and any account postcondition still require their own explicit typed intent, and the owner account's actual ac_id stays unverified by this read-only path.",
       "live_login_probe_2026_10_30": {
-       "command": "buaa gateway login --online (4 attempts) + independent Python crypto probe",
-       "result": "login_blocked_environment",
-       "cause": "The account is online from campus IP 10.135.150.11 (verified via rad_user_info). The development host egress is 10.20.0.254 (PVE/lab network, not campus wireless). SRun returns E2531: User not found when login is attempted from a non-campus AC path. The gateway can only authenticate the account from the campus VLAN where its AC is reachable. A separate code defect was found and fixed: the xencoded info JSON acid field was serialized as a numeric u32 instead of a string, causing auth_info_error; this is corrected to match the fontlos/buaa-api reference.",
-       "acid_fix": "Info.acid changed from u32 to String so serde_json emits \"acid\":\"1\" instead of \"acid\":1; test vectors updated.",
-       "credit": "Protocol reference: fontlos/buaa-api (MIT) — XEncode formula, SRBX1 custom base64 alphabet, HMAC-MD5 password derivation, SHA-1 checksum ordering, acid-as-string info JSON field."
+        "command": "buaa gateway login --online (4 attempts) + independent Python crypto probe",
+        "result": "login_blocked_environment",
+        "cause": "The account is online from campus IP 10.135.150.11 (verified via rad_user_info). The development host egress is 10.20.0.254 (PVE/lab network, not campus wireless). SRun returns E2531: User not found when login is attempted from a non-campus AC path. The gateway can only authenticate the account from the campus VLAN where its AC is reachable. A separate code defect was found and fixed: the xencoded info JSON acid field was serialized as a numeric u32 instead of a string, causing auth_info_error; this is corrected to match the fontlos/buaa-api reference.",
+        "acid_fix": "Info.acid changed from u32 to String so serde_json emits \"acid\":\"1\" instead of \"acid\":1; test vectors updated.",
+        "credit": "Protocol reference: fontlos/buaa-api (MIT) — XEncode formula, SRBX1 custom base64 alphabet, HMAC-MD5 password derivation, SHA-1 checksum ordering, acid-as-string info JSON field."
       },
       "authorized_attempts": [
         {
@@ -332,8 +351,8 @@
             "attempts": "One CAS sign-on attempt per deliberate operator resume; the failure class was retryable (no auth_latched/challenge), the fix was committed, and exactly one retry was performed with owner credentials over protected stdin."
           }
         },
-        "remaining": "Current source identity, rights, per-service discovery, cache-first behavior and governed online reads remain unverified. Synthetic admission does not prove a live request or authorize attendance."
-        ,"classrooms_session_online_2026_11_04": {
+        "remaining": "Current source identity, rights, per-service discovery, cache-first behavior and governed online reads remain unverified. Synthetic admission does not prove a live request or authorize attendance.",
+        "classrooms_session_online_2026_11_04": {
           "command": "buaa smart session --online with protected JSON stdin (classrooms free-classroom read, campus_id=1, date=2026-11-04)",
           "observed": "One authorized in-memory CAS login for the classrooms profile completed the sign-on chain and sent the free-classroom read; the endpoint returned a real 11400-byte text/html document (HTTP 200), which the privacy gate withheld as unknown_content_type rather than parsing.",
           "scope": "Classrooms profile only. The endpoint returned an HTML UI page, not the JSON API the parser admits, so parsed room data is NOT claimed by design. Exams, cgyy and running remain unverified (they require caller-supplied tokens, not CAS).",
@@ -453,7 +472,7 @@
     {
       "id": "timetable-pg",
       "title": "Postgraduate timetable/ICS",
-      "status": "pending",
+      "status": "partial-offline",
       "acceptance": "Verified postgraduate contract and standards-compliant ICS.",
       "sources": [
         "https://github.com/roife/BUAAIcsGen",
@@ -467,6 +486,13 @@
           "command": "buaa timetable-pg parse with an empty object",
           "observed": "invalid_input exit 2: the parser requires an operator-supplied timetable payload",
           "live_blocker": "No live postgraduate timetable source is authorized for this run."
+        },
+        "session_readpath_2026_11_05": {
+          "command": "buaa timetable session [--online] with protected JSON stdin",
+          "scope": "One explicit in-memory CAS login to GSMIS followed by exactly one loadXskbData.do read under the existing Authentication lease; no persistence, refresh, retry, writes or cookie adoption.",
+          "input_contract": "Strict object root: authorized, username, password, intent, read{operation=xskb, enabled, xnxqdm(5 ASCII digits)}. Object-only and duplicate-field refusal; a disabled read performs no I/O before any governor/network access.",
+          "verification": "4 focused session cases plus the full 1217-library gate passed offline (3 existing ignored workers). Published module schema is drafted Draft 2020-12 and validated: valid inputs accepted, 4- and 6-digit xnxqdm rejected. Actual native CLI smoke: session --offline refused with online_required-adjacent invalid_input before any request; a disabled read returned result=disabled with network_performed=false.",
+          "not_proven": "No authenticated GSMIS transport, no real loadXskbData.do response and no parsed live schedule. The GSMIS CAS profile and endpoint remain unverified against the current campus deployment."
         }
       }
     },
@@ -499,7 +525,13 @@
       "evidence": {
         "candidate_offline": "Synthetic AES-encrypted responses reproduced an unnecessary token:null fallback, decrypted scalar credential echoes and generated-null false positives. Post-fix cases passed with missing-versus-explicit-null, ordinary, upstream-error and denial controls; scoped source review found no further issue.",
         "json_string_envelope_2026_11_02": "Pinned MIT public UBAA LocalBykcApi.kt at e8a397fcb35a68147eee65a94c66ffb84e2f09fe lines 478-482 admits raw ciphertext or a JSON string. Two quoted-response regressions failed before repair while the raw-wire control passed. After repair, 25 Boya library cases, two focused CLI cases and a separate native consumer passed: raw/quoted source preservation, original-wire fallback and sensitive ciphertext withholding. Only the quoted form is decoded into zeroizing storage; raw ciphertext stays borrowed. Fallback original bytes, length and SHA-256 bind the unchanged wire body. No new endpoint, authentication retry or live compatibility claim.",
-        "remaining": "Current response contract, authorized session, complete pagination and owner-present mutation/postcondition are unverified. Synthetic encrypted data is not a live response."
+        "remaining": "Current response contract, authorized session, complete pagination and owner-present mutation/postcondition are unverified. Synthetic encrypted data is not a live response.",
+        "session_handoff_2026_11_05": {
+          "command": "buaa boya session [--online] with protected JSON stdin",
+          "scope": "One explicit in-memory CAS login to bykc, the issued handoff token consumed once via take_service_credential, then exactly one prepared sscv read reusing BoyaClient::prepare/execute. preview_write stays blocked.",
+          "verification": "Full 1217-library offline gate passed. Published schema extended with the session contract and validated under Draft 2020-12. Actual native CLI smoke: authorized=false refused with code permission exit 5 both with and without --online, before any transport.",
+          "not_proven": "No authenticated Boya session, no live encrypted response and no paginated read. Current campus token issuance and response contract remain unverified."
+        }
       },
       "sources": [
         "https://github.com/BUAASubnet/UBAA/blob/e8a397fcb35a68147eee65a94c66ffb84e2f09fe/shared/src/commonMain/kotlin/cn/edu/ubaa/api/local/LocalBykcApi.kt#L478-L482",
@@ -537,8 +569,8 @@
         },
         "session_transport": "2026-11-01: bounded transport-only probes of current SSO/iHome DNS answers failed before TLS/HTTP: IPv4 TCP 443 refused, IPv6 no route. No real credentials, HTTP requests, authentication attempt or VPN recovery were submitted/performed; this is not a password or live-application verdict.",
         "source_contract": "Pinned MIT public client BUAASubnet/UBAA e8a397fcb35a68147eee65a94c66ffb84e2f09fe, IhomeProtocol.kt: positive code=20000 plus success=true, paginated source facts, no required appeal title. Client defaults and historical reports are not proof of current server behavior; legacy php-ihome is a different social platform, not a modern attachment contract.",
-        "remaining": "The bounded iHome login/read implementation has offline proof only. Live token acquisition, account identity/rights, current authorized source, incremental history, full-text and nonempty attachment behavior remain unverified. Current idle window and server token lifetime are unknown. Legacy cache entries without cookie-admission facts are retained but not replayed."
-        ,"session_online_2026_11_04": {
+        "remaining": "The bounded iHome login/read implementation has offline proof only. Live token acquisition, account identity/rights, current authorized source, incremental history, full-text and nonempty attachment behavior remain unverified. Current idle window and server token lifetime are unknown. Legacy cache entries without cookie-admission facts are retained but not replayed.",
+        "session_online_2026_11_04": {
           "command": "buaa ihome session --online with protected JSON stdin (operation=list, limit=10, page=1)",
           "observed": "One authorized in-memory CAS login completed, the service handoff produced a bearer token via the redirect fragment (credential_source=redirect_fragment_token), and the list page request returned application/json with entry_count=0. The account's ihome list at this page/limit is genuinely empty. The token was consumed in this invocation only and never persisted.",
           "scope": "list operation at limit=10 page=1 only. detail not exercised because entry_count=0 produced no list id to anchor a detail id. Full-text/attachment behavior, incremental history and account rights remain unverified.",
@@ -749,15 +781,69 @@
           "snapshot_entry_total_not_unique_files_across_branches": 8290,
           "original_inventory_http_status": 200,
           "inventory_observations": [
-            {"school": 3, "repo": "AccSrd/BUAA_Course_Automation", "branch": "main", "entries": 3283, "tree_sha": "3c59d746a206a14aa06ab21bf85953a1eca0359c"},
-            {"school": 6, "repo": "TheBloodthirster/BUAA_Course_Sharing", "branch": "master", "entries": 1991, "tree_sha": "a6ad073516ea9a5bda16ed88b59cc52201a3aa03"},
-            {"school": 8, "repo": "HoBeedzc/CreditCount", "branch": "main", "entries": 25, "tree_sha": "848d47ce16f410ea504b5052c2339d73c7eeb2e6"},
-            {"school": 8, "repo": "grandchicken/1708SEM_ISIM", "branch": "master", "entries": 1999, "tree_sha": "3d0068744664a182a4b98c423ed13743308519be"},
-            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "main", "entries": 1, "tree_sha": "c1ff8c4728db5e775a1bb32ab7792bef43f1e019"},
-            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "second-autumn", "entries": 227, "tree_sha": "036855ae8b07974196c7b356fa977790316f38b1"},
-            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "second-spring", "entries": 213, "tree_sha": "580bccf181c9654eb8fcb86a55211812c6f8aed5"},
-            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "third-autumn", "entries": 194, "tree_sha": "fbae921a2f14058676286a7d0330b97a368fdc57"},
-            {"school": 21, "repo": "Soft-Where-21/21CoreDocs", "branch": "third-spring", "entries": 357, "tree_sha": "d71504365c488d5db4cdb7a3b3866693f1cbdd4b"}
+            {
+              "school": 3,
+              "repo": "AccSrd/BUAA_Course_Automation",
+              "branch": "main",
+              "entries": 3283,
+              "tree_sha": "3c59d746a206a14aa06ab21bf85953a1eca0359c"
+            },
+            {
+              "school": 6,
+              "repo": "TheBloodthirster/BUAA_Course_Sharing",
+              "branch": "master",
+              "entries": 1991,
+              "tree_sha": "a6ad073516ea9a5bda16ed88b59cc52201a3aa03"
+            },
+            {
+              "school": 8,
+              "repo": "HoBeedzc/CreditCount",
+              "branch": "main",
+              "entries": 25,
+              "tree_sha": "848d47ce16f410ea504b5052c2339d73c7eeb2e6"
+            },
+            {
+              "school": 8,
+              "repo": "grandchicken/1708SEM_ISIM",
+              "branch": "master",
+              "entries": 1999,
+              "tree_sha": "3d0068744664a182a4b98c423ed13743308519be"
+            },
+            {
+              "school": 21,
+              "repo": "Soft-Where-21/21CoreDocs",
+              "branch": "main",
+              "entries": 1,
+              "tree_sha": "c1ff8c4728db5e775a1bb32ab7792bef43f1e019"
+            },
+            {
+              "school": 21,
+              "repo": "Soft-Where-21/21CoreDocs",
+              "branch": "second-autumn",
+              "entries": 227,
+              "tree_sha": "036855ae8b07974196c7b356fa977790316f38b1"
+            },
+            {
+              "school": 21,
+              "repo": "Soft-Where-21/21CoreDocs",
+              "branch": "second-spring",
+              "entries": 213,
+              "tree_sha": "580bccf181c9654eb8fcb86a55211812c6f8aed5"
+            },
+            {
+              "school": 21,
+              "repo": "Soft-Where-21/21CoreDocs",
+              "branch": "third-autumn",
+              "entries": 194,
+              "tree_sha": "fbae921a2f14058676286a7d0330b97a368fdc57"
+            },
+            {
+              "school": 21,
+              "repo": "Soft-Where-21/21CoreDocs",
+              "branch": "third-spring",
+              "entries": 357,
+              "tree_sha": "d71504365c488d5db4cdb7a3b3866693f1cbdd4b"
+            }
           ],
           "whole_inventory_proof": "Final actual cache-only CLI reads cover all nine selections. Independent Python reconstruction verifies every advertised directory and native git hash-object agrees on every root. Every normalized entry matches the complete original-derived sequence; original body digests/timestamps and whole private cache-file bytes remain unchanged. Same-UID regular single-link 0600 files under 0700 directories and standard input/output schemas were checked. This complete readback matrix performs no new network requests.",
           "source_name_correction": "The original School 8 SEM HTTP200 tree has 1999 entries and 308 valid directory/root objects. One exact Git name contains U+0088/U+0089. Source metadata admission now preserves it under the unchanged verifier rather than applying the operator control-character rule. The same retained original yields the complete exact inventory without refetching, rewriting or omitting entries; operator control-bearing retrieval still refuses before cache or GET.",
@@ -768,8 +854,18 @@
             "license_source": "https://api.github.com/repos/TheBloodthirster/BUAA_Course_Sharing/git/blobs/dc06b50555a100a88417f07d1dd4f0192be3ebc3",
             "license_review": "The exact MIT legal notice, Copyright (c) 2023 TheBloodthirster, was independently read and Git-blob-verified before selecting the original notice and associated maintainer README documentation. The copyright/permission notice remains with the originals. This does not license third-party course, exam or answer-bank materials.",
             "selected_documents": [
-              {"path": "LICENSE", "bytes": 1073, "blob_sha": "dc06b50555a100a88417f07d1dd4f0192be3ebc3", "sha256": "f9c3c37207130bd4bd24312df7789ff0b74814d5c937f431ba9236ce4a3ed38c"},
-              {"path": "README.md", "bytes": 4317, "blob_sha": "a4468d77b7c379f86e43f0c01e17c6d3df67db9a", "sha256": "adc0104b26dc0d5fbab0e361d2830d01a8c0fcc5de10e8316d1a932b1434010d"}
+              {
+                "path": "LICENSE",
+                "bytes": 1073,
+                "blob_sha": "dc06b50555a100a88417f07d1dd4f0192be3ebc3",
+                "sha256": "f9c3c37207130bd4bd24312df7789ff0b74814d5c937f431ba9236ce4a3ed38c"
+              },
+              {
+                "path": "README.md",
+                "bytes": 4317,
+                "blob_sha": "a4468d77b7c379f86e43f0c01e17c6d3df67db9a",
+                "sha256": "adc0104b26dc0d5fbab0e361d2830d01a8c0fcc5de10e8316d1a932b1434010d"
+              }
             ],
             "native_result": "raw_snapshot with material_admitted:true",
             "byte_proof": "Independent complete-byte length, Git-blob and SHA-256 checks match the exact immutable tree/path/blob binding. LICENSE equals the separately observed GitHub JSON blob in full. Actual offline CLI replay returns identical bytes and original body digests/timestamps; native and offline outputs validate against the published schema.",
@@ -1012,8 +1108,41 @@
           "quality_gate": "Locked offline build, strict all-target clippy and formatter check passed; complete suite 350 library plus 19 CLI passed, two subprocess-worker entry points ignored. One foreground global heavy-work lease, worktree-owned target, UID1000, jobs1, memory2GiB/swap-total3GiB, read-only container root and network none.",
           "input_set_sha256_before_evidence_update": "ec87e4ffc53e8e6a83a334213021934b0ed656269ae1c4b74fed421c2274bf30",
           "native_consumers": "Actual CLI capabilities equal the entire49-capability/74-catalog manifest. After removing62 stale schema mutations, a six-failure native schema consumer passes all15 checks, including IAI,29 listing colleges,HSS HTTPS,Transportation namespace,BME query shape and MSE table types. Separate SSE3/report5 focused cases overlap the full suite.",
-          "listing_colleges": ["scse", "ic", "aviation", "beijing", "shenyuan", "h3i", "iai", "zfai", "iiif", "mse", "sepe", "math", "soft", "transportation", "physics", "sce", "sse", "sem", "fld", "me", "wrj", "yqgdxy", "ase", "hss", "bme", "ygy", "cst", "dept3", "ee"],
-          "root_only_colleges": ["rse", "sa"],
+          "listing_colleges": [
+            "scse",
+            "ic",
+            "aviation",
+            "beijing",
+            "shenyuan",
+            "h3i",
+            "iai",
+            "zfai",
+            "iiif",
+            "mse",
+            "sepe",
+            "math",
+            "soft",
+            "transportation",
+            "physics",
+            "sce",
+            "sse",
+            "sem",
+            "fld",
+            "me",
+            "wrj",
+            "yqgdxy",
+            "ase",
+            "hss",
+            "bme",
+            "ygy",
+            "cst",
+            "dept3",
+            "ee"
+          ],
+          "root_only_colleges": [
+            "rse",
+            "sa"
+          ],
           "current_online_status": "No college in these arrays received a current campus observation in this gate. Existing source-specific live receipts below retain their historical scopes; a schema entry or synthetic parser is not a working remote service.",
           "blockers": {
             "all_current_observations": "At this historical offline gate the original production governor still required deliberate reviewed boot-history admission; no state reset, alternative identity, credential reuse or campus request was performed. The subsequent original_runtime_migration_2026_10_21 evidence resolves only that boot-continuity blocker.",
@@ -3261,11 +3390,11 @@
       "id": "recordings-native-subtitles-online",
       "title": "Existing-session native classroom subtitle read",
       "status": "partial-live-verified",
-        "parent_items": [
-          "recordings",
-          "live",
-          "recording-subtitle-service"
-                ],
+      "parent_items": [
+        "recordings",
+        "live",
+        "recording-subtitle-service"
+      ],
       "acceptance": "One explicitly authorized fixed-origin native subtitle GET with a protected-stdin session or an explicit stored-session reference, exact track selection, immutable raw-body provenance and the permanent shared governor. No login, automatic refresh or retry, media or catalog write.",
       "sources": [],
       "evidence": {
@@ -3280,17 +3409,17 @@
         "command": "buaa recordings subtitles --online|--refresh",
         "online_observation_2026_10_23": {
           "scope": "Prior candidate selected one authorized native track; this is not exact-head approval of subsequent safety repairs.",
-              "segments": 3389,
+          "segments": 3389,
           "original_bytes": 595620,
-                "revalidation_status": 200,
+          "revalidation_status": 200,
           "network_access": true,
-                "content_type": "text/html; charset=UTF-8",
-                "mime_label_matches_json": false,
-                "envelope": "flat",
+          "content_type": "text/html; charset=UTF-8",
+          "mime_label_matches_json": false,
+          "envelope": "flat",
           "source_order_preserved": true,
-                "resource_guid_status": "absent_in_native_track",
+          "resource_guid_status": "absent_in_native_track",
           "digests": "Original and normalized-segment digests are privately retained, not published."
-    },
+        },
         "admission": "The raw HTTP body is the flat code/list envelope. A supplied status/data capture wrapper remains a separate offline-import input. Reviewed JSON/HTML MIME labels and bounded bytes are required before immutable comparison. Application code zero permits track normalization; the separately reviewed code 10002, total zero, exact no-data message and literal empty list permit an upstream-reported absence. Other non-zero codes remain refused. Safe admitted layout failures remain privately recoverable without a new request.",
         "observation_2026_11_02": {
           "scope": "An authorized native subtitle read through an existing stored classroom session after session establishment. Private lesson, resource and session identifiers are withheld. No campus write, attendance or completion claim.",
@@ -3311,14 +3440,14 @@
       }
     },
     {
-        "id": "recordings-classroom-session",
-        "title": "Governed classroom platform session",
+      "id": "recordings-classroom-session",
+      "title": "Governed classroom platform session",
       "status": "live-verified",
-        "parent_items": [
-          "recordings",
-          "live",
-          "recording-subtitle-service"
-                ],
+      "parent_items": [
+        "recordings",
+        "live",
+        "recording-subtitle-service"
+      ],
       "acceptance": "A deliberate one-shot authentication with protected stdin, pinned SSO service, positive reviewed application confirmation, production governor pacing/cooldowns throughout all hops, and private atomic session storage. No automatic login refresh, retry or challenge bypass.",
       "sources": [],
       "evidence": {
@@ -3330,15 +3459,15 @@
           "not_a_defect": "The courseapi response declares Content-Type text/html while carrying JSON; classroom_json_mime already admits text/html, so no MIME change was required.",
           "limits": "Media rights, live playback, subtitle synchronization and attendance/completion remain unverified. The authorization block still records account_identity_verified false with operator_attestation basis."
         },
-          "commands": [
-            "buaa recordings session --offline",
-            "buaa recordings session --online",
-            "buaa recordings session inspect --online"
+        "commands": [
+          "buaa recordings session --offline",
+          "buaa recordings session --online",
+          "buaa recordings session inspect --online"
         ],
-          "implementation": [
-            "src/recordings/session.rs",
-            "src/governor.rs",
-            "src/main.rs"
+        "implementation": [
+          "src/recordings/session.rs",
+          "src/governor.rs",
+          "src/main.rs"
         ],
         "authorized_attempt_2026_10_29": {
           "scope": "One deliberately resumed classroom authentication under the existing v2 shared governor and heavy-work guardian, using the previously bound native replay-worktree binary.",
@@ -3854,7 +3983,11 @@
             },
             "online_attempt_correction_2026_10_25": {
               "attempted_module_prefix": "2ccfb0db",
-              "trail": ["sso_get_200", "credential_post_302", "classroom_cas_callback_500"],
+              "trail": [
+                "sso_get_200",
+                "credential_post_302",
+                "classroom_cas_callback_500"
+              ],
               "session_established": false,
               "online_acceptance_passed": false,
               "callback_failure_cause": "undetermined_original_response_not_retained",
@@ -3867,7 +4000,11 @@
             "governed_attempt_and_integration_2026_10_26": {
               "attempted_module_sha256": "0980d3e277fa3327b438f77369f0bd4d0f714b05397844ead514f461fcdadf29",
               "authentication_invocations": 1,
-              "trail": ["sso_get_200", "credential_post_302", "classroom_cas_callback_500"],
+              "trail": [
+                "sso_get_200",
+                "credential_post_302",
+                "classroom_cas_callback_500"
+              ],
               "session_established": false,
               "positive_application_probe": false,
               "online_acceptance_passed": false,
@@ -3878,7 +4015,12 @@
               "automatic_retry": false,
               "ticket_replay": false,
               "alternate_governor": false,
-              "merged_pull_requests": [125, 126, 127, 128],
+              "merged_pull_requests": [
+                125,
+                126,
+                127,
+                128
+              ],
               "stack_number": 129,
               "stack_open_after_integration": false,
               "observed_main_commit": "004cf2f72953d48bdeed810582b482f398825144",
@@ -3988,15 +4130,15 @@
       }
     },
     {
-        "id": "recordings-media",
+      "id": "recordings-media",
       "title": "Governed classroom recording media acquisition",
       "status": "live-verified",
       "parent_items": [
         "recordings",
         "live",
-          "recording-replay-playback",
+        "recording-replay-playback",
         "recording-subtitle-service"
-        ],
+      ],
       "acceptance": "Cache-first source-bound recording acquisition: validate exact requested lesson selectors, admit only its declared recording URL on the reviewed HTTPS media host, and stream bounded prefix/full bytes through the shared governor. Publish only a completely verified local file. Caller-supplied native-track metadata remains operator-asserted, not independently verified source association.",
       "sources": [],
       "evidence": {
@@ -4007,21 +4149,21 @@
           "full_read": "A full fetch into a private 0700 directory returned complete_body true with bytes_read equal to declared_content_length (415863736) and media_bytes_verified true. The original, digest and receipt remain owner-only; no media locator or private digest is published here.",
           "limits": "This proves the current lesson's declared recording is retrievable and byte-verified. Media rights, remote-origin proof beyond the platform declaration, native-track association and rendered subtitle synchronization remain unverified."
         },
-          "command": "buaa recordings media --online",
-          "implementation": [
-            "src/recordings/media.rs",
-            "src/recordings/session.rs",
+        "command": "buaa recordings media --online",
+        "implementation": [
+          "src/recordings/media.rs",
+          "src/recordings/session.rs",
           "src/net.rs"
         ],
         "historical_observation_2026_10_23": {
           "scope": "Prior candidate source APIs declared a released replay and one recording asset. These observations predate later transport/output-safety repairs.",
           "declared_duration_seconds": 8940,
-            "content_type": "video/mp4",
+          "content_type": "video/mp4",
           "declared_bytes": 2068314499,
           "prefix": {
             "status": 206,
             "bytes": 1048576,
-              "hash_scope": "bounded_media_prefix_bytes"
+            "hash_scope": "bounded_media_prefix_bytes"
           },
           "full": {
             "status": 200,
@@ -4031,7 +4173,7 @@
           },
           "digests": "Both prefix and whole-file hashes are privately retained. The whole media file is retained for offline current-code readback; no repeated campus download is needed.",
           "media_cookie_sent": false
-              },
+        },
         "association_limits": "Platform responses associate replay metadata with a lesson. The native track has no resource identity; date equality, duration coverage and caller-supplied cue/hash facts do not certify a native media binding or rendered synchronization.",
         "player_observation": "A prior direct mpv observation sampled nine cue windows across the track and four early cue gaps. VLC root captures were black; later window captures differed across unmatched frames. These are bounded/inconclusive observations, not full-track or dual-player synchronization acceptance.",
         "safety_repair": "Reuse the session-scoped source cache and governor. Strict zero-based Content-Range, bounded reads, nonempty framed MP4 admission, cancel-before-finish, durable Retry-After, exclusive staging and full-file verification before local reuse/publication are required.",

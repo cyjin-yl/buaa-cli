@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Add `governor review-outcome-plan` / `review-outcome-commit --offline` for
+  the operator's deliberate, offline resolution of one unknown request
+  outcome. The preview reports the retained state SHA-256, pending kind,
+  latch, failure count and retained waits anchored to the persisted
+  observation timestamp; the commit requires an exact intent plus one
+  explicit settlement, preserves the original bytes as
+  `outcome-review-<sha>.json` before the atomic rewrite, and advances the
+  failure backoff only on `network_failure`. The commands are declared in the
+  published governor schema.
+- Add `timetable session [--online]`: one explicit in-memory CAS login to
+  GSMIS followed by exactly one `loadXskbData.do` read under the existing
+  Authentication lease. Strict object input, `operation=xskb`, five-digit
+  `xnxqdm`; a disabled read performs no I/O; the issued cookie is consumed
+  once and never persisted.
+- Add `boya session [--online]`: one explicit in-memory CAS login to bykc
+  yielding the handoff token via `take_service_credential`, then exactly one
+  prepared `sscv` read reusing `BoyaClient::prepare`/`execute`. The token is
+  consumed once and never persisted; `preview_write` stays blocked and the
+  `login` schema text now describes the implemented contract.
+
 - Separate historical IEAS preview/list from the modern yjsxk existing-session
   selected-record reader. Keep native source roles and unknown account,
   completeness and postcondition facts explicit; no login or academic write.

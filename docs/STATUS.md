@@ -1,5 +1,45 @@
 ## Development status
 
+## 2026-11-05: offline governor outcome review plus Boya/GSMIS one-login reads
+
+Three bounded additions landed together in commit `6d4bafd`. None of them
+performs a campus write, retry, refresh, persistence or second authentication;
+each keeps the existing Authentication lease and settlement contract.
+
+`buaa governor review-outcome-plan` / `review-outcome-commit --offline` give
+the operator a deliberate, offline way to resolve one unknown request outcome
+(`pending`). The preview reports the retained state SHA-256, pending kind,
+latch, failure count and retained waits; the commit requires an exact intent
+`REVIEW GOVERNOR OUTCOME <state_sha256>` plus one explicit settlement
+(`success`, `no_request_sent`, `network_failure`, `credential_rejected`,
+`captcha_required`, or `cooldown{until_ms}` for a server-directed Retry-After).
+`success` clears the failure streak; only `network_failure` advances the
+backoff. The original state bytes are preserved as `outcome-review-<sha>.json`
+before the atomic rewrite — an existing archive must read back byte-identical
+or the commit refuses, and the directory entry is synchronized. The plan
+anchors retained waits to the persisted `last_observed_ms`, matching the
+boot-review contract, so a preview cannot drift against its own commit. When
+the pending state survived a reboot, every deadline stays in the dead boot's
+clock domain rather than mixing the new uptime; the commit also reserves the
+same post-completion request gap a real `finish` performs. The outcome
+commands are now declared in the published governor schema.
+
+`buaa timetable session [--online]` performs one explicit in-memory CAS login
+to GSMIS followed by exactly one `loadXskbData.do` read. Input is a strict
+object (`authorized`, `username`, `password`, `intent`, `read`); `read` must
+select `operation=xskb` with a five-ASCII-digit `xnxqdm`. A disabled read
+performs no I/O. The issued session cookie is consumed once for that read and
+never persisted; credential/cookie echoes, challenges and newly issued cookies
+withhold the body rather than exporting it. The module's own schema now
+documents the session contract.
+
+`buaa boya session [--online]` performs the same pattern for the bykc CAS
+service: one login yields the handoff token via `take_service_credential`,
+then exactly one prepared `sscv` read reuses `BoyaClient::prepare`/`execute`.
+The token is consumed once and never persisted; `preview_write` stays blocked.
+The `login` schema text was corrected from "token issuance blocked before
+transport" to describe the implemented one-login contract.
+
 ## 2026-11-04: online CAS reads verified for Smart classrooms and iHome
 
 Two more bounded session profiles completed one authorized in-memory CAS login
