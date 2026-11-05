@@ -493,6 +493,12 @@
           "input_contract": "Strict object root: authorized, username, password, intent, read{operation=xskb, enabled, xnxqdm(5 ASCII digits)}. Object-only and duplicate-field refusal; a disabled read performs no I/O before any governor/network access.",
           "verification": "4 focused session cases plus the full 1217-library gate passed offline (3 existing ignored workers). Published module schema is drafted Draft 2020-12 and validated: valid inputs accepted, 4- and 6-digit xnxqdm rejected. Actual native CLI smoke: session --offline refused with online_required-adjacent invalid_input before any request; a disabled read returned result=disabled with network_performed=false.",
           "not_proven": "No authenticated GSMIS transport, no real loadXskbData.do response and no parsed live schedule. The GSMIS CAS profile and endpoint remain unverified against the current campus deployment."
+        },
+        "cas_identity_online_2026_11_05": {
+          "command": "credential-free HTTPS header read of the GSMIS portal entry",
+          "observed": "HTTP/2 302 with Location https://sso.buaa.edu.cn/login?service=https%3A%2F%2Fgsmis.buaa.edu.cn%2Fgsapp%2Fsys%2Fyjsemaphome%2Fportal%2Findex.do ; TLS verification result 0 and endpoint IP 10.254.15.1.",
+          "significance": "The live redirect target equals the source constant GSMIS_CAS_SERVICE (src/recordings/session.rs:43) byte-for-byte, so the configured CAS profile matches the current deployment. sso.buaa.edu.cn itself returned 200 with TLS verification 0.",
+          "scope": "Deployment identity only. No credential was submitted, no session established, no timetable read performed; the redirect was read, not followed with a ticket."
         }
       }
     },
@@ -531,6 +537,12 @@
           "scope": "One explicit in-memory CAS login to bykc, the issued handoff token consumed once via take_service_credential, then exactly one prepared sscv read reusing BoyaClient::prepare/execute. preview_write stays blocked.",
           "verification": "Full 1217-library offline gate passed. Published schema extended with the session contract and validated under Draft 2020-12. Actual native CLI smoke: authorized=false refused with code permission exit 5 both with and without --online, before any transport.",
           "not_proven": "No authenticated Boya session, no live encrypted response and no paginated read. Current campus token issuance and response contract remain unverified."
+        },
+        "cas_identity_online_2026_11_05": {
+          "command": "credential-free HTTPS header read of the bykc CAS entry",
+          "observed": "HTTP/2 302 with Location https://sso.buaa.edu.cn/login?noAutoRedirect=true&service=https%3A%2F%2Fbykc.buaa.edu.cn%2Fsscv%2Fcas%2Flogin ; TLS verification result 0, endpoint IP 10.254.15.1.",
+          "significance": "The live redirect target equals the source constant BYKC_CAS_SERVICE (src/recordings/session.rs:45) byte-for-byte.",
+          "scope": "Deployment identity only. No credential, session, token or read."
         }
       },
       "sources": [

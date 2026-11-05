@@ -2,6 +2,15 @@
 
 ## 2026-11-05: offline governor outcome review plus Boya/GSMIS one-login reads
 
+Credential-free reachability was re-established first: `sso.buaa.edu.cn`,
+`gsmis.buaa.edu.cn` and `bykc.buaa.edu.cn` all complete TLS with
+`ssl_verify_result=0`. The two service entries answer `302` to
+`sso.buaa.edu.cn/login?service=…` with the exact service URLs held in
+`GSMIS_CAS_SERVICE` and `BYKC_CAS_SERVICE`, so the configured CAS profiles
+match the current deployment. The redirects were read, never followed with a
+ticket, and no credential was submitted — this is deployment identity, not an
+authenticated session.
+
 Three bounded additions landed together in commit `6d4bafd`. None of them
 performs a campus write, retry, refresh, persistence or second authentication;
 each keeps the existing Authentication lease and settlement contract.
