@@ -755,6 +755,7 @@
         "https://github.com/wwlyeye/PhysicalExperimentSelector",
         "https://github.com/qgjyf2001/queryJiwu"
       ],
+      "issue": "https://github.com/cyjin-yl/buaa-cli/issues/145",
       "evidence": {
         "offline_observation_2026_10_31": {
           "command": "buaa physics-reference",

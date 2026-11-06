@@ -1,3 +1,17 @@
+## 2026-11-06: CAS service parameter fix; three services live-verified
+
+- session: preserve `service` query parameter through relative form action resolution (RFC 3986 drops it; CAS needs it to issue tickets)
+- session: stop masking real error codes behind `authentication_unconfirmed`; pass through original code and message for diagnosis
+- smart: live-verified classrooms and library with owner credentials (`result: ok`, `network_performed: true`)
+- ihome: live-verified with owner credentials (`entry_count: 20`)
+- timetable: CAS login succeeds; GSMIS data endpoint returns 403 (server-side)
+- boya: CAS login succeeds; upstream business error (server-side)
+- privacy: Smart/Timetable issued-cookie guards screen complete name=value pairs, JSON escapes, numeric projections, and MIME metadata
+- privacy: timetable unified IssuedCookie entries cover quoted/unquoted complete pairs; empty deletion cookies excluded
+- net: bounded same-origin transcript redirects with per-hop challenge/robots review and selected-lesson identity binding
+- governance: closed #19 as duplicate of #17 (skills-fs); closed #145 (physics-reference scoped); closed #142 (smart verified); closed #134 (ihome verified)
+- governance: closed PRs #131–#163 (heads already on main); merged #164 and #165
+
 # Changelog
 
 ## Unreleased

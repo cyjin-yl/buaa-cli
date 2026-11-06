@@ -1,3 +1,44 @@
+## 2026-11-06: CAS fix unlocks three services; PRs merged
+
+### Live-verified with owner credentials
+
+| Service | Result | Evidence |
+|---------|--------|----------|
+| smart classrooms | `ok` | `network_performed: true`, `service: classrooms` |
+| smart library | `ok` | `network_performed: true`, `service: library` |
+| ihome | `entries` | `entry_count: 20` |
+
+### CAS fix
+
+Root cause: the reviewed sign-on form declares a relative action (`login`).
+RFC 3986 relative resolution drops the page query, so the credential POST
+carried no `service` parameter. CAS had no ticket target and answered with
+the sign-on page again. Fix: carry the page query onto a resolved action
+that has none, then re-validate through `pinned_login_route`.
+
+Error diagnosis: `service_attempt_failure` no longer masks real error codes.
+
+### Server-side blockers remaining
+
+- **timetable-pg**: GSMIS `loadXskbData.do` returns HTTP 403 for this account
+- **boya**: `queryStudentSemesterCourseByPage` returns upstream business error
+
+### Gates
+
+1414 library tests pass, 0 failed, 3 ignored. All integration tests pass.
+196 `recordings::session` tests pass.
+
+### Issue governance
+
+- Closed #19 (duplicate of #17, skills-fs)
+- Closed #145 (physics-reference scoped manifest)
+- Closed #142 (smart live-verified)
+- Closed #134 (ihome live-verified)
+- Updated #146 (timetable progress) and #150 (boya progress)
+- Closed PRs #131–#163 (already on main)
+- Merged #164 (cookie admission repairs) and #165 (CAS fix)
+
+
 ## Development status
 
 ## 2026-11-06: reviewed privacy and contract repairs; live reads still pending
