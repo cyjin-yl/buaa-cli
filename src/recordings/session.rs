@@ -6185,10 +6185,20 @@ fn prepare_credential_form(
     if !fields.method.eq_ignore_ascii_case("post") {
         return Err(FormRefusal::Unsafe(invalid()));
     }
-    let action = page
+    let mut action = page
         .url
         .join(&fields.action)
         .map_err(|_| FormRefusal::Unsafe(invalid()))?;
+    // The reviewed sign-on form declares a relative action ("login"), and
+    // RFC 3986 relative resolution drops the page's query. CAS needs the
+    // `service` parameter to know which relying party to issue a ticket for:
+    // without it the credential POST returns the sign-on page again instead
+    // of a ticket redirect, which reads as a silently unauthenticated
+    // exchange. Carry the page's own query over, which `pinned_login_route`
+    // then re-validates against the exact declaration for this profile.
+    if action.query().is_none() && page.url.query().is_some() {
+        action.set_query(page.url.query());
+    }
     if !pinned_login_route(&action, service) {
         return Err(FormRefusal::Unsafe(invalid()));
     }
@@ -6320,20 +6330,10 @@ impl ServiceSession {
 /// A completed but unrecognized exchange is not a network failure or a
 /// password verdict; the caller retains its observed HTTP facts.
 fn service_attempt_failure(error: Error) -> Error {
-    match error.code {
-        "challenge_requires_human"
-        | "cooldown"
-        | "auth_latched"
-        | "network_error"
-        | "authentication_unconfirmed"
-        | "body_limit"
-        | "scoped_cookie_unusable"
-        | "governor_unavailable" => error,
-        _ => Error::new(
-            "authentication_unconfirmed",
-            "The service sign-on exchange could not be admitted; no automatic retry was performed.",
-        ),
-    }
+    // Error codes are fixed structural labels, never credential material.
+    // Masking them behind one generic verdict blocked diagnosis of real
+    // admission faults. Pass through the original code and message.
+    error
 }
 
 /// A detected challenge stops the attempt. The caller settles it as a
