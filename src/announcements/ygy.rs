@@ -99,29 +99,29 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
             "requested YGY page exceeds the reviewed advertised-page hop bound",
         ));
     }
-    let mut current = latest;
-    for hop in 1..page {
+    let mut current = latest.clone();
+    let mut visited = vec![latest.clone()];
+    for _ in 1..page {
         let next = current.clone();
         current = client.get(&next, false, |response| {
             college_html(response)?;
             advertised_next_page_url(&response.body, &next)
         })?;
-        // The requested ordinal must be evidenced by the board's own declared
-        // identity: hop `hop` has to land on /tzgg/yggg/<hop + 1>.htm.  A pager
-        // that revisits an earlier or the same page can therefore never stand
-        // in for a later ordinal, and a request is never answered with bytes
-        // whose source URL declares a different page.
-        let declared = current
-            .path()
-            .strip_prefix("/tzgg/yggg/")
-            .and_then(|stem| stem.strip_suffix(".htm"))
-            .and_then(|stem| stem.parse::<u32>().ok());
-        if declared != Some(hop + 1) {
+        // The board's filename mapping is not the ordinal (the retained
+        // source declares page 2 at yggg/2.htm and page 3 at yggg/1.htm), so
+        // identity cannot be proven from the path.  What must hold is that
+        // every hop selects a fresh advertised page: the chain is
+        // deterministic, so revisiting an already-traversed URL can only
+        // cycle and never reach the requested ordinal.  Refusing here keeps a
+        // looping pager from answering `page`/source_page N with an earlier
+        // page's bytes.
+        if visited.contains(&current) {
             return Err(Error::new(
                 "unavailable",
-                "retained YGY pager cannot evidence the requested page ordinal",
+                "retained YGY pager loops back to an already-visited page",
             ));
         }
+        visited.push(current.clone());
     }
     Ok(current)
 }
@@ -667,13 +667,15 @@ mod tests {
     /// in the emitted JSON), while `retrieval.source_url` names the URL whose
     /// bytes actually backed it.  `listing_url` consumes
     /// `advertised_next_page_url` once per hop, so a retained pager that
-    /// re-declares an already-visited URL must never be admitted as the
-    /// backing source of a later ordinal: the consumer would emit
-    /// `page:3`/`source_page:3` over page-2 content.  The traversal must
-    /// either refuse or resolve a URL whose declared board ordinal is the
-    /// requested one.  `MAX_PAGE_HOPS` bounds only the hop count, not this
-    /// identity.  `article`'s `source_page` shares the same `listing_url`
-    /// traversal, so this invariant covers both entry points.
+    /// re-declares an already-visited URL must never stand in as the backing
+    /// source of a later ordinal: the consumer would emit
+    /// `page:3`/`source_page:3` over page-2 content.  Board filenames are not
+    /// ordinals — the retained source declares page 2 at yggg/2.htm and
+    /// page 3 at yggg/1.htm — so traversal must accept the real chain while
+    /// refusing any hop that revisits a page.  `MAX_PAGE_HOPS` bounds only the
+    /// hop count, not this identity.  `article`'s `source_page` shares the
+    /// same `listing_url` traversal, so this invariant covers both entry
+    /// points.
     #[test]
     fn looping_pager_cannot_back_page_three_with_page_two_content() {
         // The root board declares its next page as /tzgg/yggg/2.htm.
@@ -685,8 +687,15 @@ mod tests {
         let page_two_html = r#"<title>医工公告</title><ul class="list1">
             <li><div class="li-l"><p class="p1">08</p><p class="p2">20</p></div><div class="li-r"><a href="../info/1004/42.htm">Page two notice</a><p>Page two summary.</p></div></li>
             </ul><div class="page"><a class="Next" href="/tzgg/yggg/2.htm">下页</a></div>"#;
+        // The retained source's real mapping: page 3 lives at yggg/1.htm, so
+        // a correct page-two pager advertises that URL for the next hop.
+        let real_page_two_html = page_two_html.replace(
+            "/tzgg/yggg/2.htm\">下页",
+            "/tzgg/yggg/1.htm\">下页",
+        );
         let latest = Url::parse(YGY_NOTICES_URL).unwrap();
         let page_two = Url::parse("https://ygy.buaa.edu.cn/tzgg/yggg/2.htm").unwrap();
+        let page_three = Url::parse("https://ygy.buaa.edu.cn/tzgg/yggg/1.htm").unwrap();
 
         // Ordinary control: hop one selects page two, whose valid list and
         // honest retrieval identity belong to page two only.
@@ -711,30 +720,23 @@ mod tests {
             Some(page_two.as_str())
         );
 
+        // The real page-3 mapping stays reachable: hop two from page two
+        // selects yggg/1.htm, a fresh page the consumer may serve as page 3.
+        assert_eq!(
+            advertised_next_page_url(real_page_two_html.as_bytes(), &first_hop).unwrap(),
+            page_three
+        );
+
         // Requested page 3 is a second hop from the retained page two.  Its
         // only advertised next destination re-declares page two itself, so the
-        // selected URL can never truthfully back a page-3 answer.
-        match advertised_next_page_url(page_two_html.as_bytes(), &first_hop) {
-            // Refusal: the source advertises no third page; nothing is served.
-            Err(_) => {}
-            Ok(target) => {
-                // Truthful identity: the backing URL must itself be the source's
-                // declared third board, never the already-visited page-2 URL
-                // relabeled by hop count.
-                let declared_ordinal = target
-                    .path()
-                    .strip_prefix("/tzgg/yggg/")
-                    .and_then(|stem| stem.strip_suffix(".htm"))
-                    .and_then(|stem| stem.parse::<u32>().ok());
-                assert_eq!(
-                    declared_ordinal,
-                    Some(3),
-                    "a page-3 answer must be backed by the source's declared \
-                     third board; {target} declares a different ordinal, so \
-                     its bytes would be emitted under page:3/source_page:3 \
-                     while retrieval.source_url names another page"
-                );
-            }
-        }
+        // self-declaration must be refused rather than admit the already-
+        // visited URL as page-3 content.  Even if a loop reached the target
+        // anyway, `listing_url` now refuses any hop that revisits a URL, so
+        // `page:3`/`source_page:3` can never be backed by page-2 bytes.
+        assert!(
+            advertised_next_page_url(page_two_html.as_bytes(), &first_hop).is_err(),
+            "a self-referential pager advertises no next page and cannot back \
+             a page-3 answer with page-2 bytes"
+        );
     }
 }

@@ -952,6 +952,9 @@ impl CourseTraversal {
     /// Withheld material keeps its neighboring records verbatim and the
     /// traversal can never claim completeness for a window it no longer
     /// covers.
+    /// The generated page summaries in `pages` are adapter output — their
+    /// keys (`count`, `number`, `size`, `total_elements`, `total_pages`) are
+    /// locally invented names, not source data — and are never screened.
     fn envelope(self, contains_secret: &dyn Fn(&[u8]) -> bool) -> Value {
         let CourseTraversal {
             start,
@@ -964,7 +967,7 @@ impl CourseTraversal {
             offset: _,
             seen: _,
             mut entries,
-            mut pages,
+            pages,
             mut failure,
             result,
             mut complete,
@@ -974,7 +977,6 @@ impl CourseTraversal {
         let mut withheld = false;
         for value in std::iter::empty()
             .chain(entries.iter())
-            .chain(pages.iter())
             .chain(failure.iter())
         {
             if value_carries_secret(value, contains_secret) {
@@ -983,7 +985,6 @@ impl CourseTraversal {
         }
         if withheld {
             entries.retain(|entry| !value_carries_secret(entry, contains_secret));
-            pages.retain(|page| !value_carries_secret(page, contains_secret));
             if failure
                 .as_ref()
                 .is_some_and(|value| value_carries_secret(value, contains_secret))
@@ -3014,6 +3015,167 @@ mod tests {
                 .is_some_and(|entries| entries.iter().any(|entry| entry["id"] == 1)),
             "the record carrying the issued value must be withheld"
         );
+        settle(
+            lease,
+            last_status,
+            last_retry.as_deref(),
+            last_challenge,
+            last_body_failed,
+        )
+        .unwrap();
+        drop(governor);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// A cookie value that happens to equal a generated page-summary key
+    /// must not scrub adapter output it never wrote: ordinary pages whose
+    /// source carries no occurrence of `count` still complete with their
+    /// page summaries intact when a later page issues `sid=count`. Only
+    /// retained source material (entries, failure payloads) is screened;
+    /// locally generated summary keys are not source data.
+    #[test]
+    fn traversal_preserves_pages_when_issued_value_matches_generated_key() {
+        use std::io::Write;
+        use std::os::unix::fs::DirBuilderExt;
+        let key = [0u8; 16];
+        let page0 = STANDARD.encode(
+            aes(
+                br#"{"status":"0","data":{"content":[{"id":1}],"totalElements":2,"totalPages":2,"size":1,"number":0}}"#,
+                &key,
+                true,
+            )
+            .unwrap()
+            .as_slice(),
+        );
+        let page1 = STANDARD.encode(
+            aes(
+                br#"{"status":"0","data":{"content":[{"id":2}],"totalElements":2,"totalPages":2,"size":1,"number":1}}"#,
+                &key,
+                true,
+            )
+            .unwrap()
+            .as_slice(),
+        );
+        let server = Server::new(move |socket, index| {
+            let (extra, body) = match index {
+                0 => ("", page0.as_str()),
+                _ => ("Set-Cookie: sid=count; Path=/\r\n", page1.as_str()),
+            };
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+                        body.len(),
+                        extra
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            socket.write_all(body.as_bytes()).unwrap();
+        });
+        let client = reqwest::blocking::Client::builder()
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .build()
+            .unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "boya-traversal-generated-key-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        let governor = Governor::isolated_for_test(&path).unwrap();
+        let mut lease = net::acquire(&governor).unwrap();
+        let token = "synthetic-auth-token-value";
+        let mut secrets = ScreenedSecrets {
+            token,
+            session: None,
+            password: None,
+            issued: IssuedCookies::default(),
+        };
+        let route = |request: &mut reqwest::blocking::Request| {
+            let url = request.url_mut();
+            url.set_scheme("http").expect("test loopback scheme");
+            url.set_host(Some(&server.address.ip().to_string()))
+                .expect("test loopback host");
+            url.set_port(Some(server.address.port()))
+                .expect("test loopback port");
+        };
+        let page_request = PageRequest {
+            page_number: 0,
+            page_size: 1,
+            max_pages: 2,
+        };
+        let mut traversal = CourseTraversal::new(&page_request);
+        let mut last = None;
+        for next_page in [0u32, 1] {
+            if next_page != 0 {
+                let reservation = lease.reserve_followup().unwrap();
+                assert!(reservation.cooldown_wait.is_zero());
+            }
+            let request = ReadRequest::Courses(PageRequest {
+                page_number: next_page,
+                page_size: 1,
+                max_pages: 2,
+            });
+            let mut request = BoyaClient::prepare(&client, token, &request)
+                .unwrap()
+                .0;
+            route(&mut request);
+            let exchange = BoyaClient::exchange(
+                &client,
+                &mut lease,
+                request,
+                Zeroizing::new(key),
+                &mut secrets,
+                &ReadRequest::Courses(PageRequest {
+                    page_number: next_page,
+                    page_size: 1,
+                    max_pages: 2,
+                }),
+            )
+            .map_err(|_| err("test_exchange", "exchange transport failed"))
+            .unwrap();
+            let Exchange {
+                value,
+                status,
+                retry_after,
+                challenge,
+                body_failed,
+            } = exchange;
+            last = Some((status, retry_after, challenge, body_failed));
+            let value = value.unwrap();
+            if matches!(traversal.advance(&value), Step::Done) {
+                break;
+            }
+        }
+        let (last_status, last_retry, last_challenge, last_body_failed) = last.unwrap();
+        // The issued value is genuinely registered for future screening —
+        // the credential entered the invocation's secret history.
+        assert!(secrets.issued.carries(b"count"));
+        let envelope = traversal.envelope(&|candidate| secrets.carries(candidate));
+        assert_eq!(
+            envelope["result"], "success",
+            "a generated summary key must not withhold source material: {envelope}"
+        );
+        assert_eq!(envelope["complete"], true);
+        assert_eq!(
+            envelope["pagination"]["pages_fetched"], 2,
+            "all page summaries must be preserved"
+        );
+        let ids: Vec<i64> = envelope["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["id"].as_i64())
+            .collect();
+        assert_eq!(ids, [1, 2], "both source records are retained");
         settle(
             lease,
             last_status,

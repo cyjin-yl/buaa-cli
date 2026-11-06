@@ -2685,44 +2685,45 @@ fn page_meta(response: &Response, entry_count: usize, token: &str) -> Value {
 /// The response facts one page retains until the consumer envelope is
 /// published. The complete issued-cookie history is only known after the
 /// traversal settles, so publication re-screens these facts before they are
-/// released or their cached admission is trusted. The body itself is not
-/// retained: a page's own facts were already screened against every value
-/// issued before it, the projections it made are re-screened directly, and a
-/// cache admission is re-screened from the file it would serve.
+/// released or their cached admission is trusted. The retained body is the
+/// source material that produced every projection this page published; it is
+/// kept exactly once per consumed page, bounded by `MAX_BODY`, because only
+/// the original bytes admit the complete re-screen a later cookie issue
+/// requires, including literals that survive only in escaped form. Generated
+/// adapter vocabulary such as envelope field names is never screened.
 struct PageSource {
     url: String,
     status: u16,
     headers: BTreeMap<String, String>,
-    body_len: usize,
+    body: Vec<u8>,
     sha256: String,
     fetched_at_unix_ms: u64,
     cache_status: CacheStatus,
 }
 
-/// Retain the facts of the response that produced one outcome, without
-/// copying its body.
+/// Retain the facts of the response that produced one outcome.
 fn page_source(response: &Response) -> PageSource {
     PageSource {
         url: response.url.clone(),
         status: response.status,
         headers: response.headers.clone(),
-        body_len: response.body.len(),
+        body: response.body.clone(),
         sha256: response.sha256.clone(),
         fetched_at_unix_ms: response.fetched_at_unix_ms,
         cache_status: response.cache_status,
     }
 }
 
-/// A synthetic response view of the retained facts, used only to rebuild a
-/// withheld page's metadata and evidence. Its empty body is never published:
-/// `evidence` withholds raw bytes for `CredentialEcho` regardless.
+/// A response view of the retained facts, used only to rebuild a withheld
+/// page's metadata and evidence. The original body supplies the evidence's
+/// byte count, but `evidence` never exports raw bytes for `CredentialEcho`.
 impl PageSource {
     fn withheld_view(&self) -> Response {
         Response {
             url: self.url.clone(),
             status: self.status,
             headers: self.headers.clone(),
-            body: Vec::new(),
+            body: self.body.clone(),
             sha256: self.sha256.clone(),
             fetched_at_unix_ms: self.fetched_at_unix_ms,
             cache_status: self.cache_status,
@@ -3008,57 +3009,6 @@ fn collect_traversal(
     })
 }
 
-/// Does `value`, a projection already built from one page, carry any
-/// invocation-issued credential value? Strings and object keys are checked in
-/// their decoded form, and scalars in the exact JSON spelling a consumer
-/// receives, mirroring the literal inspection a fresh body gets.
-fn value_carries_issued(value: &Value, issued: &IssuedCookies) -> bool {
-    match value {
-        Value::String(text) => issued.carries(text.as_bytes()),
-        Value::Array(items) => items.iter().any(|item| value_carries_issued(item, issued)),
-        Value::Object(map) => map.iter().any(|(key, item)| {
-            issued.carries(key.as_bytes()) || value_carries_issued(item, issued)
-        }),
-        scalar => net::json_scalar_matches(scalar, |bytes| issued.carries(bytes)),
-    }
-}
-
-/// Null every projected leaf or member that carries an issued credential
-/// value. A carrying object key removes its member: the key cannot be
-/// renamed, and keeping the value under a replaced key misattributes it.
-fn scrub_issued_carriers(value: &mut Value, issued: &IssuedCookies) {
-    match value {
-        Value::String(text) => {
-            if issued.carries(text.as_bytes()) {
-                *value = Value::Null;
-            }
-        }
-        Value::Array(items) => {
-            for item in items.iter_mut() {
-                scrub_issued_carriers(item, issued);
-            }
-        }
-        Value::Object(map) => {
-            let carrying: Vec<String> = map
-                .keys()
-                .filter(|key| issued.carries(key.as_bytes()))
-                .cloned()
-                .collect();
-            for key in carrying {
-                map.remove(&key);
-            }
-            for item in map.values_mut() {
-                scrub_issued_carriers(item, issued);
-            }
-        }
-        _ => {
-            if net::json_scalar_matches(value, |bytes| issued.carries(bytes)) {
-                *value = Value::Null;
-            }
-        }
-    }
-}
-
 /// Re-screen retained body bytes exactly like `analyze_authenticated_body`
 /// does, but only against the issued-cookie guard: the raw bytes, every
 /// decoded JSON literal and any embedded document. An unreviewable body
@@ -3082,44 +3032,25 @@ fn retained_bytes_carry_issued(bytes: &[u8], issued: &IssuedCookies) -> bool {
         || inspection.incomplete
 }
 
-/// Does anything this page would still publish carry a value issued later in
-/// the same invocation? Every retained surface is screened: the request URL
-/// and projected headers, the page metadata and its entries, and the
-/// degradation evidence, whose reversible raw-body channel is decoded before
-/// it is screened.
+/// Does anything this page retained carry a value issued later in the same
+/// invocation? Only *source* material is screened: the request URL, the
+/// retained headers and the original body whose bytes produced every
+/// projection this page published, including the reversible raw-evidence
+/// channel. Adapter-generated envelope vocabulary — field names, labels and
+/// provenance fields — is never credential evidence: an innocuous value that
+/// collides with a generated key like `content_type` must not withhold a
+/// safe page or strip required members.
 fn page_carries_issued(page: &PageOutcome, issued: &IssuedCookies) -> bool {
     if issued.is_empty() {
         return false;
     }
-    if issued.carries(page.source.url.as_bytes())
+    issued.carries(page.source.url.as_bytes())
         || page
             .source
             .headers
             .values()
             .any(|value| issued.carries(value.as_bytes()))
-        || value_carries_issued(&page.meta, issued)
-        || page
-            .entries
-            .iter()
-            .any(|entry| value_carries_issued(entry, issued))
-    {
-        return true;
-    }
-    let Some(evidence) = &page.evidence else {
-        return false;
-    };
-    if value_carries_issued(evidence, issued) {
-        return true;
-    }
-    match evidence
-        .get("raw_response_base64")
-        .and_then(Value::as_str)
-        .map(|encoded| STANDARD.decode(encoded))
-    {
-        // A raw channel that cannot even be decoded is never trusted.
-        None | Some(Err(_)) => false,
-        Some(Ok(body)) => retained_bytes_carry_issued(&body, issued),
-    }
+        || retained_bytes_carry_issued(&page.source.body, issued)
 }
 
 /// Publish one settled traversal. Every page is first re-screened against the
@@ -3163,8 +3094,10 @@ fn publish_list_envelope(
             // A value issued by a later page makes everything this page
             // retained a credential disclosure. Publish exactly what a page
             // refused at read time would have published: provenance metadata
-            // and evidence with no raw bytes, then scrub any residue so the
-            // issued spelling can never leak through an unexpected field.
+            // and evidence with no raw bytes. Only upstream-derived members
+            // can carry the value: the request URL is nulled if it does, and
+            // a carrying Content-Type takes the content_type_echo path;
+            // generated envelope vocabulary is never touched.
             let content_type_echo = page
                 .source
                 .headers
@@ -3173,12 +3106,8 @@ fn publish_list_envelope(
             let view = page.source.withheld_view();
             let mut withheld =
                 credential_echo_page(&view, request.token.as_str(), content_type_echo);
-            if let Some(evidence) = &mut withheld.evidence {
-                evidence["byte_length"] = json!(page.source.body_len);
-            }
-            scrub_issued_carriers(&mut withheld.meta, issued);
-            if let Some(evidence) = &mut withheld.evidence {
-                scrub_issued_carriers(evidence, issued);
+            if issued.carries(page.source.url.as_bytes()) {
+                withheld.meta["url"] = Value::Null;
             }
             withheld
         } else {
@@ -3578,8 +3507,10 @@ fn list_with_cache(
 /// Re-screen one page's replayable cache admission against the complete
 /// invocation issued-cookie history. A retained response whose body or
 /// headers now match an issued value is removed rather than preserved for a
-/// later replay; a file that cannot be reviewed as an admission is not
-/// proven credential-matching and keeps the original artifact policy.
+/// later replay. A prior file that cannot be reviewed as an admission — a
+/// pre-cookie-review version, a corrupt record, or a latched rejection — is
+/// not proven credential-matching: the existing artifact policy keeps it and
+/// its state already prevents publication, so the fresh result stands.
 fn purge_cached_admission(
     cache: &ResponseCache,
     url: &Url,
@@ -3588,7 +3519,7 @@ fn purge_cached_admission(
     if issued.is_empty() {
         return Ok(());
     }
-    let Some((response, _)) = cache.load(url)? else {
+    let Ok(Some((response, _))) = cache.load(url) else {
         return Ok(());
     };
     if issued.carries(response.url.as_bytes())
@@ -7887,5 +7818,167 @@ mod ihome_review_regressions {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ihome_review_regression_unreviewable_prior_cache_keeps_fresh_publication() {
+        // A pre-cookie-review cache file (version 3) refuses as
+        // `cached_response_unreviewed` on read, and that policy is preserved:
+        // the original bytes stay on disk. But a fresh `refresh` response that
+        // issues a session cookie must still publish; the post-traversal
+        // admission re-screen must skip the unreviewable prior file instead of
+        // discarding the independently admitted result.
+        const ISSUED: &str = "refresh-page-cookie";
+        let first_body = loopback_list_page(1, 1, 1, 41, "Synthetic first appeal");
+        let set_cookie = format!("sid={ISSUED}; Path=/; Secure; HttpOnly");
+        let pki = loopback_pki();
+        let endpoint = IhomeLoopback::start(loopback_acceptor(&pki), move |request| {
+            match loopback_page_query(&request.target).as_str() {
+                "1" => loopback_http_response(
+                    "200 OK",
+                    &[
+                        ("Content-Type", "application/json"),
+                        ("Set-Cookie", &set_cookie),
+                    ],
+                    &first_body,
+                ),
+                _ => loopback_http_response("404 Not Found", &[], "unexpected"),
+            }
+        });
+        let client = loopback_client(&pki, endpoint.address);
+        let cache_directory = loopback_directory("cache-refresh-legacy");
+        let governor_directory = loopback_directory("governor-refresh-legacy");
+
+        // Plant a version-3 admission for exactly this page before the
+        // traversal. `cache.save` writes version 4; rewriting the version
+        // field keeps every other byte of the admitted record.
+        let first_url = list_url(1, 1).unwrap();
+        let cache = ResponseCache {
+            directory: governor::open_directory(&cache_directory.path, false, true)
+                .expect("cache directory"),
+        };
+        cache
+            .save(
+                &review_response(
+                    &first_url,
+                    loopback_list_page(1, 1, 1, 41, "Synthetic first appeal").as_bytes(),
+                    Some("application/json"),
+                ),
+                &ChallengeAssessment::Clear,
+            )
+            .expect("legacy seed");
+        let legacy_path = cache_directory.path.join(ResponseCache::name(&first_url));
+        let mut legacy: Cached =
+            serde_json::from_slice(&std::fs::read(&legacy_path).unwrap()).unwrap();
+        legacy.version = 3;
+        let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+        std::fs::write(&legacy_path, &legacy_bytes).unwrap();
+
+        let governor =
+            Governor::isolated_for_test(&governor_directory.path).expect("isolated governor");
+        let output = list_with_test_network(
+            &json!({"token": BEARER, "limit": 1, "page": 1, "max_pages": 1, "refresh": true})
+                .to_string(),
+            &cache_directory.path,
+            client,
+            governor,
+        )
+        .expect("the refresh traversal settles normally");
+
+        // The fresh response was fetched (the legacy file was bypassed by the
+        // refresh), projected, and its session-cookie issuance correctly kept
+        // the fresh body out of the replayable cache — but the unreviewable
+        // prior file was not allowed to invalidate the result.
+        assert_eq!(endpoint.observed().len(), 1);
+        assert_eq!(output["result"], "entries");
+        assert_eq!(output["entry_count"], 1);
+        assert_eq!(output["entries"][0]["id"], 41);
+        assert_eq!(output["upstream"]["complete"], true);
+        assert_eq!(output["upstream_evidence"], Value::Null);
+
+        // The unreviewable original is preserved byte-for-byte, and it still
+        // refuses publication on the ordinary read path.
+        assert_eq!(std::fs::read(&legacy_path).unwrap(), legacy_bytes);
+        let error = cache
+            .load(&first_url)
+            .err()
+            .expect("legacy read still refuses");
+        assert_eq!(error.code, "cached_response_unreviewed");
+    }
+
+    #[test]
+    fn ihome_review_regression_generated_field_name_never_withholds_a_page() {
+        // `content_type` is adapter-generated envelope vocabulary, not source
+        // material. An upstream-issued cookie value that collides with a
+        // generated field name is still ordinary credential material for the
+        // guard, but it cannot withhold a safe page, null out required
+        // metadata members, or erase schema fields: only the retained source
+        // bytes, headers and URL are screened.
+        const KEY_COLLISION: &str = "content_type";
+        let first_body = loopback_list_page(1, 2, 2, 41, "Synthetic first appeal");
+        let second_body = loopback_list_page(2, 2, 2, 42, "Synthetic second appeal");
+        let set_cookie = format!("sid={KEY_COLLISION}; Path=/; Secure; HttpOnly");
+        let pki = loopback_pki();
+        let endpoint = IhomeLoopback::start(loopback_acceptor(&pki), move |request| {
+            match loopback_page_query(&request.target).as_str() {
+                "1" => loopback_http_response(
+                    "200 OK",
+                    &[("Content-Type", "application/json")],
+                    &first_body,
+                ),
+                "2" => loopback_http_response(
+                    "200 OK",
+                    &[
+                        ("Content-Type", "application/json"),
+                        ("Set-Cookie", &set_cookie),
+                    ],
+                    &second_body,
+                ),
+                _ => loopback_http_response("404 Not Found", &[], "unexpected"),
+            }
+        });
+        let client = loopback_client(&pki, endpoint.address);
+        let cache_directory = loopback_directory("cache-key-collision");
+        let governor_directory = loopback_directory("governor-key-collision");
+        let governor =
+            Governor::isolated_for_test(&governor_directory.path).expect("isolated governor");
+        let output = list_with_test_network(
+            &json!({"token": BEARER, "limit": 1, "page": 1, "max_pages": 2}).to_string(),
+            &cache_directory.path,
+            client,
+            governor,
+        )
+        .expect("the bounded traversal settles normally");
+
+        // The generated key name is not credential evidence: both pages stay
+        // published and the traversal is complete.
+        assert_eq!(output["result"], "entries");
+        assert_eq!(output["entry_count"], 2);
+        assert_eq!(output["upstream"]["complete"], true);
+        // Required metadata members keep their real values; nothing was
+        // nulled or removed by the publication screen.
+        for record in output["upstream"]["pages"].as_array().unwrap() {
+            for key in [
+                "url",
+                "status",
+                "content_type",
+                "entry_count",
+                "fetched_at_unix_ms",
+                "response_body_sha256",
+                "cache_status",
+            ] {
+                assert!(!record[key].is_null(), "missing member {key}");
+            }
+            assert_eq!(record["content_type"], "application/json");
+            assert_eq!(record["status"], 200);
+        }
+        let cache = ResponseCache {
+            directory: governor::open_directory(&cache_directory.path, false, true)
+                .expect("cache directory"),
+        };
+        // The ordinary first page stays cached; the cookie-issuing second
+        // page is never written.
+        assert!(cache.load(&list_url(1, 1).unwrap()).unwrap().is_some());
+        assert!(cache.load(&list_url(1, 2).unwrap()).unwrap().is_none());
     }
 }

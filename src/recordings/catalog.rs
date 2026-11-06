@@ -190,44 +190,40 @@ impl Catalog {
             }
         }
         literal.push('"');
-        let mut initial = self
+        // One ordered cursor serves every candidate batch. Ordering by the FTS
+        // rowid lets the index supply its native ascending order, so the scan
+        // streams rowids and visits each candidate row exactly once; a heavily
+        // stale index cannot multiply the sort/scan cost per batch. Ordering
+        // by s.id instead leaves the planner a temporary sort it would redo on
+        // every continuation query, which can exhaust the progress budget.
+        let mut statement = self
             .connection
             .prepare(
                 "SELECT s.id,s.asset_id,s.segment_index,s.start_ms,s.end_ms,s.speaker,s.language,s.text
                  FROM transcript_fts JOIN transcript_segment AS s ON transcript_fts.rowid=s.id
                  WHERE transcript_fts MATCH ?1 AND (?2 IS NULL OR s.asset_id COLLATE BINARY=?2)
-                 ORDER BY s.id LIMIT ?3",
-            )
-            .map_err(|_| unavailable())?;
-        let mut continuing = self
-            .connection
-            .prepare(
-                "SELECT s.id,s.asset_id,s.segment_index,s.start_ms,s.end_ms,s.speaker,s.language,s.text
-                 FROM transcript_fts JOIN transcript_segment AS s ON transcript_fts.rowid=s.id
-                 WHERE transcript_fts MATCH ?1 AND (?2 IS NULL OR s.asset_id COLLATE BINARY=?2) AND s.id>?3
-                 ORDER BY s.id LIMIT ?4",
+                 AND (?3 IS NULL OR s.id>?3)
+                 ORDER BY transcript_fts.rowid",
             )
             .map_err(|_| unavailable())?;
         // Scan candidate batches until `limit` verified rows are collected or
         // the index is exhausted: stale FTS rows are dropped by verify_phrase,
         // so applying the SQL limit before verification could report an
         // incomplete or empty page while unverified candidates remain.
+        let mut rows = statement
+            .query(params![literal, asset_id, after_id])
+            .map_err(|_| unavailable())?;
         let mut result = Vec::new();
         let mut text_bytes = 0usize;
-        let mut scanned_after = after_id;
         loop {
             // Fetch only the remaining page slots; a smaller final batch or an
             // exhausted index (short page) ends the scan.
             let want = limit - result.len();
-            let mut rows = match scanned_after {
-                Some(after) => {
-                    continuing.query(params![literal, asset_id, after, want as i64])
-                }
-                None => initial.query(params![literal, asset_id, want as i64]),
-            }
-            .map_err(|_| unavailable())?;
             let mut batch = Vec::new();
-            while let Some(row) = rows.next().map_err(|_| unavailable())? {
+            while batch.len() < want {
+                let Some(row) = rows.next().map_err(|_| unavailable())? else {
+                    break;
+                };
                 let segment_text = text(row, 7, MAX_TEXT)?;
                 text_bytes += segment_text.len();
                 if text_bytes > MAX_PAGE_TEXT {
@@ -253,9 +249,6 @@ impl Catalog {
                 });
             }
             let scanned = batch.len();
-            if let Some(last) = batch.last() {
-                scanned_after = Some(last.id);
-            }
             if !batch.is_empty() {
                 let rows = batch
                     .iter()
@@ -1016,6 +1009,57 @@ mod tests {
                 .map(|row| row.id)
                 .collect::<Vec<_>>(),
             [live_fourth]
+        );
+    }
+
+    #[test]
+    fn stale_index_prefix_still_reaches_first_live_match() {
+        let fixture = Fixture::new();
+        fixture.asset("a", "transcript", HASH);
+        // 20,000 indexed matches in one transaction keeps the setup bounded.
+        let connection = fixture.db();
+        connection
+            .execute_batch("PRAGMA synchronous=OFF; BEGIN;")
+            .unwrap();
+        let mut insert = connection
+            .prepare("INSERT INTO transcript_segment(asset_id,segment_index,text) VALUES('a',?1,'needle')")
+            .unwrap();
+        let mut ids = Vec::new();
+        for index in 0i64..20_000 {
+            insert.execute([index]).unwrap();
+            ids.push(connection.last_insert_rowid());
+        }
+        drop(insert);
+        connection.execute_batch("COMMIT;").unwrap();
+        // Writes that skipped the sync trigger leave 10,000 stale index rows
+        // at the front of the ordered scan; verification drops each one, so
+        // the candidate stream must keep scanning rather than report empty or
+        // restart a sort heavy enough to exhaust the instruction budget.
+        connection
+            .execute(
+                "UPDATE transcript_segment SET text='gone' WHERE id<=?1",
+                [ids[9_999]],
+            )
+            .unwrap();
+        let first_live = ids[10_000];
+        let catalog = Catalog::open(&fixture.path).unwrap();
+        // Contract: the stale prefix is scanned once and the first live match
+        // is returned, not an unavailable error or an empty page.
+        assert_eq!(
+            catalog
+                .search_segments("needle", None, None, 1)
+                .unwrap()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            [first_live]
+        );
+        // Continuation past the last row genuinely exhausts the index.
+        assert!(
+            catalog
+                .search_segments("needle", None, Some(ids[19_999]), 10)
+                .unwrap()
+                .is_empty()
         );
     }
 

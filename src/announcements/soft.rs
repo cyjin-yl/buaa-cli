@@ -283,7 +283,8 @@ fn credential_construct(source: &str) -> bool {
                     if credentialish_assignment(key, rest) {
                         return true;
                     }
-                } else if credentialish_key(key)
+                } else if key_end == at
+                    && credentialish_key(key)
                     && rest
                         .chars()
                         .next()
@@ -985,5 +986,35 @@ mod tests {
         assert!(evidence["title"].is_null());
         assert!(evidence["body_paragraphs"].is_null());
         assert!(evidence["published_at"].is_null());
+    }
+
+    #[test]
+    fn prose_time_colons_stay_exportable_while_token_fields_withhold() {
+        // A credentialish word separated from the colon by prose words is not
+        // a field: "session 将于 19:00" keeps exact bytes. An adjacent
+        // unquoted token field with a value still withholds the body.
+        const PROSE: &str = r#"<title>通知公告</title><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-board"><div><ul><li><a href="../../info/1095/42.htm">Fixture</a></li></ul></div></div></div></div></div><p>第三期 session 将于 19:00 开始</p>"#;
+        let evidence = super::html_fallback(
+            &listing_response(PROSE),
+            "announcements_list",
+            "soft",
+            "soft_listing_selector_contract",
+        );
+        assert_eq!(
+            STANDARD
+                .decode(evidence["raw_html"].as_str().unwrap())
+                .unwrap()
+                .as_slice(),
+            PROSE.as_bytes()
+        );
+
+        const FIELD: &str = r#"<title>通知公告</title><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-board"><div><ul><li><a href="../../info/1095/42.htm">Fixture</a></li></ul></div></div></div></div></div><script>var s = {token: "synthetic-fixture"};</script>"#;
+        let evidence = super::html_fallback(
+            &listing_response(FIELD),
+            "announcements_list",
+            "soft",
+            "soft_listing_selector_contract",
+        );
+        assert!(evidence["raw_html"].is_null());
     }
 }

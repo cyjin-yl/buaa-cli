@@ -80,6 +80,28 @@ pub fn combined(terms: &[f64]) -> f64 {
     terms.iter().fold(0.0f64, |acc, t| acc.hypot(*t))
 }
 
+/// `factor * numerator / denominator` with an operand order that keeps a
+/// representable result.
+///
+/// The default `factor * (numerator / denominator)` loses the result when the
+/// ratio underflows out of the normal range even though the scaled product is
+/// representable (e.g. `1e300 * (1e-200 / 1e200)`). When the ratio is not a
+/// normal number the division is applied to `factor` instead; `factor` is
+/// already known nonzero there, so `factor / denominator` cannot underflow to
+/// zero while the true result stays representable. A zero numerator returns
+/// zero without forming `inf * 0`.
+fn scaled_ratio(factor: f64, numerator: f64, denominator: f64) -> f64 {
+    if numerator == 0.0 {
+        return 0.0;
+    }
+    let ratio = numerator / denominator;
+    if ratio.is_normal() {
+        factor * ratio
+    } else {
+        (factor / denominator) * numerator
+    }
+}
+
 /// Ordinary least-squares linear regression `y = intercept + slope * x`.
 ///
 /// Returns `(slope, intercept, se_slope, se_intercept, r_squared)`. The
@@ -112,9 +134,10 @@ pub fn linear_fit(points: &[(f64, f64)]) -> Result<(f64, f64, f64, f64, f64), St
     }
     let ssx_norm: f64 = hx.iter().map(|d| (d / sx) * (d / sx)).sum();
     let sy = hy.iter().fold(0.0f64, |a, d| a.max(d.abs()));
-    let (sy_eff, sxy_norm, ssy_norm) = if sy == 0.0 {
-        // Every y equals my: sxy and ssy are exactly zero and slope is zero.
-        (1.0, 0.0, 0.0)
+    let (sy_eff, sxy_norm, ssy_norm, residual_norm) = if sy == 0.0 {
+        // Every y equals my: sxy, ssy and the residual sum are exactly zero
+        // and slope is zero.
+        (1.0, 0.0, 0.0, 0.0)
     } else {
         let sxy: f64 = hx
             .iter()
@@ -122,7 +145,20 @@ pub fn linear_fit(points: &[(f64, f64)]) -> Result<(f64, f64, f64, f64, f64), St
             .map(|(dx, dy)| (dx / sx) * (dy / sy))
             .sum();
         let ssy: f64 = hy.iter().map(|d| (d / sy) * (d / sy)).sum();
-        (sy, sxy, ssy)
+        // Residual sum of squares in normalized units, ss_res/(4*sy^2),
+        // accumulated from the per-point residuals directly. Forming it as
+        // ssy - sxy^2/ssx subtracts two nearly equal O(1) sums and cancels a
+        // tiny-but-representable residual variance to zero.
+        let b = sxy / ssx_norm;
+        let res: f64 = hx
+            .iter()
+            .zip(hy.iter())
+            .map(|(dx, dy)| {
+                let r = dy / sy - b * (dx / sx);
+                r * r
+            })
+            .sum();
+        (sy, sxy, ssy, res)
     };
     // True sums are 4*sx^2*ssx_norm, 4*sx*sy*sxy_norm, 4*sy^2*ssy_norm;
     // the dimensionless ratios below use them without computing them.
@@ -132,16 +168,12 @@ pub fn linear_fit(points: &[(f64, f64)]) -> Result<(f64, f64, f64, f64, f64), St
         (sy_eff / sx) * (sxy_norm / ssx_norm)
     };
     let intercept = 2.0 * (my * 0.5 - slope * (mx * 0.5));
-    // ss_res = ss_tot - sxy^2/sxx, evaluated on normalized sums.
-    let residual_norm = if ssy_norm == 0.0 {
-        0.0
-    } else {
-        (ssy_norm - sxy_norm * sxy_norm / ssx_norm).max(0.0)
-    };
     let r_squared = if ssy_norm == 0.0 {
         1.0
     } else {
-        1.0 - residual_norm / ssy_norm
+        // ss_res <= ss_tot in exact arithmetic; rounding the residual sum can
+        // overshoot by an ulp, so keep r^2 inside its documented [0, 1] range.
+        (1.0 - residual_norm / ssy_norm).max(0.0)
     };
     // s2 = 4*sy^2*residual_norm/(n-2); se_slope = sqrt(s2/sxx) factors to
     // (sy/sx)*sqrt(residual_norm/((n-2)*ssx_norm)). Multiply sy by the
@@ -206,10 +238,12 @@ pub fn single_pendulum(
     }
     // Sensitivity coefficients from ln g = ln(4*pi^2) + ln L - 2 ln T:
     // dg/dL = g/L, dg/dT = -2*g/T.
-    // The propagation terms are formed as g * (u_L / L) and -2 * g * (u_T / T)
-    // so a zero uncertainty cannot produce inf * 0 = NaN.
-    let term_l = g * (length_uncertainty_m / length_m);
-    let term_t = -2.0 * g * (period_uncertainty / period);
+    // The propagation terms are formed through scaled_ratio so an extreme
+    // uncertainty/quantity ratio (u_L/L or u_T/T leaving the normal range)
+    // reorders to (g/L)*u_L or 2*g*(u_T/T) applied on the finite side; a zero
+    // uncertainty still yields exactly zero instead of inf * 0 = NaN.
+    let term_l = scaled_ratio(g, length_uncertainty_m, length_m);
+    let term_t = -2.0 * scaled_ratio(g, period_uncertainty, period);
     let g_uncertainty = combined(&[term_l, term_t]);
     if !g_uncertainty.is_finite() {
         return Err("pendulum result g uncertainty is outside the finite f64 range".into());
@@ -604,6 +638,42 @@ mod tests {
         assert!((g_u - g * 1e-200).abs() / g_u < 1e-12);
         // An unrepresentable g (L/T overflows the f64 range) must be refused.
         assert!(single_pendulum(1e308, 0.0, 1, 1e-200, 0.0).is_err());
+    }
+
+    #[test]
+    fn pendulum_preserves_uncertainty_with_underflowing_ratio() {
+        // L=1e200, u_L=1e-200: u_L/L = 1e-400 underflows to zero, so forming
+        // the propagation term as g * (u_L / L) reports g_u = 0 even though
+        // the true term (g/L)*u_L = 4*pi^2*e-100 ≈ 3.95e-99 is representable.
+        let (g, g_u, _, _) = single_pendulum(1e200, 1e-200, 1, 1e-50, 0.0).unwrap();
+        assert!(g.is_finite() && g > 0.0);
+        assert!(g_u.is_finite() && g_u > 0.0);
+        let expected = 4.0 * std::f64::consts::PI * std::f64::consts::PI * 1e-100;
+        assert!((g_u - expected).abs() / g_u < 1e-12);
+    }
+
+    #[test]
+    fn linear_fit_preserves_tiny_residual_variance() {
+        // Residuals of e/2 in the halved-deviation units give se_slope =
+        // e/sqrt(2). The residual sum formed as ssy - sxy^2/ssx subtracts
+        // nearly equal O(1) sums and cancels to zero.
+        let e = f64::powi(2.0, -30);
+        let points = [
+            (-1.0, -1.0 - e),
+            (-1.0, -1.0 + e),
+            (1.0, 1.0 - e),
+            (1.0, 1.0 + e),
+        ];
+        let (slope, intercept, se_slope, se_intercept, r2) = linear_fit(&points).unwrap();
+        assert!((slope - 1.0).abs() < e);
+        assert_eq!(intercept, 0.0);
+        let expected_se = e / 2f64.sqrt();
+        assert!(se_slope.is_finite() && se_slope > 0.0);
+        // O(e) rounding in the normalized slope puts the result within ~1e-9
+        // of e/sqrt(2); the defect under test produces exactly zero.
+        assert!((se_slope - expected_se).abs() / se_slope < 1e-6);
+        assert!((se_intercept - expected_se).abs() / se_intercept < 1e-6);
+        assert!((0.0..=1.0).contains(&r2));
     }
 
     #[test]
