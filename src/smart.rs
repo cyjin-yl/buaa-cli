@@ -190,58 +190,69 @@ impl Request {
     }
 
     fn response_contains_secret(&self, bytes: &[u8]) -> bool {
-        if self.contains_secret_bytes(bytes) {
-            return true;
-        }
-        // JSON permits arbitrary escapes in values and keys. Decode only
-        // strings containing escapes, keeping each temporary zeroized.
-        let mut cursor = 0;
-        while cursor < bytes.len() {
-            if bytes[cursor] != b'"' {
-                cursor += 1;
-                continue;
-            }
-            let opening = cursor;
-            cursor += 1;
-            let mut escaped = false;
-            while cursor < bytes.len() {
-                match bytes[cursor] {
-                    b'\\' => {
-                        escaped = true;
-                        cursor = cursor.saturating_add(2);
-                    }
-                    b'"' => break,
-                    _ => cursor += 1,
-                }
-            }
-            if cursor >= bytes.len() {
-                break;
-            }
-            if escaped && let Ok(value) = serde_json::from_slice::<String>(&bytes[opening..=cursor])
-            {
-                let value = Zeroizing::new(value);
-                if self.contains_secret_bytes(value.as_bytes()) {
-                    return true;
-                }
-            }
-            cursor += 1;
-        }
-        false
+        response_bytes_contain_secret(bytes, |bytes| self.contains_secret_bytes(bytes))
     }
+}
 
-    fn output_contains_numeric_secret(&self, value: &Value) -> bool {
-        match value {
-            Value::Number(_) => {
-                net::json_scalar_matches(value, |bytes| self.contains_secret_bytes(bytes))
-            }
-            Value::Array(values) => values
-                .iter()
-                .any(|value| self.output_contains_numeric_secret(value)),
-            Value::Object(fields) => fields
-                .values()
-                .any(|value| self.output_contains_numeric_secret(value)),
-            _ => false,
+/// Screen both the original response and every escaped JSON string it carries.
+/// Each source string is visited independently, so last-member-wins duplicate
+/// keys cannot hide an earlier echo. An incomplete or invalid document remains
+/// inadmissible in `parse`; it is never treated as a reviewed business value.
+fn response_bytes_contain_secret(
+    bytes: &[u8],
+    contains_secret: impl Fn(&[u8]) -> bool + Copy,
+) -> bool {
+    if contains_secret(bytes) {
+        return true;
+    }
+    // JSON permits arbitrary escapes in values and keys. Decode only strings
+    // containing escapes, keeping each temporary zeroized.
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'"' {
+            cursor += 1;
+            continue;
         }
+        let opening = cursor;
+        cursor += 1;
+        let mut escaped = false;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'\\' => {
+                    escaped = true;
+                    cursor = cursor.saturating_add(2);
+                }
+                b'"' => break,
+                _ => cursor += 1,
+            }
+        }
+        if cursor >= bytes.len() {
+            break;
+        }
+        if escaped && let Ok(value) = serde_json::from_slice::<String>(&bytes[opening..=cursor]) {
+            let value = Zeroizing::new(value);
+            if contains_secret(value.as_bytes()) {
+                return true;
+            }
+        }
+        cursor += 1;
+    }
+    false
+}
+
+fn output_contains_numeric_secret(
+    value: &Value,
+    contains_secret: impl Fn(&[u8]) -> bool + Copy,
+) -> bool {
+    match value {
+        Value::Number(_) => net::json_scalar_matches(value, contains_secret),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| output_contains_numeric_secret(value, contains_secret)),
+        Value::Object(fields) => fields
+            .values()
+            .any(|value| output_contains_numeric_secret(value, contains_secret)),
+        _ => false,
     }
 }
 
@@ -1107,6 +1118,134 @@ fn with_source(mut output: Value, source: Source) -> Value {
     output
 }
 
+/// Credential values issued by this read's `Set-Cookie` headers. The Smart
+/// readers maintain no cookie jar: an issued value is never persisted,
+/// adopted into a later request, or returned as evidence, but an echo of it
+/// inside the issuing response is still a credential disclosure. Routine
+/// server-side session maintenance therefore does not withhold an otherwise
+/// ordinary read; its values join this screening guard only.
+#[derive(Default)]
+struct IssuedCookies {
+    entries: Vec<IssuedCookie>,
+    bytes: usize,
+}
+
+struct IssuedCookie {
+    /// Complete, trimmed first `name=value` pair exactly as issued.
+    pair: Zeroizing<String>,
+    /// Quoted cookies also have an unquoted composite spelling. Its base64
+    /// boundaries differ from both the quoted pair and the bare value.
+    unquoted_pair: Option<Zeroizing<String>>,
+}
+
+/// One response may declare only so much new credential material before the
+/// whole echo set can no longer be reviewed. Refuse instead of screening a
+/// subset or forgetting an earlier declaration.
+const MAX_ISSUED_COOKIE_VALUES: usize = 64;
+const MAX_ISSUED_COOKIE_BYTES: usize = 64 * 1024;
+
+fn issued_cookie_refusal() -> Error {
+    error(
+        "invalid_headers",
+        "the Smart response issued a cookie that cannot be reviewed",
+    )
+}
+
+impl IssuedCookies {
+    /// Review every `Set-Cookie` value while the raw header map is available.
+    /// Only the first `name=value` pair is credential material. An unparseable
+    /// name/value or ambiguous quoting refuses rather than guessing which
+    /// spelling upstream might echo. An empty value deletes a cookie and is
+    /// not a transmitting secret.
+    fn absorb(&mut self, headers: &reqwest::header::HeaderMap) -> Result<(), Error> {
+        for value in headers.get_all(reqwest::header::SET_COOKIE) {
+            let text = value.to_str().map_err(|_| issued_cookie_refusal())?;
+            let Some(pair) = text.split(';').next() else {
+                return Err(issued_cookie_refusal());
+            };
+            let Some((name, value)) = pair.split_once('=') else {
+                return Err(issued_cookie_refusal());
+            };
+            let name = name.trim();
+            let value = value.trim();
+            if !cas::valid_cookie_name(name) || !cas::valid_cookie_value(value) {
+                return Err(issued_cookie_refusal());
+            }
+            let unquoted = value
+                .strip_prefix('"')
+                .and_then(|inner| inner.strip_suffix('"'))
+                .unwrap_or(value);
+            if unquoted.is_empty() {
+                continue;
+            }
+            let pair = pair.trim();
+            // An identical declaration carries no new secret and must not
+            // exhaust the bounded history by being repeated.
+            if self
+                .entries
+                .iter()
+                .any(|retained| retained.pair.as_str() == pair)
+            {
+                continue;
+            }
+            let unquoted_pair_len = if value.len() == unquoted.len() {
+                0
+            } else {
+                name.len() + 1 + unquoted.len()
+            };
+            let retained_bytes = pair.len().saturating_add(unquoted_pair_len);
+            if self.entries.len() >= MAX_ISSUED_COOKIE_VALUES
+                || self.bytes.saturating_add(retained_bytes) > MAX_ISSUED_COOKIE_BYTES
+            {
+                return Err(issued_cookie_refusal());
+            }
+            let unquoted_pair = if unquoted_pair_len == 0 {
+                None
+            } else {
+                let mut canonical = Zeroizing::new(String::with_capacity(unquoted_pair_len));
+                canonical.push_str(name);
+                canonical.push('=');
+                canonical.push_str(unquoted);
+                Some(canonical)
+            };
+            self.bytes += retained_bytes;
+            self.entries.push(IssuedCookie {
+                pair: Zeroizing::new(pair.to_string()),
+                unquoted_pair,
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether a response echoes any issued value, including the unquoted
+    /// spelling, the complete first pair and every reversible form supported
+    /// by the token guard. Escaped JSON literals receive the same decoded pass
+    /// as the original request credentials.
+    fn carries(&self, bytes: &[u8]) -> bool {
+        self.entries.iter().any(|entry| {
+            let value = entry
+                .pair
+                .split_once('=')
+                .map(|(_, value)| value.trim())
+                .expect("absorbed cookie pair contains equals");
+            net::carries_secret(bytes, &entry.pair)
+                || entry
+                    .unquoted_pair
+                    .as_ref()
+                    .is_some_and(|pair| net::carries_secret(bytes, pair))
+                || net::carries_secret(bytes, value)
+                || value
+                    .strip_prefix('"')
+                    .and_then(|inner| inner.strip_suffix('"'))
+                    .is_some_and(|unquoted| net::carries_secret(bytes, unquoted))
+        })
+    }
+
+    fn response_contains_secret(&self, bytes: &[u8]) -> bool {
+        response_bytes_contain_secret(bytes, |bytes| self.carries(bytes))
+    }
+}
+
 fn withheld(
     service: Service,
     status: u16,
@@ -1131,35 +1270,18 @@ fn withheld(
         "byte_length":bytes.len(),"sha256":format!("{:x}",Sha256::digest(bytes))})
 }
 
-fn admit_content(
-    service: Service,
-    status: u16,
-    content_type: Option<&str>,
-    bytes: &[u8],
-    kind: &str,
-    issues_session_cookie: bool,
-) -> Value {
-    if issues_session_cookie {
-        // Even the MIME essence can echo the newly issued credential.
-        let mut output = withheld(service, status, None, bytes, "session_cookie_issued");
-        output["content_type_parameters_withheld"] = json!(content_type.is_some());
-        output
-    } else {
-        parse(service, status, content_type, bytes, kind)
-    }
-}
-
 /// Check projected numbers before releasing the original request lease. JSON
 /// can serialize an exponent using a different spelling from the wire bytes.
 fn admit_checked_json(
     request: &Request,
+    issued: &IssuedCookies,
     service: Service,
     status: u16,
     content_type: Option<&str>,
     bytes: &[u8],
     kind: &str,
 ) -> Value {
-    let output = admit_content(service, status, content_type, bytes, kind, false);
+    let output = parse(service, status, content_type, bytes, kind);
     // HTTP status, byte length and other refusal metadata are generated here,
     // not echoed source fields. Preserve independent session-denial results.
     let source_value = match output.get("result").and_then(Value::as_str) {
@@ -1167,7 +1289,11 @@ fn admit_checked_json(
         Some("business_error") => output.get("upstream_code"),
         _ => None,
     };
-    if source_value.is_some_and(|value| request.output_contains_numeric_secret(value)) {
+    if source_value.is_some_and(|value| {
+        output_contains_numeric_secret(value, |bytes| {
+            request.contains_secret_bytes(bytes) || issued.carries(bytes)
+        })
+    }) {
         withheld(service, status, content_type, bytes, "credential_echo")
     } else {
         output
@@ -1981,6 +2107,14 @@ fn perform_read(
     };
     let status = response.status().as_u16();
     let issues_session_cookie = net::issues_session_cookie(response.headers());
+    let mut issued = IssuedCookies::default();
+    let issued_failure = if issues_session_cookie {
+        // Routine session maintenance is not itself a refusal: screen the
+        // issued values, but never persist, adopt or retransmit them.
+        issued.absorb(response.headers()).err()
+    } else {
+        None
+    };
     let retry = response
         .headers()
         .get_all("retry-after")
@@ -2012,13 +2146,29 @@ fn perform_read(
     let mut bytes = Zeroizing::new(Vec::new());
     let read_result = response.by_ref().take(LIMIT + 1).read_to_end(&mut bytes);
     let incomplete = read_result.is_err() || bytes.len() as u64 > LIMIT;
-    let assessment =
-        crate::html::assess_challenge_body(&bytes, content_type.as_deref(), !incomplete);
+    // Some Smart services label a complete JSON body as HTML or plain text.
+    // Validate the complete document instead of admitting arbitrary markup;
+    // only genuinely JSON-shaped UTF-8 can take this content-based path.
+    let json_document = !incomplete
+        && std::str::from_utf8(&bytes).is_ok()
+        && serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok();
+    // A complete UTF-8 JSON string can contain markup or exceed the HTML DOM
+    // budget without being HTML. Do not reinterpret it using its declared MIME;
+    // genuine non-JSON HTML still follows the original assessment below.
+    let assessment = if json_document {
+        crate::html::ChallengeAssessment::Clear
+    } else {
+        crate::html::assess_challenge_body(&bytes, content_type.as_deref(), !incomplete)
+    };
+    // Header evidence remains authoritative even when the body is JSON.
     let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
     let metadata_echo = content_type
         .as_deref()
         .is_some_and(|value| request.response_contains_secret(value.as_bytes()));
-    let safe_content_type = if metadata_echo {
+    let issued_metadata_echo = content_type
+        .as_deref()
+        .is_some_and(|value| issued.carries(value.as_bytes()));
+    let safe_content_type = if metadata_echo || issued_metadata_echo {
         None
     } else {
         content_type.as_deref()
@@ -2030,16 +2180,15 @@ fn perform_read(
             "body_limit",
             "smart response exceeds bounded body limit",
         ))
-    } else if issues_session_cookie {
-        Ok(admit_content(
-            service,
-            status,
-            safe_content_type,
-            &bytes,
-            kind,
-            true,
-        ))
-    } else if request.response_contains_secret(&bytes) || metadata_echo {
+    } else if let Some(failure) = issued_failure {
+        // The cookie history is still dropped with this invocation. The
+        // response cannot be admitted because its complete echo set is unknown.
+        Err(failure)
+    } else if request.response_contains_secret(&bytes)
+        || metadata_echo
+        || issued.response_contains_secret(&bytes)
+        || issued_metadata_echo
+    {
         Ok(withheld(
             service,
             status,
@@ -2056,13 +2205,14 @@ fn perform_read(
             "response_safety_unreviewed",
         ))
     } else if challenge
-        || content_type.is_none()
-        || !content_type.as_deref().is_some_and(|t| {
-            t.split(';').next().is_some_and(|t| {
-                t.eq_ignore_ascii_case("application/json")
-                    || t.to_ascii_lowercase().ends_with("+json")
-            })
-        })
+        || (!json_document
+            && (content_type.is_none()
+                || !content_type.as_deref().is_some_and(|t| {
+                    t.split(';').next().is_some_and(|t| {
+                        t.eq_ignore_ascii_case("application/json")
+                            || t.to_ascii_lowercase().ends_with("+json")
+                    })
+                })))
     {
         let mut out = withheld(
             service,
@@ -2082,6 +2232,7 @@ fn perform_read(
     } else {
         Ok(admit_checked_json(
             request,
+            &issued,
             service,
             status,
             content_type.as_deref(),
@@ -2312,7 +2463,15 @@ mod numeric_library_regression {
         if request.response_contains_secret(body) || metadata_echo {
             withheld(Service::Library, 200, Some(MIME), body, "credential_echo")
         } else {
-            admit_checked_json(request, Service::Library, 200, Some(MIME), body, "premises")
+            admit_checked_json(
+                request,
+                &IssuedCookies::default(),
+                Service::Library,
+                200,
+                Some(MIME),
+                body,
+                "premises",
+            )
         }
     }
 
@@ -2629,15 +2788,18 @@ mod tests {
                 .unwrap();
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(reqwest::header::SET_COOKIE, "x=q".parse().unwrap());
-            let output = admit_content(
+            let mut issued = IssuedCookies::default();
+            issued.absorb(&headers).unwrap();
+            assert!(!issued.carries(body.as_bytes()));
+            let output = parse(
                 service,
                 200,
                 Some("application/json"),
                 body.as_bytes(),
                 kind,
-                net::issues_session_cookie(&headers),
             );
-            assert_eq!(output["fallback_reason"], "session_cookie_issued");
+            assert_eq!(output["result"], "session_expired");
+            assert_eq!(output["fallback_reason"], "session_expired");
             assert!(output.get("data").is_none());
             assert!(output.get("upstream_message").is_none());
             finish_response(
@@ -2665,45 +2827,85 @@ mod tests {
         }
     }
     #[test]
-    fn opaque_cookie_content_is_withheld_but_safe_content_remains_useful() {
+    fn issued_cookies_are_screened_without_refusing_safe_content() {
         let body = br#"{"code":200,"data":{"content":[{"id":7,"venueName":"q","siteList":[]}]}}"#;
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(reqwest::header::SET_COOKIE, "x=q".parse().unwrap());
-        let output = admit_content(
-            Service::Cgyy,
-            200,
-            Some("application/json"),
-            body,
-            "venues",
-            net::issues_session_cookie(&headers),
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            "sid=synthetic-issued-value; Path=/; HttpOnly".parse().unwrap(),
         );
-        assert_eq!(output["fallback_reason"], "session_cookie_issued");
-        assert!(output.get("data").is_none());
-        assert!(output.get("upstream_message").is_none());
-        assert!(output.get("raw_evidence").is_none());
-        let metadata_echo = admit_content(
-            Service::Cgyy,
-            200,
-            Some("application/freshopaque123; proof=freshopaque123"),
-            body,
-            "venues",
-            true,
+        headers.append(reqwest::header::SET_COOKIE, "empty=; Path=/".parse().unwrap());
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            "quoted=\"synthetic-quoted\"".parse().unwrap(),
         );
-        assert_eq!(metadata_echo["fallback_reason"], "session_cookie_issued");
-        assert!(metadata_echo["content_type"].is_null());
-        assert_eq!(metadata_echo["content_type_parameters_withheld"], true);
-        assert!(!metadata_echo.to_string().contains("freshopaque123"));
-        headers.clear();
-        let safe = admit_content(
-            Service::Cgyy,
-            200,
-            Some("application/json"),
-            body,
-            "venues",
-            net::issues_session_cookie(&headers),
-        );
+        let mut issued = IssuedCookies::default();
+        issued.absorb(&headers).unwrap();
+        // Repetition carries no new secret and cannot exhaust the guard.
+        issued.absorb(&headers).unwrap();
+        assert_eq!(issued.entries.len(), 2);
+        assert!(!issued.carries(body));
+        let safe = parse(Service::Cgyy, 200, Some("application/json"), body, "venues");
         assert_eq!(safe["result"], "ok");
         assert_eq!(safe["data"][0]["id"], 7);
+        for echo in [
+            br#"{"code":200,"message":"synthetic-issued-value"}"#.as_slice(),
+            br#"{"code":200,"message":"synthetic-quoted"}"#,
+            br#"{"code":200,"message":"\"synthetic-quoted\""}"#,
+        ] {
+            assert!(issued.carries(echo));
+            let withheld_output = withheld(
+                Service::Cgyy,
+                200,
+                Some("application/json"),
+                echo,
+                "credential_echo",
+            );
+            assert_eq!(withheld_output["raw_evidence_withheld"], true);
+            assert!(!withheld_output.to_string().contains("synthetic-"));
+        }
+        for invalid in ["missing-equals", "=no-name", "x=\"unterminated"] {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(reqwest::header::SET_COOKIE, invalid.parse().unwrap());
+            assert_eq!(
+                IssuedCookies::default().absorb(&headers).unwrap_err().code,
+                "invalid_headers"
+            );
+        }
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::SET_COOKIE, "x=q".parse().unwrap());
+        let mut issued = IssuedCookies::default();
+        issued.absorb(&headers).unwrap();
+        // The venue name echoes the just-issued value, so this response is
+        // still withheld even though issuance alone is no longer a refusal.
+        assert!(issued.carries(body));
+        let echo = withheld(Service::Cgyy, 200, Some("application/json"), body, "credential_echo");
+        assert_eq!(echo["raw_evidence_withheld"], true);
+        assert!(echo.get("data").is_none());
+        assert!(echo.get("upstream_message").is_none());
+    }
+
+    #[test]
+    fn complete_json_is_admitted_despite_a_non_json_mime_label() {
+        let body = br#"{"e":0,"m":"","d":{"list":{"A":[{"id":1,"name":"101","kxsds":"1,3"}]}}}"#;
+        for mime in ["text/html", "text/plain; charset=UTF-8", "application/json"] {
+            let assessment = crate::html::assess_challenge_body(body, Some(mime), true);
+            assert!(
+                matches!(
+                    assessment,
+                    crate::html::ChallengeAssessment::Clear
+                        | crate::html::ChallengeAssessment::Unreviewed
+                ),
+                "a JSON-only document cannot assert a CAPTCHA: {assessment:?}"
+            );
+            let output = parse(Service::Classrooms, 200, Some(mime), body, "rooms");
+            assert_eq!(output["result"], "ok");
+            assert_eq!(output["data"][0]["free_periods"], json!([1, 3]));
+        }
+        let html = b"<html><body>an actual HTML page</body></html>";
+        let output = parse(Service::Classrooms, 200, Some("text/html"), html, "rooms");
+        assert_eq!(output["result"], "sensitive_response_withheld");
+        assert_eq!(output["fallback_reason"], "invalid_json_authenticated_response");
     }
     #[test]
     fn classroom_periods() {

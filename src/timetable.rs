@@ -23,8 +23,11 @@
 //! A separate `session` entry point performs, on explicit authorization and
 //! `--online`, one in-memory CAS sign-on to the graduate timetable service
 //! followed by exactly one `loadXskbData.do` read in the same invocation. It
-//! never retries, refreshes, caches or adopts upstream cookies, and credential
-//! material never leaves the invocation.
+//! never retries, refreshes or caches, and credential material never leaves
+//! the invocation. The GSMIS service re-issues its session cookie on the
+//! read; those declarations are absorbed into the invocation's in-memory
+//! jar and joined into the credential-echo screen, never persisted or
+//! replayed.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::blocking::Client;
@@ -501,7 +504,9 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
 // Graduate timetable session: one explicit in-memory CAS login to GSMIS
 // followed by exactly one loadXskbData.do read. Secrets are stdin-only inputs;
 // they are never persisted, logged or placed inside a generic Value tree. The
-// read performs no writes, retries, refreshes, pagination or cookie adoption.
+// read performs no writes, retries, refreshes or pagination. A session cookie
+// issued by the read response is absorbed into the same invocation-only jar
+// and screened like every other credential, never exported or persisted.
 
 const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
 const SESSION_MAX_INPUT: usize = 65536;
@@ -700,6 +705,122 @@ fn contains_cookie(bytes: &[u8], cookie: &str) -> bool {
             })
 }
 
+/// Upper bound on the `Set-Cookie` declarations one read response can
+/// contribute to the invocation-only jar, matching the shared session jar.
+const MAX_ISSUED_COOKIES: usize = 64;
+
+/// Session cookies issued by the single read response. They are retained
+/// only so the credential-echo screen covers the newly issued material;
+/// the read is terminal, so nothing is persisted or replayed. Values are
+/// zeroized on drop. The complete `name=value` pair is retained alongside
+/// the bare value: a composite spelling has different base64 boundaries
+/// from the value alone, so screening only values would miss an encoded
+/// full-pair echo (e.g. base64("sid=abc") is not base64("abc")).
+#[derive(Default)]
+struct IssuedCookies {
+    entries: Vec<IssuedCookie>,
+    complete: bool,
+}
+
+/// One absorbed cookie: the complete first `name=value` pair exactly as
+/// issued, plus the unquoted composite spelling when the value was quoted.
+/// The bare value is derived from the pair at screen time, not stored
+/// separately.
+struct IssuedCookie {
+    /// Complete, trimmed first `name=value` pair exactly as issued.
+    pair: Zeroizing<String>,
+    /// A quoted cookie also has an unquoted composite spelling. Its base64
+    /// boundaries differ from both the quoted pair and the bare value.
+    unquoted_pair: Option<Zeroizing<String>>,
+}
+
+impl IssuedCookies {
+    /// Absorb every `Set-Cookie` declaration the response carries. Each
+    /// value is admitted through the same name/value review the CAS jar
+    /// uses; declarations that are not valid UTF-8 or exceed the bound
+    /// leave the jar incomplete so the body is withheld rather than
+    /// exported unscreened. A declaration without a `=` pair, or with a
+    /// name/value the review rejects, is equally unscreenable: skipping it
+    /// would export a body whose credential material was never screened,
+    /// so it also leaves the jar incomplete. An empty value (bare `=` or
+    /// `=""`) deletes the cookie: it is not a secret and is not retained,
+    /// so it can never false-positive against an arbitrary empty JSON field.
+    fn absorb(headers: &reqwest::header::HeaderMap) -> Self {
+        let mut jar = IssuedCookies {
+            entries: Vec::new(),
+            complete: true,
+        };
+        let declarations = headers.get_all(reqwest::header::SET_COOKIE);
+        if declarations.iter().count() > MAX_ISSUED_COOKIES {
+            jar.complete = false;
+            return jar;
+        }
+        for declaration in declarations {
+            let Ok(text) = declaration.to_str() else {
+                jar.complete = false;
+                continue;
+            };
+            let Some(pair) = text.split(';').next() else {
+                jar.complete = false;
+                continue;
+            };
+            let Some((name, value)) = pair.split_once('=') else {
+                jar.complete = false;
+                continue;
+            };
+            let name = name.trim();
+            let value = value.trim();
+            if cas::valid_cookie_name(name) && cas::valid_cookie_value(value) {
+                let unquoted = value
+                    .strip_prefix('"')
+                    .and_then(|inner| inner.strip_suffix('"'))
+                    .unwrap_or(value);
+                // An empty value deletes the cookie; it carries no secret.
+                if unquoted.is_empty() {
+                    continue;
+                }
+                // The complete pair is the first name=value segment only;
+                // attributes (Path, HttpOnly, …) are not credential carriers.
+                let pair = pair.trim();
+                let unquoted_pair = if value.len() == unquoted.len() {
+                    None
+                } else {
+                    Some(Zeroizing::new(format!("{name}={unquoted}")))
+                };
+                jar.entries.push(IssuedCookie {
+                    pair: Zeroizing::new(pair.to_owned()),
+                    unquoted_pair,
+                });
+            } else {
+                jar.complete = false;
+            }
+        }
+        jar
+    }
+
+    /// Whether the candidate bytes echo any issued cookie value, the
+    /// complete `name=value` pair, or either in its unquoted spelling.
+    fn contains_secret_bytes(&self, bytes: &[u8]) -> bool {
+        self.entries.iter().any(|entry| {
+            let value = entry
+                .pair
+                .split_once('=')
+                .map(|(_, value)| value.trim())
+                .expect("absorbed cookie pair contains equals");
+            net::carries_secret(bytes, &entry.pair)
+                || entry
+                    .unquoted_pair
+                    .as_ref()
+                    .is_some_and(|pair| net::carries_secret(bytes, pair))
+                || net::carries_secret(bytes, value)
+                || value
+                    .strip_prefix('"')
+                    .and_then(|inner| inner.strip_suffix('"'))
+                    .is_some_and(|unquoted| net::carries_secret(bytes, unquoted))
+        })
+    }
+}
+
 /// A `serde_json::Value` built by strict admission only: object members are
 /// retained with their decoded names, duplicate members are rejected before
 /// either occurrence can be dropped, and no positional spelling is silently
@@ -817,7 +938,7 @@ fn value_contains_secret(value: &Value, contains: &dyn Fn(&[u8]) -> bool) -> boo
 /// means part of the body could not be screened — an escaped JSON literal a
 /// strict decoder rejects — so neither a definite echo nor safety was
 /// established. `Clear` means every check ran to completion without a match.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BodyScreening {
     Clear,
     Echo,
@@ -931,8 +1052,6 @@ fn session_denied(bytes: &[u8]) -> bool {
 /// and the issued session jar; they never carry secret material themselves.
 #[derive(Default)]
 struct ReadScreening {
-    /// The response re-issued session material, so its body is not exportable.
-    issued_session_cookie: bool,
     /// A challenge signal was present in the response headers.
     header_challenge: bool,
     /// The declared Content-Type itself echoes credential material.
@@ -943,6 +1062,12 @@ struct ReadScreening {
     /// literal the decoder rejects, so neither echo nor safety was
     /// established.
     body_unreviewed: bool,
+    /// The response's `Set-Cookie` declarations could not all be reviewed
+    /// (over the bound, invalid UTF-8, missing `=`, or an invalid
+    /// name/value). Unscreened cookie material may appear anywhere in the
+    /// response metadata, so the declared Content-Type is withheld even
+    /// when it echoes no known secret.
+    metadata_unreviewed: bool,
 }
 
 /// The value one read body is admitted as, plus the denial signal the governor
@@ -970,19 +1095,13 @@ fn admit_read_body(
 ) -> ReadAdmission {
     let header_challenge = screening.header_challenge;
     let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
-    let safe_content_type = if screening.metadata_echo {
+    let safe_content_type = if screening.metadata_echo || screening.metadata_unreviewed {
         None
     } else {
         content_type
     };
     let denied = !screening.echo && session_denied(bytes);
-    let output = if screening.issued_session_cookie {
-        // The read response may not re-issue session material; the MIME
-        // essence itself can echo the issued value, so withhold it too.
-        let mut output = withheld(status, None, bytes, "session_cookie_issued");
-        output["content_type_parameters_withheld"] = json!(content_type.is_some());
-        output
-    } else if screening.echo {
+    let output = if screening.echo {
         withheld(status, safe_content_type, bytes, "credential_echo")
     } else if screening.body_unreviewed {
         withheld(
@@ -1168,7 +1287,10 @@ pub(crate) fn session_with_network(
         }
     };
     let status = response.status().as_u16();
-    let issues_session_cookie = net::issues_session_cookie(response.headers());
+    // GSMIS re-issues its session cookie on the read. Absorb the declarations
+    // into the invocation-only jar so their values join the credential screen;
+    // the read remains terminal and nothing is persisted or replayed.
+    let issued = IssuedCookies::absorb(response.headers());
     let retry_after = response
         .headers()
         .get_all("retry-after")
@@ -1213,9 +1335,27 @@ pub(crate) fn session_with_network(
     let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
     let metadata_echo = content_type
         .as_deref()
-        .is_some_and(|value| contains(value.as_bytes()));
+        .is_some_and(|value| {
+            contains(value.as_bytes()) || issued.contains_secret_bytes(value.as_bytes())
+        });
     let body_screening = decoded_body_screening(&bytes, &contains);
-    let echo = contains(&bytes) || metadata_echo || body_screening == BodyScreening::Echo;
+    // JSON-escaped spellings of an issued cookie value are screened with the
+    // same decoded-literal pass the stdin credentials receive.
+    let issued_screening = if issued.entries.is_empty() {
+        BodyScreening::Clear
+    } else {
+        decoded_body_screening(&bytes, &|candidate: &[u8]| {
+            issued.contains_secret_bytes(candidate)
+        })
+    };
+    // The issued cookie values are session material too: a body or header
+    // echoing one is withheld, and an incompletely screened declaration set
+    // withholds the body rather than exporting it unscreened.
+    let echo = contains(&bytes)
+        || issued.contains_secret_bytes(&bytes)
+        || metadata_echo
+        || body_screening == BodyScreening::Echo
+        || issued_screening == BodyScreening::Echo;
     let mut denied = false;
     let result = if read_result.is_err() {
         Err(error(
@@ -1235,11 +1375,13 @@ pub(crate) fn session_with_network(
             &input.read.xnxqdm,
             assessment,
             ReadScreening {
-                issued_session_cookie: issues_session_cookie,
                 header_challenge,
                 metadata_echo,
+                metadata_unreviewed: !issued.complete,
                 echo,
-                body_unreviewed: body_screening == BodyScreening::Unreviewable,
+                body_unreviewed: body_screening == BodyScreening::Unreviewable
+                    || issued_screening == BodyScreening::Unreviewable
+                    || !issued.complete,
             },
         );
         denied = admission.denied;
@@ -1293,7 +1435,7 @@ pub fn schema() -> Value {
         }
     });
     schema["session"] = json!({
-        "description": "One explicit in-memory CAS login to GSMIS followed by exactly one loadXskbData.do read; no persistence, refresh, retry, writes or cookie adoption.",
+        "description": "One explicit in-memory CAS login to GSMIS followed by exactly one loadXskbData.do read; no persistence, refresh, retry or writes. Session cookies issued by the read are absorbed into the invocation-only jar and screened as credential material, never persisted or replayed.",
         "input": {
             "type": "object",
             "additionalProperties": false,
@@ -2027,6 +2169,347 @@ mod session_tests {
         let mut request = session_input();
         request["read"]["xnxqdm"] = json!(term);
         request.to_string()
+    }
+
+    fn headers_with(declarations: &[&str]) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        for declaration in declarations {
+            headers.append(
+                reqwest::header::SET_COOKIE,
+                reqwest::header::HeaderValue::from_str(declaration)
+                    .expect("fixture declaration must be a header value"),
+            );
+        }
+        headers
+    }
+
+    /// A read response that re-issues the session cookie is no longer
+    /// refused: the jar absorbs the declaration and a clean body parses.
+    #[test]
+    fn issued_session_cookie_is_absorbed_and_clean_body_parses() {
+        let jar = IssuedCookies::absorb(&headers_with(&[
+            "JSESSIONID=synthetic-issued-7f2; Path=/gsapp; HttpOnly",
+            "route=synthetic-route-a; Path=/; Secure",
+        ]));
+        assert!(jar.complete);
+        assert_eq!(jar.entries.len(), 2);
+        assert!(jar.contains_secret_bytes(b"JSESSIONID=synthetic-issued-7f2"));
+        // A cookie attribute (Path, HttpOnly) is not a credential carrier.
+        assert!(!jar.contains_secret_bytes(b"/gsapp"));
+
+        let body = timetable_body().to_string();
+        let content_type = Some("application/json");
+        let admission = admit_read_body(
+            200,
+            content_type,
+            body.as_bytes(),
+            "20261",
+            complete_assessment(content_type, body.as_bytes()),
+            ReadScreening::default(),
+        );
+        assert!(!admission.denied);
+        assert_eq!(admission.output["result"], "parsed");
+    }
+
+    /// Issued cookie values are session material: a body echoing one, even
+    /// behind a JSON escape, is withheld rather than exported.
+    #[test]
+    fn issued_cookie_echo_is_withheld_including_escaped_spellings() {
+        let jar = IssuedCookies::absorb(&headers_with(&[
+            "JSESSIONID=synthetic-issued-7f2; Path=/gsapp; HttpOnly",
+        ]));
+        assert!(jar.complete);
+        assert!(jar.contains_secret_bytes(br#"{"session":"synthetic-issued-7f2"}"#));
+        // The decoded spelling of an escaped literal carries the value too.
+        let escaped = br#"{"session":"synthetic-issued-\u0037f2"}"#;
+        assert!(!jar.contains_secret_bytes(escaped));
+        let screening = decoded_body_screening(escaped, &|candidate: &[u8]| {
+            jar.contains_secret_bytes(candidate)
+        });
+        assert_eq!(screening, BodyScreening::Echo);
+        // An unquoted cookie value is screened in both spellings.
+        let quoted = IssuedCookies::absorb(&headers_with(&[
+            "JSESSIONID=\"quoted-issued-91c\"; Path=/gsapp",
+        ]));
+        assert!(quoted.contains_secret_bytes(b"quoted-issued-91c"));
+        assert!(quoted.contains_secret_bytes(b"\"quoted-issued-91c\""));
+    }
+
+    /// Declarations that cannot be fully screened leave the jar incomplete,
+    /// which withholds the body instead of exporting it unscreened.
+    #[test]
+    fn unreviewable_cookie_declarations_withhold_the_body() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_bytes(b"JSESSIONID=ok; Path=/")
+                .expect("valid declaration"),
+        );
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_bytes(b"JSESSIONID=\xff\xfe; Path=/")
+                .expect("non-UTF-8 header values are representable"),
+        );
+        let jar = IssuedCookies::absorb(&headers);
+        assert!(!jar.complete);
+        // The valid declaration is still retained for screening.
+        assert_eq!(jar.entries.len(), 1);
+
+        let body = timetable_body().to_string();
+        let content_type = Some("application/json");
+        let admission = admit_read_body(
+            200,
+            content_type,
+            body.as_bytes(),
+            "20261",
+            complete_assessment(content_type, body.as_bytes()),
+            ReadScreening {
+                body_unreviewed: !jar.complete,
+                ..ReadScreening::default()
+            },
+        );
+        assert_eq!(
+            admission.output["result"],
+            "sensitive_response_withheld"
+        );
+        assert_eq!(
+            admission.output["fallback_reason"],
+            "response_safety_unreviewed"
+        );
+        assert!(admission.output.get("raw_response_base64").is_none());
+    }
+
+    /// An over-limit declaration set is refused as unreviewable, not
+    /// truncated into a partially screened jar.
+    #[test]
+    fn excessive_cookie_declarations_are_unreviewable() {
+        let declarations = vec!["route=synthetic-route-a; Path=/"; MAX_ISSUED_COOKIES + 1];
+        let jar = IssuedCookies::absorb(&headers_with(&declarations));
+        assert!(!jar.complete);
+        assert!(jar.entries.is_empty());
+    }
+
+    /// Admit one body the way `session_with_network` does once the issued
+    /// jar is known: metadata is unreviewed whenever the jar is incomplete,
+    /// and any body echo of an issued value is refused. The output
+    /// assertions below are consumer-level, not just jar-level.
+    fn issued_admission(
+        jar: &IssuedCookies,
+        content_type: Option<&str>,
+        body: &[u8],
+    ) -> ReadAdmission {
+        let issued_screening = if jar.entries.is_empty() {
+            BodyScreening::Clear
+        } else {
+            decoded_body_screening(body, &|candidate: &[u8]| {
+                jar.contains_secret_bytes(candidate)
+            })
+        };
+        let assessment = complete_assessment(content_type, body);
+        admit_read_body(
+            200,
+            content_type,
+            body,
+            "20261",
+            assessment,
+            ReadScreening {
+                echo: jar.contains_secret_bytes(body)
+                    || issued_screening == BodyScreening::Echo,
+                metadata_unreviewed: !jar.complete,
+                body_unreviewed: issued_screening == BodyScreening::Unreviewable
+                    || !jar.complete,
+                ..ReadScreening::default()
+            },
+        )
+    }
+
+    /// An over-limit jar cannot screen the Content-Type for the cookie
+    /// values it dropped. A MIME essence echoing one of those values must
+    /// not survive as "safe" metadata, and the body is withheld too.
+    #[test]
+    fn over_limit_declarations_withhold_metadata_echoing_unscreened_cookie() {
+        let mut declarations = vec!["route=synthetic-route-a; Path=/"; MAX_ISSUED_COOKIES];
+        declarations.push("JSESSIONID=private-issued-7f2; Path=/gsapp; HttpOnly");
+        let jar = IssuedCookies::absorb(&headers_with(&declarations));
+        assert!(!jar.complete);
+        assert!(jar.entries.is_empty());
+
+        let body = timetable_body().to_string();
+        let content_type = Some("application/private-issued-7f2");
+        // Even though no known value is echoed, the unreviewed declaration
+        // set means no metadata spelling can be certified safe.
+        let admission = issued_admission(&jar, content_type, body.as_bytes());
+        let output = &admission.output;
+        assert_eq!(output["result"], "sensitive_response_withheld");
+        assert_eq!(output["fallback_reason"], "response_safety_unreviewed");
+        assert_eq!(output["content_type"], Value::Null);
+        assert_eq!(output["content_type_parameters_withheld"], false);
+        assert!(output.get("raw_response_base64").is_none());
+        assert!(output.get("schedule_row_count").is_none());
+    }
+
+    /// Every declaration that cannot be fully reviewed — no `=`, or an
+    /// invalid name/value — leaves the jar incomplete so both the body and
+    /// the Content-Type metadata are withheld, rather than skipping the
+    /// declaration and exporting the rest as screened.
+    #[test]
+    fn invalid_or_ambiguous_declarations_withhold_body_and_metadata() {
+        let content_type = Some("application/json; charset=utf-8");
+        let body = timetable_body().to_string();
+        for declaration in [
+            // No `=` at all: the value boundary is ambiguous.
+            "JSESSIONID",
+            // An invalid name (spaces are not a cookie-name token).
+            "bad name=value; Path=/",
+            // An invalid value (a raw space is outside the cookie octets).
+            "JSESSIONID=bad value; Path=/",
+            // An unterminated quoted value is not a valid cookie value.
+            "JSESSIONID=\"unterminated; Path=/",
+        ] {
+            let jar = IssuedCookies::absorb(&headers_with(&[declaration]));
+            assert!(!jar.complete, "{declaration} was treated as screened");
+            let admission = issued_admission(&jar, content_type, body.as_bytes());
+            let output = &admission.output;
+            assert_eq!(
+                output["result"], "sensitive_response_withheld",
+                "{declaration} leaked a body"
+            );
+            assert_eq!(output["fallback_reason"], "response_safety_unreviewed");
+            assert_eq!(output["content_type"], Value::Null, "{declaration}");
+            assert!(output.get("raw_response_base64").is_none());
+            assert!(output.get("schedule_row_count").is_none());
+        }
+    }
+
+    /// A clean, valid declaration set stays readable: the jar is complete,
+    /// the Content-Type is retained, and a body with no echo parses. Valid
+    /// empty values (cookie deletion) are absorbed, not treated as invalid,
+    /// and a quoted empty value never matches an arbitrary empty string.
+    #[test]
+    fn clean_valid_declarations_keep_body_and_metadata_readable() {
+        let jar = IssuedCookies::absorb(&headers_with(&[
+            "JSESSIONID=synthetic-issued-7f2; Path=/gsapp; HttpOnly",
+            // Deleting a cookie: a valid empty value, not a screening gap.
+            "route=; Path=/; Max-Age=0",
+            // A quoted empty value is likewise valid and carries no secret.
+            "legacy=\"\"; Path=/",
+        ]));
+        assert!(jar.complete);
+        assert_eq!(jar.entries.len(), 1);
+        // The empty deletions never match arbitrary content, quoted or not.
+        assert!(!jar.contains_secret_bytes(b"\"any\""));
+        assert!(!jar.contains_secret_bytes(b"ordinary text"));
+
+        let body = timetable_body().to_string();
+        let content_type = Some("application/json");
+        let admission = issued_admission(&jar, content_type, body.as_bytes());
+        assert_eq!(admission.output["result"], "parsed");
+        // A clean body parses into real schedule output rather than being
+        // withheld, and no credential echo was raised.
+        assert_eq!(admission.output["schedule_row_count"], 1);
+        assert!(admission.output.get("raw_evidence_withheld").is_none());
+    }
+
+    /// Raw and JSON-escaped echoes of an issued value are still refused
+    /// even though the declaration set is complete and reviewable.
+    #[test]
+    fn complete_jar_still_withholds_raw_and_escaped_echoes() {
+        let jar = IssuedCookies::absorb(&headers_with(&[
+            "JSESSIONID=synthetic-issued-7f2; Path=/gsapp; HttpOnly",
+        ]));
+        assert!(jar.complete);
+        let content_type = Some("application/json");
+        for body in [
+            br#"{"session":"synthetic-issued-7f2"}"#.as_slice(),
+            br#"{"session":"synthetic-issued-\u0037f2"}"#.as_slice(),
+        ] {
+            let admission = issued_admission(&jar, content_type, body);
+            let output = &admission.output;
+            assert_eq!(output["result"], "sensitive_response_withheld");
+            assert_eq!(output["fallback_reason"], "credential_echo");
+            assert!(output.get("raw_response_base64").is_none());
+        }
+    }
+
+    /// A complete `name=value` pair has different base64 boundaries from
+    /// the value alone. A body echoing only the encoded full pair must be
+    /// refused even though neither the literal value nor base64(value)
+    /// appears anywhere in it. Ordinary content stays readable.
+    #[test]
+    fn complete_cookie_pair_base64_and_urlsafe_echoes_are_refused() {
+        let content_type = Some("application/json");
+        // Standard base64 of the complete pair.
+        let jar = IssuedCookies::absorb(&headers_with(&["sid=abc; Path=/; HttpOnly"]));
+        assert!(jar.complete);
+        assert_eq!(jar.entries.len(), 1);
+        let pair = "sid=abc";
+        // Sanity: the bare value alone does not match the encoded pair.
+        let pair_b64 = STANDARD.encode(pair);
+        assert!(!net::carries_secret(pair_b64.as_bytes(), "abc"));
+        assert!(net::carries_secret(pair_b64.as_bytes(), pair));
+        assert!(jar.contains_secret_bytes(pair_b64.as_bytes()));
+        let encoded = STANDARD.encode(pair);
+        let body = format!(r#"{{"session":"{encoded}"}}"#);
+        let admission = issued_admission(&jar, content_type, body.as_bytes());
+        assert_eq!(admission.output["result"], "sensitive_response_withheld");
+        assert_eq!(admission.output["fallback_reason"], "credential_echo");
+        assert!(admission.output.get("raw_response_base64").is_none());
+        // The full-pair echo in a Content-Type is refused as metadata echo.
+        let admission = issued_admission(&jar, Some(encoded.as_str()), body.as_bytes());
+        assert_eq!(admission.output["result"], "sensitive_response_withheld");
+        // Ordinary content with this jar is still readable.
+        let body = timetable_body().to_string();
+        let admission = issued_admission(&jar, content_type, body.as_bytes());
+        assert_eq!(admission.output["result"], "parsed");
+        assert_eq!(admission.output["schedule_row_count"], 1);
+
+        // URL-safe base64 of a complete pair whose standard encoding
+        // carries '+' or '/': the two alphabets differ, and only the pair
+        // screen (not the bare value) covers this boundary.
+        let jar = IssuedCookies::absorb(&headers_with(&["sid=a?b; Path=/; HttpOnly"]));
+        assert!(jar.complete);
+        let pair = "sid=a?b";
+        let standard = STANDARD.encode(pair);
+        let url_encoded = base64::engine::general_purpose::URL_SAFE.encode(pair);
+        assert!(
+            standard.contains('+') || standard.contains('/'),
+            "fixture must exercise the URL-safe alphabet: {standard}"
+        );
+        assert!(jar.contains_secret_bytes(url_encoded.as_bytes()));
+        let body = format!(r#"{{"session":"{url_encoded}"}}"#);
+        let admission = issued_admission(&jar, content_type, body.as_bytes());
+        assert_eq!(admission.output["result"], "sensitive_response_withheld");
+        assert_eq!(admission.output["fallback_reason"], "credential_echo");
+        assert!(admission.output.get("raw_response_base64").is_none());
+    }
+
+    /// A value just over the 4096-byte review bound cannot be screened at
+    /// all. It must leave the jar incomplete and withhold both the body and
+    /// the Content-Type, rather than silently dropping the declaration and
+    /// exporting the rest as screened.
+    #[test]
+    fn over_long_cookie_value_is_unreviewable_and_withholds_output() {
+        let long_value = "a".repeat(4097);
+        let declaration = format!("JSESSIONID={long_value}; Path=/gsapp");
+        let jar = IssuedCookies::absorb(&headers_with(&[declaration.as_str()]));
+        assert!(!jar.complete, "4097-byte value was treated as screened");
+        assert!(jar.entries.is_empty());
+        assert!(jar.entries.is_empty());
+
+        let body = timetable_body().to_string();
+        let admission = issued_admission(&jar, Some("application/json"), body.as_bytes());
+        let output = &admission.output;
+        assert_eq!(output["result"], "sensitive_response_withheld");
+        assert_eq!(output["fallback_reason"], "response_safety_unreviewed");
+        assert_eq!(output["content_type"], Value::Null);
+        assert!(output.get("raw_response_base64").is_none());
+
+        // Exactly at the bound is still reviewable and stays readable.
+        let ok_value = "a".repeat(4096);
+        let declaration = format!("JSESSIONID={ok_value}; Path=/gsapp");
+        let jar = IssuedCookies::absorb(&headers_with(&[declaration.as_str()]));
+        assert!(jar.complete);
+        assert_eq!(jar.entries.len(), 1);
     }
 
     #[test]

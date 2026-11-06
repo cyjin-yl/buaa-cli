@@ -91,6 +91,10 @@ pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
 pub(crate) const CLASSROOM_ORIGIN: &str = "https://classroom.msa.buaa.edu.cn";
 pub(crate) const CLASSROOM_TRANSCRIPT_PATH: &str = "/courseapi/v3/web-socket/search-trans-result";
 const CLASSROOM_ROBOTS_URL: &str = "https://classroom.msa.buaa.edu.cn/robots.txt";
+/// Bounded server-directed hops on the session-bound transcript read. A
+/// redirect beyond this count ends the chain and is refused like any other
+/// redirect.
+const MAX_TRANSCRIPT_REDIRECTS: usize = 4;
 
 pub(crate) fn classroom_json_mime(content_type: Option<&str>) -> bool {
     content_type
@@ -1800,6 +1804,231 @@ impl ArchiveClient {
             }
             Err(governor::FollowupError::Governor(reason)) => return Err(governor_denial(&reason)),
         };
+        // A server-directed 3xx on the session-bound transcript read is
+        // answered by hand: anonymous adapters and every other classroom
+        // route keep refusing redirects outright. A followed target must
+        // stay HTTPS, on the request's own host and port, carry no
+        // credentials or fragment, remain inside the reviewed transcript
+        // URL scope, and keep the selected lesson identity. The session
+        // cookie is replayed only to such a target; anonymous landing or
+        // login hops are never followed. Only redirect hops enter the loop:
+        // each hop's headers and bounded body are reviewed before any next
+        // send, so a challenge, an authentication refusal, a robots denial
+        // or a credential echo ends the chain instead of being overwritten
+        // by a final 200. Cookies issued anywhere in the chain stay in a
+        // bounded invocation-only guard that also screens the terminal
+        // response before it is processed, projected or persisted. The
+        // retained response keeps the request URL as its identity so an
+        // unreviewed redirect target never enters the cache or output.
+        let mut redirect_hops = 0usize;
+        let mut redirect_cooldown = false;
+        let mut redirect_issue: Option<(u16, bool, RedirectIssue)> = None;
+        let mut issued = IssuedCookies::new();
+        let mut current = url.clone();
+        while session.cookie.is_some()
+            && self.profile == SourceProfile::Classroom
+            && classroom_transcript_url_allowed(url)
+            && redirect_hops < MAX_TRANSCRIPT_REDIRECTS
+            && matches!(raw.status().as_u16(), 301 | 302 | 303 | 307 | 308)
+        {
+            let hop_status = raw.status().as_u16();
+            let hop_challenge = raw
+                .headers()
+                .iter()
+                .any(|(name, value)| challenge_header(name.as_str(), value.as_bytes()));
+            if lease
+                .observe_http_many(
+                    hop_status,
+                    raw.headers()
+                        .get_all("retry-after")
+                        .iter()
+                        .map(|value| value.to_str().ok()),
+                    hop_challenge,
+                )
+                .is_err()
+            {
+                drop(raw);
+                return Err(governor_error());
+            }
+            // Every Set-Cookie field on this hop joins the chain-wide guard.
+            // An undecodable field or an overflow means the guard can no
+            // longer prove its echo screen, so the chain must refuse.
+            for value in raw.headers().get_all(reqwest::header::SET_COOKIE) {
+                issued.absorb(value.to_str().ok());
+            }
+            // A redirect has exactly one decodable Location. Multiple
+            // Locations are indeterminate: choosing one would silently skip
+            // a refused target.
+            let mut locations = raw.headers().get_all("location").iter();
+            let next = match (locations.next(), locations.next()) {
+                (None, _) => break,
+                (Some(_), Some(_)) => {
+                    redirect_issue =
+                        Some((hop_status, hop_challenge, RedirectIssue::AmbiguousLocation));
+                    break;
+                }
+                (Some(value), None) => {
+                    let parsed = value
+                        .to_str()
+                        .ok()
+                        .and_then(|location| current.join(location).ok());
+                    match parsed {
+                        Some(target)
+                            if target.scheme() == "https"
+                                && target.host_str() == url.host_str()
+                                && target.port_or_known_default()
+                                    == url.port_or_known_default()
+                                && target.username().is_empty()
+                                && target.password().is_none()
+                                && target.fragment().is_none()
+                                && target != current
+                                && classroom_transcript_url_allowed(&target)
+                                && transcript_sub_id(&target) == transcript_sub_id(url) =>
+                        {
+                            target
+                        }
+                        _ => {
+                            redirect_issue =
+                                Some((hop_status, hop_challenge, RedirectIssue::Target));
+                            break;
+                        }
+                    }
+                }
+            };
+            let hop_body = match read_bounded_body(&mut raw, MAX_REDIRECT_BODY) {
+                Ok(body) => body,
+                Err(error) => {
+                    let network_failure =
+                        matches!(error.code, "network_error" | "body_limit");
+                    drop(raw);
+                    lease
+                        .finish(Outcome::Http {
+                            status: hop_status,
+                            retry_after: None,
+                            challenge: hop_challenge,
+                            network_failure,
+                        })
+                        .map_err(|_| governor_error())?;
+                    return Err(error);
+                }
+            };
+            // Never adopt or retransmit an issued cookie. The hop's body and
+            // retained metadata are screened for every carrier the chain has
+            // collected so far; an overflowed guard cannot prove the screen.
+            if issued.overflowed()
+                || issued.echoed(&hop_body)
+                || raw.headers().iter().any(|(name, value)| {
+                    name != reqwest::header::SET_COOKIE
+                        && (issued.echoed(name.as_str().as_bytes())
+                            || issued.echoed(value.as_bytes()))
+                })
+            {
+                redirect_issue =
+                    Some((hop_status, hop_challenge, RedirectIssue::CredentialEcho));
+                break;
+            }
+            // Challenge headers are observed facts. The body is classified by
+            // the real application envelope: a refused session is a real
+            // authentication signal; indeterminate bytes are refused with an
+            // unknown classification, never reported as a challenge.
+            if hop_challenge {
+                redirect_issue = Some((hop_status, hop_challenge, RedirectIssue::Challenge));
+                break;
+            }
+            match crate::recordings::subtitles::review_redirect_body(&hop_body) {
+                crate::recordings::subtitles::RedirectBodyReview::Empty
+                | crate::recordings::subtitles::RedirectBodyReview::Admitted => {}
+                crate::recordings::subtitles::RedirectBodyReview::SessionRefused => {
+                    redirect_issue =
+                        Some((hop_status, hop_challenge, RedirectIssue::AuthRefusal));
+                    break;
+                }
+                crate::recordings::subtitles::RedirectBodyReview::Indeterminate => {
+                    redirect_issue =
+                        Some((hop_status, hop_challenge, RedirectIssue::Unreviewable));
+                    break;
+                }
+            }
+            let reservation = match lease.reserve_followup() {
+                Ok(reservation) => reservation,
+                Err(governor::FollowupError::Governor(reason)) => {
+                    return Err(governor_denial(&reason));
+                }
+            };
+            if !reservation.cooldown_wait.is_zero() {
+                redirect_cooldown = true;
+                break;
+            }
+            // Each followed hop is independently admitted by the already
+            // loaded robots policy. This reuses the cached response under the
+            // existing lease; it never fetches robots again or re-enters the
+            // governor lock.
+            let robots_url = Url::parse(self.profile.robots_url()).map_err(|_| invalid_url())?;
+            let robots = self.load(&robots_url)?;
+            let decision = match robots {
+                Some(entry) => Self::robots_decision(&entry.response, &next),
+                None => Err(Error::new(
+                    "robots_unavailable",
+                    "robots policy is unavailable",
+                )),
+            };
+            if let Err(error) = decision {
+                drop(raw);
+                lease
+                    .finish_without_request()
+                    .map_err(|_| governor_error())?;
+                return Err(error);
+            }
+            // A server-directed redirect continues the request the server
+            // already answered; the reserved slot keeps pacing honest for
+            // later acquisitions without sleeping mid-chain.
+            drop(raw);
+            let scoped = session.cookie;
+            let started = lease.start_request(|| {
+                if scoped
+                    .is_some_and(|cookie| {
+                        cookie
+                            .expires
+                            .is_some_and(|expiry| expiry <= SystemTime::now())
+                    })
+                {
+                    return StartAttempt::CredentialExpired;
+                }
+                let mut followup = session
+                    .http
+                    .get(self.request_url(&next))
+                    .header("Accept-Encoding", "identity");
+                if let Some(cookie) = scoped {
+                    followup = followup
+                        .header(reqwest::header::COOKIE, &cookie.header)
+                        .header(reqwest::header::ACCEPT, "application/json");
+                }
+                StartAttempt::Sent(followup.send())
+            });
+            match started {
+                Ok(StartAttempt::Sent(Ok(response))) => raw = response,
+                Ok(StartAttempt::CredentialExpired) => {
+                    lease
+                        .finish_without_request()
+                        .map_err(|_| governor_error())?;
+                    return Err(Error::new(
+                        "unavailable",
+                        "Stored classroom cookie expired before transmission; deliberate authentication is required.",
+                    ));
+                }
+                Ok(StartAttempt::Sent(Err(_))) => {
+                    lease
+                        .finish(Outcome::NetworkFailure)
+                        .map_err(|_| governor_error())?;
+                    return Err(network_error());
+                }
+                Err(governor::FollowupError::Governor(reason)) => {
+                    return Err(governor_denial(&reason));
+                }
+            }
+            current = next;
+            redirect_hops += 1;
+        }
         let status = raw.status().as_u16();
         let retry_after = raw
             .headers()
@@ -1813,6 +2042,54 @@ impl ArchiveClient {
             .headers()
             .iter()
             .any(|(name, value)| challenge_header(name.as_str(), value.as_bytes()));
+        // A refused chain ends with the outcome its refusal earned. Only a
+        // real challenge or authentication refusal reports challenge=true;
+        // indeterminate hops keep an unknown classification.
+        if let Some((hop_status, hop_challenge, issue)) = redirect_issue {
+            let refused_session = matches!(
+                issue,
+                RedirectIssue::Challenge | RedirectIssue::AuthRefusal | RedirectIssue::Target
+            );
+            let error = match issue {
+                RedirectIssue::Challenge
+                | RedirectIssue::AuthRefusal
+                | RedirectIssue::Target => Error::new(
+                    "auth_latched",
+                    "classroom session requires deliberate safety review",
+                ),
+                RedirectIssue::AmbiguousLocation
+                | RedirectIssue::CredentialEcho
+                | RedirectIssue::Unreviewable => Error::new(
+                    "unavailable",
+                    "classroom transcript redirect cannot be reviewed",
+                ),
+            };
+            drop(raw);
+            lease
+                .finish(Outcome::Http {
+                    status: hop_status,
+                    retry_after: None,
+                    challenge: refused_session || hop_challenge,
+                    network_failure: false,
+                })
+                .map_err(|_| governor_error())?;
+            return Err(error);
+        }
+        if redirect_cooldown {
+            drop(raw);
+            lease
+                .finish(Outcome::Http {
+                    status,
+                    retry_after: retry_after.as_deref(),
+                    challenge,
+                    network_failure: false,
+                })
+                .map_err(|_| governor_error())?;
+            return Err(Error::new(
+                "cooldown",
+                "public source requested a request cooldown",
+            ));
+        }
         let directory_cookie_issued =
             organizations_target(self, url) && issues_session_cookie(raw.headers());
         let mut attributed_archive_status = false;
@@ -1848,6 +2125,36 @@ impl ArchiveClient {
                 return Err(governor_error());
             }
             let headers = header_result?;
+            // Cookies issued during the chain join the terminal response's
+            // own declarations in the invocation-only guard. Raw header bytes
+            // (including the retained projection below) are screened before
+            // any merge, output projection or persistence can carry them.
+            if session.cookie.is_some()
+                && classroom_transcript_url_allowed(url)
+                && (!issued.values.is_empty() || issues_session_cookie(raw.headers()))
+            {
+                for value in raw.headers().get_all(reqwest::header::SET_COOKIE) {
+                    issued.absorb(value.to_str().ok());
+                }
+                if issued.overflowed()
+                    || raw
+                        .headers()
+                        .iter()
+                        .any(|(name, value)| {
+                            name != reqwest::header::SET_COOKIE
+                                && (issued.echoed(name.as_str().as_bytes())
+                                    || issued.echoed(value.as_bytes()))
+                        })
+                    || headers.iter().any(|(name, value)| {
+                        issued.echoed(name.as_bytes()) || issued.echoed(value.as_bytes())
+                    })
+                {
+                    return Err(Error::new(
+                        "unavailable",
+                        "classroom transcript response metadata echoes an issued credential",
+                    ));
+                }
+            }
             if challenge || (!attributed_archive_status && matches!(status, 401 | 403)) {
                 return Err(Error::new(
                     "safety_latched",
@@ -1925,6 +2232,15 @@ impl ArchiveClient {
                 return Err(body_limit());
             }
             body_complete = true;
+            // The final body (and its decoded JSON projection) must not echo
+            // any credential issued during the chain before it is processed,
+            // output or persisted under the request URL.
+            if !issued.values.is_empty() && issued.echoed(&body) {
+                return Err(Error::new(
+                    "unavailable",
+                    "classroom transcript response echoes an issued credential",
+                ));
+            }
             // Validate fresh metadata before retained immutable headers can
             // hide MIME drift. Cached output repeats the same admission policy.
             if status == 200 {
@@ -2495,6 +2811,160 @@ pub(crate) fn challenge_header(name: &str, value: &[u8]) -> bool {
 /// Issuance alone is not a challenge or an authentication rejection.
 pub(crate) fn issues_session_cookie(headers: &reqwest::header::HeaderMap) -> bool {
     headers.contains_key(reqwest::header::SET_COOKIE)
+}
+
+/// A redirect hop is never transcript content. Its body is still reviewed in
+/// full, but under this much smaller bound, before any follow-up is sent.
+const MAX_REDIRECT_BODY: usize = 64 * 1024;
+
+/// Read one complete response body under a fixed bound. An oversized or
+/// truncated body is an error, never a partial admission.
+fn read_bounded_body(
+    raw: &mut reqwest::blocking::Response,
+    budget: usize,
+) -> Result<Vec<u8>, Error> {
+    if raw
+        .content_length()
+        .is_some_and(|length| length > budget as u64)
+    {
+        return Err(body_limit());
+    }
+    let mut body = Vec::new();
+    raw.by_ref()
+        .take(budget as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| network_error())?;
+    if body.len() > budget {
+        return Err(body_limit());
+    }
+    Ok(body)
+}
+
+/// The selected lesson identity of a reviewed transcript URL. The caller has
+/// already applied `classroom_transcript_url_allowed`, so exactly one `sub_id`
+/// pair exists.
+fn transcript_sub_id(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, _)| key == "sub_id")
+        .map(|(_, value)| value.into_owned())
+}
+
+/// Why a reviewed transcript redirect hop ended the chain. Only real
+/// challenge or authentication-refusal facts may carry the challenge
+/// outcome; indeterminate facts keep an unknown classification.
+enum RedirectIssue {
+    AmbiguousLocation,
+    Target,
+    Challenge,
+    AuthRefusal,
+    Unreviewable,
+    CredentialEcho,
+}
+
+/// Cookies issued inside one bounded transcript redirect chain stay in this
+/// invocation-only guard. Values are never adopted, stored or retransmitted.
+const MAX_ISSUED_COOKIES: usize = 16;
+const MAX_ISSUED_COOKIE_BYTES: usize = 8 * 1024;
+
+struct IssuedCookies {
+    values: Vec<Zeroizing<String>>,
+    bytes: usize,
+    complete: bool,
+}
+
+impl IssuedCookies {
+    fn new() -> Self {
+        Self {
+            values: Vec::new(),
+            bytes: 0,
+            complete: true,
+        }
+    }
+
+    /// Retain both the complete name=value pair and the bare value so an
+    /// echo in either spelling is caught. An undecodable or unnameable
+    /// declaration marks the set incomplete: the guard then refuses rather
+    /// than screening incompletely.
+    fn absorb(&mut self, header: Option<&str>) {
+        let Some(pair) = header.and_then(|header| header.split(';').next()).map(str::trim)
+        else {
+            self.complete = false;
+            return;
+        };
+        let Some((name, value)) = pair.split_once('=') else {
+            self.complete = false;
+            return;
+        };
+        if name.is_empty() {
+            self.complete = false;
+            return;
+        }
+        // A revocation declaration carries no credential to screen.
+        if value.is_empty() {
+            return;
+        }
+        let pair = Zeroizing::new(pair.to_owned());
+        let value = Zeroizing::new(value.to_owned());
+        let added = pair.len() + value.len();
+        if self.values.len() >= MAX_ISSUED_COOKIES * 2
+            || self.bytes.saturating_add(added) > MAX_ISSUED_COOKIE_BYTES
+        {
+            // Refuse instead of silently dropping a carrier.
+            self.complete = false;
+            return;
+        }
+        self.bytes += added;
+        self.values.push(pair);
+        self.values.push(value);
+    }
+
+    /// Once any declaration was lost the guard cannot prove its screen.
+    fn overflowed(&self) -> bool {
+        !self.complete
+    }
+
+    /// Whether candidate bytes carry any retained cookie spelling. The
+    /// literal, JSON-escaped, base64 and percent/form views come from
+    /// `carries_secret`; a decoded JSON document is searched string by
+    /// string so an echo inside a structured body cannot hide.
+    fn echoed(&self, candidate: &[u8]) -> bool {
+        !self.complete
+            || self.values.iter().any(|value| {
+                carries_cookie_value(candidate, value)
+                    || json_carries_cookie_value(candidate, value)
+            })
+    }
+}
+
+/// Both the raw and unquoted spellings of an issued cookie value carry the
+/// credential. Neither the value nor a match is ever exposed.
+fn carries_cookie_value(bytes: &[u8], value: &str) -> bool {
+    carries_secret(bytes, value)
+        || value
+            .strip_prefix('"')
+            .and_then(|inner| inner.strip_suffix('"'))
+            .is_some_and(|unquoted| carries_secret(bytes, unquoted))
+}
+
+/// Search a decoded JSON document's strings for the cookie spelling without
+/// exposing either. Non-JSON bytes carry no decoded view.
+fn json_carries_cookie_value(candidate: &[u8], needle: &str) -> bool {
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(candidate) else {
+        return false;
+    };
+    fn carries(document: &serde_json::Value, needle: &str) -> bool {
+        match document {
+            serde_json::Value::String(text) => carries_secret(text.as_bytes(), needle),
+            serde_json::Value::Array(items) => {
+                items.iter().any(|item| carries(item, needle))
+            }
+            serde_json::Value::Object(members) => members.iter().any(|(key, item)| {
+                carries_secret(key.as_bytes(), needle) || carries(item, needle)
+            }),
+            _ => false,
+        }
+    }
+    carries(&document, needle)
 }
 
 /// Decode one percent/form view into caller-owned storage without allocating.
@@ -4357,6 +4827,428 @@ mod tests {
         );
         assert_eq!(layout_server.count(), 1);
         assert!(!layout_fixture.governor().status().unwrap().safety_latched);
+    }
+
+    #[test]
+    fn transcript_redirect_replays_the_session_only_inside_its_reviewed_scope() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("cookie: session=redirected")
+            );
+            if request.starts_with(
+                "GET /courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42 ",
+            ) {
+                reply(
+                    socket,
+                    302,
+                    "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\n",
+                    b"",
+                );
+            } else {
+                assert!(
+                    request.starts_with(
+                        "GET /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json "
+                    )
+                );
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: application/json\r\n",
+                    CLASSROOM_TEST_BODY,
+                );
+            }
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=redirected");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        let output = client.get(&url, classroom_track).unwrap().unwrap();
+        assert_eq!(output["result"], "selected_track_observed");
+        assert_eq!(output["segments"].as_array().unwrap().len(), 2);
+        assert_eq!(server.count(), 2);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
+        // The redirected capture persists under the request URL: the second
+        // read is served without another request.
+        let cached = client.get(&url, classroom_track).unwrap().unwrap();
+        assert_eq!(cached["result"], "selected_track_observed");
+        assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn transcript_redirect_must_keep_the_selected_lesson_identity() {
+        for location in [
+            // A redirect that silently selects another lesson must never be
+            // followed: its empty track would otherwise be cached as lesson 42.
+            "/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=43",
+            // Anonymous landing and sign-in pages are outside the reviewed
+            // transcript scope and are refused without any follow-up request.
+            "/courseapi/v3/web-socket/landing",
+            "/login",
+            "/courseapi/v3/multi-search/get-sub-detail?sub_id=42",
+            "/courseapi/v3/web-socket/search-trans-result?format=json",
+            "/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42&sub_id=43",
+        ] {
+            let fixture = Fixture::new();
+            let headers = format!("Location: {location}\r\n");
+            let server = Server::new(move |socket, _| {
+                reply(socket, 303, &headers, b"");
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=scoped");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            assert_eq!(
+                client.get(&url, classroom_track).unwrap_err().code,
+                "auth_latched",
+                "location {location}"
+            );
+            assert!(client.source.load(&url).unwrap().is_none());
+            assert_eq!(server.count(), 1, "location {location}");
+            assert!(!fixture.governor().status().unwrap().safety_latched);
+        }
+    }
+
+    #[test]
+    fn transcript_redirect_challenge_or_refused_body_ends_without_a_followup() {
+        for (headers, body, code) in [
+            // A real challenge header is a session refusal.
+            ("Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nCF-Mitigated: challenge\r\n", &b""[..], "auth_latched"),
+            // The reviewed envelope's non-zero code is a real refusal.
+            ("Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nContent-Type: application/json\r\n", &br#"{"code":401,"msg":"expired"}"#[..], "auth_latched"),
+            // Bytes the application review cannot classify are refused with
+            // an unknown classification, never reported as a challenge.
+            ("Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nContent-Type: text/html\r\n", &b"<html><body>sign in</body></html>"[..], "unavailable"),
+            // Multiple Locations are indeterminate; neither is chosen.
+            ("Location: /login\r\nLocation: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\n", &b""[..], "unavailable"),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(socket, 302, headers, body);
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=challenged");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            assert_eq!(
+                client.get(&url, classroom_track).unwrap_err().code,
+                code
+            );
+            assert!(client.source.load(&url).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+            // The shared public-source latch is unchanged; the session refusal
+            // is recorded as a challenge outcome, not a safety latch.
+            assert!(!fixture.governor().status().unwrap().safety_latched);
+        }
+
+        // A refused hop's Retry-After remains durable and the refusal keeps
+        // its own classification, never a converted cooldown or a retry.
+        let fixture = Fixture::new();
+        let server = Server::new(move |socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nRetry-After: 60\r\nContent-Type: text/html\r\n",
+                b"<html><body>sign in</body></html>",
+            );
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=hop-cooldown");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "unavailable"
+        );
+        let state = fixture.governor().status().unwrap();
+        assert!(state.cooldown_wait > Duration::from_secs(50));
+        assert!(!state.safety_latched);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn transcript_redirect_checks_each_hop_against_the_loaded_robots_policy() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\n",
+                b"",
+            );
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=robots-hop");
+        // The initial URL is allowed, but the exact followed target is not.
+        // The decision must reuse this loaded policy without a robots fetch.
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42\nDisallow: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "robots_denied"
+        );
+        assert!(client.source.load(&url).unwrap().is_none());
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn transcript_redirect_never_adopts_or_leaks_a_newly_issued_cookie() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            // The issued value is a synthetic fixture credential, not a real one.
+            assert!(request.to_ascii_lowercase().contains("cookie: session=issued"));
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nSet-Cookie: rotated=synthetic-issued-value; Path=/; HttpOnly\r\n",
+                br#"{"code":0,"msg":"","total":0,"list":[],"echo":"synthetic-issued-value"}"#,
+            );
+        });
+        let client = fixture.classroom_client(CacheMode::PreferCache, &server, "session=issued");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        let error = client.get(&url, classroom_track).unwrap_err();
+        // A credential echo is an integrity violation, not a fabricated
+        // challenge or an authentication refusal.
+        assert_eq!(error.code, "unavailable");
+        assert!(!error.message.contains("synthetic-issued-value"));
+        assert!(client.source.load(&url).unwrap().is_none());
+        // No follow-up: the issued cookie is neither adopted nor retransmitted.
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn transcript_redirect_guard_screens_terminal_body_metadata_and_projection() {
+        // The guard spans the entire chain: a cookie issued on an early hop
+        // must still refuse a clean final 200 whose transcript body, decoded
+        // JSON text or retained MIME parameter echoes it. Two alternating
+        // reviewed query orders prove the bound is not a per-hop reset.
+        for echo in ["text", "mime", "pair"] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                if request.starts_with(
+                    "GET /courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42 ",
+                ) {
+                    reply(
+                        socket,
+                        302,
+                        "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nSet-Cookie: rotated=synthetic-chain-value; Path=/; HttpOnly\r\n",
+                        b"",
+                    );
+                } else {
+                    assert!(request.starts_with(
+                        "GET /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json "
+                    ));
+                    let (content_type, body): (&str, Vec<u8>) = match echo {
+                        "text" => (
+                            "application/json",
+                            br#"{"code":0,"msg":"","total":1,"list":[{"sub_id":"42","resource_guid":"","all_content":[{"BeginSec":0,"EndSec":1,"Text":"synthetic-chain-value","TransText":""}],"trans_content":""}]}"#.to_vec(),
+                        ),
+                        "mime" => (
+                            "application/json; note=synthetic-chain-value",
+                            CLASSROOM_TEST_BODY.to_vec(),
+                        ),
+                        // The complete name=value pair is a distinct carrier:
+                        // a base64 echo of the pair alone must also be caught.
+                        _ => (
+                            "application/json",
+                            br#"{"code":0,"msg":"","total":1,"list":[{"sub_id":"42","resource_guid":"","all_content":[{"BeginSec":0,"EndSec":1,"Text":"cm90YXRlZD1zeW50aGV0aWMtY2hhaW4tdmFsdWU=","TransText":""}],"trans_content":""}]}"#.to_vec(),
+                        ),
+                    };
+                    reply(
+                        socket,
+                        200,
+                        &format!("Content-Type: {content_type}\r\n"),
+                        &body,
+                    );
+                }
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=chain-guard");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            let error = client.get(&url, classroom_track).unwrap_err();
+            assert_eq!(error.code, "unavailable", "echo {echo}");
+            assert!(!error.message.contains("synthetic-chain-value"));
+            assert!(client.source.load(&url).unwrap().is_none(), "echo {echo}");
+            // The terminal 200 was actually reached: the guard is not merely
+            // refusing the issuing hop.
+            assert_eq!(server.count(), 2, "echo {echo}");
+        }
+    }
+
+    #[test]
+    fn transcript_redirect_to_another_origin_or_scheme_keeps_auth_latched() {
+        for location in [
+            "https://sso.buaa.edu.cn/login",
+            "http://classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42",
+            "https://classroom.msa.buaa.edu.cn:8443/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42",
+            "https://user:pw@classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42",
+            "//sso.buaa.edu.cn/login",
+        ] {
+            let fixture = Fixture::new();
+            let headers = format!("Location: {location}\r\n");
+            let server = Server::new(move |socket, _| {
+                reply(socket, 302, &headers, b"");
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=follows");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            assert_eq!(
+                client.get(&url, classroom_track).unwrap_err().code,
+                "auth_latched"
+            );
+            assert!(client.source.load(&url).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+            assert!(!fixture.governor().status().unwrap().safety_latched);
+        }
+    }
+
+    #[test]
+    fn transcript_redirect_to_a_sign_in_page_keeps_auth_latched() {
+        let fixture = Fixture::new();
+        let server = Server::new(move |socket, _| {
+            reply(socket, 302, "Location: /login\r\n", b"");
+        });
+        let client = fixture.classroom_client(CacheMode::PreferCache, &server, "session=signin");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "auth_latched"
+        );
+        assert!(client.source.load(&url).unwrap().is_none());
+        // The login target is outside the reviewed transcript scope, so no
+        // anonymous follow-up is sent at all.
+        assert_eq!(server.count(), 1);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
+    }
+
+    #[test]
+    fn transcript_redirect_chains_stay_bounded_and_other_session_routes_still_refuse() {
+        let fixture = Fixture::new();
+        let mut hop = 0usize;
+        let server = Server::new(move |socket, request| {
+            // The initial URL already carries format=json&sub_id=42, so the
+            // first hop must use the other reviewed order before alternating;
+            // otherwise *next != current ends the chain immediately. Both
+            // targets stay inside the transcript scope and keep the selected
+            // lesson identity.
+            let next = if hop % 2 == 0 {
+                "sub_id=42&format=json"
+            } else {
+                "format=json&sub_id=42"
+            };
+            hop += 1;
+            assert!(
+                request.starts_with("GET /courseapi/v3/web-socket/search-trans-result?")
+            );
+            reply(
+                socket,
+                302,
+                &format!("Location: /courseapi/v3/web-socket/search-trans-result?{next}\r\n"),
+                b"",
+            );
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=loop-chain");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "auth_latched"
+        );
+        assert!(client.source.load(&url).unwrap().is_none());
+        assert_eq!(server.count(), 1 + MAX_TRANSCRIPT_REDIRECTS);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
+
+        // The bounded follow is scoped to the transcript endpoint: the other
+        // session-bound classroom reads keep refusing redirects outright.
+        let source_fixture = Fixture::new();
+        let source_server = Server::new(|socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/multi-search/get-sub-detail?sub_id=42\r\n",
+                b"",
+            );
+        });
+        let source_client = source_fixture.classroom_client(
+            CacheMode::PreferCache,
+            &source_server,
+            "session=source-only",
+        );
+        seed(
+            &source_client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let source_url = Url::parse(
+            "https://classroom.msa.buaa.edu.cn/courseapi/v3/multi-search/get-sub-detail?sub_id=42",
+        )
+        .unwrap();
+        let error = source_client
+            .get_source(&source_url, |response| {
+                crate::recordings::subtitles::validate_http_application(&response.body)
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "auth_latched");
+        assert_eq!(source_server.count(), 1);
+        assert!(!source_fixture.governor().status().unwrap().safety_latched);
     }
 
     fn seed_spoc_html(client: &ArchiveClient, body: &[u8]) {

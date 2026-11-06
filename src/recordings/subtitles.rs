@@ -551,6 +551,31 @@ pub(crate) fn validate_http_metadata(
     Ok(())
 }
 
+/// How a bounded transcript redirect body classifies the session. Only the
+/// reviewed application envelope's non-zero code is a real refusal; ordinary
+/// redirect prose is admitted, and bytes that cannot be reviewed stay
+/// indeterminate rather than being fabricated as a challenge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RedirectBodyReview {
+    Empty,
+    Admitted,
+    SessionRefused,
+    Indeterminate,
+}
+
+pub(crate) fn review_redirect_body(body: &[u8]) -> RedirectBodyReview {
+    if body.is_empty() {
+        return RedirectBodyReview::Empty;
+    }
+    match native_http_data(body) {
+        Ok(data) if reports_no_native_track(&data) || data.code == 0 => {
+            RedirectBodyReview::Admitted
+        }
+        Ok(_) => RedirectBodyReview::SessionRefused,
+        Err(_) => RedirectBodyReview::Indeterminate,
+    }
+}
+
 pub(crate) fn process_http(
     response: &Response,
     sub_id: &str,
@@ -634,7 +659,18 @@ pub(crate) fn process_http(
 }
 
 /// Read exactly one source-bound native subtitle response with an explicitly
-/// supplied session. No login, redirect, authentication refresh or retry exists.
+/// supplied session. A bounded number of server-directed same-origin redirect
+/// hops is followed only while each target stays inside the reviewed
+/// transcript URL scope and keeps the selected lesson identity. Every hop's
+/// headers and bounded body are reviewed first; a real challenge, an
+/// application-level authentication refusal, a robots denial or a credential
+/// echo ends the chain without another request, while indeterminate bytes
+/// are refused with an unknown classification rather than a fabricated
+/// challenge. Cookies issued anywhere in the chain are retained only in a
+/// bounded zeroizing guard that screens the terminal body, decoded JSON and
+/// retained headers before output or cache. The cookie is replayed only to a
+/// reviewed same-lesson target; no anonymous landing, login, cross-origin
+/// redirect, cookie adoption, authentication refresh or retry exists.
 pub fn online(mode: CacheMode, input: &str) -> Result<Value, Error> {
     if input.len() > 32 * 1024 {
         return Err(invalid());
@@ -751,7 +787,7 @@ pub fn online_schema() -> Value {
         }
     });
     output["description"] = json!(
-        "Fixed-origin session-bound native subtitle GET/cache only. Credentials remain on stdin/in memory and are never sent to robots, redirects or another origin; no session/credential is included in cache or output. Body hash covers raw HTTP bytes, not a constructed wrapper. No login, media retrieval, catalog write, publisher/rights proof or course completion."
+        "Fixed-origin session-bound native subtitle GET/cache only. Credentials remain on stdin/in memory and are never sent to robots, a cross-origin redirect or another origin; a bounded same-origin redirect is followed only inside the reviewed transcript scope with the same selected sub_id, and every hop's headers/body and robots admission are reviewed before the next send. Real challenge or application authentication refusal ends the chain without a follow-up; indeterminate bytes keep an unknown classification. Cookies issued anywhere in the chain are retained only in a bounded zeroizing guard that screens the terminal body, decoded JSON and retained headers before output or cache; issued cookies are never adopted or retransmitted. No session/credential is included in cache or output. Body hash covers raw HTTP bytes, not a constructed wrapper. No login, media retrieval, catalog write, publisher/rights proof or course completion."
     );
     json!({
         "input":{"type":"object","additionalProperties":false,"required":["authorized","selection"],"oneOf":[{"required":["cookie"]},{"required":["session_ref"]}],"properties":{
@@ -759,7 +795,7 @@ pub fn online_schema() -> Value {
             "session_ref":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Non-secret reference to one stored governed classroom session. Exactly one of cookie or session_ref is required; the credential itself stays in its private owner-only file."},
             "selection":{"type":"object","additionalProperties":false,"required":["sub_id","resource_guid"],"properties":{"sub_id":{"type":"string","pattern":"^[0-9]{1,20}$"},"resource_guid":offline["input"]["properties"]["selection"]["properties"]["resource_guid"]}}
         }},
-        "output":output,"network_policy":{"origin":CLASSROOM_ORIGIN,"path":CLASSROOM_TRANSCRIPT_PATH,"method":"GET","cache_first":true,"automatic_authentication_retry":false,"shared_governor":true,"robots_authenticated":false}
+        "output":output,"network_policy":{"origin":CLASSROOM_ORIGIN,"path":CLASSROOM_TRANSCRIPT_PATH,"method":"GET","cache_first":true,"redirect_follow":"same_origin_bounded","automatic_authentication_retry":false,"shared_governor":true,"robots_authenticated":false}
     })
 }
 
