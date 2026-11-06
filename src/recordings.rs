@@ -356,4 +356,54 @@ mod tests {
             serde_json::json!(["integer", "null"])
         );
     }
+
+    #[test]
+    fn filtered_index_rows_never_report_no_matching_segments_or_false_completion() {
+        let fixture = Fixture::new();
+        fixture.asset("transcript", "transcript", &"1".repeat(64));
+        let stale_first = fixture.segment("transcript", 0, "old needle term", None, None);
+        let stale_second = fixture.segment("transcript", 1, "older needle term", None, None);
+        let third = fixture.segment("transcript", 2, "current needle term", None, None);
+        let fourth = fixture.segment("transcript", 3, "current needle tail", None, None);
+        // Upstream writes that skipped the FTS sync triggers leave the index
+        // carrying old text for the first two rowids; verification drops them.
+        let connection = fixture.db();
+        connection
+            .execute(
+                "UPDATE transcript_segment SET text='rewritten entirely fresh' WHERE id IN (?1,?2)",
+                rusqlite::params![stale_first, stale_second],
+            )
+            .unwrap();
+        drop(connection);
+
+        // limit=1 asks the catalog for one page row plus one pagination row;
+        // scanning must continue past the two filtered rows to fill both.
+        let mut input = request(&fixture, "needle");
+        let first = search(&input.to_string()).unwrap();
+        assert_eq!(first["result"], "segments_found");
+        assert_eq!(
+            first["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|hit| hit["segment"]["id"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            [third]
+        );
+        assert_eq!(first["completeness"]["more_results"], true);
+        input["cursor"] = first["next_cursor"].clone();
+        let second = search(&input.to_string()).unwrap();
+        assert_eq!(second["result"], "segments_found");
+        assert_eq!(
+            second["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|hit| hit["segment"]["id"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            [fourth]
+        );
+        assert_eq!(second["completeness"]["more_results"], false);
+        assert!(second["next_cursor"].is_null());
+    }
 }

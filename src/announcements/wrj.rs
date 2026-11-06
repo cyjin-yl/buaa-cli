@@ -230,6 +230,7 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
             }
             Err(error) => return Err(error),
         };
+        super::refuse_unsafe_listing(response, &html)?;
         let entries: Vec<_> = document
             .entries
             .iter()
@@ -526,5 +527,89 @@ mod tests {
         };
         let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
         assert_eq!(output["published_at"], Value::Null);
+    }
+
+    #[test]
+    fn review_regression_security_marked_listing_is_refused_before_output_or_cache() {
+        // A board that still parses while carrying a security marker is
+        // unsafe: the real list callback must refuse it before serializing
+        // entries and before ArchiveClient::get may persist the response
+        // (save happens only after the callback returns Ok), and no fallback
+        // export may carry the unsafe bytes.
+        let base = Url::parse(WRJ_NOTICES_URL).unwrap();
+        let link_body = listing_html().replace(
+            "href=\"../info/1008/3067.htm\"",
+            "href=\"../info/1008/3067.htm?csrf_token=synthetic\"",
+        );
+        let link_response = Response {
+            url: WRJ_NOTICES_URL.into(),
+            status: 200,
+            headers: BTreeMap::from([(String::from("content-type"), String::from("text/html"))]),
+            sha256: format!("{:x}", Sha256::digest(link_body.as_bytes())),
+            body: link_body.into_bytes(),
+            fetched_at_unix_ms: 1,
+            cache_status: CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let html = college_html(&link_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&link_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback_document(&link_response, &html));
+
+        let control_body = listing_html().replace(
+            "</ul></div><div class=\"pb_sys_common\">",
+            "</ul><form><input type=\"hidden\" name=\"csrf_token\" value=\"synthetic\"></form></div><div class=\"pb_sys_common\">",
+        );
+        let control_response = Response {
+            url: WRJ_NOTICES_URL.into(),
+            status: 200,
+            headers: BTreeMap::from([(String::from("content-type"), String::from("text/html"))]),
+            sha256: format!("{:x}", Sha256::digest(control_body.as_bytes())),
+            body: control_body.into_bytes(),
+            fetched_at_unix_ms: 1,
+            cache_status: CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let html = college_html(&control_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&control_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback_document(&control_response, &html));
+
+        // The ordinary public board stays admissible end to end.
+        let body = listing_html().to_owned();
+        let response = Response {
+            url: WRJ_NOTICES_URL.into(),
+            status: 200,
+            headers: BTreeMap::from([(String::from("content-type"), String::from("text/html"))]),
+            sha256: format!("{:x}", Sha256::digest(body.as_bytes())),
+            body: body.into_bytes(),
+            fetched_at_unix_ms: 1,
+            cache_status: CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        let html = college_html(&response).unwrap();
+        assert!(parse_listing(&html, &base).is_ok());
+        assert!(crate::announcements::refuse_unsafe_listing(&response, &html).is_ok());
+        assert!(is_safe_public_fallback_document(&response, &html));
     }
 }

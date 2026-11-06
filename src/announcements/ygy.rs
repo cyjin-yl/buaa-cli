@@ -100,12 +100,28 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         ));
     }
     let mut current = latest;
-    for _ in 1..page {
+    for hop in 1..page {
         let next = current.clone();
         current = client.get(&next, false, |response| {
             college_html(response)?;
             advertised_next_page_url(&response.body, &next)
         })?;
+        // The requested ordinal must be evidenced by the board's own declared
+        // identity: hop `hop` has to land on /tzgg/yggg/<hop + 1>.htm.  A pager
+        // that revisits an earlier or the same page can therefore never stand
+        // in for a later ordinal, and a request is never answered with bytes
+        // whose source URL declares a different page.
+        let declared = current
+            .path()
+            .strip_prefix("/tzgg/yggg/")
+            .and_then(|stem| stem.strip_suffix(".htm"))
+            .and_then(|stem| stem.parse::<u32>().ok());
+        if declared != Some(hop + 1) {
+            return Err(Error::new(
+                "unavailable",
+                "retained YGY pager cannot evidence the requested page ordinal",
+            ));
+        }
     }
     Ok(current)
 }
@@ -130,6 +146,11 @@ fn advertised_next_page_url(bytes: &[u8], base: &Url) -> Result<Url, Error> {
                 file!(),
                 line!(),
             ));
+        }
+        // A declaration resolving to the page's own URL advertises no next
+        // page; standing still can never back a later ordinal.
+        if url == *base {
+            continue;
         }
         match selected.as_ref() {
             Some(previous) if previous != &url => {
@@ -640,5 +661,80 @@ mod tests {
                 .code,
             "unavailable"
         );
+    }
+
+    /// A page answer's identity is the requested ordinal (`page`/`source_page`
+    /// in the emitted JSON), while `retrieval.source_url` names the URL whose
+    /// bytes actually backed it.  `listing_url` consumes
+    /// `advertised_next_page_url` once per hop, so a retained pager that
+    /// re-declares an already-visited URL must never be admitted as the
+    /// backing source of a later ordinal: the consumer would emit
+    /// `page:3`/`source_page:3` over page-2 content.  The traversal must
+    /// either refuse or resolve a URL whose declared board ordinal is the
+    /// requested one.  `MAX_PAGE_HOPS` bounds only the hop count, not this
+    /// identity.  `article`'s `source_page` shares the same `listing_url`
+    /// traversal, so this invariant covers both entry points.
+    #[test]
+    fn looping_pager_cannot_back_page_three_with_page_two_content() {
+        // The root board declares its next page as /tzgg/yggg/2.htm.
+        let root_html = r#"<title>医工公告</title><ul class="list1">
+            <li><div class="li-l"><p class="p1">09</p><p class="p2">10</p></div><div class="li-r"><a href="../info/1004/41.htm">Root notice</a></div></li>
+            </ul><div class="page"><a class="Next" href="yggg/2.htm">下页</a></div>"#;
+        // Page two carries a valid list, but its pager self-links: the source
+        // advertises no third board at all.
+        let page_two_html = r#"<title>医工公告</title><ul class="list1">
+            <li><div class="li-l"><p class="p1">08</p><p class="p2">20</p></div><div class="li-r"><a href="../info/1004/42.htm">Page two notice</a><p>Page two summary.</p></div></li>
+            </ul><div class="page"><a class="Next" href="/tzgg/yggg/2.htm">下页</a></div>"#;
+        let latest = Url::parse(YGY_NOTICES_URL).unwrap();
+        let page_two = Url::parse("https://ygy.buaa.edu.cn/tzgg/yggg/2.htm").unwrap();
+
+        // Ordinary control: hop one selects page two, whose valid list and
+        // honest retrieval identity belong to page two only.
+        let first_hop = advertised_next_page_url(root_html.as_bytes(), &latest).unwrap();
+        assert_eq!(first_hop, page_two);
+        let control = parse_listing(&Html::parse_document(page_two_html), &page_two).unwrap();
+        assert_eq!(control.entries.len(), 1);
+        assert_eq!(control.entries[0].title, "Page two notice");
+        let honest = Response {
+            url: page_two.to_string(),
+            status: 200,
+            headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
+            sha256: format!("{:x}", Sha256::digest(page_two_html.as_bytes())),
+            body: page_two_html.as_bytes().to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: crate::net::CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        };
+        assert_eq!(
+            retrieval(&honest)["source_url"].as_str(),
+            Some(page_two.as_str())
+        );
+
+        // Requested page 3 is a second hop from the retained page two.  Its
+        // only advertised next destination re-declares page two itself, so the
+        // selected URL can never truthfully back a page-3 answer.
+        match advertised_next_page_url(page_two_html.as_bytes(), &first_hop) {
+            // Refusal: the source advertises no third page; nothing is served.
+            Err(_) => {}
+            Ok(target) => {
+                // Truthful identity: the backing URL must itself be the source's
+                // declared third board, never the already-visited page-2 URL
+                // relabeled by hop count.
+                let declared_ordinal = target
+                    .path()
+                    .strip_prefix("/tzgg/yggg/")
+                    .and_then(|stem| stem.strip_suffix(".htm"))
+                    .and_then(|stem| stem.parse::<u32>().ok());
+                assert_eq!(
+                    declared_ordinal,
+                    Some(3),
+                    "a page-3 answer must be backed by the source's declared \
+                     third board; {target} declares a different ordinal, so \
+                     its bytes would be emitted under page:3/source_page:3 \
+                     while retrieval.source_url names another page"
+                );
+            }
+        }
     }
 }

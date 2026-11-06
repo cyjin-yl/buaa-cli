@@ -439,6 +439,8 @@ fn parameter_carries_credentials(key: &str, value: &str, enclosing: &Url, depth:
             "tgt",
             "access_token",
             "refresh_token",
+            "token",
+            "id_token",
         ]
         .iter()
         .any(|reserved| key.eq_ignore_ascii_case(reserved))
@@ -479,7 +481,19 @@ fn target_carries_credentials(url: &Url, depth: usize) -> bool {
     }
     pairs_carry_credentials(url.query_pairs(), url, depth)
         || url.fragment().is_some_and(|fragment| {
+            // Fragment routes embed a second query behind `?` (for example
+            // `#/callback?ticket=…`); screening only the whole fragment as
+            // pairs would make `/callback?ticket` the key and hide the
+            // reserved name, so every `?`-separated segment after the route
+            // is screened through the same pair policy as well.
             pairs_carry_credentials(url::form_urlencoded::parse(fragment.as_bytes()), url, depth)
+                || fragment.split('?').skip(1).any(|segment| {
+                    pairs_carry_credentials(
+                        url::form_urlencoded::parse(segment.as_bytes()),
+                        url,
+                        depth,
+                    )
+                })
         })
 }
 

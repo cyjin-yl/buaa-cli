@@ -36,10 +36,37 @@ pub fn type_a(samples: &[f64]) -> Result<(f64, f64, f64), String> {
     if samples.iter().any(|v| !v.is_finite()) {
         return Err("sample value must be finite".into());
     }
-    let mean = samples.iter().sum::<f64>() / n as f64;
-    let ss: f64 = samples.iter().map(|v| (v - mean) * (v - mean)).sum();
-    let sample_std = (ss / (n as f64 - 1.0)).sqrt();
-    let std_uncertainty = sample_std / (n as f64).sqrt();
+    let nf = n as f64;
+    // Divide each sample by n before accumulating so the running sum cannot
+    // overflow even at the f64 range boundary (every term is at most MAX/n).
+    let mean = samples.iter().map(|v| v / nf).sum::<f64>();
+    // Scaled squared deviations: halving both operands keeps every difference
+    // within [-MAX, MAX], and normalizing by the largest half-deviation keeps
+    // squared terms in [0, 1]. Tiny representable deviations (e.g. 1e-200)
+    // are therefore not zeroed by premature squaring, and huge ones do not
+    // overflow.
+    let half_dev = |v: f64| v * 0.5 - mean * 0.5;
+    let max_hd = samples.iter().map(|v| half_dev(*v).abs()).fold(0.0, f64::max);
+    let sample_std = if max_hd == 0.0 {
+        0.0
+    } else {
+        let ssn: f64 = samples
+            .iter()
+            .map(|v| {
+                let d = half_dev(*v) / max_hd;
+                d * d
+            })
+            .sum();
+        // std = 2*max_hd * sqrt(ssn/(n-1)) reordered to defer the range check.
+        max_hd * (4.0 * ssn / (nf - 1.0)).sqrt()
+    };
+    let std_uncertainty = sample_std / nf.sqrt();
+    if ![mean, sample_std, std_uncertainty]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return Err("type_a result is outside the finite f64 range".into());
+    }
     Ok((mean, sample_std, std_uncertainty))
 }
 
@@ -48,7 +75,9 @@ pub fn type_a(samples: &[f64]) -> Result<(f64, f64, f64), String> {
 /// Each supplied term is a sensitivity coefficient multiplied by its standard
 /// uncertainty, i.e. `c_i * u_i`. Returns `sqrt(sum(term_i^2))`.
 pub fn combined(terms: &[f64]) -> f64 {
-    terms.iter().map(|t| t * t).sum::<f64>().sqrt()
+    // hypot computes a scaled root-sum-square: a 1e-200 term survives (its
+    // square would underflow to zero) and large terms do not overflow.
+    terms.iter().fold(0.0f64, |acc, t| acc.hypot(*t))
 }
 
 /// Ordinary least-squares linear regression `y = intercept + slope * x`.
@@ -67,31 +96,72 @@ pub fn linear_fit(points: &[(f64, f64)]) -> Result<(f64, f64, f64, f64, f64), St
     if points.iter().any(|(x, y)| !x.is_finite() || !y.is_finite()) {
         return Err("point value must be finite".into());
     }
-    let mx: f64 = points.iter().map(|(x, _)| x).sum::<f64>() / n as f64;
-    let my: f64 = points.iter().map(|(_, y)| y).sum::<f64>() / n as f64;
-    let sxx: f64 = points.iter().map(|(x, _)| (x - mx) * (x - mx)).sum();
-    if sxx == 0.0 {
+    let nf = n as f64;
+    // Per-term division before accumulating keeps means inside [-MAX, MAX].
+    let mx: f64 = points.iter().map(|(x, _)| x / nf).sum::<f64>();
+    let my: f64 = points.iter().map(|(_, y)| y / nf).sum::<f64>();
+    // Halving both operands keeps every deviation within [-MAX, MAX] even for
+    // opposite-sign inputs near the f64 boundary; normalizing by the largest
+    // half-deviation keeps squared terms in [0, 1] so representable tiny
+    // deviations are not zeroed by premature squaring.
+    let hx: Vec<f64> = points.iter().map(|(x, _)| x * 0.5 - mx * 0.5).collect();
+    let hy: Vec<f64> = points.iter().map(|(_, y)| y * 0.5 - my * 0.5).collect();
+    let sx = hx.iter().fold(0.0f64, |a, d| a.max(d.abs()));
+    if sx == 0.0 {
         return Err("linear_fit requires distinct x values".into());
     }
-    let sxy: f64 = points.iter().map(|(x, y)| (x - mx) * (y - my)).sum();
-    let slope = sxy / sxx;
-    let intercept = my - slope * mx;
-    let ss_res: f64 = points
-        .iter()
-        .map(|(x, y)| {
-            let r = y - (intercept + slope * x);
-            r * r
-        })
-        .sum();
-    let ss_tot: f64 = points.iter().map(|(_, y)| (y - my) * (y - my)).sum();
-    let r_squared = if ss_tot == 0.0 {
+    let ssx_norm: f64 = hx.iter().map(|d| (d / sx) * (d / sx)).sum();
+    let sy = hy.iter().fold(0.0f64, |a, d| a.max(d.abs()));
+    let (sy_eff, sxy_norm, ssy_norm) = if sy == 0.0 {
+        // Every y equals my: sxy and ssy are exactly zero and slope is zero.
+        (1.0, 0.0, 0.0)
+    } else {
+        let sxy: f64 = hx
+            .iter()
+            .zip(hy.iter())
+            .map(|(dx, dy)| (dx / sx) * (dy / sy))
+            .sum();
+        let ssy: f64 = hy.iter().map(|d| (d / sy) * (d / sy)).sum();
+        (sy, sxy, ssy)
+    };
+    // True sums are 4*sx^2*ssx_norm, 4*sx*sy*sxy_norm, 4*sy^2*ssy_norm;
+    // the dimensionless ratios below use them without computing them.
+    let slope = if sxy_norm == 0.0 {
+        0.0
+    } else {
+        (sy_eff / sx) * (sxy_norm / ssx_norm)
+    };
+    let intercept = 2.0 * (my * 0.5 - slope * (mx * 0.5));
+    // ss_res = ss_tot - sxy^2/sxx, evaluated on normalized sums.
+    let residual_norm = if ssy_norm == 0.0 {
+        0.0
+    } else {
+        (ssy_norm - sxy_norm * sxy_norm / ssx_norm).max(0.0)
+    };
+    let r_squared = if ssy_norm == 0.0 {
         1.0
     } else {
-        1.0 - ss_res / ss_tot
+        1.0 - residual_norm / ssy_norm
     };
-    let s2 = ss_res / (n as f64 - 2.0);
-    let se_slope = (s2 / sxx).sqrt();
-    let se_intercept = (s2 * (1.0 / n as f64 + mx * mx / sxx)).sqrt();
+    // s2 = 4*sy^2*residual_norm/(n-2); se_slope = sqrt(s2/sxx) factors to
+    // (sy/sx)*sqrt(residual_norm/((n-2)*ssx_norm)). Multiply sy by the
+    // dimensionless factor before dividing by sx to dodge range artifacts.
+    let se_slope = sy_eff * (residual_norm / ((nf - 2.0) * ssx_norm)).sqrt() / sx;
+    // se_intercept = sy*sqrt(4*residual_norm/(n-2) * (1/n + t^2/ssx_norm))
+    // with t = mx/(2*sx), all dimensionless except the leading sy.
+    let se_intercept = if residual_norm == 0.0 {
+        0.0
+    } else {
+        let t = mx / (2.0 * sx);
+        sy_eff
+            * (4.0 * residual_norm / (nf - 2.0) * (1.0 / nf + t * t / ssx_norm)).sqrt()
+    };
+    if ![slope, intercept, se_slope, se_intercept, r_squared]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return Err("linear_fit result is outside the finite f64 range".into());
+    }
     Ok((slope, intercept, se_slope, se_intercept, r_squared))
 }
 
@@ -127,12 +197,23 @@ pub fn single_pendulum(
     }
     let period = total_time_s / cycles as f64;
     let period_uncertainty = total_time_uncertainty_s / cycles as f64;
-    let g = 4.0 * std::f64::consts::PI * std::f64::consts::PI * length_m / (period * period);
+    // g = 4*pi^2*L/T^2 = 4*pi^2 * (L/T) / T: forming L/T first avoids a
+    // premature overflow of period*period and only overflows when g itself
+    // is unrepresentable.
+    let g = 4.0 * std::f64::consts::PI * std::f64::consts::PI * (length_m / period) / period;
+    if !g.is_finite() {
+        return Err("pendulum result g is outside the finite f64 range".into());
+    }
     // Sensitivity coefficients from ln g = ln(4*pi^2) + ln L - 2 ln T:
     // dg/dL = g/L, dg/dT = -2*g/T.
-    let dg_dl = g / length_m;
-    let dg_dt = -2.0 * g / period;
-    let g_uncertainty = combined(&[dg_dl * length_uncertainty_m, dg_dt * period_uncertainty]);
+    // The propagation terms are formed as g * (u_L / L) and -2 * g * (u_T / T)
+    // so a zero uncertainty cannot produce inf * 0 = NaN.
+    let term_l = g * (length_uncertainty_m / length_m);
+    let term_t = -2.0 * g * (period_uncertainty / period);
+    let g_uncertainty = combined(&[term_l, term_t]);
+    if !g_uncertainty.is_finite() {
+        return Err("pendulum result g uncertainty is outside the finite f64 range".into());
+    }
     Ok((g, g_uncertainty, period, period_uncertainty))
 }
 
@@ -191,8 +272,9 @@ pub fn check(input: &str, method: &str) -> Value {
                 total_time_uncertainty_s,
             ) {
                 Ok((g, g_u, period, period_u)) => {
-                    let relative = if g != 0.0 {
-                        Value::from(g_u / g)
+                    let ratio = if g != 0.0 { g_u / g } else { f64::NAN };
+                    let relative = if ratio.is_finite() {
+                        Value::from(ratio)
                     } else {
                         Value::Null
                     };
@@ -481,5 +563,60 @@ mod tests {
     fn fit_rejects_non_finite_points() {
         assert!(linear_fit(&[(0.0, f64::NAN), (1.0, 1.0)]).is_err());
         assert!(linear_fit(&[(0.0, 1.0), (0.0, 2.0)]).is_err()); // non-distinct x
+    }
+
+    #[test]
+    fn type_a_never_emits_non_finite_or_null_result() {
+        // Summing 1e308 + 1e308 overflows a naive running sum to inf, which
+        // serde_json would then serialize as a successful null. The mean must
+        // come back as the finite 1e308.
+        let out = check(r#"{"samples":[1e308,1e308]}"#, "type-a");
+        assert_eq!(out["type"], "physics_type_a");
+        assert_eq!(out["mean"].as_f64(), Some(1e308));
+        assert_eq!(out["sample_std"].as_f64(), Some(0.0));
+        assert_eq!(out["std_uncertainty"].as_f64(), Some(0.0));
+        // The serialized document must contain no null/infinite success field.
+        let text = serde_json::to_string(&out).unwrap();
+        assert!(!text.contains("null"));
+        // Opposite-sign extremes whose true standard deviation exceeds the
+        // f64 range must be refused, not emitted as null/inf.
+        let out = check(r#"{"samples":[-1.7e308,1.7e308]}"#, "type-a");
+        assert_eq!(out["error"], "invalid_input");
+    }
+
+    #[test]
+    fn type_a_preserves_tiny_representable_deviations() {
+        // (1e-200)^2 underflows to zero; a premature-squaring implementation
+        // reports std 0. Scaled accumulation must keep ~7.07e-201.
+        let (mean, sample_std, std_uncertainty) = type_a(&[0.0, 1e-200]).unwrap();
+        assert_eq!(mean, 5e-201);
+        assert!((sample_std - 1e-200 / 2f64.sqrt()).abs() / sample_std < 1e-12);
+        assert!((std_uncertainty - 5e-201).abs() / std_uncertainty < 1e-12);
+    }
+
+    #[test]
+    fn pendulum_preserves_tiny_uncertainty_and_rejects_unrepresentable() {
+        // (1e-200)^2 underflows to zero: the combined uncertainty must stay
+        // nonzero via the hypot-based root-sum-square.
+        let (g, g_u, _, _) = single_pendulum(1.0, 0.0, 1, 2.0, 1e-200).unwrap();
+        assert!(g.is_finite() && g > 0.0);
+        assert!(g_u.is_finite() && g_u > 0.0);
+        assert!((g_u - g * 1e-200).abs() / g_u < 1e-12);
+        // An unrepresentable g (L/T overflows the f64 range) must be refused.
+        assert!(single_pendulum(1e308, 0.0, 1, 1e-200, 0.0).is_err());
+    }
+
+    #[test]
+    fn linear_fit_never_emits_non_finite_or_null_result() {
+        // Exact line through extreme opposite-sign points: a naive Sxx
+        // overflows to inf, giving NaN slope serialized as null.
+        let out = check(r#"{"points":[[-1e308,-1e308],[0,0],[1e308,1e308]]}"#, "fit");
+        assert_eq!(out["type"], "physics_fit");
+        assert!((out["slope"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+        assert!(out["intercept"].as_f64().unwrap().abs() < 1e290);
+        assert_eq!(out["slope_se"].as_f64(), Some(0.0));
+        assert_eq!(out["r_squared"].as_f64(), Some(1.0));
+        let text = serde_json::to_string(&out).unwrap();
+        assert!(!text.contains("null"));
     }
 }

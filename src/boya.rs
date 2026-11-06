@@ -665,6 +665,7 @@ fn decode_response_with_fields(
     bytes: &[u8],
     content_type: Option<&str>,
     key: &[u8; 16],
+    contains_secret: &dyn Fn(&[u8]) -> bool,
 ) -> (Value, SourceFields) {
     if crate::html::assess_challenge_body(bytes, content_type, true)
         != crate::html::ChallengeAssessment::Clear
@@ -684,12 +685,42 @@ fn decode_response_with_fields(
         None
     };
     let ciphertext = quoted.as_ref().map_or(bytes, |text| text.as_bytes());
-    let decoded = STANDARD
+    // Keep the decrypted plaintext until strict admission finished so its
+    // own screening state decides whether recoverable ciphertext may be
+    // published as fallback evidence.
+    let plaintext = STANDARD
         .decode(ciphertext)
         .ok()
         .map(Zeroizing::new)
-        .and_then(|b| aes(&b, key, false).ok())
-        .and_then(|b| serde_json::from_slice::<PrivateValue>(&b).ok());
+        .and_then(|b| aes(&b, key, false).ok());
+    let decoded = plaintext
+        .as_deref()
+        .and_then(|b| serde_json::from_slice::<PrivateValue>(b).ok());
+    if decoded.is_none()
+        && let Some(plaintext) = plaintext.as_deref()
+        && !plaintext.is_empty()
+    {
+        // Decrypted plaintext that cannot be admitted strictly cannot be
+        // screened by the structured path either: screen its decoded string
+        // spellings before any ciphertext is published as evidence. A
+        // definite echo withholds the fallback; material that cannot be
+        // reviewed at all withholds it without claiming an echo.
+        match escaped_string_screening(plaintext, contains_secret) {
+            ResponseScreening::Echo => {
+                return (
+                    withheld_fallback(bytes, content_type),
+                    SourceFields::default(),
+                );
+            }
+            ResponseScreening::Unreviewable => {
+                return (
+                    unreviewed_fallback(bytes, content_type),
+                    SourceFields::default(),
+                );
+            }
+            ResponseScreening::Clear => {}
+        }
+    }
     if decoded.as_ref().is_some_and(|value| sensitive_value(value)) {
         return (
             withheld_fallback(bytes, content_type),
@@ -725,7 +756,7 @@ fn decode_response_with_fields(
     }
 }
 pub fn decode_response(bytes: &[u8], content_type: Option<&str>, key: &[u8; 16]) -> Value {
-    decode_response_with_fields(bytes, content_type, key).0
+    decode_response_with_fields(bytes, content_type, key, &|_| false).0
 }
 pub fn parse_page(data: &Value) -> Result<Value, Error> {
     let content = data
@@ -913,7 +944,15 @@ impl CourseTraversal {
         Step::Continue
     }
 
-    fn envelope(self) -> Value {
+    /// Settle the traversal into its exported envelope. Every retained
+    /// record and page payload is screened once more against the
+    /// invocation's complete secret history: a value issued by a later
+    /// page's `Set-Cookie` is a credential of this invocation too, so a
+    /// record or page carrying it is withheld rather than exported.
+    /// Withheld material keeps its neighboring records verbatim and the
+    /// traversal can never claim completeness for a window it no longer
+    /// covers.
+    fn envelope(self, contains_secret: &dyn Fn(&[u8]) -> bool) -> Value {
         let CourseTraversal {
             start,
             page_size,
@@ -924,13 +963,39 @@ impl CourseTraversal {
             size,
             offset: _,
             seen: _,
-            entries,
-            pages,
-            failure,
+            mut entries,
+            mut pages,
+            mut failure,
             result,
-            complete,
-            reason,
+            mut complete,
+            mut reason,
         } = self;
+        let mut result = result;
+        let mut withheld = false;
+        for value in std::iter::empty()
+            .chain(entries.iter())
+            .chain(pages.iter())
+            .chain(failure.iter())
+        {
+            if value_carries_secret(value, contains_secret) {
+                withheld = true;
+            }
+        }
+        if withheld {
+            entries.retain(|entry| !value_carries_secret(entry, contains_secret));
+            pages.retain(|page| !value_carries_secret(page, contains_secret));
+            if failure
+                .as_ref()
+                .is_some_and(|value| value_carries_secret(value, contains_secret))
+            {
+                failure = Some(json!({"result":"fallback","fallback_reason":"sensitive_response_withheld"}));
+            }
+            if complete {
+                result = "partial";
+            }
+            complete = false;
+            reason = Some("credential_echo");
+        }
         let entry_count = entries.len();
         json!({"result":if complete{"success"}else{result},"source":"queryStudentSemesterCourseByPage","list_contract":"page",
             "complete":complete,"incomplete_reason":reason,"entries":entries,"entry_count":entry_count,
@@ -1506,7 +1571,7 @@ impl BoyaClient {
             }
             last = (status, retry_after, challenge, body_failed);
         }
-        let envelope = traversal.envelope();
+        let envelope = traversal.envelope(&|candidate| secrets.carries(candidate));
         // A later page whose send failed is recorded as a network failure; a
         // traversal that stopped for any other reason settles with the last
         // admitted exchange's facts.
@@ -1542,7 +1607,9 @@ fn admit_response(
             ResponseScreening::Unreviewable => {
                 (unreviewed_fallback(bytes, safe_ct), SourceFields::default())
             }
-            ResponseScreening::Clear => decode_response_with_fields(bytes, ct, key),
+            ResponseScreening::Clear => {
+                decode_response_with_fields(bytes, ct, key, contains_secret)
+            }
         }
     } else {
         (Value::Null, SourceFields::default())
@@ -2344,11 +2411,18 @@ mod tests {
                                 }
                             }
                             let request = String::from_utf8_lossy(&bytes).into_owned();
+                            // Header names are case-insensitive and reqwest
+                            // emits them lowercase. The body must be drained
+                            // before replying: closing the socket with an
+                            // unread POST body races an RST against the
+                            // client reading the response.
                             let body_len: usize = request
                                 .lines()
                                 .find_map(|line| {
-                                    line.strip_prefix("Content-Length: ")
-                                        .and_then(|value| value.trim().parse().ok())
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse().ok())
+                                        .flatten()
                                 })
                                 .unwrap_or(0);
                             if body_len > 0 {
@@ -2694,6 +2768,260 @@ mod tests {
                 .any(|line| line.to_ascii_lowercase().starts_with("cookie:")),
             "an issued value must never be retransmitted"
         );
+        drop(governor);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// An encrypted response is not screened until it decrypts. When the
+    /// decrypted plaintext fails strict `PrivateValue` admission — a
+    /// duplicate key carrying an escaped spelling of an issued cookie — the
+    /// body cannot be screened at all, so the fallback must withhold its
+    /// raw evidence rather than publish recoverable ciphertext. The cookie
+    /// issued by the same response's `Set-Cookie` supplies the secret.
+    #[test]
+    fn encrypted_unparseable_echo_withholds_raw_evidence() {
+        use std::io::Write;
+        use std::os::unix::fs::DirBuilderExt;
+        let key = [0u8; 16];
+        let plain = br#"{"note":"abc\/123","note":"ordinary"}"#.as_slice();
+        let wire = STANDARD.encode(aes(plain, &key, true).unwrap().as_slice());
+        let server = Server::new(move |socket, _index| {
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\nSet-Cookie: sid=abc/123; Path=/\r\n\r\n",
+                        wire.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            socket.write_all(wire.as_bytes()).unwrap();
+        });
+        let client = reqwest::blocking::Client::builder()
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .build()
+            .unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "boya-encrypted-echo-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        let governor = Governor::isolated_for_test(&path).unwrap();
+        let mut lease = net::acquire(&governor).unwrap();
+        let token = "synthetic-auth-token-value";
+        let mut secrets = ScreenedSecrets {
+            token,
+            session: None,
+            password: None,
+            issued: IssuedCookies::default(),
+        };
+        let mut request = BoyaClient::prepare(&client, token, &ReadRequest::Profile)
+            .unwrap()
+            .0;
+        let url = request.url_mut();
+        url.set_scheme("http").expect("test loopback scheme");
+        url.set_host(Some(&server.address.ip().to_string()))
+            .expect("test loopback host");
+        url.set_port(Some(server.address.port()))
+            .expect("test loopback port");
+        let exchange = BoyaClient::exchange(
+            &client,
+            &mut lease,
+            request,
+            Zeroizing::new(key),
+            &mut secrets,
+            &ReadRequest::Profile,
+        )
+        .map_err(|_| err("test_exchange", "exchange transport failed"))
+        .unwrap();
+        let value = exchange.value.unwrap();
+        assert_eq!(
+            value["raw_evidence"]["data"], Value::Null,
+            "recoverable ciphertext whose plaintext cannot be screened must not be published"
+        );
+        assert!(secrets.issued.carries(b"abc/123"));
+        settle(
+            lease,
+            exchange.status,
+            exchange.retry_after.as_deref(),
+            exchange.challenge,
+            exchange.body_failed,
+        )
+        .unwrap();
+        drop(governor);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// A value that becomes secret partway through a traversal — issued by
+    /// a later page's `Set-Cookie` — cannot leave the earlier pages
+    /// unscreened: an already-admitted record carrying that value must not
+    /// reach the exported envelope, and no complete result may be claimed
+    /// when a source record is withheld. Two source-shaped pages declare
+    /// the same totals; the second issues the cookie.
+    #[test]
+    fn traversal_withholds_records_matching_later_issued_values() {
+        use std::io::Write;
+        use std::os::unix::fs::DirBuilderExt;
+        let key = [0u8; 16];
+        let page0 = STANDARD.encode(
+            aes(
+                br#"{"status":"0","data":{"content":[{"id":1,"note":"abc/123"}],"totalElements":2,"totalPages":2,"size":1,"number":0}}"#,
+                &key,
+                true,
+            )
+            .unwrap()
+            .as_slice(),
+        );
+        let page1 = STANDARD.encode(
+            aes(
+                br#"{"status":"0","data":{"content":[{"id":2}],"totalElements":2,"totalPages":2,"size":1,"number":1}}"#,
+                &key,
+                true,
+            )
+            .unwrap()
+            .as_slice(),
+        );
+        let server = Server::new(move |socket, index| {
+            let (extra, body) = match index {
+                0 => ("", page0.as_str()),
+                _ => (
+                    "Set-Cookie: sid=abc/123; Path=/\r\n",
+                    page1.as_str(),
+                ),
+            };
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+                        body.len(),
+                        extra
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            socket.write_all(body.as_bytes()).unwrap();
+        });
+        let client = reqwest::blocking::Client::builder()
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .build()
+            .unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "boya-traversal-echo-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        let governor = Governor::isolated_for_test(&path).unwrap();
+        let mut lease = net::acquire(&governor).unwrap();
+        let token = "synthetic-auth-token-value";
+        let mut secrets = ScreenedSecrets {
+            token,
+            session: None,
+            password: None,
+            issued: IssuedCookies::default(),
+        };
+        let route = |request: &mut reqwest::blocking::Request| {
+            let url = request.url_mut();
+            url.set_scheme("http").expect("test loopback scheme");
+            url.set_host(Some(&server.address.ip().to_string()))
+                .expect("test loopback host");
+            url.set_port(Some(server.address.port()))
+                .expect("test loopback port");
+        };
+        let page_request = PageRequest {
+            page_number: 0,
+            page_size: 1,
+            max_pages: 2,
+        };
+        let mut traversal = CourseTraversal::new(&page_request);
+        let mut last = None;
+        for next_page in [0u32, 1] {
+            if next_page != 0 {
+                let reservation = lease.reserve_followup().unwrap();
+                assert!(reservation.cooldown_wait.is_zero());
+            }
+            let request = ReadRequest::Courses(PageRequest {
+                page_number: next_page,
+                page_size: 1,
+                max_pages: 2,
+            });
+            let mut request = BoyaClient::prepare(&client, token, &request)
+                .unwrap()
+                .0;
+            route(&mut request);
+            let exchange = BoyaClient::exchange(
+                &client,
+                &mut lease,
+                request,
+                Zeroizing::new(key),
+                &mut secrets,
+                &ReadRequest::Courses(PageRequest {
+                    page_number: next_page,
+                    page_size: 1,
+                    max_pages: 2,
+                }),
+            )
+            .map_err(|_| err("test_exchange", "exchange transport failed"))
+            .unwrap();
+            let Exchange {
+                value,
+                status,
+                retry_after,
+                challenge,
+                body_failed,
+            } = exchange;
+            last = Some((status, retry_after, challenge, body_failed));
+            let value = value.unwrap();
+            if matches!(traversal.advance(&value), Step::Done) {
+                break;
+            }
+        }
+        let (last_status, last_retry, last_challenge, last_body_failed) = last.unwrap();
+        assert!(secrets.issued.carries(b"abc/123"));
+        let envelope = traversal.envelope(&|candidate| secrets.carries(candidate));
+        let exported = envelope.to_string();
+        assert!(
+            !exported.contains("abc/123"),
+            "a value issued by a later page must not survive in earlier records: {exported}"
+        );
+        assert!(
+            !exported.contains(&STANDARD.encode("abc/123")),
+            "an encoded echo must not survive either"
+        );
+        assert_ne!(envelope["result"], "success");
+        assert_ne!(
+            envelope["complete"], true,
+            "completeness must not be claimed when a source record is withheld"
+        );
+        assert!(
+            !envelope["entries"]
+                .as_array()
+                .is_some_and(|entries| entries.iter().any(|entry| entry["id"] == 1)),
+            "the record carrying the issued value must be withheld"
+        );
+        settle(
+            lease,
+            last_status,
+            last_retry.as_deref(),
+            last_challenge,
+            last_body_failed,
+        )
+        .unwrap();
         drop(governor);
         std::fs::remove_dir_all(path).unwrap();
     }
@@ -3201,7 +3529,7 @@ mod tests {
                 break;
             }
         }
-        traversal.envelope()
+        traversal.envelope(&|_| false)
     }
 
     #[test]

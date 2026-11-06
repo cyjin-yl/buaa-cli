@@ -1620,6 +1620,7 @@ fn describe_college_surface(
             | "dept3"
             | "ee"
             | "sa"
+            | "transportation"
     ) {
         college_html(response)?
     } else {

@@ -5458,6 +5458,16 @@ mod tests {
                 false,
             ),
             (
+                "<a href='/login?token=fixture42'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?id_token=fixture42'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
                 "<a href='https://synthetic-user:synthetic-private@example.invalid/login'>Navigation</a>",
                 MEMBER,
                 false,
@@ -5490,6 +5500,16 @@ mod tests {
             (
                 "",
                 "<a href='/public?service=%2Fcallback%3Fticket%3Dfixture42'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?token=fixture42'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?id_token=fixture42'>One</a>",
                 false,
             ),
             (
@@ -5547,6 +5567,40 @@ mod tests {
                 200,
                 "Content-Type: text/html\r\n",
                 b"<html><title>Changed</title><a href='/login'>Navigation</a></html>",
+            );
+        });
+        let client = fixture.organization_client(CacheMode::Revalidate, &server);
+        seed(
+            &client,
+            ORGANIZATIONS_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(&client, ORGANIZATIONS_URL, ORIGINAL);
+        assert_eq!(
+            crate::organizations::list_with_client(&client)
+                .unwrap_err()
+                .code,
+            "source_refused"
+        );
+        let retained = client
+            .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, ORIGINAL);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn nested_fragment_route_credentials_never_enter_output_or_replace_a_prior_capture() {
+        const ORIGINAL: &[u8] = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='/public'>One</a></div></div></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                b"<html><title>Directory</title><a href='/login?service=https%3A%2F%2Fportal.example.invalid%2F%23%2Fcallback%3Fticket%3Dfixture42'>Navigation</a><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='/public'>One</a></div></div></html>",
             );
         });
         let client = fixture.organization_client(CacheMode::Revalidate, &server);

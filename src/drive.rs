@@ -227,6 +227,89 @@ fn sensitive_raw(bytes: &[u8]) -> bool {
             marked(key.as_bytes()) || marked(value.as_bytes())
         })
 }
+/// Decode every JSON string literal in `bytes` into one contiguous review
+/// buffer. Duplicate members and a non-object shape do not stop this scan:
+/// literals are located syntactically, so a body serde refused to normalize
+/// is still screened. `None` means some quoted run or escape could not be
+/// decoded (a bad `\u` digit, a lone surrogate, an unknown escape or an
+/// unterminated literal); the caller must treat the escaped material as
+/// unreviewable rather than release bytes it could not finish reading.
+fn decoded_string_literals(bytes: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    let mut out = Zeroizing::new(Vec::with_capacity(bytes.len()));
+    let hex4 = |at: &[u8]| -> Option<u32> {
+        let mut value: u32 = 0;
+        for byte in at {
+            value = value << 4 | (*byte as char).to_digit(16)?;
+        }
+        Some(value)
+    };
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        loop {
+            match *bytes.get(index)? {
+                b'"' => {
+                    index += 1;
+                    break;
+                }
+                b'\\' => {
+                    match *bytes.get(index + 1)? {
+                        escaped @ (b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
+                            out.push(match escaped {
+                                b'b' => 0x08,
+                                b'f' => 0x0C,
+                                b'n' => b'\n',
+                                b'r' => b'\r',
+                                b't' => b'\t',
+                                plain => plain,
+                            });
+                            index += 2;
+                        }
+                        b'u' => {
+                            let first = hex4(bytes.get(index + 2..index + 6)?)?;
+                            index += 6;
+                            let scalar = if (0xD800..0xDC00).contains(&first) {
+                                if bytes.get(index) != Some(&b'\\')
+                                    || bytes.get(index + 1) != Some(&b'u')
+                                {
+                                    return None;
+                                }
+                                let low = hex4(bytes.get(index + 2..index + 6)?)?;
+                                if !(0xDC00..0xE000).contains(&low) {
+                                    return None;
+                                }
+                                index += 6;
+                                0x10000 + ((first - 0xD800) << 10) + (low - 0xDC00)
+                            } else if (0xDC00..0xE000).contains(&first) {
+                                return None;
+                            } else {
+                                first
+                            };
+                            out.extend_from_slice(
+                                char::from_u32(scalar)?
+                                    .encode_utf8(&mut [0; 4])
+                                    .as_bytes(),
+                            );
+                        }
+                        _ => return None,
+                    }
+                }
+                byte => {
+                    out.push(byte);
+                    index += 1;
+                }
+            }
+        }
+        // One NUL separates decoded literals so a credential can never be
+        // assembled across two adjacent string boundaries.
+        out.push(0);
+    }
+    Some(out)
+}
 fn safe_mime(value: Option<&str>) -> Option<&'static str> {
     let essence = value?.split(';').next()?.trim();
     [
@@ -256,6 +339,13 @@ fn response_contains_secret(bytes: &[u8], content_type: Option<&str>, secret: &s
     let contains = |candidate: &[u8]| crate::net::carries_secret(candidate, secret);
     contains(bytes)
         || content_type.is_some_and(|value| contains(value.as_bytes()))
+        || match decoded_string_literals(bytes) {
+            // A credential escaped inside a duplicate-member or otherwise
+            // unparseable body still decodes to that credential; escaped
+            // material that cannot be fully decoded is unreviewable.
+            None => true,
+            Some(literals) => contains(&literals),
+        }
         || serde_json::from_slice::<PrivateValue>(bytes)
             .ok()
             .is_some_and(|value| private_value(&value, Some(secret)))
@@ -384,6 +474,13 @@ impl Evidence {
             crate::html::ChallengeAssessment::Unreviewed => Some("response_safety_unreviewed"),
         };
         let withheld = if sensitive_raw(bytes)
+            || match decoded_string_literals(bytes) {
+                // Escaped literal material that cannot be decoded is
+                // unreviewable, and decoded literals are screened for the
+                // same markers as the raw body before bytes are released.
+                None => true,
+                Some(literals) => sensitive_raw(&literals),
+            }
             || serde_json::from_slice::<PrivateValue>(bytes)
                 .ok()
                 .is_some_and(|value| private_value(&value, None))
@@ -2772,5 +2869,37 @@ mod tests {
         .unwrap();
         assert_eq!(safe["status"], "structured");
         assert_eq!(safe["value"]["docid"], "freshopaque123");
+    }
+    #[test]
+    fn escaped_credential_echo_in_duplicate_member_body_is_withheld() {
+        // The JSON string literal `path\/value` decodes to the credential
+        // `path/value`; duplicate `x` members must not let the escaped echo
+        // reach raw evidence.
+        let echo = run(
+            &json!({"operation":"list","host":"bhpan.buaa.edu.cn","access_token":"path/value",
+                "raw_base64":STANDARD.encode(br#"{"x":1,"x":2,"y":"path\/value"}"#),
+                "content_type":"application/json"})
+            .to_string(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(echo["status"], "degraded");
+        assert_eq!(echo["evidence"]["raw_withheld"], true);
+        assert_eq!(echo["evidence"]["raw_base64"], "");
+        assert!(!echo.to_string().contains("path/value"));
+        assert_eq!(echo["network_performed"], false);
+        // A harmless duplicate member without credential material still
+        // preserves the exact supplied bytes.
+        let safe = br#"{"x":1,"x":2,"y":"path/other"}"#;
+        let control = run(
+            &json!({"operation":"list","host":"bhpan.buaa.edu.cn","access_token":"path/value",
+                "raw_base64":STANDARD.encode(safe),"content_type":"application/json"})
+            .to_string(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(control["status"], "degraded");
+        assert_eq!(control["evidence"]["raw_withheld"], false);
+        assert_eq!(control["evidence"]["raw_base64"], STANDARD.encode(safe));
     }
 }

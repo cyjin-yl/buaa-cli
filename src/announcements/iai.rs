@@ -2,8 +2,10 @@
 use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     article_body, article_output, bind_college_board, college_directory_attribution, college_html,
-    describe_college_surface, element_text, entry_in_scope, failed_contract, invalid_article,
-    invalid_list, is_http, parse_iso_date, retrieval, unavailable,
+    describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
+    invalid_article, invalid_list, is_http, is_safe_public_fallback,
+    is_safe_public_fallback_document, parse_iso_date, retrieval, unavailable,
+    viewer,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, IAI_NOTICES_URL, IAI_ROOT_URL, Response, iai_path_allowed,
@@ -255,14 +257,33 @@ pub(crate) fn article_with_client(
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
-            let document = college_html(response)?;
-            Ok(normalize(response, &document).map(|mut value| {
-                value["publisher"] = json!(PUBLISHER);
-                value["college"] = json!("iai");
-                value["directory_attribution"] = attribution;
-                value["source_listing"] = listing;
-                value
-            }))
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "iai",
+                        "iai_article_selector_contract",
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut value = match normalize(response, &document) {
+                Ok(value) => value,
+                Err(_) if is_safe_public_fallback(response) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "iai",
+                    "iai_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            value["publisher"] = json!(PUBLISHER);
+            value["college"] = json!("iai");
+            value["directory_attribution"] = attribution;
+            value["source_listing"] = listing;
+            Ok(Ok(value))
         })?
 }
 
@@ -277,7 +298,7 @@ fn declared_embedded_document(
     let scripts = Selector::parse("script").map_err(|_| unavailable())?;
     let mut original: Option<String> = None;
     let mut previews = Vec::new();
-    for script in body.select(&scripts) {
+    for script in body.select(&scripts).filter(|node| !super::inert_element(*node)) {
         if script.value().attr("src").is_some() {
             continue;
         }
@@ -306,53 +327,65 @@ fn declared_embedded_document(
                 previews = paths;
             }
         }
-        let Some(marker) = text.find("showVsbpdfIframe(") else {
+        // Only classic scripts can execute the reviewed viewer call; module
+        // sources carrying the marker cannot establish a declaration either.
+        let Some(kind) = crate::html::script_kind(script) else {
             continue;
         };
-        let tail = &text[marker + "showVsbpdfIframe(".len()..];
-        let quote = tail
-            .chars()
-            .next()
-            .filter(|quote| *quote == '\'' || *quote == '"')
-            .ok_or_else(unavailable)?;
-        let path = tail[quote.len_utf8()..]
-            .split(quote)
-            .next()
-            .filter(|path| !path.is_empty() && path.len() <= MAX_HREF)
-            .ok_or_else(unavailable)?;
-        let url = article.join(path).map_err(|_| unavailable())?;
-        if url.scheme() != "https"
-            || url.host_str() != article.host_str()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.port().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || !url.path().starts_with("/__local/")
-            || !url.path().to_ascii_lowercase().ends_with(".pdf")
-        {
-            return Err(failed_contract(
-                "IAI embedded document must be a same-host source-declared PDF",
-                file!(),
-                line!(),
-            ));
+        if kind == crate::html::ScriptKind::Module {
+            if text.contains("showVsbpdfIframe") {
+                return Err(unavailable());
+            }
+            continue;
         }
-        if original
-            .as_deref()
-            .is_some_and(|previous| previous != url.as_str())
-        {
-            return Err(failed_contract(
-                "IAI article declares ambiguous embedded PDF documents",
-                file!(),
-                line!(),
-            ));
+        // The shared classic-script lexer recognizes only complete top-level
+        // viewer calls; markers inside comments or string literals are inert
+        // text and can neither declare nor shadow an original PDF.
+        for path in viewer::declarations(&text)? {
+            if path.is_empty() || path.len() > MAX_HREF {
+                return Err(unavailable());
+            }
+            let url = article.join(&path).map_err(|_| unavailable())?;
+            if url.scheme() != "https"
+                || url.host_str() != article.host_str()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.port().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || !url.path().starts_with("/__local/")
+                || !url.path().to_ascii_lowercase().ends_with(".pdf")
+            {
+                return Err(failed_contract(
+                    "IAI embedded document must be a same-host source-declared PDF",
+                    file!(),
+                    line!(),
+                ));
+            }
+            if original
+                .as_deref()
+                .is_some_and(|previous| previous != url.as_str())
+            {
+                return Err(failed_contract(
+                    "IAI article declares ambiguous embedded PDF documents",
+                    file!(),
+                    line!(),
+                ));
+            }
+            original = Some(url.to_string());
         }
-        original = Some(url.to_string());
     }
     Ok((original, previews))
 }
 
 fn normalize(response: &Response, document: &Html) -> Result<Value, Error> {
+    // Unsafe article pages are never retained, whether or not their layout
+    // still matches the reviewed selectors: refuse before parsing or exposing
+    // any of their bytes. Safe pages that drifted degrade to retained evidence
+    // at the fetch boundary, keeping direct normalization errors truthful.
+    if !is_safe_public_fallback_document(response, document) {
+        return Err(unavailable());
+    }
     let forms =
         Selector::parse("div.mainBox > div.clear > div.nry2 > form").map_err(|_| unavailable())?;
     let mut forms = document
@@ -474,14 +507,14 @@ mod tests {
         }
     }
 
+    const LISTING_BOARD: &str = r#"<title>通知公告-人工智能学院</title><div class="mainBox"><div class="listText"><ul>
+        <li class="clear"><a href="../info/1024/42.htm">First notice</a><i>2026-09-24</i></li>
+        <li class="clear"><a href="../info/1024/41.htm">Earlier notice</a><i>2026-06-12</i></li>
+    </ul></div></div>"#;
+
     #[test]
     fn listing_preserves_source_order_and_dates() {
-        let document = Html::parse_document(
-            r#"<title>通知公告-人工智能学院</title><div class="mainBox"><div class="listText"><ul>
-            <li class="clear"><a href="../info/1024/42.htm">First notice</a><i>2026-09-24</i></li>
-            <li class="clear"><a href="../info/1024/41.htm">Earlier notice</a><i>2026-06-12</i></li>
-        </ul></div></div>"#,
-        );
+        let document = Html::parse_document(LISTING_BOARD);
         let base = Url::parse(IAI_NOTICES_URL).unwrap();
         let listing = parse_listing(&document, &base).unwrap();
         assert_eq!(listing.entries.len(), 2);
@@ -512,6 +545,52 @@ mod tests {
     }
 
     #[test]
+    fn article_ignores_viewer_marker_inside_script_comments_and_strings() {
+        let source = r#"<div class="mainBox"><div class="clear"><div class="nry2"><form>
+            <div class="show01"><h5>Inert marker notice</h5><div class="date"><i>点击数:<script>1</script></i><s>发布时间:2026-09-24</s></div></div>
+            <div id="vsb_content" class="show02"><div class="v_news_content"><p>正文段落仍然有效。</p><script>// showVsbpdfIframe("/__local/comment.pdf","100%");
+            var label = 'showVsbpdfIframe("/__local/string.pdf","100%")';</script></div></div>
+        </form></div></div></div>"#;
+        let response = response("https://iai.buaa.edu.cn/info/1024/42.htm", source);
+        let document = college_html(&response).unwrap();
+        let output = normalize(&response, &document).unwrap();
+        assert_eq!(output["result"], "full_text");
+        assert_eq!(output["body_paragraphs"], json!(["正文段落仍然有效。"]));
+        assert_eq!(output["embedded_document"]["present"], false);
+        assert_eq!(output["embedded_document"]["original_pdf_url"], Value::Null);
+        assert_eq!(output["embedded_document"]["preview_paths"], json!([]));
+    }
+
+    #[test]
+    fn article_refuses_when_viewer_marker_is_only_script_comment_text() {
+        let source = r#"<div class="mainBox"><div class="clear"><div class="nry2"><form>
+            <div class="show01"><h5>Comment only notice</h5><div class="date"><i>点击数:<script>1</script></i><s>发布时间:2026-09-24</s></div></div>
+            <div id="vsb_content" class="show02"><div class="v_news_content"><script>// disabled markup: showVsbpdfIframe("/__local/comment-only.pdf","100%");</script></div></div>
+        </form></div></div></div>"#;
+        let response = response("https://iai.buaa.edu.cn/info/1024/42.htm", source);
+        let document = college_html(&response).unwrap();
+        assert!(normalize(&response, &document).is_err());
+    }
+
+    #[test]
+    fn article_embedded_document_prefers_real_call_over_earlier_inert_mention() {
+        let source = r#"<div class="mainBox"><div class="clear"><div class="nry2"><form>
+            <div class="show01"><h5>Mixed marker notice</h5><div class="date"><i>点击数:<script>1</script></i><s>发布时间:2026-09-24</s></div></div>
+            <div id="vsb_content" class="show02"><div class="v_news_content"><p><script>// showVsbpdfIframe("/__local/inert.pdf","100%");
+            showVsbpdfIframe("/__local/real.pdf","100%");</script></p></div></div>
+        </form></div></div></div>"#;
+        let response = response("https://iai.buaa.edu.cn/info/1024/42.htm", source);
+        let document = college_html(&response).unwrap();
+        let output = normalize(&response, &document).unwrap();
+        assert_eq!(output["result"], "embedded_document");
+        assert_eq!(output["body_paragraph_count"], 0);
+        assert_eq!(
+            output["embedded_document"]["original_pdf_url"],
+            "https://iai.buaa.edu.cn/__local/real.pdf"
+        );
+    }
+
+    #[test]
     fn listing_rejects_missing_source_heading() {
         let document = Html::parse_document(
             r#"<div class="mainBox"><div class="listText"><ul><li><i>2026-09-24</i></li></ul></div></div>"#,
@@ -522,5 +601,63 @@ mod tests {
                 .code,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn review_regression_security_marked_listing_is_refused_before_output_or_cache() {
+        // A board that still parses while carrying a security marker is
+        // unsafe: the real list callback must refuse it before serializing
+        // entries and before ArchiveClient::get may persist the response
+        // (save happens only after the callback returns Ok), and the body is
+        // not a safe public fallback either.
+        let base = Url::parse(IAI_NOTICES_URL).unwrap();
+        let link_response = response(
+            IAI_NOTICES_URL,
+            &LISTING_BOARD.replace(
+                "href=\"../info/1024/42.htm\"",
+                "href=\"../info/1024/42.htm?csrf_token=synthetic\"",
+            ),
+        );
+        let html = college_html(&link_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&link_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!crate::announcements::is_safe_public_fallback(&link_response));
+
+        let control_response = response(
+            IAI_NOTICES_URL,
+            &format!(
+                "{LISTING_BOARD}<form><input type=\"hidden\" name=\"csrf_token\" value=\"synthetic\"></form>"
+            ),
+        );
+        let html = college_html(&control_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert_eq!(listing.entries.len(), 2);
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&control_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!crate::announcements::is_safe_public_fallback(
+            &control_response
+        ));
+
+        // The ordinary public board stays admissible end to end.
+        let response = response(IAI_NOTICES_URL, LISTING_BOARD);
+        let html = college_html(&response).unwrap();
+        assert!(parse_listing(&html, &base).is_ok());
+        assert!(crate::announcements::refuse_unsafe_listing(&response, &html).is_ok());
+        assert!(crate::announcements::is_safe_public_fallback(&response));
     }
 }

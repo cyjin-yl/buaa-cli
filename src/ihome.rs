@@ -51,8 +51,13 @@
 //!   every fresh response's `Set-Cookie` headers: they are reviewed from the
 //!   raw header map before collection discards them, retained across pages
 //!   to screen later fresh and cached bodies and MIME, and never adopted or
-//!   transmitted. An unreviewable value refuses projection, and no
-//!   cookie-issuing response is written to the replayable cache.
+//!   transmitted. Before the consumer envelope is published, every retained
+//!   page is screened once more against the complete invocation history: a
+//!   value first issued by a later page is credential material wherever an
+//!   earlier page already carried it, so that page's records are withheld,
+//!   the traversal never reports complete, and a cached admission whose
+//!   content matches is removed. An unreviewable value refuses projection,
+//!   and no cookie-issuing response is written to the replayable cache.
 //!   Responses whose nested token inspection exceeds its bound are withheld as
 //!   unreviewed, without claiming an echo or an authentication refusal.
 //! * An explicit application-level authentication refusal (a root-level
@@ -1623,7 +1628,12 @@ fn read_request(
 /// of the same invocation is still a credential disclosure. The guard is
 /// created once per invocation, accumulates every fresh response's values
 /// without resetting or evicting between pages, and also screens cached
-/// bodies and their projected MIME. It is zeroized with the invocation.
+/// bodies and their projected MIME. Because a page only learns the values
+/// issued *before* it, the consumer envelope is screened once more after the
+/// traversal settles, against this complete history: a value first issued by
+/// a later page withholds every earlier record that already carried it, and a
+/// cached admission whose retained content matches is removed. The guard is
+/// zeroized with the invocation.
 #[derive(Default)]
 struct IssuedCookies {
     /// Every nonempty first-pair value, stored exactly as the server sent
@@ -2672,12 +2682,63 @@ fn page_meta(response: &Response, entry_count: usize, token: &str) -> Value {
     })
 }
 
+/// The response facts one page retains until the consumer envelope is
+/// published. The complete issued-cookie history is only known after the
+/// traversal settles, so publication re-screens these facts before they are
+/// released or their cached admission is trusted. The body itself is not
+/// retained: a page's own facts were already screened against every value
+/// issued before it, the projections it made are re-screened directly, and a
+/// cache admission is re-screened from the file it would serve.
+struct PageSource {
+    url: String,
+    status: u16,
+    headers: BTreeMap<String, String>,
+    body_len: usize,
+    sha256: String,
+    fetched_at_unix_ms: u64,
+    cache_status: CacheStatus,
+}
+
+/// Retain the facts of the response that produced one outcome, without
+/// copying its body.
+fn page_source(response: &Response) -> PageSource {
+    PageSource {
+        url: response.url.clone(),
+        status: response.status,
+        headers: response.headers.clone(),
+        body_len: response.body.len(),
+        sha256: response.sha256.clone(),
+        fetched_at_unix_ms: response.fetched_at_unix_ms,
+        cache_status: response.cache_status,
+    }
+}
+
+/// A synthetic response view of the retained facts, used only to rebuild a
+/// withheld page's metadata and evidence. Its empty body is never published:
+/// `evidence` withholds raw bytes for `CredentialEcho` regardless.
+impl PageSource {
+    fn withheld_view(&self) -> Response {
+        Response {
+            url: self.url.clone(),
+            status: self.status,
+            headers: self.headers.clone(),
+            body: Vec::new(),
+            sha256: self.sha256.clone(),
+            fetched_at_unix_ms: self.fetched_at_unix_ms,
+            cache_status: self.cache_status,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        }
+    }
+}
+
 struct PageOutcome {
     meta: Value,
     success: Option<bool>,
     evidence: Option<Value>,
     entries: Vec<Value>,
     pagination: Option<Pagination>,
+    source: PageSource,
 }
 
 fn refused_page(
@@ -2692,6 +2753,7 @@ fn refused_page(
         evidence: Some(evidence(reason, response, token)),
         entries: Vec::new(),
         pagination: None,
+        source: page_source(response),
     }
 }
 
@@ -2860,55 +2922,47 @@ fn set_field(value: &mut Value, key: &str, field: Value) {
     }
 }
 
-fn build_list_envelope(
+/// One settled traversal: every page the lazy acquisition read before its
+/// first refusal, degradation, inconsistency or declared terminal page, plus
+/// the observed pagination facts. Acquisition stops exactly where the single
+/// pass used to stop; publication decisions are left to the caller.
+struct ConsumedTraversal {
+    outcomes: Vec<PageOutcome>,
+    /// The pagination/duplicate/acquisition refusal the traversal settled
+    /// with; `None` when the read window was internally consistent.
+    incomplete: Option<&'static str>,
+    has_more: bool,
+    reached_terminal: bool,
+}
+
+/// Consume the lazy page acquisition exactly as far as the original envelope
+/// fold would have. No page is projected further than this point, so the
+/// caller may re-screen every retained record against the *complete*
+/// invocation issued-cookie history before publishing.
+fn collect_traversal(
     request: &ListRequest,
     pages: impl IntoIterator<Item = Result<PageOutcome, Error>>,
-) -> Result<Value, Error> {
-    let mut counts = Counts {
-        kept_new: 0,
-        kept_changed: 0,
-        skipped_unchanged: 0,
-        skipped_at_or_before_since_id: 0,
-        skipped_at_or_before_since_time: 0,
-        uncomparable_created_at: 0,
-    };
-    let mut entries: Vec<Value> = Vec::new();
-    let mut max_id = request.since_id;
-    let mut max_created_at = request.since_time_raw.clone();
-    let mut incomparable_dates = false;
-    let mut seen_ids = BTreeSet::new();
-    let mut upstream_success: Option<bool> = None;
-    let mut page_records: Vec<Value> = Vec::new();
-    let mut degraded_evidence: Option<Value> = None;
+) -> Result<ConsumedTraversal, Error> {
+    let mut outcomes: Vec<PageOutcome> = Vec::new();
     let mut incomplete = None;
     let mut previous_pagination: Option<Pagination> = None;
     let mut has_more = false;
     let mut reached_terminal = false;
+    let mut seen_ids = BTreeSet::new();
 
     for result in pages {
         let page = match result {
             Ok(page) => page,
-            Err(error) if page_records.is_empty() => return Err(error),
+            Err(error) if outcomes.is_empty() => return Err(error),
             Err(error) => {
                 incomplete = Some(error.code);
                 break;
             }
         };
-        let expected_page = request.page + u32::try_from(page_records.len()).unwrap_or(0);
-        let mut meta = page.meta;
-        if let Some(pagination) = page.pagination {
-            meta["pagination"] = json!({
-                "current_page": pagination.current_page,
-                "last_page": pagination.last_page,
-                "total": pagination.total,
-            });
-        }
-        page_records.push(meta);
-        if let Some(success) = page.success {
-            upstream_success = Some(success);
-        }
-        if let Some(found) = page.evidence {
-            degraded_evidence = Some(found);
+        let expected_page = request.page + u32::try_from(outcomes.len()).unwrap_or(0);
+        outcomes.push(page);
+        let page = outcomes.last().expect("the outcome was just pushed");
+        if page.evidence.is_some() {
             break;
         }
         incomplete = pagination_issue(
@@ -2926,13 +2980,234 @@ fn build_list_envelope(
         {
             incomplete = Some("pagination_changed");
         }
-        for mut entry in page.entries {
+        for entry in &page.entries {
+            if let Some(id) = entry.get("id").and_then(Value::as_u64)
+                && !seen_ids.insert(id)
+            {
+                incomplete.get_or_insert("duplicate_entry_id");
+            }
+        }
+        if incomplete.is_some() {
+            break;
+        }
+        if let Some(pagination) = page.pagination {
+            has_more = pagination.current_page < pagination.last_page;
+            reached_terminal = !has_more;
+            previous_pagination = Some(pagination);
+        }
+        if reached_terminal {
+            break;
+        }
+    }
+
+    Ok(ConsumedTraversal {
+        outcomes,
+        incomplete,
+        has_more,
+        reached_terminal,
+    })
+}
+
+/// Does `value`, a projection already built from one page, carry any
+/// invocation-issued credential value? Strings and object keys are checked in
+/// their decoded form, and scalars in the exact JSON spelling a consumer
+/// receives, mirroring the literal inspection a fresh body gets.
+fn value_carries_issued(value: &Value, issued: &IssuedCookies) -> bool {
+    match value {
+        Value::String(text) => issued.carries(text.as_bytes()),
+        Value::Array(items) => items.iter().any(|item| value_carries_issued(item, issued)),
+        Value::Object(map) => map.iter().any(|(key, item)| {
+            issued.carries(key.as_bytes()) || value_carries_issued(item, issued)
+        }),
+        scalar => net::json_scalar_matches(scalar, |bytes| issued.carries(bytes)),
+    }
+}
+
+/// Null every projected leaf or member that carries an issued credential
+/// value. A carrying object key removes its member: the key cannot be
+/// renamed, and keeping the value under a replaced key misattributes it.
+fn scrub_issued_carriers(value: &mut Value, issued: &IssuedCookies) {
+    match value {
+        Value::String(text) => {
+            if issued.carries(text.as_bytes()) {
+                *value = Value::Null;
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                scrub_issued_carriers(item, issued);
+            }
+        }
+        Value::Object(map) => {
+            let carrying: Vec<String> = map
+                .keys()
+                .filter(|key| issued.carries(key.as_bytes()))
+                .cloned()
+                .collect();
+            for key in carrying {
+                map.remove(&key);
+            }
+            for item in map.values_mut() {
+                scrub_issued_carriers(item, issued);
+            }
+        }
+        _ => {
+            if net::json_scalar_matches(value, |bytes| issued.carries(bytes)) {
+                *value = Value::Null;
+            }
+        }
+    }
+}
+
+/// Re-screen retained body bytes exactly like `analyze_authenticated_body`
+/// does, but only against the issued-cookie guard: the raw bytes, every
+/// decoded JSON literal and any embedded document. An unreviewable body
+/// counts as carrying rather than exposing an unscreened spelling.
+fn retained_bytes_carry_issued(bytes: &[u8], issued: &IssuedCookies) -> bool {
+    if issued.is_empty() || bytes.is_empty() {
+        return false;
+    }
+    if issued.carries(bytes) {
+        return true;
+    }
+    let contains = |part: &[u8]| issued.carries(part);
+    let mut inspection = token_inspection("");
+    inspection.authentication = Some(&contains);
+    inspection.scan_decoded = bytes.contains(&b'\\');
+    let document = literal_document(bytes, &mut inspection);
+    inspection.echo
+        || (document.is_none()
+            && inspection.scan_decoded
+            && decoded_strings_carry_secret(bytes, &mut inspection))
+        || inspection.incomplete
+}
+
+/// Does anything this page would still publish carry a value issued later in
+/// the same invocation? Every retained surface is screened: the request URL
+/// and projected headers, the page metadata and its entries, and the
+/// degradation evidence, whose reversible raw-body channel is decoded before
+/// it is screened.
+fn page_carries_issued(page: &PageOutcome, issued: &IssuedCookies) -> bool {
+    if issued.is_empty() {
+        return false;
+    }
+    if issued.carries(page.source.url.as_bytes())
+        || page
+            .source
+            .headers
+            .values()
+            .any(|value| issued.carries(value.as_bytes()))
+        || value_carries_issued(&page.meta, issued)
+        || page
+            .entries
+            .iter()
+            .any(|entry| value_carries_issued(entry, issued))
+    {
+        return true;
+    }
+    let Some(evidence) = &page.evidence else {
+        return false;
+    };
+    if value_carries_issued(evidence, issued) {
+        return true;
+    }
+    match evidence
+        .get("raw_response_base64")
+        .and_then(Value::as_str)
+        .map(|encoded| STANDARD.decode(encoded))
+    {
+        // A raw channel that cannot even be decoded is never trusted.
+        None | Some(Err(_)) => false,
+        Some(Ok(body)) => retained_bytes_carry_issued(&body, issued),
+    }
+}
+
+/// Publish one settled traversal. Every page is first re-screened against the
+/// complete invocation issued-cookie history: a value first issued by a later
+/// page is credential material wherever an earlier retained record carries
+/// it, so that page's records are withheld as `credential_echo` degradation,
+/// the traversal is never reported complete, and `purge` is asked to drop any
+/// cache admission that would still serve credential-matching content.
+fn publish_list_envelope(
+    request: &ListRequest,
+    issued: &IssuedCookies,
+    mut purge: impl FnMut(&Url, &IssuedCookies) -> Result<(), Error>,
+    traversal: ConsumedTraversal,
+) -> Result<Value, Error> {
+    let mut counts = Counts {
+        kept_new: 0,
+        kept_changed: 0,
+        skipped_unchanged: 0,
+        skipped_at_or_before_since_id: 0,
+        skipped_at_or_before_since_time: 0,
+        uncomparable_created_at: 0,
+    };
+    let mut entries: Vec<Value> = Vec::new();
+    let mut max_id = request.since_id;
+    let mut max_created_at = request.since_time_raw.clone();
+    let mut incomparable_dates = false;
+    let mut seen_ids = BTreeSet::new();
+    let mut upstream_success: Option<bool> = None;
+    let mut page_records: Vec<Value> = Vec::new();
+    let mut degraded_evidence: Option<Value> = None;
+
+    for page in traversal.outcomes {
+        // A cached admission written before the complete history was known is
+        // re-screened before publication: credential-matching content is never
+        // preserved for replay. This applies to every consumed page, whether
+        // or not the material it retained is itself withheld below.
+        if let Ok(url) = Url::parse(&page.source.url) {
+            purge(&url, issued)?;
+        }
+        let outcome = if page_carries_issued(&page, issued) {
+            // A value issued by a later page makes everything this page
+            // retained a credential disclosure. Publish exactly what a page
+            // refused at read time would have published: provenance metadata
+            // and evidence with no raw bytes, then scrub any residue so the
+            // issued spelling can never leak through an unexpected field.
+            let content_type_echo = page
+                .source
+                .headers
+                .get("content-type")
+                .is_some_and(|value| issued.carries(value.as_bytes()));
+            let view = page.source.withheld_view();
+            let mut withheld =
+                credential_echo_page(&view, request.token.as_str(), content_type_echo);
+            if let Some(evidence) = &mut withheld.evidence {
+                evidence["byte_length"] = json!(page.source.body_len);
+            }
+            scrub_issued_carriers(&mut withheld.meta, issued);
+            if let Some(evidence) = &mut withheld.evidence {
+                scrub_issued_carriers(evidence, issued);
+            }
+            withheld
+        } else {
+            page
+        };
+        let mut meta = outcome.meta;
+        if let Some(pagination) = outcome.pagination {
+            meta["pagination"] = json!({
+                "current_page": pagination.current_page,
+                "last_page": pagination.last_page,
+                "total": pagination.total,
+            });
+        }
+        page_records.push(meta);
+        if let Some(success) = outcome.success {
+            upstream_success = Some(success);
+        }
+        if let Some(found) = outcome.evidence {
+            if degraded_evidence.is_none() {
+                degraded_evidence = Some(found);
+            }
+            continue;
+        }
+        for mut entry in outcome.entries {
             if let Some(map) = entry.as_object() {
                 let id = map.get("id").and_then(Value::as_u64);
                 let created_at = map.get("created_at").and_then(Value::as_str);
                 if let Some(id) = id {
                     if !seen_ids.insert(id) {
-                        incomplete.get_or_insert("duplicate_entry_id");
                         continue;
                     }
                     max_id = Some(max_id.map_or(id, |current| current.max(id)));
@@ -2965,19 +3240,9 @@ fn build_list_envelope(
                 entries.push(entry);
             }
         }
-        if incomplete.is_some() {
-            break;
-        }
-        if let Some(pagination) = page.pagination {
-            has_more = pagination.current_page < pagination.last_page;
-            reached_terminal = !has_more;
-            previous_pagination = Some(pagination);
-        }
-        if reached_terminal {
-            break;
-        }
     }
 
+    let incomplete = traversal.incomplete;
     if incomparable_dates {
         max_created_at = None;
     }
@@ -2985,7 +3250,7 @@ fn build_list_envelope(
     let next_page = request
         .page
         .saturating_add(u32::try_from(pages_fetched).unwrap_or(0));
-    let complete = degraded_evidence.is_none() && reached_terminal;
+    let complete = degraded_evidence.is_none() && traversal.reached_terminal;
     let provenance = match page_records.last().and_then(Value::as_object) {
         Some(meta) => json!({
             "source_url": meta.get("url").cloned().unwrap_or(Value::Null),
@@ -3018,8 +3283,8 @@ fn build_list_envelope(
         json!({
             "max_id": max_id,
             "max_created_at": max_created_at,
-            "next_page": if has_more { json!(next_page) } else { Value::Null },
-            "has_more": has_more,
+            "next_page": if traversal.has_more { json!(next_page) } else { Value::Null },
+            "has_more": traversal.has_more,
         })
     };
     Ok(json!({
@@ -3054,6 +3319,20 @@ fn build_list_envelope(
         "provenance": provenance,
         "upstream_evidence": degraded_evidence,
     }))
+}
+
+/// Standalone publication for already-built outcomes, used by the session
+/// read and by unit fixtures. No invocation cookie history reaches this
+/// entry point beyond what each outcome's own read already screened, and no
+/// cache admission is associated with the pages, so publication is a direct
+/// fold of the consumed traversal.
+fn build_list_envelope(
+    request: &ListRequest,
+    pages: impl IntoIterator<Item = Result<PageOutcome, Error>>,
+) -> Result<Value, Error> {
+    let traversal = collect_traversal(request, pages)?;
+    let issued = IssuedCookies::default();
+    publish_list_envelope(request, &issued, |_, _| Ok(()), traversal)
 }
 
 // ---------------------------------------------------------------------------
@@ -3277,32 +3556,74 @@ fn list_with_cache(
     online: bool,
     issued: &mut IssuedCookies,
 ) -> Result<Value, Error> {
-    collect_list_pages(request, |url| {
-        cache.get(
-            url,
-            request.token.as_str(),
-            online,
-            request.refresh,
-            &mut *issued,
-            |response, challenge, facts| {
-                Ok::<PageOutcome, Error>(list_page(request, response, challenge, facts))
-            },
-        )
-    })
+    collect_list_pages(
+        request,
+        issued,
+        |url, issued| {
+            cache.get(
+                url,
+                request.token.as_str(),
+                online,
+                request.refresh,
+                issued,
+                |response, challenge, facts| {
+                    Ok::<PageOutcome, Error>(list_page(request, response, challenge, facts))
+                },
+            )
+        },
+        |url, issued| purge_cached_admission(cache, url, issued),
+    )
 }
 
+/// Re-screen one page's replayable cache admission against the complete
+/// invocation issued-cookie history. A retained response whose body or
+/// headers now match an issued value is removed rather than preserved for a
+/// later replay; a file that cannot be reviewed as an admission is not
+/// proven credential-matching and keeps the original artifact policy.
+fn purge_cached_admission(
+    cache: &ResponseCache,
+    url: &Url,
+    issued: &IssuedCookies,
+) -> Result<(), Error> {
+    if issued.is_empty() {
+        return Ok(());
+    }
+    let Some((response, _)) = cache.load(url)? else {
+        return Ok(());
+    };
+    if issued.carries(response.url.as_bytes())
+        || response
+            .headers
+            .values()
+            .any(|value| issued.carries(value.as_bytes()))
+        || retained_bytes_carry_issued(&response.body, issued)
+    {
+        cache.remove(url)?;
+    }
+    Ok(())
+}
+
+/// The lazy acquisition hands the invocation's cookie guard to every page
+/// read, so each page is screened against every value issued before it. Once
+/// the traversal settles, publication re-screens every retained record and
+/// every cache admission against the complete history: a value first issued
+/// by a later page withholds the earlier records that carried it, never
+/// reports the traversal complete, and removes any cached response whose
+/// retained content matches.
 fn collect_list_pages(
     request: &ListRequest,
-    mut read: impl FnMut(&Url) -> Result<PageOutcome, Error>,
+    issued: &mut IssuedCookies,
+    mut read: impl FnMut(&Url, &mut IssuedCookies) -> Result<PageOutcome, Error>,
+    purge: impl FnMut(&Url, &IssuedCookies) -> Result<(), Error>,
 ) -> Result<Value, Error> {
     // Lazy acquisition lets the collector stop before asking for another
     // page on a terminal, inconsistent, repeated or refused source response.
     let pages = (0..request.max_pages).map(|offset| {
         let page = request.page.saturating_add(offset);
-        let url = list_url(request.limit, page)?;
-        read(&url)
+        list_url(request.limit, page).and_then(|url| read(&url, issued))
     });
-    build_list_envelope(request, pages)
+    let traversal = collect_traversal(request, pages)?;
+    publish_list_envelope(request, issued, purge, traversal)
 }
 
 /// Strict-TLS service fixtures use the production traversal, cache handling,
@@ -3325,16 +3646,23 @@ pub(crate) fn list_with_test_network(
         http: client,
     };
     let mut issued = IssuedCookies::default();
-    collect_list_pages(&request, |url| {
-        transport.fetch(
-            &cache,
-            url,
-            request.token.as_str(),
-            request.refresh,
-            &mut issued,
-            |response, challenge, facts| Ok(list_page(&request, response, challenge, facts)),
-        )
-    })
+    collect_list_pages(
+        &request,
+        &mut issued,
+        |url, issued| {
+            transport.fetch(
+                &cache,
+                url,
+                request.token.as_str(),
+                request.refresh,
+                issued,
+                |response, challenge, facts| {
+                    Ok(list_page(&request, response, challenge, facts))
+                },
+            )
+        },
+        |url, issued| purge_cached_admission(&cache, url, issued),
+    )
 }
 
 /// Structure one listing page. A refusal, an echoed token and an explicit
@@ -3383,6 +3711,7 @@ fn list_page(
             )),
             entries: Vec::new(),
             pagination,
+            source: page_source(response),
         },
         Ok((_, entries)) if cursor_is_incomparable(request, &entries) => refused_page(
             response,
@@ -3399,6 +3728,7 @@ fn list_page(
                 .map(|entry| project_entry(entry, response))
                 .collect(),
             pagination,
+            source: page_source(response),
         },
         Err(reason) => refused_page(
             response,
@@ -3553,6 +3883,7 @@ fn detail_page(
                 .map(|entry| vec![project_entry(&entry, response)])
                 .unwrap_or_default(),
             pagination: None,
+            source: page_source(response),
         },
         Err(reason) => refused_page(
             response,
@@ -4340,6 +4671,7 @@ mod tests {
                     .map(|entry| project_entry(entry, &original))
                     .collect(),
                 pagination,
+                source: page_source(&original),
             },
             Err(reason) => refused_page(&original, "synthetic-token-value", reason, None),
         }
@@ -6909,6 +7241,7 @@ mod tests {
                 evidence: Some(found),
                 entries: Vec::new(),
                 pagination: None,
+                source: page_source(&original),
             }]).into_iter().map(Ok)).unwrap();
             assert!(envelope["upstream_evidence"].get("raw_response_base64").is_none());
         }
@@ -7101,5 +7434,458 @@ mod ihome_review_regressions {
         let found = page.evidence.as_ref().expect("fallback evidence");
         assert_eq!(found["fallback_reason"], "unexpected_content");
         assert_eq!(found["raw_response_base64"], STANDARD.encode(body));
+    }
+
+    // -------------------------------------------------------------------
+    // Late-issued cookie consumer regression
+    // -------------------------------------------------------------------
+    //
+    // One strict-TLS loopback stands in for `i.buaa.edu.cn` alone: an
+    // ephemeral CA signs one leaf for that host, the test client pins only
+    // that CA and resolves the real hostname to the loopback listener.
+    // Nothing is relaxed, no campus endpoint or credential is touched.
+
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::{BigNum, MsbOption};
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::ssl::{SslAcceptor, SslMethod, SslStream};
+    use openssl::x509::X509;
+    use openssl::x509::extension::{BasicConstraints, KeyUsage, SubjectAlternativeName};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::os::unix::fs::DirBuilderExt as _;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as SyncOrdering};
+    use std::sync::{Arc, Mutex};
+
+    /// The one loopback request this fixture needs to classify: request
+    /// line target plus the header lines, bounded well under any body an
+    /// appeal read would legitimately receive.
+    const MAX_LOOPBACK_REQUEST: usize = 64 * 1024;
+
+    struct LoopbackRequest {
+        target: String,
+        headers: Vec<(String, String)>,
+    }
+
+    /// Ephemeral CA plus one leaf whose SAN covers only `i.buaa.edu.cn`.
+    struct LoopbackPki {
+        ca_pem: Vec<u8>,
+        leaf_pem: Vec<u8>,
+        key_pem: Vec<u8>,
+    }
+
+    fn loopback_pki() -> LoopbackPki {
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let key = PKey::from_rsa(rsa).expect("pkey");
+        let serial = || {
+            let mut serial = BigNum::new().expect("bignum");
+            serial
+                .rand(64, MsbOption::MAYBE_ZERO, false)
+                .expect("serial");
+            serial.to_asn1_integer().expect("asn1 serial")
+        };
+        let mut name = openssl::x509::X509NameBuilder::new().expect("ca name");
+        name.append_entry_by_text("CN", "buaa-cli synthetic ihome CA")
+            .expect("ca name entry");
+        let name = name.build();
+        let mut ca_builder = X509::builder().expect("ca builder");
+        ca_builder.set_version(2).expect("version");
+        ca_builder.set_serial_number(&serial()).expect("serial");
+        ca_builder.set_subject_name(&name).expect("ca subject");
+        ca_builder.set_issuer_name(&name).expect("ca issuer");
+        ca_builder.set_pubkey(&key).expect("ca pubkey");
+        let not_before = Asn1Time::days_from_now(0).expect("not before");
+        ca_builder.set_not_before(&not_before).expect("not before");
+        let not_after = Asn1Time::days_from_now(1).expect("not after");
+        ca_builder.set_not_after(&not_after).expect("not after");
+        ca_builder
+            .append_extension(BasicConstraints::new().critical().ca().build().expect("bc"))
+            .expect("ca constraints");
+        ca_builder
+            .append_extension(
+                KeyUsage::new()
+                    .critical()
+                    .key_cert_sign()
+                    .crl_sign()
+                    .build()
+                    .expect("ca key usage"),
+            )
+            .expect("ca usage");
+        ca_builder
+            .sign(&key, MessageDigest::sha256())
+            .expect("ca sign");
+        let ca = ca_builder.build();
+
+        let mut leaf_name = openssl::x509::X509NameBuilder::new().expect("leaf name");
+        leaf_name
+            .append_entry_by_text("CN", IHOME_HOST)
+            .expect("leaf cn");
+        let leaf_name = leaf_name.build();
+        let mut leaf = X509::builder().expect("leaf builder");
+        leaf.set_version(2).expect("version");
+        leaf.set_serial_number(&serial()).expect("serial");
+        leaf.set_subject_name(&leaf_name).expect("leaf subject");
+        leaf.set_issuer_name(ca.subject_name()).expect("leaf issuer");
+        leaf.set_pubkey(&key).expect("leaf pubkey");
+        leaf.set_not_before(&not_before).expect("not before");
+        leaf.set_not_after(&not_after).expect("not after");
+        let san = SubjectAlternativeName::new()
+            .dns(IHOME_HOST)
+            .build(&leaf.x509v3_context(Some(&ca), None))
+            .expect("san");
+        leaf.append_extension(san).expect("leaf san");
+        leaf.append_extension(BasicConstraints::new().critical().build().expect("leaf bc"))
+            .expect("leaf constraints");
+        leaf.sign(&key, MessageDigest::sha256()).expect("leaf sign");
+        let leaf = leaf.build();
+        LoopbackPki {
+            ca_pem: ca.to_pem().expect("ca pem"),
+            leaf_pem: leaf.to_pem().expect("leaf pem"),
+            key_pem: key.private_key_to_pem_pkcs8().expect("key pem"),
+        }
+    }
+
+    fn loopback_acceptor(pki: &LoopbackPki) -> Arc<SslAcceptor> {
+        let mut builder =
+            SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).expect("tls acceptor");
+        builder
+            .set_private_key(&PKey::private_key_from_pem(&pki.key_pem).expect("key"))
+            .expect("acceptor key");
+        builder
+            .set_certificate(&X509::from_pem(&pki.leaf_pem).expect("leaf"))
+            .expect("acceptor cert");
+        builder
+            .add_extra_chain_cert(X509::from_pem(&pki.ca_pem).expect("ca"))
+            .expect("chain");
+        builder.check_private_key().expect("key pair");
+        Arc::new(builder.build())
+    }
+
+    /// The test client pins the ephemeral CA and resolves the real host to
+    /// loopback; verification stays fully enforced.
+    fn loopback_client(pki: &LoopbackPki, address: SocketAddr) -> Client {
+        Client::builder()
+            .user_agent("buaa-cli/0.1 ihome")
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .referer(false)
+            .no_proxy()
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
+            .http1_only()
+            .pool_max_idle_per_host(0)
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .https_only(true)
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(&pki.ca_pem).expect("pinned ca"),
+            )
+            .resolve(IHOME_HOST, address)
+            .build()
+            .expect("strict test client")
+    }
+
+    fn loopback_http_response(status: &str, headers: &[(&str, &str)], body: &str) -> Vec<u8> {
+        let mut response = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
+        for (name, value) in headers {
+            response.push_str(name);
+            response.push_str(": ");
+            response.push_str(value);
+            response.push_str("\r\n");
+        }
+        response.push_str("Connection: close\r\n\r\n");
+        response.push_str(body);
+        response.into_bytes()
+    }
+
+    fn read_loopback_request(stream: &mut SslStream<TcpStream>) -> Option<LoopbackRequest> {
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let header_end = loop {
+            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+            if bytes.len() > MAX_LOOPBACK_REQUEST {
+                return None;
+            }
+            let read = std::io::Read::read(stream, &mut chunk).ok()?;
+            if read == 0 {
+                return None;
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        };
+        let head = String::from_utf8_lossy(&bytes[..header_end]);
+        let mut lines = head.split("\r\n");
+        let request_line = lines.next()?;
+        let mut parts = request_line.split(' ');
+        let _method = parts.next()?;
+        let target = parts.next()?.to_owned();
+        let mut headers = Vec::new();
+        for line in lines {
+            if line.is_empty() {
+                continue;
+            }
+            let (name, value) = line.split_once(':')?;
+            headers.push((name.trim().to_owned(), value.trim().to_owned()));
+        }
+        Some(LoopbackRequest { target, headers })
+    }
+
+    /// One bounded loopback worker: the listener polls a stop flag and each
+    /// connection is served once with timeouts, so a failed test never
+    /// strands a thread.
+    struct IhomeLoopback {
+        address: SocketAddr,
+        requests: Arc<Mutex<Vec<LoopbackRequest>>>,
+        stop: Arc<AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl IhomeLoopback {
+        fn start(
+            acceptor: Arc<SslAcceptor>,
+            responder: impl Fn(&LoopbackRequest) -> Vec<u8> + Send + 'static,
+        ) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+            listener.set_nonblocking(true).expect("nonblocking listener");
+            let address = listener.local_addr().expect("listener address");
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let (worker_requests, worker_stop) = (Arc::clone(&requests), Arc::clone(&stop));
+            let worker = std::thread::spawn(move || {
+                while !worker_stop.load(SyncOrdering::SeqCst) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                            let mut tls = match acceptor.accept(stream) {
+                                Ok(tls) => tls,
+                                Err(_) => continue,
+                            };
+                            let Some(request) = read_loopback_request(&mut tls) else {
+                                continue;
+                            };
+                            let response = responder(&request);
+                            worker_requests.lock().expect("request log").push(request);
+                            let _ = std::io::Write::write_all(&mut tls, &response);
+                            let _ = tls.shutdown();
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                address,
+                requests,
+                stop,
+                worker: Some(worker),
+            }
+        }
+
+        fn observed(&self) -> Vec<(String, Vec<(String, String)>)> {
+            self.requests
+                .lock()
+                .expect("request log")
+                .iter()
+                .map(|request| (request.target.clone(), request.headers.clone()))
+                .collect()
+        }
+    }
+
+    impl Drop for IhomeLoopback {
+        fn drop(&mut self) {
+            self.stop.store(true, SyncOrdering::SeqCst);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    /// A fresh temporary directory removed when the test ends; created new
+    /// every run so no stale state can be replayed.
+    struct LoopbackDir {
+        path: std::path::PathBuf,
+    }
+
+    impl Drop for LoopbackDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    static LOOPBACK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn loopback_directory(name: &str) -> LoopbackDir {
+        let path = std::env::temp_dir().join(format!(
+            "buaa-ihome-loopback-{}-{name}-{}",
+            std::process::id(),
+            LOOPBACK_SEQUENCE.fetch_add(1, SyncOrdering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .expect("loopback test directory");
+        LoopbackDir { path }
+    }
+
+    /// One appeal-board page in the documented envelope shape.
+    fn loopback_list_page(current: u32, last: u32, total: u64, id: u64, content: &str) -> String {
+        serde_json::to_string(&json!({
+            "code": 20000,
+            "success": true,
+            "data": {
+                "current_page": current,
+                "last_page": last,
+                "total": total,
+                "data": [{
+                    "id": id,
+                    "title": "Synthetic appeal",
+                    "content": content,
+                    "created_at": "2026-10-20 08:30:00",
+                    "publish_status_text": "Pending",
+                    "departments": [],
+                    "appeal_reply": []
+                }]
+            }
+        }))
+        .expect("page body")
+    }
+
+    fn loopback_page_query(target: &str) -> String {
+        Url::parse(&format!("https://{IHOME_HOST}{target}"))
+            .expect("observed request target")
+            .query_pairs()
+            .find(|(name, _)| name == "page")
+            .map(|(_, value)| value.into_owned())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn ihome_review_regression_late_issued_cookie_cannot_reach_earlier_output() {
+        // The invocation cookie guard only learns a value when a later
+        // response's Set-Cookie issues it. An earlier page's record that
+        // already carries that string is ordinary business content when it
+        // was processed, but it becomes credential material the moment the
+        // later response issues it: the consumer envelope must then withhold
+        // it and must not report a complete traversal. The ordinary leg
+        // proves the same string stays admissible when nothing issues it.
+        const FUTURE: &str = "future-cookie-private";
+        for (name, issue) in [("issued", true), ("ordinary", false)] {
+            let first_body = loopback_list_page(1, 2, 2, 41, FUTURE);
+            let second_body = loopback_list_page(2, 2, 2, 42, "Second ordinary appeal");
+            let set_cookie = format!("sid={FUTURE}; Path=/api; Secure; HttpOnly");
+            let pki = loopback_pki();
+            let endpoint = IhomeLoopback::start(loopback_acceptor(&pki), move |request| {
+                match loopback_page_query(&request.target).as_str() {
+                    "1" => loopback_http_response(
+                        "200 OK",
+                        &[("Content-Type", "application/json")],
+                        &first_body,
+                    ),
+                    "2" if issue => loopback_http_response(
+                        "200 OK",
+                        &[
+                            ("Content-Type", "application/json"),
+                            ("Set-Cookie", &set_cookie),
+                        ],
+                        &second_body,
+                    ),
+                    "2" => loopback_http_response(
+                        "200 OK",
+                        &[("Content-Type", "application/json")],
+                        &second_body,
+                    ),
+                    _ => loopback_http_response("404 Not Found", &[], "unexpected"),
+                }
+            });
+            let client = loopback_client(&pki, endpoint.address);
+            let cache_directory = loopback_directory(&format!("cache-{name}"));
+            let governor_directory = loopback_directory(&format!("governor-{name}"));
+            let governor =
+                Governor::isolated_for_test(&governor_directory.path).expect("isolated governor");
+            let output = list_with_test_network(
+                &json!({"token": BEARER, "limit": 1, "page": 1, "max_pages": 2}).to_string(),
+                &cache_directory.path,
+                client,
+                governor,
+            )
+            .expect("the bounded traversal settles normally");
+
+            // Exactly the two documented pages were requested once each;
+            // no request adopted or transmitted the issued cookie.
+            let observed = endpoint.observed();
+            assert_eq!(observed.len(), 2, "{name}: one request per page");
+            let mut observed_pages = Vec::new();
+            for (target, headers) in &observed {
+                let header = |name: &str| {
+                    headers
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                        .map(|(_, value)| value.as_str())
+                };
+                assert!(
+                    header("cookie").is_none(),
+                    "{name}: no cookie adoption or transmission"
+                );
+                assert_eq!(
+                    header("authorization"),
+                    Some(format!("Bearer {BEARER}").as_str()),
+                    "{name}"
+                );
+                observed_pages.push(loopback_page_query(target));
+            }
+            assert_eq!(observed_pages, ["1", "2"], "{name}");
+
+            let cache = ResponseCache {
+                directory: governor::open_directory(&cache_directory.path, false, true)
+                    .expect("cache directory"),
+            };
+            if issue {
+                // The page-2 response issued `future-cookie-private` as
+                // session material, so the identical string in page-1's
+                // already-collected record is a credential disclosure:
+                // nothing in the consumer envelope may carry it, and the
+                // traversal is never reported complete.
+                assert!(
+                    !output.to_string().contains(FUTURE),
+                    "{name}: a late-issued credential never reaches output"
+                );
+                assert_ne!(
+                    output["upstream"]["complete"], true,
+                    "{name}: a withheld page cannot settle as complete"
+                );
+                assert_ne!(output["result"], "entries", "{name}");
+                // The issuing response is never persisted as a replayable
+                // page; the ordinary first page stays cached.
+                assert!(
+                    cache
+                        .load(&list_url(1, 2).unwrap())
+                        .expect("cache read")
+                        .is_none(),
+                    "{name}: the cookie-issuing response is never cached"
+                );
+            } else {
+                // Ordinary control: the very same record content is business
+                // data when no response issues it as a credential.
+                assert_eq!(output["result"], "entries", "{name}");
+                assert_eq!(output["entry_count"], 2, "{name}");
+                assert_eq!(output["upstream"]["complete"], true, "{name}");
+                assert_eq!(output["entries"][0]["content"], FUTURE, "{name}");
+                assert_eq!(output["entries"][1]["id"], 42, "{name}");
+                assert!(
+                    cache
+                        .load(&list_url(1, 2).unwrap())
+                        .expect("cache read")
+                        .is_some(),
+                    "{name}: the ordinary response is retained"
+                );
+            }
+        }
     }
 }

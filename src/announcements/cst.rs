@@ -224,22 +224,23 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            let document =
-                match college_html(response).and_then(|html| parse_listing(&html, &target)) {
-                    Ok(document) => document,
-                    Err(_) if is_safe_public_fallback(response) => {
-                        let mut value = html_fallback(
-                            response,
-                            "announcements_list",
-                            "cst",
-                            "cst_listing_selector_contract",
-                        );
-                        value["category"] = json!("tzgg");
-                        value["page"] = json!(1);
-                        return Ok(value);
-                    }
-                    Err(error) => return Err(error),
-                };
+            let html = college_html(response)?;
+            let document = match parse_listing(&html, &target) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    let mut value = html_fallback(
+                        response,
+                        "announcements_list",
+                        "cst",
+                        "cst_listing_selector_contract",
+                    );
+                    value["category"] = json!("tzgg");
+                    value["page"] = json!(1);
+                    return Ok(value);
+                }
+                Err(error) => return Err(error),
+            };
+            super::refuse_unsafe_listing(response, &html)?;
             let entries: Vec<&ListingEntry> = document
                 .entries
                 .iter()
@@ -298,7 +299,8 @@ fn article_with_client(
     bind_college_board(&client, CST_ROOT_URL, CST_NOTICES_URL, &mut attribution)?;
     let source = Url::parse(CST_NOTICES_URL).map_err(|_| unavailable())?;
     let listing = client.get(&source, false, |response| {
-        let document = match college_html(response).and_then(|html| parse_listing(&html, &source)) {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &source) {
             Ok(document) => document,
             Err(_) if is_safe_public_fallback(response) => {
                 return Ok(html_fallback(
@@ -310,6 +312,7 @@ fn article_with_client(
             }
             Err(error) => return Err(error),
         };
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()
@@ -460,14 +463,16 @@ mod tests {
         }
     }
 
+    const LISTING_BOARD: &str = r#"<title>Fixture notices</title><div class="text-list"><ul>
+        <li><a href="../info/1102/42.htm"><div class="text-ldata"><div><p>10/12</p><span>2026</span></div></div><div class="text-linfo"><h3>First notice</h3><p>First excerpt</p></div></a></li>
+        <li><a href="../info/1102/43.htm"><div class="text-ldata"><div><p>bad</p><span>2026</span></div></div><div class="text-linfo"><h3>Second notice</h3><p></p></div></a></li>
+    </ul></div>"#;
+
     #[test]
     fn listing_preserves_source_order_and_split_dates() {
-        let source = r#"<title>Fixture notices</title><div class="text-list"><ul>
-            <li><a href="../info/1102/42.htm"><div class="text-ldata"><div><p>10/12</p><span>2026</span></div></div><div class="text-linfo"><h3>First notice</h3><p>First excerpt</p></div></a></li>
-            <li><a href="../info/1102/43.htm"><div class="text-ldata"><div><p>bad</p><span>2026</span></div></div><div class="text-linfo"><h3>Second notice</h3><p></p></div></a></li>
-        </ul></div>"#;
         let base = Url::parse(CST_NOTICES_URL).unwrap();
-        let document = parse_listing(&college_html(&response(source)).unwrap(), &base).unwrap();
+        let document =
+            parse_listing(&college_html(&response(LISTING_BOARD)).unwrap(), &base).unwrap();
         assert_eq!(document.entries.len(), 2);
         assert_eq!(document.entries[0].source_order, 1);
         assert_eq!(document.entries[0].date.as_deref(), Some("2026-10-12"));
@@ -515,5 +520,64 @@ mod tests {
         ] {
             assert!(!plain_url(&Url::parse(raw).unwrap()));
         }
+    }
+
+    #[test]
+    fn review_regression_security_marked_listing_is_refused_before_output_or_cache() {
+        // A board that still parses while carrying a security marker is
+        // unsafe: the real list callback must refuse it before serializing
+        // entries and before ArchiveClient::get may persist the response
+        // (save happens only after the callback returns Ok), and no fallback
+        // export may carry the unsafe bytes.
+        let base = Url::parse(CST_NOTICES_URL).unwrap();
+        let link_response = Response {
+            url: CST_NOTICES_URL.into(),
+            ..response(&LISTING_BOARD.replace(
+                "href=\"../info/1102/42.htm\"",
+                "href=\"../info/1102/42.htm?csrf_token=synthetic\"",
+            ))
+        };
+        let html = college_html(&link_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&link_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback(&link_response));
+
+        let control_response = Response {
+            url: CST_NOTICES_URL.into(),
+            ..response(&format!(
+                "{LISTING_BOARD}<form><input type=\"hidden\" name=\"csrf_token\" value=\"synthetic\"></form>"
+            ))
+        };
+        let html = college_html(&control_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert_eq!(listing.entries.len(), 2);
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&control_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback(&control_response));
+
+        // The ordinary public board stays admissible end to end.
+        let response = Response {
+            url: CST_NOTICES_URL.into(),
+            ..response(LISTING_BOARD)
+        };
+        let html = college_html(&response).unwrap();
+        assert!(parse_listing(&html, &base).is_ok());
+        assert!(crate::announcements::refuse_unsafe_listing(&response, &html).is_ok());
+        assert!(is_safe_public_fallback(&response));
     }
 }

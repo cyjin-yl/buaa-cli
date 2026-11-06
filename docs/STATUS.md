@@ -1,5 +1,33 @@
 ## Development status
 
+## 2026-11-06: reviewed privacy and contract repairs; live reads still pending
+
+A fresh independent review of `760bbe0342b4cbd247f369555487e1bc90736b4f`
+requested changes in two Boya paths and two directory paths; all four were
+reproduced with real offline exchanges before repair. Boya now screens the
+decrypted plaintext before any ciphertext fallback and re-screens retained
+pagination records against values issued by later pages. Directory admission
+refuses `token`/`id_token` query keys and screens the query portion of nested
+fragment routes. Refused sources are not emitted or cached.
+
+Wider capability audits found and repaired further consumer-visible defects:
+successful announcement parses now pass the shared listing safety gate;
+transportation refuses non-HTML surfaces; admitted page originals survive an
+unadvertised ordinal; raw fallback withholds credential constructs found in
+inert or script text; YGY refuses looping pagers; ASE ignores inert markup in
+dates; IAI requires a real viewer call. Organization, timetable and drive
+admission screen escaped strings and member names; evaluation and electricity
+require object roots; HTML-declared electricity bodies take the HTML privacy
+path; iHome re-screens retained pages and cache entries against later-issued
+cookies; physics results stay finite; local catalog pagination continues past
+stale full-text rows.
+
+The complete offline gate passed 1,378 library tests and all 116 integration
+tests, with three existing ignored workers. These are synthetic and offline
+results. No post-repair authorized campus read has been performed yet, so
+no service acceptance is upgraded here; GSMIS HTTP 403 and the earlier Boya
+`session_cookie_refused` observation remain the latest live facts.
+
 ## 2026-11-05: directory refresh verified; GSMIS and Boya reads incomplete
 
 A fresh `buaa organizations list --refresh` completed with exit 0, HTTP 200

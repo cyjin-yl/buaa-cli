@@ -32,7 +32,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     governor::{Governor, Outcome, RequestKind, RequestLease},
@@ -700,20 +700,212 @@ fn contains_cookie(bytes: &[u8], cookie: &str) -> bool {
             })
 }
 
-/// JSON escapes hide a credential echo from a raw-byte scan; inspect decoded
-/// strings and scalar re-encodings inside a parsed body.
+/// A `serde_json::Value` built by strict admission only: object members are
+/// retained with their decoded names, duplicate members are rejected before
+/// either occurrence can be dropped, and no positional spelling is silently
+/// retyped. Drop wipes every retained string so decoded material never
+/// outlives the screen.
+struct PrivateValue(Value);
+impl<'de> Deserialize<'de> for PrivateValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = PrivateValue;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("JSON value")
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(PrivateValue(Value::Null))
+            }
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(PrivateValue(Value::Bool(value)))
+            }
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(PrivateValue(Value::from(value)))
+            }
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(PrivateValue(Value::from(value)))
+            }
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(PrivateValue(Value::from(value)))
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(PrivateValue(Value::String(value.to_owned())))
+            }
+            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(PrivateValue(Value::String(value)))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut result = PrivateValue(Value::Array(Vec::new()));
+                while let Some(mut value) = access.next_element::<PrivateValue>()? {
+                    result
+                        .0
+                        .as_array_mut()
+                        .unwrap()
+                        .push(std::mem::take(&mut value.0));
+                }
+                Ok(result)
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut result = PrivateValue(Value::Object(serde_json::Map::new()));
+                while let Some(key) = access.next_key::<String>()? {
+                    let mut key = Zeroizing::new(key);
+                    let values = result.0.as_object_mut().unwrap();
+                    if values.contains_key(key.as_str()) {
+                        return Err(serde::de::Error::custom("duplicate JSON key"));
+                    }
+                    let mut value = access.next_value::<PrivateValue>()?;
+                    values.insert(std::mem::take(&mut *key), std::mem::take(&mut value.0));
+                }
+                Ok(result)
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+impl std::ops::Deref for PrivateValue {
+    type Target = Value;
+    fn deref(&self) -> &Value {
+        &self.0
+    }
+}
+impl Drop for PrivateValue {
+    fn drop(&mut self) {
+        wipe_value(&mut self.0);
+    }
+}
+fn wipe_value(value: &mut Value) {
+    match value {
+        Value::String(text) => text.zeroize(),
+        Value::Array(values) => values.iter_mut().for_each(wipe_value),
+        Value::Object(values) => {
+            for (mut key, mut value) in std::mem::take(values) {
+                key.zeroize();
+                wipe_value(&mut value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// JSON escapes hide a credential echo from a raw-byte scan; inspect every
+/// decoded member name and string plus scalar re-encodings inside a
+/// strictly admitted body.
 fn value_contains_secret(value: &Value, contains: &dyn Fn(&[u8]) -> bool) -> bool {
     match value {
         Value::String(text) => contains(text.as_bytes()),
         Value::Array(values) => values
             .iter()
             .any(|value| value_contains_secret(value, contains)),
-        Value::Object(fields) => fields
-            .values()
-            .any(|value| value_contains_secret(value, contains)),
+        Value::Object(fields) => fields.iter().any(|(name, value)| {
+            contains(name.as_bytes()) || value_contains_secret(value, contains)
+        }),
         Value::Number(_) | Value::Bool(_) | Value::Null => {
             net::json_scalar_matches(value, contains)
         }
+    }
+}
+
+/// The outcome of screening one response body against every secret the
+/// invocation holds. `Echo` is a definite credential match. `Unreviewable`
+/// means part of the body could not be screened — an escaped JSON literal a
+/// strict decoder rejects — so neither a definite echo nor safety was
+/// established. `Clear` means every check ran to completion without a match.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BodyScreening {
+    Clear,
+    Echo,
+    Unreviewable,
+}
+
+/// Screen every decoded string and member name one body produces. Strict
+/// `PrivateValue` admission keeps duplicate members and decoded names in
+/// scope for the credential check; bodies it rejects (duplicate keys,
+/// malformed structure) fall back to decoding each escaped string literal
+/// individually so an echo hidden behind a duplicate or an escape cannot
+/// pass, while an escaped literal that cannot be decoded is unreviewable
+/// rather than presumed safe.
+fn decoded_body_screening(bytes: &[u8], contains: &dyn Fn(&[u8]) -> bool) -> BodyScreening {
+    match serde_json::from_slice::<PrivateValue>(bytes) {
+        Ok(value) => {
+            if value_contains_secret(&value, contains) {
+                BodyScreening::Echo
+            } else {
+                BodyScreening::Clear
+            }
+        }
+        Err(_) => escaped_string_screening(bytes, contains),
+    }
+}
+
+/// Screen JSON string spellings that only exist after decoding. A body that
+/// fails strict `PrivateValue` parsing (a duplicate key, truncated
+/// structure) can still encode a retained credential inside an escaped
+/// string (`\u0061`, `\/`, `\\`), and the raw bytes never contain the
+/// decoded spelling. Only literals that carry a JSON escape need decoding;
+/// every unescaped spelling is already covered by the byte-level check. An
+/// escaped literal that cannot be decoded — a string cut off before its
+/// closing quote or an invalid escape — cannot be screened at all: a
+/// lenient consumer may still recover a credential spelling from it, so it
+/// is unreviewable rather than presumed safe or presumed an echo.
+fn escaped_string_screening(bytes: &[u8], contains: &dyn Fn(&[u8]) -> bool) -> BodyScreening {
+    let mut cursor = 0;
+    let mut unreviewable = false;
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'"' {
+            cursor += 1;
+            continue;
+        }
+        let opening = cursor;
+        cursor += 1;
+        let mut escaped = false;
+        let mut terminated = false;
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'\\' => {
+                    escaped = true;
+                    cursor = cursor.saturating_add(2);
+                }
+                b'"' => {
+                    terminated = true;
+                    break;
+                }
+                _ => cursor += 1,
+            }
+        }
+        if !terminated {
+            // A cut-off literal carrying an escape is never presumed safe:
+            // a lenient consumer may recover the credential spelling a
+            // strict decoder rejects.
+            unreviewable |= escaped;
+            break;
+        }
+        if escaped {
+            match serde_json::from_slice::<String>(&bytes[opening..=cursor]) {
+                Ok(value) => {
+                    let value = Zeroizing::new(value);
+                    if contains(value.as_bytes()) {
+                        return BodyScreening::Echo;
+                    }
+                }
+                // An escaped literal that cannot be decoded cannot be
+                // screened; record it and keep looking for a definite
+                // echo, which outranks the unreviewable verdict.
+                Err(_) => unreviewable = true,
+            }
+        }
+        cursor += 1;
+    }
+    if unreviewable {
+        BodyScreening::Unreviewable
+    } else {
+        BodyScreening::Clear
     }
 }
 
@@ -747,6 +939,10 @@ struct ReadScreening {
     metadata_echo: bool,
     /// The body, raw or JSON-decoded, echoes credential material.
     echo: bool,
+    /// Part of the body could not be screened at all: an escaped JSON
+    /// literal the decoder rejects, so neither echo nor safety was
+    /// established.
+    body_unreviewed: bool,
 }
 
 /// The value one read body is admitted as, plus the denial signal the governor
@@ -760,8 +956,10 @@ struct ReadAdmission {
 /// performs no I/O, no retry and no parsing of the request. A recognized
 /// session denial is refused before the parser is consulted, so a denial body
 /// can never be presented as timetable rows, and every non-2xx, non-UTF-8 or
-/// unparsable body keeps byte-exact degraded evidence (base64, sha256,
-/// Content-Type, reason and status) instead of an empty schedule.
+/// unparsable body that was fully screened keeps byte-exact degraded evidence
+/// (base64, sha256, Content-Type, reason and status) instead of an empty
+/// schedule. A body whose decoded spellings cannot all be screened is
+/// withheld rather than exported.
 fn admit_read_body(
     status: u16,
     content_type: Option<&str>,
@@ -786,6 +984,13 @@ fn admit_read_body(
         output
     } else if screening.echo {
         withheld(status, safe_content_type, bytes, "credential_echo")
+    } else if screening.body_unreviewed {
+        withheld(
+            status,
+            safe_content_type,
+            bytes,
+            "response_safety_unreviewed",
+        )
     } else if assessment == crate::html::ChallengeAssessment::Unreviewed && !challenge {
         withheld(
             status,
@@ -1009,12 +1214,8 @@ pub(crate) fn session_with_network(
     let metadata_echo = content_type
         .as_deref()
         .is_some_and(|value| contains(value.as_bytes()));
-    let echo = contains(&bytes)
-        || metadata_echo
-        || std::str::from_utf8(&bytes)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-            .is_some_and(|value| value_contains_secret(&value, &contains));
+    let body_screening = decoded_body_screening(&bytes, &contains);
+    let echo = contains(&bytes) || metadata_echo || body_screening == BodyScreening::Echo;
     let mut denied = false;
     let result = if read_result.is_err() {
         Err(error(
@@ -1038,6 +1239,7 @@ pub(crate) fn session_with_network(
                 header_challenge,
                 metadata_echo,
                 echo,
+                body_unreviewed: body_screening == BodyScreening::Unreviewable,
             },
         );
         denied = admission.denied;
@@ -1737,6 +1939,86 @@ mod session_tests {
         assert_eq!(echoing.output["fallback_reason"], "credential_echo");
         for key in ["calendar", "event_count", "schedule_row_count"] {
             assert!(echoing.output.get(key).is_none(), "{key} emitted");
+        }
+    }
+
+    /// Screen one body the way `session_with_network` does, then admit it.
+    /// The `contains` predicate plays the role of the transmitted cookie,
+    /// issued jar and stdin credentials in production.
+    fn screened_admission(status: u16, content_type: Option<&str>, body: &[u8]) -> ReadAdmission {
+        let contains = |candidate: &[u8]| {
+            crate::net::carries_secret(candidate, "secret-canary-9")
+        };
+        let screening = decoded_body_screening(body, &contains);
+        let assessment = complete_assessment(content_type, body);
+        admit_read_body(
+            status,
+            content_type,
+            body,
+            "20261",
+            assessment,
+            ReadScreening {
+                echo: contains(body) || screening == BodyScreening::Echo,
+                body_unreviewed: screening == BodyScreening::Unreviewable,
+                ..ReadScreening::default()
+            },
+        )
+    }
+
+    /// A decoded credential must be found wherever it sits: Unicode-escaped
+    /// inside a member name or in a duplicate member a lenient tree parser
+    /// would silently drop. Neither form may reach fallback export.
+    #[test]
+    fn decoded_echoes_in_names_and_duplicate_members_are_withheld() {
+        let content_type = Some("application/json");
+        // The credential's escaped spelling appears only in a member name;
+        // a screen that visits values only misses it, and the raw bytes
+        // never contain the decoded spelling.
+        let escaped_name: &[u8] = br#"{"\u0073ecret-canary-9":0}"#;
+        // The first duplicate member carries the escaped credential; a
+        // lenient tree parser keeps only the second, ordinary occurrence.
+        let duplicate: &[u8] = br#"{"x":"\u0073ecret-canary-9","x":"ordinary"}"#;
+        for body in [escaped_name, duplicate] {
+            assert!(serde_json::from_slice::<Value>(body).is_ok());
+            assert_eq!(
+                complete_assessment(content_type, body),
+                crate::html::ChallengeAssessment::Clear
+            );
+            let admission = screened_admission(200, content_type, body);
+            let output = &admission.output;
+            assert_eq!(output["result"], "sensitive_response_withheld");
+            assert_eq!(output["raw_evidence_withheld"], true);
+            assert!(output.get("raw_response_base64").is_none());
+            assert_eq!(output["body_byte_length"], body.len());
+            assert_eq!(
+                output["raw_response_sha256"],
+                format!("{:x}", Sha256::digest(body))
+            );
+        }
+    }
+
+    /// A body part that cannot be screened — an escaped JSON literal the
+    /// decoder rejects, whether by an invalid escape or a missing closing
+    /// quote — is withheld rather than presumed safe.
+    #[test]
+    fn unscreenable_body_is_withheld() {
+        let content_type = Some("application/json");
+        for unscreenable in [
+            // An invalid escape sequence: the literal exists but no decoder
+            // can produce its spelling.
+            br#"{"x":"abc\q"}"#.as_slice(),
+            // An escaped literal cut off before its closing quote: a lenient
+            // consumer may still recover a credential spelling from it.
+            br#"{"x":"\u0041"#.as_slice(),
+        ] {
+            let admission = screened_admission(200, content_type, unscreenable);
+            let output = &admission.output;
+            assert_eq!(
+                output["result"], "sensitive_response_withheld",
+                "{unscreenable:?}"
+            );
+            assert_eq!(output["raw_evidence_withheld"], true);
+            assert!(output.get("raw_response_base64").is_none());
         }
     }
 

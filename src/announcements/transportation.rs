@@ -1,7 +1,8 @@
 //! Directory-bound Transportation Science and Engineering college notices.
 use super::{
-    ArticleDocument, ListQuery, MAX_TEXT, advertised_page_url, article_category_from_url,
-    article_output, article_paragraphs, bind_college_board, college_directory_attribution,
+    ArticleDocument, ListQuery, MAX_TEXT, advertised_page_url_document,
+    article_category_from_url, article_output, article_paragraphs, bind_college_board,
+    college_directory_attribution,
     college_html, declared_jsp_attachment_hints, describe_college_surface, element_text,
     entry_in_scope, failed_contract, inert_element, invalid_article, invalid_list,
     parse_chinese_publication_date, parse_iso_date, parse_notice_list, retrieval, unavailable,
@@ -78,15 +79,19 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
         return Ok(latest);
     }
     client.get(&latest, false, |response| {
-        college_html(response)?;
-        advertised_page_url(
-            &response.body,
+        let document = college_html(response)?;
+        let selected = advertised_page_url_document(
+            &document,
             &latest,
             page,
             "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xwdt/gggs/"),
-        )
-    })
+        );
+        if selected.is_err() && !super::is_safe_public_fallback_document(response, &document) {
+            return Err(unavailable());
+        }
+        Ok(selected)
+    })?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -118,7 +123,9 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     )?;
     let target = listing_url(&client, page)?;
     client.with_cache_mode(mode).get(&target, false, |response| {
-        let document = parse_notice_list(&college_html(response)?, &target)?;
+        let html = college_html(response)?;
+        let document = parse_notice_list(&html, &target)?;
+        super::refuse_unsafe_listing(response, &html)?;
         let entries: Vec<_> = document
             .entries
             .iter()
@@ -153,7 +160,9 @@ pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Va
     )?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = parse_notice_list(&college_html(response)?, &source)?;
+        let html = college_html(response)?;
+        let document = parse_notice_list(&html, &source)?;
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()
@@ -354,5 +363,123 @@ mod tests {
         assert_eq!(output["result"], "partial_text");
         assert_eq!(output["completeness"]["image_content_present"], true);
         assert_eq!(output["completeness"]["unextracted_table_count"], 1);
+    }
+
+    fn board_response(content_type: &str, body: &str) -> Response {
+        Response {
+            url: TRANSPORTATION_NOTICES_URL.into(),
+            status: 200,
+            headers: BTreeMap::from([(
+                String::from("content-type"),
+                String::from(content_type),
+            )]),
+            sha256: format!("{:x}", Sha256::digest(body.as_bytes())),
+            body: body.as_bytes().to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        }
+    }
+
+    const BOARD_PAGE: &str = r#"<html><head><title>公告公示-交通学院</title></head><body>
+        <div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul>
+        <li><a href="../../info/1058/6401.htm"><div class="bg"></div><span>2026.10.18</span><h3>Fixture transportation notice</h3><p>Fixture excerpt</p></a></li>
+        </ul><div class="pagestyle"><span class="p_no"><a href="../gggs/1.htm">2</a></span></div></div></div></div></div></div>
+        </body></html>"#;
+
+    #[test]
+    fn transportation_surface_refuses_non_html_media_types() {
+        // A surface snapshot may only describe an admitted text/html
+        // original. A text/plain body is never HTML evidence: it must be
+        // refused rather than parsed into a successful surface snapshot.
+        for content_type in ["text/plain", "application/json"] {
+            let response = board_response(content_type, BOARD_PAGE);
+            assert!(
+                !crate::announcements::is_admitted_html(&response),
+                "non-HTML media type must not pass admission: {content_type}"
+            );
+            assert!(
+                describe_college_surface(&response, "transportation", json!({})).is_err(),
+                "surface must refuse a {content_type} body"
+            );
+        }
+        // A real text/html original of the same bytes stays describable.
+        let html = board_response("text/html", BOARD_PAGE);
+        let output = describe_college_surface(&html, "transportation", json!({})).unwrap();
+        assert_eq!(output["result"], "surface_snapshot");
+        assert_eq!(output["document_title"], "公告公示-交通学院");
+    }
+
+    #[test]
+    fn transportation_listing_with_token_marker_href_is_refused() {
+        // A board that still parses while carrying a credential token
+        // marker is unsafe: the real list callback must refuse it before
+        // serializing entries and before ArchiveClient::get may persist
+        // the response, and no fallback export may carry the unsafe bytes.
+        let html = BOARD_PAGE.replace(
+            "href=\"../../info/1058/6401.htm\"",
+            "href=\"../../info/1058/6401.htm?csrf_token=synthetic-fixture\"",
+        );
+        let document = Html::parse_document(&html);
+        let base = Url::parse(TRANSPORTATION_NOTICES_URL).unwrap();
+        let listing = parse_notice_list(&document, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        let response = board_response("text/html", &html);
+        assert!(
+            crate::announcements::refuse_unsafe_listing(&response, &document).is_err(),
+            "a credential-marked page must be refused as unsafe evidence"
+        );
+        assert!(
+            !crate::announcements::is_safe_public_fallback(&response),
+            "a credential-marked page must not emit fallback source bytes"
+        );
+        // The identical page without the marker is a public listing.
+        let document = Html::parse_document(BOARD_PAGE);
+        assert!(parse_notice_list(&document, &base).is_ok());
+        let public = board_response("text/html", BOARD_PAGE);
+        assert!(crate::announcements::refuse_unsafe_listing(&public, &document).is_ok());
+    }
+
+    #[test]
+    fn transportation_unadvertised_ordinal_keeps_the_admitted_original() {
+        // When page 1 does not advertise the requested ordinal, resolution
+        // fails, but the page-1 response itself is still a fully admitted
+        // original. The admission must not be rolled back: a later
+        // cache-only page-1 read must serve these exact bytes (bound by the
+        // recorded sha256), never report an offline miss for content that
+        // was already admitted.
+        let html = BOARD_PAGE.replace(
+            "<div class=\"pagestyle\"><span class=\"p_no\"><a href=\"../gggs/1.htm\">2</a></span></div>",
+            "",
+        );
+        let base = Url::parse(TRANSPORTATION_NOTICES_URL).unwrap();
+        // The unadvertised ordinal is refused by resolution...
+        assert!(
+            crate::announcements::advertised_page_url(
+                html.as_bytes(),
+                &base,
+                2,
+                "div.nymain div.ny-right div.notice-list > div > div.pagestyle span.p_no a[href]",
+                |url| plain_url(url) && url.path().starts_with("/xwdt/gggs/")
+            )
+            .is_err(),
+            "page 2 is not advertised by this board"
+        );
+        // ...while the exact admitted original stays parseable and
+        // byte-identified for the cache-only page-1 read.
+        let response = board_response("text/html", &html);
+        let document = college_html(&response).unwrap();
+        let parsed = parse_notice_list(&document, &base).unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(
+            retrieval(&response)["response_body_sha256"],
+            format!("{:x}", Sha256::digest(html.as_bytes()))
+        );
     }
 }

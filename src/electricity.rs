@@ -103,12 +103,58 @@ const FALLBACK_REASONS: [&str; 18] = [
 /// `floor` selector members are unknown fields and are refused instead of
 /// being reinterpreted. The binding is mandatory, so an absent or null binding
 /// is refused before any read; it is never derived from the caller's account.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 struct MeterBinding {
     building: String,
     room: String,
     meter_no: String,
+}
+
+/// The binding is a map-only shape: only the three named members name a
+/// meter, so a positional array is invalid input rather than a binding
+/// reinterpreted by position. Decoding through MapAccess preserves
+/// duplicate fields, so the member visitor still refuses them instead of
+/// collapsing to last-key-wins before the typed shape sees them.
+impl<'de> Deserialize<'de> for MeterBinding {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Members {
+            building: String,
+            room: String,
+            meter_no: String,
+        }
+
+        struct BindingObject;
+
+        impl<'de> serde::de::Visitor<'de> for BindingObject {
+            type Value = MeterBinding;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a meter binding object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let Members {
+                    building,
+                    room,
+                    meter_no,
+                } = serde::Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(
+                    map,
+                ))?;
+                Ok(MeterBinding {
+                    building,
+                    room,
+                    meter_no,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(BindingObject)
+    }
 }
 
 /// A binding member is a bounded non-empty field. The request and the fixture
@@ -770,7 +816,14 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
     // A bare `{` starts a statement block, not an object declaration. Other
     // expression contexts are deliberately unsupported, never reinterpreted.
     let mut containers: Vec<(u8, bool)> = Vec::new();
-    let mut object_members = Vec::with_capacity(tokens.len());
+    // One resolved chart-declaration identity per admitted object literal,
+    // innermost last. An admitted object nested directly inside another
+    // admitted object is a member of the same declaration; in any other
+    // context the literal is a separate declaration. Data members of two
+    // separate declarations can never be paired into one chart.
+    let mut declarations: Vec<usize> = Vec::new();
+    let mut next_declaration = 0usize;
+    let mut object_scope: Vec<Option<usize>> = Vec::with_capacity(tokens.len());
     for (position, token) in tokens.iter().enumerate() {
         if token.kind == TokenKind::Str
             && script[token.start..token.end].contains('\\')
@@ -834,7 +887,11 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
         {
             return Err("script_unlexable");
         }
-        object_members.push(in_object);
+        object_scope.push(if in_object {
+            declarations.last().copied()
+        } else {
+            None
+        });
         let previous = position.checked_sub(1).map(|index| tokens[index].kind);
         match token.kind {
             TokenKind::Punct(b'{') => {
@@ -850,6 +907,16 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
                     && matches!(tokens[position - 2].kind, TokenKind::Ident | TokenKind::Str)
                     && matches!(tokens[position - 3].kind, TokenKind::Punct(b'{' | b','));
                 let object = assignment || member_value;
+                if object {
+                    let declaration = if in_object {
+                        declarations.last().copied().ok_or("script_unlexable")?
+                    } else {
+                        let declaration = next_declaration;
+                        next_declaration += 1;
+                        declaration
+                    };
+                    declarations.push(declaration);
+                }
                 containers.push((b'{', object));
             }
             TokenKind::Punct(open @ (b'[' | b'(')) => containers.push((open, false)),
@@ -859,8 +926,13 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
                     b']' => b'[',
                     _ => b'(',
                 };
-                if containers.pop().map(|entry| entry.0) != Some(expected) {
-                    return Err("script_unlexable");
+                match containers.pop() {
+                    Some((open, object)) if open == expected => {
+                        if object {
+                            declarations.pop();
+                        }
+                    }
+                    _ => return Err("script_unlexable"),
                 }
             }
             _ => {}
@@ -872,7 +944,7 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
     let mut arrays = Vec::new();
     let mut index = 0usize;
     while index < tokens.len() {
-        if object_members[index]
+        if object_scope[index].is_some()
             && is_data_member(script, tokens[index])
             && index > 0
             && matches!(tokens[index - 1].kind, TokenKind::Punct(b'{' | b','))
@@ -885,7 +957,7 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
         {
             return Err("history_ambiguous");
         }
-        let owns_member = object_members[index]
+        let owns_member = object_scope[index].is_some()
             && is_data_member(script, tokens[index])
             && tokens
                 .get(index + 1)
@@ -930,18 +1002,20 @@ fn script_history(script: &str) -> Result<Option<(Value, Value)>, &'static str> 
         }
         let text = std::str::from_utf8(&script.as_bytes()[open..close])
             .map_err(|_| "history_ambiguous")?;
-        arrays.push(text);
+        arrays.push((object_scope[index], text));
         index += 3;
     }
     if arrays.is_empty() {
         return Ok(None);
     }
-    if arrays.len() != 2 {
+    // Only members of one enclosing chart declaration compose its history:
+    // data arrays of separate object literals can never pair into a chart.
+    if arrays.len() != 2 || arrays.iter().any(|(scope, _)| *scope != arrays[0].0) {
         return Err("history_ambiguous");
     }
-    let dates: Vec<String> = serde_json::from_str(arrays[0]).map_err(|_| "history_ambiguous")?;
+    let dates: Vec<String> = serde_json::from_str(arrays[0].1).map_err(|_| "history_ambiguous")?;
     let usage: Vec<serde_json::Number> =
-        serde_json::from_str(arrays[1]).map_err(|_| "history_ambiguous")?;
+        serde_json::from_str(arrays[1].1).map_err(|_| "history_ambiguous")?;
     if dates.is_empty() || dates.len() > MAX_ARRAY_ITEMS || usage.len() > MAX_ARRAY_ITEMS {
         return Err("history_ambiguous");
     }
@@ -1397,31 +1471,49 @@ fn safe_content_type(value: Option<&str>) -> Option<&str> {
     Some(value)
 }
 
+/// The response's own declared MIME is the surface admission contract: a
+/// declared HTML document is admitted through the HTML privacy and challenge
+/// inspection even when its bytes also happen to parse as JSON. Element
+/// syntax inside a JSON string is a real part of the declared HTML tree, so
+/// the JSON shortcut cannot skip it.
+fn declared_html(content_type: Option<&str>) -> bool {
+    content_type.is_some_and(|value| {
+        let mime = value.split(';').next().unwrap_or("").trim();
+        mime.eq_ignore_ascii_case("text/html")
+            || mime.eq_ignore_ascii_case("application/xhtml+xml")
+    })
+}
+
 fn response_withholding(bytes: &[u8], content_type: Option<&str>) -> Option<&'static str> {
     if content_type.is_some() && safe_content_type(content_type).is_none() {
         return Some("unsafe_response_metadata");
     }
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        if serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok() {
-            // Inspect every decoded string token, including duplicate keys
-            // that converting the document into a Value map would discard.
-            let tokens = match tokenize(text) {
-                Ok(tokens) => tokens,
-                Err(_) => return Some("response_safety_unreviewed"),
-            };
-            for token in tokens.iter().filter(|token| token.kind == TokenKind::Str) {
-                let decoded = match serde_json::from_str::<String>(&text[token.start..token.end]) {
-                    Ok(decoded) => decoded,
+    let declared_html = declared_html(content_type);
+    if !declared_html {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            if serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok() {
+                // Inspect every decoded string token, including duplicate
+                // keys that converting the document into a Value map would
+                // discard.
+                let tokens = match tokenize(text) {
+                    Ok(tokens) => tokens,
                     Err(_) => return Some("response_safety_unreviewed"),
                 };
-                if let Some(reason) = marker_withholding(&decoded) {
-                    return Some(reason);
+                for token in tokens.iter().filter(|token| token.kind == TokenKind::Str) {
+                    let decoded =
+                        match serde_json::from_str::<String>(&text[token.start..token.end]) {
+                            Ok(decoded) => decoded,
+                            Err(_) => return Some("response_safety_unreviewed"),
+                        };
+                    if let Some(reason) = marker_withholding(&decoded) {
+                        return Some(reason);
+                    }
                 }
+                return None;
             }
-            return None;
-        }
-        if let Some(reason) = marker_withholding(text) {
-            return Some(reason);
+            if let Some(reason) = marker_withholding(text) {
+                return Some(reason);
+            }
         }
     }
     let text = match decode_html(bytes, content_type) {
@@ -2982,5 +3074,62 @@ mod tests {
                 .get("threshold_conversion")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn json_shaped_body_with_a_form_control_is_withheld() {
+        // A body that happens to be valid JSON is still consumed as an HTML
+        // document: a control value inside a JSON string is a real element
+        // of that tree, so its bytes can never be retained as reviewable
+        // raw evidence.
+        let body = br#"{"note":"<input name=a value=sentinel>"}"#;
+        assert_eq!(
+            parse_balance_page(body, Some("text/html; charset=utf-8")),
+            Err("response_withheld")
+        );
+        let output = parse_balance_fixture(body, Some("text/html; charset=utf-8")).unwrap();
+        assert_eq!(output["result"], "degraded");
+        assert!(output["balance"].is_null());
+        assert_eq!(output["raw_evidence"]["raw_withheld"], true);
+        assert!(output["raw_evidence"]["data"].is_null());
+        assert!(!output.to_string().contains("sentinel"));
+        assert!(restore_raw_evidence(&output["raw_evidence"]).is_err());
+    }
+
+    #[test]
+    fn separate_objects_cannot_compose_one_chart() {
+        // Each object owns only one `data` member. The arrays of two
+        // different declarations can never be paired into one chart, so a
+        // page that splits them has no verified history at all.
+        assert!(matches!(
+            script_history(r#"x={data:["d"]};y={data:[1]};"#),
+            Err(_) | Ok(None)
+        ));
+        let page = PAGE.replace(
+            r#"x={data:["2024-05-01"],series:{data:[1.2]}};"#,
+            r#"x={data:["2024-05-01"]};y={data:[1.2]};"#,
+        );
+        let output =
+            parse_balance_fixture(page.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+        assert_eq!(output["result"], "degraded");
+        assert!(output["balance"].is_null());
+    }
+
+    #[test]
+    fn positional_binding_is_refused_as_invalid_input() {
+        // The reviewed binding is an object shape, not a positional array:
+        // only the three named members name a meter, never a sequence.
+        for operation in ["balance", "resolve"] {
+            let input = format!(
+                r#"{{"operation":"{operation}","binding":["B","101","M1"],"authorization_confirmed":true}}"#
+            );
+            for online in [false, true] {
+                assert_eq!(
+                    run(&input, online).unwrap_err().code,
+                    "invalid_input",
+                    "{input}"
+                );
+            }
+        }
     }
 }

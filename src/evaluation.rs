@@ -1242,8 +1242,10 @@ fn parse_command(input: &str) -> Result<Command, Error> {
     if let Some(slot) = value.0.get_mut("session_cookie") {
         *slot = Value::Null;
     }
-    let mut command =
-        Command::deserialize(&value.0).map_err(|_| Error::Invalid("invalid evaluation command"))?;
+    // The command root must be an object: the tagged-enum seq form would
+    // otherwise read ["operation", fields...] as positional variant fields.
+    let mut command: Command =
+        deserialize_map(&value.0).map_err(|_| Error::Invalid("invalid evaluation command"))?;
     if let Command::Status { session_cookie } = &mut command {
         *session_cookie = cookie.take();
     }
@@ -1971,6 +1973,22 @@ mod tests {
         }
         let clean = json!({"operation":"submit","intent":{"rwid":"r","wjid":"w","course":{"rwid":"r","wjid":"w"},"metadata":{},"answers":[{"topic":"t","options":["low"]}]},"topics":topics,"confirmation":preview.digest(),"reconfirmation":false});
         assert_eq!(run(&clean.to_string(), true).unwrap()["status"], "blocked");
+    }
+    #[test]
+    fn array_command_root_is_refused_before_dispatch() {
+        // A sequence root is not a command object. Serde's internally tagged
+        // enum visitor consumes the first element as the operation tag and the
+        // rest as positional variant fields, so
+        // ["courses","w",null,{"result":[]}] would otherwise dispatch as
+        // courses{wjid:"w",source:{"result":[]}} and project status:ok with an
+        // empty course list that no request ever produced.
+        for online in [false, true] {
+            let result = run(r#"["courses","w",null,{"result":[]}]"#, online).unwrap();
+            assert_eq!(result["status"], "blocked");
+            assert_eq!(result["reason"], "invalid evaluation command");
+            assert!(result.get("courses").is_none());
+            assert!(!result.to_string().contains("private"));
+        }
     }
     #[test]
     fn owner_answers_and_pattern() {

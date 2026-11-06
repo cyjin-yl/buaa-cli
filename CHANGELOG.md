@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Withhold Boya original ciphertext when the decrypted body cannot be screened,
+  and re-screen retained pagination records against values issued by later
+  pages. Screen organization query keys `token`/`id_token` and the query
+  portion of nested fragment routes.
+- Apply the directory/listing safety gate on successful announcement parses
+  and refuse non-HTML transportation surfaces; keep admitted page originals
+  when an unadvertised ordinal is refused. Withhold raw fallback bytes that
+  carry credential constructs in inert or script text.
+- Screen escaped JSON strings and member names in organization, timetable and
+  drive response admission; require object roots for evaluated commands and
+  electricity meter bindings; refuse HTML-declared bodies that also parse as
+  JSON and pair chart arrays only within one declaration.
+- Preserve retained iHome pages against later-issued cookie values, including
+  cache admission. Reject looping YGY pagers, ignore inert markup in ASE dates,
+  and require a real viewer call for IAI original-PDF declarations.
+- Reject non-finite physics results, keep tiny uncertainties representable,
+  and make local catalog pagination continue past stale FTS rows while opening
+  identity files non-blocking and verifying phrases without reopening paths.
+
 - Refuse credential-shaped organization titles, category labels, member names
   and decoded URL parameters before output or cache persistence. Allow harmless
   login navigation outside directory groups only for a successful structured
