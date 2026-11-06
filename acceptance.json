@@ -597,7 +597,7 @@
           "decrypted_plaintext_screened_before_ciphertext_fallback": true,
           "retained_records_rescreened_against_later_issued_values": true,
           "withheld_reason": "response_safety_unreviewed",
-          "library_cases_passed": 1388,
+          "library_cases_passed": 1389,
           "integration_cases_passed": 116,
           "existing_ignored_cases": 3,
           "new_campus_request": false,
@@ -1196,7 +1196,7 @@
           "prior_capture_preserved": true,
           "announcement_success_paths_gated": true,
           "withheld_raw_fallback_credential_constructs": true,
-          "library_cases_passed": 1388,
+          "library_cases_passed": 1389,
           "integration_cases_passed": 116,
           "new_campus_request": false,
           "live_acceptance_upgraded": false

@@ -283,7 +283,9 @@ fn credential_construct(source: &str) -> bool {
                     if credentialish_assignment(key, rest) {
                         return true;
                     }
-                } else if key_end == at
+                } else if source[key_end..at]
+                    .bytes()
+                    .all(|b| matches!(b, b' ' | b'\t'))
                     && credentialish_key(key)
                     && rest
                         .chars()
@@ -1008,7 +1010,7 @@ mod tests {
             PROSE.as_bytes()
         );
 
-        const FIELD: &str = r#"<title>通知公告</title><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-board"><div><ul><li><a href="../../info/1095/42.htm">Fixture</a></li></ul></div></div></div></div></div><script>var s = {token: "synthetic-fixture"};</script>"#;
+        const FIELD: &str = r#"<title>通知公告</title><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-board"><div><ul><li><a href="../../info/1095/42.htm">Fixture</a></li></ul></div></div></div></div></div><script>var s = {token : "synthetic-fixture"};</script>"#;
         let evidence = super::html_fallback(
             &listing_response(FIELD),
             "announcements_list",
@@ -1016,5 +1018,15 @@ mod tests {
             "soft_listing_selector_contract",
         );
         assert!(evidence["raw_html"].is_null());
+
+
+        const COMPACT: &str = r#"<title>通知公告</title><div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-board"><div><ul><li><a href="../../info/1095/42.htm">Fixture</a></li></ul></div></div></div></div></div><script>var s = {token:"x"};</script>"#;
+        let compact = super::html_fallback(
+            &listing_response(COMPACT),
+            "announcements_list",
+            "soft",
+            "soft_listing_selector_contract",
+        );
+        assert!(compact["raw_html"].is_null());
     }
 }

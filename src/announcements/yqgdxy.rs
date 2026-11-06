@@ -279,7 +279,9 @@ fn credential_construct(source: &str) -> bool {
                     if credentialish_assignment(key, rest) {
                         return true;
                     }
-                } else if key_end == at
+                } else if source[key_end..at]
+                    .bytes()
+                    .all(|b| matches!(b, b' ' | b'\t'))
                     && credentialish_key(key)
                     && rest
                         .chars()
@@ -1127,7 +1129,7 @@ mod tests {
             PROSE
         );
 
-        const FIELD: &[u8] = br#"<title>Fixture</title><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned</a></li></ul></div><script>var s = {token: "synthetic-fixture"};</script>"#;
+        const FIELD: &[u8] = br#"<title>Fixture</title><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned</a></li></ul></div><script>var s = {token : "synthetic-fixture"};</script>"#;
         let field = response(YQGDXY_NOTICES_URL, std::str::from_utf8(FIELD).unwrap());
         let output = html_fallback(
             &field,
@@ -1136,5 +1138,17 @@ mod tests {
             "yqgdxy_listing_selector_contract",
         );
         assert!(output["raw_html"].is_null());
+
+        const COMPACT: &[u8] = br#"<title>Fixture</title><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned</a></li></ul></div><script>var s = {token:"x"};</script>"#;
+        let compact = response(YQGDXY_NOTICES_URL, std::str::from_utf8(COMPACT).unwrap());
+        assert!(
+            html_fallback(
+                &compact,
+                "announcements_list",
+                "yqgdxy",
+                "yqgdxy_listing_selector_contract",
+            )["raw_html"]
+                .is_null()
+        );
     }
 }

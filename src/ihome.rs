@@ -3053,6 +3053,13 @@ fn page_carries_issued(page: &PageOutcome, issued: &IssuedCookies) -> bool {
         || retained_bytes_carry_issued(&page.source.body, issued)
 }
 
+/// The documented constant a withheld page reports as its request URL when
+/// the real URL itself carries an invocation-issued credential value. The
+/// marker is a string so `page_meta_schema`'s required `url` member still
+/// validates, and `url_withheld` states that the substitution happened.
+/// A real-looking replacement URL is never fabricated.
+const WITHHELD_URL_MARKER: &str = "withheld";
+
 /// Publish one settled traversal. Every page is first re-screened against the
 /// complete invocation issued-cookie history: a value first issued by a later
 /// page is credential material wherever an earlier retained record carries
@@ -3095,9 +3102,10 @@ fn publish_list_envelope(
             // retained a credential disclosure. Publish exactly what a page
             // refused at read time would have published: provenance metadata
             // and evidence with no raw bytes. Only upstream-derived members
-            // can carry the value: the request URL is nulled if it does, and
-            // a carrying Content-Type takes the content_type_echo path;
-            // generated envelope vocabulary is never touched.
+            // can carry the value: a carrying request URL is replaced by the
+            // documented withheld marker, and a carrying Content-Type takes
+            // the content_type_echo path; generated envelope vocabulary is
+            // never touched.
             let content_type_echo = page
                 .source
                 .headers
@@ -3107,7 +3115,12 @@ fn publish_list_envelope(
             let mut withheld =
                 credential_echo_page(&view, request.token.as_str(), content_type_echo);
             if issued.carries(page.source.url.as_bytes()) {
-                withheld.meta["url"] = Value::Null;
+                // The request URL itself is credential-bearing: the required
+                // `url` member stays a string (the documented marker) and the
+                // `url_withheld` flag states the substitution. The real URL
+                // never reaches the envelope.
+                withheld.meta["url"] = json!(WITHHELD_URL_MARKER);
+                withheld.meta["url_withheld"] = json!(true);
             }
             withheld
         } else {
@@ -3954,7 +3967,8 @@ fn page_meta_schema() -> Value {
         "additionalProperties": false,
         "required": ["url","status","content_type","content_type_parameters_withheld","entry_count","fetched_at_unix_ms","response_body_sha256","cache_status"],
         "properties": {
-            "url": {"type": "string"},
+            "url": {"type": "string", "description": "The request URL; on a page withheld because an invocation-issued credential value appears in that URL itself, the constant 'withheld'."},
+            "url_withheld": {"type": "boolean", "description": "Present and true only when `url` is the 'withheld' marker because the request URL itself carried an invocation-issued credential value."},
             "status": {"type": "integer", "minimum": 100, "maximum": 999},
             "content_type": {"type": ["string", "null"]},
             "content_type_parameters_withheld": {"type":"boolean", "description": "True when the response declared a content type that is not fully projected: untrusted parameters, a malformed value, or a value carrying the submitted credential."},
@@ -7980,5 +7994,88 @@ mod ihome_review_regressions {
         // page is never written.
         assert!(cache.load(&list_url(1, 1).unwrap()).unwrap().is_some());
         assert!(cache.load(&list_url(1, 2).unwrap()).unwrap().is_none());
+    }
+
+    #[test]
+    fn ihome_review_regression_url_carrying_page_uses_documented_marker() {
+        // `api` is a path segment of every request URL (`/api/appeal`). A
+        // cookie issued as `sid=api` therefore makes the page's own request
+        // URL a credential carrier: the page is withheld like any
+        // credential-echo refusal, but the required `url` member must stay a
+        // string — the documented `withheld` marker — with `url_withheld`
+        // stating the substitution. No null, no fabricated URL, and the
+        // issued value never reaches the envelope.
+        let body = loopback_list_page(1, 1, 1, 41, "Synthetic appeal");
+        let set_cookie = "sid=api; Path=/api; Secure; HttpOnly".to_owned();
+        let pki = loopback_pki();
+        let endpoint = IhomeLoopback::start(loopback_acceptor(&pki), move |request| {
+            match loopback_page_query(&request.target).as_str() {
+                "1" => loopback_http_response(
+                    "200 OK",
+                    &[
+                        ("Content-Type", "application/json"),
+                        ("Set-Cookie", &set_cookie),
+                    ],
+                    &body,
+                ),
+                _ => loopback_http_response("404 Not Found", &[], "unexpected"),
+            }
+        });
+        let client = loopback_client(&pki, endpoint.address);
+        let cache_directory = loopback_directory("cache-url-marker");
+        let governor_directory = loopback_directory("governor-url-marker");
+        let governor =
+            Governor::isolated_for_test(&governor_directory.path).expect("isolated governor");
+        let output = list_with_test_network(
+            &json!({"token": BEARER, "limit": 1, "page": 1, "max_pages": 1}).to_string(),
+            &cache_directory.path,
+            client,
+            governor,
+        )
+        .expect("the bounded traversal settles normally");
+
+        // The page is withheld as a credential echo: no entries, no
+        // completeness, evidence carries the echo reason and no raw bytes.
+        assert_eq!(output["result"], "degraded");
+        assert_eq!(output["entry_count"], 0);
+        assert_ne!(output["upstream"]["complete"], true);
+        assert_eq!(
+            output["upstream_evidence"]["fallback_reason"],
+            "credential_echo"
+        );
+        assert!(
+            output["upstream_evidence"]
+                .get("raw_response_base64")
+                .is_none()
+        );
+
+        // The page record keeps every required `page_meta_schema` member:
+        // `url` is the documented marker string with `url_withheld`, never a
+        // null and never the credential-bearing request URL.
+        let record = &output["upstream"]["pages"][0];
+        for key in [
+            "url",
+            "status",
+            "content_type",
+            "content_type_parameters_withheld",
+            "entry_count",
+            "fetched_at_unix_ms",
+            "response_body_sha256",
+            "cache_status",
+        ] {
+            assert!(!record[key].is_null(), "required member {key}");
+        }
+        assert_eq!(record["url"], WITHHELD_URL_MARKER);
+        assert_eq!(record["url_withheld"], true);
+        assert!(record["url"].is_string());
+        assert_eq!(record["status"], 200);
+        assert_eq!(record["entry_count"], 0);
+
+        // The issued value and the real request URL are absent from the
+        // entire consumer envelope.
+        let text = output.to_string();
+        assert!(!text.contains("i.buaa.edu.cn"));
+        assert!(!text.contains("/api/appeal"));
+        assert!(!text.contains("api"));
     }
 }

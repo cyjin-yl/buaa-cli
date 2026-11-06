@@ -273,7 +273,9 @@ fn credential_construct(source: &str) -> bool {
                     if credentialish_assignment(key, rest) {
                         return true;
                     }
-                } else if key_end == at
+                } else if source[key_end..at]
+                    .bytes()
+                    .all(|b| matches!(b, b' ' | b'\t'))
                     && credentialish_key(key)
                     && rest
                         .chars()
@@ -1200,7 +1202,7 @@ mod tests {
             PROSE.as_bytes()
         );
 
-        const FIELD: &str = r#"<title>信息公告</title><div class="news"><ul class="list12"><li><a class="a" href="info/1196/42.htm">Fixture</a></li></ul></div><script>var s = {token: "synthetic-fixture"};</script>"#;
+        const FIELD: &str = r#"<title>信息公告</title><div class="news"><ul class="list12"><li><a class="a" href="info/1196/42.htm">Fixture</a></li></ul></div><script>var s = {token : "synthetic-fixture"};</script>"#;
         let evidence = super::html_fallback(
             &listing_response(FIELD),
             "announcements_list",
@@ -1208,5 +1210,15 @@ mod tests {
             "zfai_listing_selector_contract",
         );
         assert!(evidence["raw_html"].is_null());
+
+
+        const COMPACT: &str = r#"<title>信息公告</title><div class="news"><ul class="list12"><li><a class="a" href="info/1196/42.htm">Fixture</a></li></ul></div><script>var s = {token:"x"};</script>"#;
+        let compact = super::html_fallback(
+            &listing_response(COMPACT),
+            "announcements_list",
+            "zfai",
+            "zfai_listing_selector_contract",
+        );
+        assert!(compact["raw_html"].is_null());
     }
 }
