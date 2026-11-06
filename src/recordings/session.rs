@@ -6330,20 +6330,10 @@ impl ServiceSession {
 /// A completed but unrecognized exchange is not a network failure or a
 /// password verdict; the caller retains its observed HTTP facts.
 fn service_attempt_failure(error: Error) -> Error {
-    match error.code {
-        "challenge_requires_human"
-        | "cooldown"
-        | "auth_latched"
-        | "network_error"
-        | "authentication_unconfirmed"
-        | "body_limit"
-        | "scoped_cookie_unusable"
-        | "governor_unavailable" => error,
-        _ => Error::new(
-            "authentication_unconfirmed",
-            "The service sign-on exchange could not be admitted; no automatic retry was performed.",
-        ),
-    }
+    // Error codes are fixed structural labels, never credential material.
+    // Masking them behind one generic verdict blocked diagnosis of real
+    // admission faults. Pass through the original code and message.
+    error
 }
 
 /// A detected challenge stops the attempt. The caller settles it as a
