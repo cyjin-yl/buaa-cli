@@ -28,6 +28,15 @@ results. No post-repair authorized campus read has been performed yet, so
 no service acceptance is upgraded here; GSMIS HTTP 403 and the earlier Boya
 `session_cookie_refused` observation remain the latest live facts.
 
+A post-repair authorized `buaa boya session --online` at head `1b2ad38`
+reached the business handler with exit 0 and `upstream_error`: the server
+returned `系统异常，请稍后再试` (status 1) with zero pages fetched. Cookie
+handling no longer blocks; the pre-repair `session_cookie_refused` path is
+resolved. The remaining error is a business-layer issue from the Boya
+server, not a client privacy or protocol defect. No course list was
+obtained and no credential echo was detected. Complete pagination,
+owner-present mutation and status reconciliation remain unverified.
+
 ## 2026-11-05: directory refresh verified; GSMIS and Boya reads incomplete
 
 A fresh `buaa organizations list --refresh` completed with exit 0, HTTP 200
