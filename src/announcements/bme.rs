@@ -131,6 +131,7 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
             }
             Err(error) => return Err(error),
         };
+        super::refuse_unsafe_listing(response, &html)?;
         let entries: Vec<_> = document
             .entries
             .iter()
@@ -687,15 +688,29 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 
+    const LISTING_BOARD: &str = r#"<title>BME</title><table id="DataList1"><tr>
+        <td><div class="posTit"><span><a href="news.aspx?catID=13&amp;subcatID=46"><img src="more.gif"/></a></span>通知公告</div>
+        <ul><li><span>[2026-10-11]</span><a href="newsInfo.aspx?catID=13&amp;subcatID=46&amp;curID=14781" title="完整公告标题">完整公告标题...</a></li>
+        <li><span>[2025-01-02]</span><a href="newsInfo.aspx?catID=13&amp;subcatID=46&amp;curID=2">可见标题</a></li></ul></td>
+        <td><div class="posTit">综合信息</div><ul><li><span>[2026-03-16]</span><a href="newsInfo.aspx?catID=13&amp;subcatID=45&amp;curID=14715">综合标题</a></li></ul></td>
+    </tr></table>"#;
+
     fn listing() -> Html {
-        Html::parse_document(
-            r#"<title>BME</title><table id="DataList1"><tr>
-                <td><div class="posTit"><span><a href="news.aspx?catID=13&amp;subcatID=46"><img src="more.gif"/></a></span>通知公告</div>
-                <ul><li><span>[2026-10-11]</span><a href="newsInfo.aspx?catID=13&amp;subcatID=46&amp;curID=14781" title="完整公告标题">完整公告标题...</a></li>
-                <li><span>[2025-01-02]</span><a href="newsInfo.aspx?catID=13&amp;subcatID=46&amp;curID=2">可见标题</a></li></ul></td>
-                <td><div class="posTit">综合信息</div><ul><li><span>[2026-03-16]</span><a href="newsInfo.aspx?catID=13&amp;subcatID=45&amp;curID=14715">综合标题</a></li></ul></td>
-            </tr></table>"#,
-        )
+        Html::parse_document(LISTING_BOARD)
+    }
+
+    fn listing_response(body: &str) -> Response {
+        Response {
+            url: BME_NOTICES_URL.into(),
+            status: 200,
+            headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
+            sha256: format!("{:x}", Sha256::digest(body.as_bytes())),
+            body: body.as_bytes().to_vec(),
+            fetched_at_unix_ms: 1,
+            cache_status: CacheStatus::Hit,
+            revalidated_at_unix_ms: None,
+            revalidation_status: None,
+        }
     }
 
     #[test]
@@ -793,5 +808,55 @@ mod tests {
             }
             Err(error) => assert_eq!(error.code, "unavailable"),
         }
+    }
+
+    #[test]
+    fn review_regression_security_marked_listing_is_refused_before_output_or_cache() {
+        // A board that still parses while carrying a security marker is
+        // unsafe: the real list callback must refuse it before serializing
+        // entries and before ArchiveClient::get may persist the response
+        // (save happens only after the callback returns Ok), and no fallback
+        // export may carry the unsafe bytes.
+        let base = Url::parse(BME_NOTICES_URL).unwrap();
+        let link_response = listing_response(&LISTING_BOARD.replace(
+            "curID=14781\"",
+            "curID=14781&amp;csrf_token=synthetic\"",
+        ));
+        let html = college_html(&link_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&link_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback(&link_response));
+
+        let control_response = listing_response(&format!(
+            "{LISTING_BOARD}<form><input type=\"hidden\" name=\"csrf_token\" value=\"synthetic\"></form>"
+        ));
+        let html = college_html(&control_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert_eq!(listing.entries.len(), 3);
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&control_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback(&control_response));
+
+        // The ordinary public board stays admissible end to end.
+        let response = listing_response(LISTING_BOARD);
+        let html = college_html(&response).unwrap();
+        assert!(parse_listing(&html, &base).is_ok());
+        assert!(crate::announcements::refuse_unsafe_listing(&response, &html).is_ok());
+        assert!(is_safe_public_fallback(&response));
     }
 }

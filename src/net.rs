@@ -91,6 +91,10 @@ pub(crate) const SPOC_ENTRY_URL: &str = "https://spoc.buaa.edu.cn/spocnew/";
 pub(crate) const CLASSROOM_ORIGIN: &str = "https://classroom.msa.buaa.edu.cn";
 pub(crate) const CLASSROOM_TRANSCRIPT_PATH: &str = "/courseapi/v3/web-socket/search-trans-result";
 const CLASSROOM_ROBOTS_URL: &str = "https://classroom.msa.buaa.edu.cn/robots.txt";
+/// Bounded server-directed hops on the session-bound transcript read. A
+/// redirect beyond this count ends the chain and is refused like any other
+/// redirect.
+const MAX_TRANSCRIPT_REDIRECTS: usize = 4;
 
 pub(crate) fn classroom_json_mime(content_type: Option<&str>) -> bool {
     content_type
@@ -1268,10 +1272,13 @@ impl ClassroomClient {
         if !classroom_transcript_url_allowed(url) {
             return Err(invalid_url());
         }
-        self.source
-            .get_with_cookie(url, true, Some(&self.cookie), |_, _| false, move |r, _| {
-                process(r)
-            })
+        self.source.get_with_cookie(
+            url,
+            true,
+            Some(&self.cookie),
+            |_, _| false,
+            move |r, _| process(r),
+        )
     }
 
     /// Cache-first, session-isolated reads of the two reviewed lesson-source
@@ -1285,10 +1292,13 @@ impl ClassroomClient {
         if !classroom_source_url_allowed(url) {
             return Err(invalid_url());
         }
-        self.source
-            .get_with_cookie(url, false, Some(&self.cookie), |_, _| false, move |r, _| {
-                process(r)
-            })
+        self.source.get_with_cookie(
+            url,
+            false,
+            Some(&self.cookie),
+            |_, _| false,
+            move |r, _| process(r),
+        )
     }
 }
 
@@ -1486,9 +1496,35 @@ impl ArchiveClient {
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
         process: impl FnOnce(&Response) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        self.get_with_cookie(url, immutable, None, is_attributed_archive_status, move |r, _| {
-            process(r)
-        })
+        self.get_with_archive_status_and_persistence(
+            url,
+            immutable,
+            is_attributed_archive_status,
+            |_, _| true,
+            process,
+        )
+    }
+
+    /// Same read as `get_with_archive_status`, with a caller predicate deciding
+    /// whether a processed result may persist its response. A rejected capture
+    /// can then report degraded evidence without retaining the inadmissible
+    /// bytes as the official replay.
+    pub(crate) fn get_with_archive_status_and_persistence<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        persist: impl Fn(&T, &Response) -> bool,
+        process: impl FnOnce(&Response) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.get_with_persistence(
+            url,
+            immutable,
+            None,
+            is_attributed_archive_status,
+            persist,
+            move |r, _| process(r),
+        )
     }
 
     /// Same read as `get`, additionally reporting whether the response's
@@ -1510,6 +1546,25 @@ impl ArchiveClient {
         immutable: bool,
         cookie: Option<&RequestCookie>,
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.get_with_persistence(
+            url,
+            immutable,
+            cookie,
+            is_attributed_archive_status,
+            |_, _| true,
+            process,
+        )
+    }
+
+    fn get_with_persistence<T>(
+        &self,
+        url: &Url,
+        immutable: bool,
+        cookie: Option<&RequestCookie>,
+        is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        persist: impl Fn(&T, &Response) -> bool,
         process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.profile.validate_url(url)?;
@@ -1551,6 +1606,7 @@ impl ArchiveClient {
                 cookie,
             },
             is_attributed_archive_status,
+            persist,
             process,
         )
     }
@@ -1653,6 +1709,7 @@ impl ArchiveClient {
             governor,
             RequestSession { http, cookie: None },
             |_, _| false,
+            |_, _| true,
             move |r, _| process(r),
         )
     }
@@ -1664,6 +1721,7 @@ impl ArchiveClient {
         governor: &Governor,
         session: RequestSession<'_>,
         is_attributed_archive_status: impl Fn(u16, &BTreeMap<String, String>) -> bool,
+        persist: impl Fn(&T, &Response) -> bool,
         process: impl FnOnce(&Response, CookieAdmission) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let mut lease = acquire(governor)?;
@@ -1689,10 +1747,9 @@ impl ArchiveClient {
         // An entry whose cookie admission is unknown cannot supply validators:
         // revalidation must observe a complete fresh 200, so a legacy entry
         // is never re-promoted by a conditional 304.
-        if let Some(entry) = cached
-            .as_ref()
-            .filter(|entry| !organizations_target(self, url) || entry.admission != CookieAdmission::Unknown)
-        {
+        if let Some(entry) = cached.as_ref().filter(|entry| {
+            !organizations_target(self, url) || entry.admission != CookieAdmission::Unknown
+        }) {
             if let Some(etag) = &entry.etag {
                 request = request.header("If-None-Match", etag);
             }
@@ -1718,7 +1775,11 @@ impl ArchiveClient {
             Sent(Result<reqwest::blocking::Response, reqwest::Error>),
         }
         let started = lease.start_request(|| {
-            if session.cookie.is_some_and(|cookie|cookie.expires.is_some_and(|expiry|expiry <= SystemTime::now())) {
+            if session.cookie.is_some_and(|cookie| {
+                cookie
+                    .expires
+                    .is_some_and(|expiry| expiry <= SystemTime::now())
+            }) {
                 StartAttempt::CredentialExpired
             } else {
                 StartAttempt::Sent(request.send())
@@ -1727,7 +1788,9 @@ impl ArchiveClient {
         let mut raw = match started {
             Ok(StartAttempt::Sent(Ok(response))) => response,
             Ok(StartAttempt::CredentialExpired) => {
-                lease.finish_without_request().map_err(|_| governor_error())?;
+                lease
+                    .finish_without_request()
+                    .map_err(|_| governor_error())?;
                 return Err(Error::new(
                     "unavailable",
                     "Stored classroom cookie expired before transmission; deliberate authentication is required.",
@@ -1741,6 +1804,231 @@ impl ArchiveClient {
             }
             Err(governor::FollowupError::Governor(reason)) => return Err(governor_denial(&reason)),
         };
+        // A server-directed 3xx on the session-bound transcript read is
+        // answered by hand: anonymous adapters and every other classroom
+        // route keep refusing redirects outright. A followed target must
+        // stay HTTPS, on the request's own host and port, carry no
+        // credentials or fragment, remain inside the reviewed transcript
+        // URL scope, and keep the selected lesson identity. The session
+        // cookie is replayed only to such a target; anonymous landing or
+        // login hops are never followed. Only redirect hops enter the loop:
+        // each hop's headers and bounded body are reviewed before any next
+        // send, so a challenge, an authentication refusal, a robots denial
+        // or a credential echo ends the chain instead of being overwritten
+        // by a final 200. Cookies issued anywhere in the chain stay in a
+        // bounded invocation-only guard that also screens the terminal
+        // response before it is processed, projected or persisted. The
+        // retained response keeps the request URL as its identity so an
+        // unreviewed redirect target never enters the cache or output.
+        let mut redirect_hops = 0usize;
+        let mut redirect_cooldown = false;
+        let mut redirect_issue: Option<(u16, bool, RedirectIssue)> = None;
+        let mut issued = IssuedCookies::new();
+        let mut current = url.clone();
+        while session.cookie.is_some()
+            && self.profile == SourceProfile::Classroom
+            && classroom_transcript_url_allowed(url)
+            && redirect_hops < MAX_TRANSCRIPT_REDIRECTS
+            && matches!(raw.status().as_u16(), 301 | 302 | 303 | 307 | 308)
+        {
+            let hop_status = raw.status().as_u16();
+            let hop_challenge = raw
+                .headers()
+                .iter()
+                .any(|(name, value)| challenge_header(name.as_str(), value.as_bytes()));
+            if lease
+                .observe_http_many(
+                    hop_status,
+                    raw.headers()
+                        .get_all("retry-after")
+                        .iter()
+                        .map(|value| value.to_str().ok()),
+                    hop_challenge,
+                )
+                .is_err()
+            {
+                drop(raw);
+                return Err(governor_error());
+            }
+            // Every Set-Cookie field on this hop joins the chain-wide guard.
+            // An undecodable field or an overflow means the guard can no
+            // longer prove its echo screen, so the chain must refuse.
+            for value in raw.headers().get_all(reqwest::header::SET_COOKIE) {
+                issued.absorb(value.to_str().ok());
+            }
+            // A redirect has exactly one decodable Location. Multiple
+            // Locations are indeterminate: choosing one would silently skip
+            // a refused target.
+            let mut locations = raw.headers().get_all("location").iter();
+            let next = match (locations.next(), locations.next()) {
+                (None, _) => break,
+                (Some(_), Some(_)) => {
+                    redirect_issue =
+                        Some((hop_status, hop_challenge, RedirectIssue::AmbiguousLocation));
+                    break;
+                }
+                (Some(value), None) => {
+                    let parsed = value
+                        .to_str()
+                        .ok()
+                        .and_then(|location| current.join(location).ok());
+                    match parsed {
+                        Some(target)
+                            if target.scheme() == "https"
+                                && target.host_str() == url.host_str()
+                                && target.port_or_known_default()
+                                    == url.port_or_known_default()
+                                && target.username().is_empty()
+                                && target.password().is_none()
+                                && target.fragment().is_none()
+                                && target != current
+                                && classroom_transcript_url_allowed(&target)
+                                && transcript_sub_id(&target) == transcript_sub_id(url) =>
+                        {
+                            target
+                        }
+                        _ => {
+                            redirect_issue =
+                                Some((hop_status, hop_challenge, RedirectIssue::Target));
+                            break;
+                        }
+                    }
+                }
+            };
+            let hop_body = match read_bounded_body(&mut raw, MAX_REDIRECT_BODY) {
+                Ok(body) => body,
+                Err(error) => {
+                    let network_failure =
+                        matches!(error.code, "network_error" | "body_limit");
+                    drop(raw);
+                    lease
+                        .finish(Outcome::Http {
+                            status: hop_status,
+                            retry_after: None,
+                            challenge: hop_challenge,
+                            network_failure,
+                        })
+                        .map_err(|_| governor_error())?;
+                    return Err(error);
+                }
+            };
+            // Never adopt or retransmit an issued cookie. The hop's body and
+            // retained metadata are screened for every carrier the chain has
+            // collected so far; an overflowed guard cannot prove the screen.
+            if issued.overflowed()
+                || issued.echoed(&hop_body)
+                || raw.headers().iter().any(|(name, value)| {
+                    name != reqwest::header::SET_COOKIE
+                        && (issued.echoed(name.as_str().as_bytes())
+                            || issued.echoed(value.as_bytes()))
+                })
+            {
+                redirect_issue =
+                    Some((hop_status, hop_challenge, RedirectIssue::CredentialEcho));
+                break;
+            }
+            // Challenge headers are observed facts. The body is classified by
+            // the real application envelope: a refused session is a real
+            // authentication signal; indeterminate bytes are refused with an
+            // unknown classification, never reported as a challenge.
+            if hop_challenge {
+                redirect_issue = Some((hop_status, hop_challenge, RedirectIssue::Challenge));
+                break;
+            }
+            match crate::recordings::subtitles::review_redirect_body(&hop_body) {
+                crate::recordings::subtitles::RedirectBodyReview::Empty
+                | crate::recordings::subtitles::RedirectBodyReview::Admitted => {}
+                crate::recordings::subtitles::RedirectBodyReview::SessionRefused => {
+                    redirect_issue =
+                        Some((hop_status, hop_challenge, RedirectIssue::AuthRefusal));
+                    break;
+                }
+                crate::recordings::subtitles::RedirectBodyReview::Indeterminate => {
+                    redirect_issue =
+                        Some((hop_status, hop_challenge, RedirectIssue::Unreviewable));
+                    break;
+                }
+            }
+            let reservation = match lease.reserve_followup() {
+                Ok(reservation) => reservation,
+                Err(governor::FollowupError::Governor(reason)) => {
+                    return Err(governor_denial(&reason));
+                }
+            };
+            if !reservation.cooldown_wait.is_zero() {
+                redirect_cooldown = true;
+                break;
+            }
+            // Each followed hop is independently admitted by the already
+            // loaded robots policy. This reuses the cached response under the
+            // existing lease; it never fetches robots again or re-enters the
+            // governor lock.
+            let robots_url = Url::parse(self.profile.robots_url()).map_err(|_| invalid_url())?;
+            let robots = self.load(&robots_url)?;
+            let decision = match robots {
+                Some(entry) => Self::robots_decision(&entry.response, &next),
+                None => Err(Error::new(
+                    "robots_unavailable",
+                    "robots policy is unavailable",
+                )),
+            };
+            if let Err(error) = decision {
+                drop(raw);
+                lease
+                    .finish_without_request()
+                    .map_err(|_| governor_error())?;
+                return Err(error);
+            }
+            // A server-directed redirect continues the request the server
+            // already answered; the reserved slot keeps pacing honest for
+            // later acquisitions without sleeping mid-chain.
+            drop(raw);
+            let scoped = session.cookie;
+            let started = lease.start_request(|| {
+                if scoped
+                    .is_some_and(|cookie| {
+                        cookie
+                            .expires
+                            .is_some_and(|expiry| expiry <= SystemTime::now())
+                    })
+                {
+                    return StartAttempt::CredentialExpired;
+                }
+                let mut followup = session
+                    .http
+                    .get(self.request_url(&next))
+                    .header("Accept-Encoding", "identity");
+                if let Some(cookie) = scoped {
+                    followup = followup
+                        .header(reqwest::header::COOKIE, &cookie.header)
+                        .header(reqwest::header::ACCEPT, "application/json");
+                }
+                StartAttempt::Sent(followup.send())
+            });
+            match started {
+                Ok(StartAttempt::Sent(Ok(response))) => raw = response,
+                Ok(StartAttempt::CredentialExpired) => {
+                    lease
+                        .finish_without_request()
+                        .map_err(|_| governor_error())?;
+                    return Err(Error::new(
+                        "unavailable",
+                        "Stored classroom cookie expired before transmission; deliberate authentication is required.",
+                    ));
+                }
+                Ok(StartAttempt::Sent(Err(_))) => {
+                    lease
+                        .finish(Outcome::NetworkFailure)
+                        .map_err(|_| governor_error())?;
+                    return Err(network_error());
+                }
+                Err(governor::FollowupError::Governor(reason)) => {
+                    return Err(governor_denial(&reason));
+                }
+            }
+            current = next;
+            redirect_hops += 1;
+        }
         let status = raw.status().as_u16();
         let retry_after = raw
             .headers()
@@ -1754,6 +2042,54 @@ impl ArchiveClient {
             .headers()
             .iter()
             .any(|(name, value)| challenge_header(name.as_str(), value.as_bytes()));
+        // A refused chain ends with the outcome its refusal earned. Only a
+        // real challenge or authentication refusal reports challenge=true;
+        // indeterminate hops keep an unknown classification.
+        if let Some((hop_status, hop_challenge, issue)) = redirect_issue {
+            let refused_session = matches!(
+                issue,
+                RedirectIssue::Challenge | RedirectIssue::AuthRefusal | RedirectIssue::Target
+            );
+            let error = match issue {
+                RedirectIssue::Challenge
+                | RedirectIssue::AuthRefusal
+                | RedirectIssue::Target => Error::new(
+                    "auth_latched",
+                    "classroom session requires deliberate safety review",
+                ),
+                RedirectIssue::AmbiguousLocation
+                | RedirectIssue::CredentialEcho
+                | RedirectIssue::Unreviewable => Error::new(
+                    "unavailable",
+                    "classroom transcript redirect cannot be reviewed",
+                ),
+            };
+            drop(raw);
+            lease
+                .finish(Outcome::Http {
+                    status: hop_status,
+                    retry_after: None,
+                    challenge: refused_session || hop_challenge,
+                    network_failure: false,
+                })
+                .map_err(|_| governor_error())?;
+            return Err(error);
+        }
+        if redirect_cooldown {
+            drop(raw);
+            lease
+                .finish(Outcome::Http {
+                    status,
+                    retry_after: retry_after.as_deref(),
+                    challenge,
+                    network_failure: false,
+                })
+                .map_err(|_| governor_error())?;
+            return Err(Error::new(
+                "cooldown",
+                "public source requested a request cooldown",
+            ));
+        }
         let directory_cookie_issued =
             organizations_target(self, url) && issues_session_cookie(raw.headers());
         let mut attributed_archive_status = false;
@@ -1768,18 +2104,57 @@ impl ArchiveClient {
             };
         let result = (|| {
             let header_result = collect_headers(raw.headers());
-            attributed_archive_status = header_result.as_ref().is_ok_and(|headers|
-                (400..=599).contains(&status) && !challenge
-                    && is_attributed_archive_status(status, headers));
-            if !attributed_archive_status && lease.observe_http_many(
-                status,
-                raw.headers().get_all("retry-after").iter().map(|value|value.to_str().ok()),
-                challenge,
-            ).is_err() {
+            attributed_archive_status = header_result.as_ref().is_ok_and(|headers| {
+                (400..=599).contains(&status)
+                    && !challenge
+                    && is_attributed_archive_status(status, headers)
+            });
+            if !attributed_archive_status
+                && lease
+                    .observe_http_many(
+                        status,
+                        raw.headers()
+                            .get_all("retry-after")
+                            .iter()
+                            .map(|value| value.to_str().ok()),
+                        challenge,
+                    )
+                    .is_err()
+            {
                 observation_failed = true;
                 return Err(governor_error());
             }
             let headers = header_result?;
+            // Cookies issued during the chain join the terminal response's
+            // own declarations in the invocation-only guard. Raw header bytes
+            // (including the retained projection below) are screened before
+            // any merge, output projection or persistence can carry them.
+            if session.cookie.is_some()
+                && classroom_transcript_url_allowed(url)
+                && (!issued.values.is_empty() || issues_session_cookie(raw.headers()))
+            {
+                for value in raw.headers().get_all(reqwest::header::SET_COOKIE) {
+                    issued.absorb(value.to_str().ok());
+                }
+                if issued.overflowed()
+                    || raw
+                        .headers()
+                        .iter()
+                        .any(|(name, value)| {
+                            name != reqwest::header::SET_COOKIE
+                                && (issued.echoed(name.as_str().as_bytes())
+                                    || issued.echoed(value.as_bytes()))
+                        })
+                    || headers.iter().any(|(name, value)| {
+                        issued.echoed(name.as_bytes()) || issued.echoed(value.as_bytes())
+                    })
+                {
+                    return Err(Error::new(
+                        "unavailable",
+                        "classroom transcript response metadata echoes an issued credential",
+                    ));
+                }
+            }
             if challenge || (!attributed_archive_status && matches!(status, 401 | 403)) {
                 return Err(Error::new(
                     "safety_latched",
@@ -1825,10 +2200,7 @@ impl ArchiveClient {
             if organizations_target(self, url)
                 && raw.headers().iter().any(|(name, value)| {
                     sensitive_text_marker(name.as_str())
-                        || value
-                            .to_str()
-                            .map(sensitive_text_marker)
-                            .unwrap_or(true)
+                        || value.to_str().map(sensitive_text_marker).unwrap_or(true)
                 })
             {
                 directory_metadata_marked = true;
@@ -1860,6 +2232,15 @@ impl ArchiveClient {
                 return Err(body_limit());
             }
             body_complete = true;
+            // The final body (and its decoded JSON projection) must not echo
+            // any credential issued during the chain before it is processed,
+            // output or persisted under the request URL.
+            if !issued.values.is_empty() && issued.echoed(&body) {
+                return Err(Error::new(
+                    "unavailable",
+                    "classroom transcript response echoes an issued credential",
+                ));
+            }
             // Validate fresh metadata before retained immutable headers can
             // hide MIME drift. Cached output repeats the same admission policy.
             if status == 200 {
@@ -1907,7 +2288,9 @@ impl ArchiveClient {
             } else {
                 let hash = hash(&body);
                 match cached {
-                    Some(mut entry) if !organizations_target(self, url) && (immutable || entry.immutable) => {
+                    Some(mut entry)
+                        if !organizations_target(self, url) && (immutable || entry.immutable) =>
+                    {
                         if entry.response.sha256 != hash
                             || entry.response.body != body
                             || entry.response.status != status
@@ -1952,10 +2335,9 @@ impl ArchiveClient {
                             // inadmissible provenance.
                             cache_status: if previous.is_some()
                                 && (!organizations_target(self, url)
-                                    || previous
-                                        .as_ref()
-                                        .is_some_and(|entry| entry.admission != CookieAdmission::Unknown))
-                            {
+                                    || previous.as_ref().is_some_and(|entry| {
+                                        entry.admission != CookieAdmission::Unknown
+                                    })) {
                                 CacheStatus::Revalidated
                             } else {
                                 CacheStatus::Miss
@@ -1973,14 +2355,18 @@ impl ArchiveClient {
             let processed = process(response, entry.admission)?;
             // An unattributed replay 404/410 is an archive gap, not immutable
             // captured content. Return its facts without persisting the gap.
-            if self.profile.cacheable(url, response) {
+            if self.profile.cacheable(url, response) && persist(&processed, response) {
                 self.save(&entry)?;
             }
             Ok(processed)
         })();
-        let network_failure = result.as_ref().is_err_and(|error|
-            matches!(error.code, "network_error" | "body_limit"))
-            || (status == 200 && !body_complete && !challenge && !directory_cookie_issued
+        let network_failure = result
+            .as_ref()
+            .is_err_and(|error| matches!(error.code, "network_error" | "body_limit"))
+            || (status == 200
+                && !body_complete
+                && !challenge
+                && !directory_cookie_issued
                 && !directory_metadata_marked);
         // A session is rejected by what the response actually is, not by the
         // transport's content label: the classroom platform serves its native
@@ -2427,6 +2813,160 @@ pub(crate) fn issues_session_cookie(headers: &reqwest::header::HeaderMap) -> boo
     headers.contains_key(reqwest::header::SET_COOKIE)
 }
 
+/// A redirect hop is never transcript content. Its body is still reviewed in
+/// full, but under this much smaller bound, before any follow-up is sent.
+const MAX_REDIRECT_BODY: usize = 64 * 1024;
+
+/// Read one complete response body under a fixed bound. An oversized or
+/// truncated body is an error, never a partial admission.
+fn read_bounded_body(
+    raw: &mut reqwest::blocking::Response,
+    budget: usize,
+) -> Result<Vec<u8>, Error> {
+    if raw
+        .content_length()
+        .is_some_and(|length| length > budget as u64)
+    {
+        return Err(body_limit());
+    }
+    let mut body = Vec::new();
+    raw.by_ref()
+        .take(budget as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| network_error())?;
+    if body.len() > budget {
+        return Err(body_limit());
+    }
+    Ok(body)
+}
+
+/// The selected lesson identity of a reviewed transcript URL. The caller has
+/// already applied `classroom_transcript_url_allowed`, so exactly one `sub_id`
+/// pair exists.
+fn transcript_sub_id(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, _)| key == "sub_id")
+        .map(|(_, value)| value.into_owned())
+}
+
+/// Why a reviewed transcript redirect hop ended the chain. Only real
+/// challenge or authentication-refusal facts may carry the challenge
+/// outcome; indeterminate facts keep an unknown classification.
+enum RedirectIssue {
+    AmbiguousLocation,
+    Target,
+    Challenge,
+    AuthRefusal,
+    Unreviewable,
+    CredentialEcho,
+}
+
+/// Cookies issued inside one bounded transcript redirect chain stay in this
+/// invocation-only guard. Values are never adopted, stored or retransmitted.
+const MAX_ISSUED_COOKIES: usize = 16;
+const MAX_ISSUED_COOKIE_BYTES: usize = 8 * 1024;
+
+struct IssuedCookies {
+    values: Vec<Zeroizing<String>>,
+    bytes: usize,
+    complete: bool,
+}
+
+impl IssuedCookies {
+    fn new() -> Self {
+        Self {
+            values: Vec::new(),
+            bytes: 0,
+            complete: true,
+        }
+    }
+
+    /// Retain both the complete name=value pair and the bare value so an
+    /// echo in either spelling is caught. An undecodable or unnameable
+    /// declaration marks the set incomplete: the guard then refuses rather
+    /// than screening incompletely.
+    fn absorb(&mut self, header: Option<&str>) {
+        let Some(pair) = header.and_then(|header| header.split(';').next()).map(str::trim)
+        else {
+            self.complete = false;
+            return;
+        };
+        let Some((name, value)) = pair.split_once('=') else {
+            self.complete = false;
+            return;
+        };
+        if name.is_empty() {
+            self.complete = false;
+            return;
+        }
+        // A revocation declaration carries no credential to screen.
+        if value.is_empty() {
+            return;
+        }
+        let pair = Zeroizing::new(pair.to_owned());
+        let value = Zeroizing::new(value.to_owned());
+        let added = pair.len() + value.len();
+        if self.values.len() >= MAX_ISSUED_COOKIES * 2
+            || self.bytes.saturating_add(added) > MAX_ISSUED_COOKIE_BYTES
+        {
+            // Refuse instead of silently dropping a carrier.
+            self.complete = false;
+            return;
+        }
+        self.bytes += added;
+        self.values.push(pair);
+        self.values.push(value);
+    }
+
+    /// Once any declaration was lost the guard cannot prove its screen.
+    fn overflowed(&self) -> bool {
+        !self.complete
+    }
+
+    /// Whether candidate bytes carry any retained cookie spelling. The
+    /// literal, JSON-escaped, base64 and percent/form views come from
+    /// `carries_secret`; a decoded JSON document is searched string by
+    /// string so an echo inside a structured body cannot hide.
+    fn echoed(&self, candidate: &[u8]) -> bool {
+        !self.complete
+            || self.values.iter().any(|value| {
+                carries_cookie_value(candidate, value)
+                    || json_carries_cookie_value(candidate, value)
+            })
+    }
+}
+
+/// Both the raw and unquoted spellings of an issued cookie value carry the
+/// credential. Neither the value nor a match is ever exposed.
+fn carries_cookie_value(bytes: &[u8], value: &str) -> bool {
+    carries_secret(bytes, value)
+        || value
+            .strip_prefix('"')
+            .and_then(|inner| inner.strip_suffix('"'))
+            .is_some_and(|unquoted| carries_secret(bytes, unquoted))
+}
+
+/// Search a decoded JSON document's strings for the cookie spelling without
+/// exposing either. Non-JSON bytes carry no decoded view.
+fn json_carries_cookie_value(candidate: &[u8], needle: &str) -> bool {
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(candidate) else {
+        return false;
+    };
+    fn carries(document: &serde_json::Value, needle: &str) -> bool {
+        match document {
+            serde_json::Value::String(text) => carries_secret(text.as_bytes(), needle),
+            serde_json::Value::Array(items) => {
+                items.iter().any(|item| carries(item, needle))
+            }
+            serde_json::Value::Object(members) => members.iter().any(|(key, item)| {
+                carries_secret(key.as_bytes(), needle) || carries(item, needle)
+            }),
+            _ => false,
+        }
+    }
+    carries(&document, needle)
+}
+
 /// Decode one percent/form view into caller-owned storage without allocating.
 /// Credential reviewers keep that storage zeroizing and bounded.
 pub(crate) fn percent_decode_into(input: &[u8], plus_as_space: bool, out: &mut Vec<u8>) {
@@ -2440,14 +2980,19 @@ pub(crate) fn percent_decode_into(input: &[u8], plus_as_space: bool, out: &mut V
     }
     let mut index = 0;
     while index < input.len() {
-        if input[index] == b'%' && index + 2 < input.len()
+        if input[index] == b'%'
+            && index + 2 < input.len()
             && let (Some(high), Some(low)) = (hex(input[index + 1]), hex(input[index + 2]))
         {
             out.push((high << 4) | low);
             index += 3;
             continue;
         }
-        out.push(if plus_as_space && input[index] == b'+' { b' ' } else { input[index] });
+        out.push(if plus_as_space && input[index] == b'+' {
+            b' '
+        } else {
+            input[index]
+        });
         index += 1;
     }
 }
@@ -2461,17 +3006,25 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
     if secret.is_empty() || candidate.len() < secret.len() {
         return false;
     }
-    let escaped = secret.bytes().any(|byte| byte < 0x20 || matches!(byte, b'"' | b'\\'))
+    let escaped = secret
+        .bytes()
+        .any(|byte| byte < 0x20 || matches!(byte, b'"' | b'\\'))
         .then(|| Zeroizing::new(serde_json::to_string(secret).expect("string serialization")));
     let encoded = Zeroizing::new(STANDARD.encode(secret));
-    let url_encoded = encoded.bytes().any(|byte| matches!(byte, b'+' | b'/'))
+    let url_encoded = encoded
+        .bytes()
+        .any(|byte| matches!(byte, b'+' | b'/'))
         .then(|| Zeroizing::new(URL_SAFE.encode(secret)));
     let matches = |part: &[u8]| {
         let contains = |text: &str| {
             text.contains(secret)
-                || escaped.as_ref().is_some_and(|value| text.contains(&value[1..value.len() - 1]))
+                || escaped
+                    .as_ref()
+                    .is_some_and(|value| text.contains(&value[1..value.len() - 1]))
                 || text.contains(encoded.trim_end_matches('='))
-                || url_encoded.as_ref().is_some_and(|value| text.contains(value.trim_end_matches('=')))
+                || url_encoded
+                    .as_ref()
+                    .is_some_and(|value| text.contains(value.trim_end_matches('=')))
         };
         // Every needle is valid UTF-8, so a match cannot cross an invalid
         // sequence. Search valid chunks linearly rather than comparing a long
@@ -2484,8 +3037,12 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
                     let valid = error.valid_up_to();
                     let text = std::str::from_utf8(&remaining[..valid])
                         .expect("UTF-8 error identifies a valid prefix");
-                    if contains(text) { return true; }
-                    let Some(invalid) = error.error_len() else { return false };
+                    if contains(text) {
+                        return true;
+                    }
+                    let Some(invalid) = error.error_len() else {
+                        return false;
+                    };
                     remaining = &remaining[valid + invalid..];
                 }
             }
@@ -2505,13 +3062,17 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
     let mut decoded = Zeroizing::new(Vec::with_capacity(candidate.len()));
     if has_percent {
         percent_decode_into(candidate, false, &mut decoded);
-        if matches(&decoded) { return true; }
+        if matches(&decoded) {
+            return true;
+        }
     }
     if has_plus {
         decoded.fill(0);
         decoded.clear();
         percent_decode_into(candidate, true, &mut decoded);
-        if matches(&decoded) { return true; }
+        if matches(&decoded) {
+            return true;
+        }
     }
     url::form_urlencoded::parse(candidate).any(|(mut key, mut value)| {
         let reflected = matches(key.as_bytes()) || matches(value.as_bytes());
@@ -2528,8 +3089,14 @@ pub(crate) fn carries_secret(candidate: &[u8], secret: &str) -> bool {
 
 /// Check the exact JSON spelling emitted for a scalar without allocating per
 /// value. If the bounded buffer is insufficient, refuse rather than expose it.
-pub(crate) fn json_scalar_matches(value: &serde_json::Value, predicate: impl FnOnce(&[u8]) -> bool) -> bool {
-    if !matches!(value, serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null) {
+pub(crate) fn json_scalar_matches(
+    value: &serde_json::Value,
+    predicate: impl FnOnce(&[u8]) -> bool,
+) -> bool {
+    if !matches!(
+        value,
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null
+    ) {
         return true;
     }
     let mut bytes = [0u8; 64];
@@ -2681,7 +3248,9 @@ mod tests {
         assert!(carries_secret(b"abc_123", secret));
         assert!(carries_secret(br#"{"echo":"abc_123"}"#, secret));
         assert!(carries_secret(
-            base64::engine::general_purpose::STANDARD.encode(secret).as_bytes(),
+            base64::engine::general_purpose::STANDARD
+                .encode(secret)
+                .as_bytes(),
             secret
         ));
         assert!(carries_secret(
@@ -2693,17 +3262,29 @@ mod tests {
         assert!(carries_secret(b"echo=%61%62%63%5F%31%32%33", secret));
         assert!(carries_secret(b"echo=abc%2B123", "abc+123"));
         assert!(carries_secret(b"echo=a+b", "a b"));
-        assert!(carries_secret(br#"{"echo":"private\"token"}"#, "private\"token"));
-        let alphabet_secret="~~~???x";
-        for encoding in [STANDARD.encode(alphabet_secret),URL_SAFE.encode(alphabet_secret)] {
-            assert!(carries_secret(encoding.as_bytes(),alphabet_secret));
-            assert!(carries_secret(encoding.trim_end_matches('=').as_bytes(),alphabet_secret));
+        assert!(carries_secret(
+            br#"{"echo":"private\"token"}"#,
+            "private\"token"
+        ));
+        let alphabet_secret = "~~~???x";
+        for encoding in [
+            STANDARD.encode(alphabet_secret),
+            URL_SAFE.encode(alphabet_secret),
+        ] {
+            assert!(carries_secret(encoding.as_bytes(), alphabet_secret));
+            assert!(carries_secret(
+                encoding.trim_end_matches('=').as_bytes(),
+                alphabet_secret
+            ));
         }
-        assert!(carries_secret(b"echo=%59%57%4A%6A%58%7A%45%79%4D%77%3D%3D",secret));
+        assert!(carries_secret(
+            b"echo=%59%57%4A%6A%58%7A%45%79%4D%77%3D%3D",
+            secret
+        ));
         assert!(!carries_secret(b"an unrelated body", secret));
         assert!(!carries_secret(b"anything", ""));
-        assert!(!carries_secret(b"%zz",secret));
-        assert!(!carries_secret(b"id",&"x".repeat(4096)));
+        assert!(!carries_secret(b"%zz", secret));
+        assert!(!carries_secret(b"id", &"x".repeat(4096)));
     }
 
     #[test]
@@ -2962,8 +3543,7 @@ mod tests {
 
     const SCE_XYXW_ROOT: &str = "<div class='news-box'><a href='xwzx/xyxw.htm'>学院新闻</a></div>";
     const SCE_XYXW_BOARD: &str = "<head><title>学院新闻-化学学院</title></head><div class='fy-list'><ul><li><span>2000-02-29</span><a href='../info/1013/42.htm'>Distinct listing teaser</a></li></ul></div>";
-    const SCE_XYXW_PDF_PATH: &str =
-        "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
+    const SCE_XYXW_PDF_PATH: &str = "/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf";
     const SCE_XYXW_ARTICLE: &str = "<div class='c-content'><h1 class='c-title'>Own complete original</h1><div class='other-s'>发布日期：2000-02-29</div><div class='nr-info'><div id='vsb_content'><div class='v_news_content'><p>Whole source paragraph.</p><script>showVsbpdfIframe(\"/__local/C/C7/70/AAAAAAAAAAAAAAAAAAAAAAAAAAA_BBBBBBBB_123.pdf\",\"100%\");</script></div></div></div></div>";
     const SCE_ORIGINAL: &[u8] = b"%PDF-1.7\nSynthetic retained document.\n%%EOF\n";
 
@@ -3119,7 +3699,12 @@ mod tests {
             assert!(request.starts_with("GET /__local/C/C7/70/"));
             let headers = request.to_ascii_lowercase();
             assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
-            reply(socket, 200, "Content-Type: application/pdf\r\n", SCE_ORIGINAL);
+            reply(
+                socket,
+                200,
+                "Content-Type: application/pdf\r\n",
+                SCE_ORIGINAL,
+            );
         });
         let mut client = fixture.client(CacheMode::Revalidate, &server);
         client.profile = SourceProfile::Sce;
@@ -3193,7 +3778,10 @@ mod tests {
         assert_eq!(cached["document"], result["document"]);
         assert_eq!(cached["source_article"], result["source_article"]);
         assert_eq!(cached["source_listing"], result["source_listing"]);
-        assert_eq!(cached["directory_attribution"], result["directory_attribution"]);
+        assert_eq!(
+            cached["directory_attribution"],
+            result["directory_attribution"]
+        );
         assert_eq!(server.count(), 1);
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         client.profile = SourceProfile::Sce;
@@ -3209,14 +3797,21 @@ mod tests {
         assert_eq!(revalidated["document"], result["document"]);
         assert_eq!(revalidated["source_article"], result["source_article"]);
         assert_eq!(revalidated["source_listing"], result["source_listing"]);
-        assert_eq!(revalidated["directory_attribution"], result["directory_attribution"]);
+        assert_eq!(
+            revalidated["directory_attribution"],
+            result["directory_attribution"]
+        );
         assert_eq!(server.count(), 2);
     }
 
     #[test]
     fn sce_document_refuses_unbound_or_unsafe_source_snapshots_before_document_transport() {
         for (url, body, expected) in [
-            (SCE_ROOT_URL, "<title>No reviewed board</title>".to_owned(), "unsupported"),
+            (
+                SCE_ROOT_URL,
+                "<title>No reviewed board</title>".to_owned(),
+                "unsupported",
+            ),
             (
                 SCE_ROOT_URL,
                 "<template><a href='xwzx/xyxw.htm'>学院新闻</a></template>".to_owned(),
@@ -3277,8 +3872,7 @@ mod tests {
         let latest = format!("{SCE_XYXW_BOARD}<a href='xyxw/30.htm'>2</a>");
         seed_college_html(&client, SCE_NOTICES_URL, latest.as_bytes());
         let selected = "https://sce.buaa.edu.cn/xwzx/xyxw/30.htm";
-        let page_two_board =
-            SCE_XYXW_BOARD.replace("../info/", "../../info/");
+        let page_two_board = SCE_XYXW_BOARD.replace("../info/", "../../info/");
         seed_college_html(&client, selected, page_two_board.as_bytes());
         let pdf = format!("https://sce.buaa.edu.cn{SCE_XYXW_PDF_PATH}");
         seed(&client, &pdf, SCE_ORIGINAL, true);
@@ -3312,7 +3906,11 @@ mod tests {
     #[test]
     fn sce_document_article_admission_keeps_safe_layout_failures_not_unsafe_bodies() {
         for (content_type, body, retained) in [
-            ("text/html", "<title>Changed article layout</title>".to_owned(), true),
+            (
+                "text/html",
+                "<title>Changed article layout</title>".to_owned(),
+                true,
+            ),
             ("text/plain", SCE_XYXW_ARTICLE.to_owned(), false),
             (
                 "text/html",
@@ -3926,7 +4524,10 @@ mod tests {
         );
         let (robots_at, _) = server.requests.recv().unwrap();
         let (target_at, _) = server.requests.recv().unwrap();
-        assert!(target_at.duration_since(robots_at) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
+        assert!(
+            target_at.duration_since(robots_at)
+                >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+        );
         let before = fs::read(fixture.0.join("governor/state.json")).unwrap();
         let cached = client.get(&url, classroom_track).unwrap().unwrap();
         assert_eq!(cached["segments"], first["segments"]);
@@ -4228,6 +4829,428 @@ mod tests {
         assert!(!layout_fixture.governor().status().unwrap().safety_latched);
     }
 
+    #[test]
+    fn transcript_redirect_replays_the_session_only_inside_its_reviewed_scope() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("cookie: session=redirected")
+            );
+            if request.starts_with(
+                "GET /courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42 ",
+            ) {
+                reply(
+                    socket,
+                    302,
+                    "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\n",
+                    b"",
+                );
+            } else {
+                assert!(
+                    request.starts_with(
+                        "GET /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json "
+                    )
+                );
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: application/json\r\n",
+                    CLASSROOM_TEST_BODY,
+                );
+            }
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=redirected");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        let output = client.get(&url, classroom_track).unwrap().unwrap();
+        assert_eq!(output["result"], "selected_track_observed");
+        assert_eq!(output["segments"].as_array().unwrap().len(), 2);
+        assert_eq!(server.count(), 2);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
+        // The redirected capture persists under the request URL: the second
+        // read is served without another request.
+        let cached = client.get(&url, classroom_track).unwrap().unwrap();
+        assert_eq!(cached["result"], "selected_track_observed");
+        assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn transcript_redirect_must_keep_the_selected_lesson_identity() {
+        for location in [
+            // A redirect that silently selects another lesson must never be
+            // followed: its empty track would otherwise be cached as lesson 42.
+            "/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=43",
+            // Anonymous landing and sign-in pages are outside the reviewed
+            // transcript scope and are refused without any follow-up request.
+            "/courseapi/v3/web-socket/landing",
+            "/login",
+            "/courseapi/v3/multi-search/get-sub-detail?sub_id=42",
+            "/courseapi/v3/web-socket/search-trans-result?format=json",
+            "/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42&sub_id=43",
+        ] {
+            let fixture = Fixture::new();
+            let headers = format!("Location: {location}\r\n");
+            let server = Server::new(move |socket, _| {
+                reply(socket, 303, &headers, b"");
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=scoped");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            assert_eq!(
+                client.get(&url, classroom_track).unwrap_err().code,
+                "auth_latched",
+                "location {location}"
+            );
+            assert!(client.source.load(&url).unwrap().is_none());
+            assert_eq!(server.count(), 1, "location {location}");
+            assert!(!fixture.governor().status().unwrap().safety_latched);
+        }
+    }
+
+    #[test]
+    fn transcript_redirect_challenge_or_refused_body_ends_without_a_followup() {
+        for (headers, body, code) in [
+            // A real challenge header is a session refusal.
+            ("Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nCF-Mitigated: challenge\r\n", &b""[..], "auth_latched"),
+            // The reviewed envelope's non-zero code is a real refusal.
+            ("Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nContent-Type: application/json\r\n", &br#"{"code":401,"msg":"expired"}"#[..], "auth_latched"),
+            // Bytes the application review cannot classify are refused with
+            // an unknown classification, never reported as a challenge.
+            ("Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nContent-Type: text/html\r\n", &b"<html><body>sign in</body></html>"[..], "unavailable"),
+            // Multiple Locations are indeterminate; neither is chosen.
+            ("Location: /login\r\nLocation: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\n", &b""[..], "unavailable"),
+        ] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, _| {
+                reply(socket, 302, headers, body);
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=challenged");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            assert_eq!(
+                client.get(&url, classroom_track).unwrap_err().code,
+                code
+            );
+            assert!(client.source.load(&url).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+            // The shared public-source latch is unchanged; the session refusal
+            // is recorded as a challenge outcome, not a safety latch.
+            assert!(!fixture.governor().status().unwrap().safety_latched);
+        }
+
+        // A refused hop's Retry-After remains durable and the refusal keeps
+        // its own classification, never a converted cooldown or a retry.
+        let fixture = Fixture::new();
+        let server = Server::new(move |socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nRetry-After: 60\r\nContent-Type: text/html\r\n",
+                b"<html><body>sign in</body></html>",
+            );
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=hop-cooldown");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "unavailable"
+        );
+        let state = fixture.governor().status().unwrap();
+        assert!(state.cooldown_wait > Duration::from_secs(50));
+        assert!(!state.safety_latched);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn transcript_redirect_checks_each_hop_against_the_loaded_robots_policy() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\n",
+                b"",
+            );
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=robots-hop");
+        // The initial URL is allowed, but the exact followed target is not.
+        // The decision must reuse this loaded policy without a robots fetch.
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42\nDisallow: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "robots_denied"
+        );
+        assert!(client.source.load(&url).unwrap().is_none());
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn transcript_redirect_never_adopts_or_leaks_a_newly_issued_cookie() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request| {
+            // The issued value is a synthetic fixture credential, not a real one.
+            assert!(request.to_ascii_lowercase().contains("cookie: session=issued"));
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nSet-Cookie: rotated=synthetic-issued-value; Path=/; HttpOnly\r\n",
+                br#"{"code":0,"msg":"","total":0,"list":[],"echo":"synthetic-issued-value"}"#,
+            );
+        });
+        let client = fixture.classroom_client(CacheMode::PreferCache, &server, "session=issued");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        let error = client.get(&url, classroom_track).unwrap_err();
+        // A credential echo is an integrity violation, not a fabricated
+        // challenge or an authentication refusal.
+        assert_eq!(error.code, "unavailable");
+        assert!(!error.message.contains("synthetic-issued-value"));
+        assert!(client.source.load(&url).unwrap().is_none());
+        // No follow-up: the issued cookie is neither adopted nor retransmitted.
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn transcript_redirect_guard_screens_terminal_body_metadata_and_projection() {
+        // The guard spans the entire chain: a cookie issued on an early hop
+        // must still refuse a clean final 200 whose transcript body, decoded
+        // JSON text or retained MIME parameter echoes it. Two alternating
+        // reviewed query orders prove the bound is not a per-hop reset.
+        for echo in ["text", "mime", "pair"] {
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                if request.starts_with(
+                    "GET /courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42 ",
+                ) {
+                    reply(
+                        socket,
+                        302,
+                        "Location: /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json\r\nSet-Cookie: rotated=synthetic-chain-value; Path=/; HttpOnly\r\n",
+                        b"",
+                    );
+                } else {
+                    assert!(request.starts_with(
+                        "GET /courseapi/v3/web-socket/search-trans-result?sub_id=42&format=json "
+                    ));
+                    let (content_type, body): (&str, Vec<u8>) = match echo {
+                        "text" => (
+                            "application/json",
+                            br#"{"code":0,"msg":"","total":1,"list":[{"sub_id":"42","resource_guid":"","all_content":[{"BeginSec":0,"EndSec":1,"Text":"synthetic-chain-value","TransText":""}],"trans_content":""}]}"#.to_vec(),
+                        ),
+                        "mime" => (
+                            "application/json; note=synthetic-chain-value",
+                            CLASSROOM_TEST_BODY.to_vec(),
+                        ),
+                        // The complete name=value pair is a distinct carrier:
+                        // a base64 echo of the pair alone must also be caught.
+                        _ => (
+                            "application/json",
+                            br#"{"code":0,"msg":"","total":1,"list":[{"sub_id":"42","resource_guid":"","all_content":[{"BeginSec":0,"EndSec":1,"Text":"cm90YXRlZD1zeW50aGV0aWMtY2hhaW4tdmFsdWU=","TransText":""}],"trans_content":""}]}"#.to_vec(),
+                        ),
+                    };
+                    reply(
+                        socket,
+                        200,
+                        &format!("Content-Type: {content_type}\r\n"),
+                        &body,
+                    );
+                }
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=chain-guard");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            let error = client.get(&url, classroom_track).unwrap_err();
+            assert_eq!(error.code, "unavailable", "echo {echo}");
+            assert!(!error.message.contains("synthetic-chain-value"));
+            assert!(client.source.load(&url).unwrap().is_none(), "echo {echo}");
+            // The terminal 200 was actually reached: the guard is not merely
+            // refusing the issuing hop.
+            assert_eq!(server.count(), 2, "echo {echo}");
+        }
+    }
+
+    #[test]
+    fn transcript_redirect_to_another_origin_or_scheme_keeps_auth_latched() {
+        for location in [
+            "https://sso.buaa.edu.cn/login",
+            "http://classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42",
+            "https://classroom.msa.buaa.edu.cn:8443/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42",
+            "https://user:pw@classroom.msa.buaa.edu.cn/courseapi/v3/web-socket/search-trans-result?format=json&sub_id=42",
+            "//sso.buaa.edu.cn/login",
+        ] {
+            let fixture = Fixture::new();
+            let headers = format!("Location: {location}\r\n");
+            let server = Server::new(move |socket, _| {
+                reply(socket, 302, &headers, b"");
+            });
+            let client =
+                fixture.classroom_client(CacheMode::PreferCache, &server, "session=follows");
+            seed(
+                &client.source,
+                CLASSROOM_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+            assert_eq!(
+                client.get(&url, classroom_track).unwrap_err().code,
+                "auth_latched"
+            );
+            assert!(client.source.load(&url).unwrap().is_none());
+            assert_eq!(server.count(), 1);
+            assert!(!fixture.governor().status().unwrap().safety_latched);
+        }
+    }
+
+    #[test]
+    fn transcript_redirect_to_a_sign_in_page_keeps_auth_latched() {
+        let fixture = Fixture::new();
+        let server = Server::new(move |socket, _| {
+            reply(socket, 302, "Location: /login\r\n", b"");
+        });
+        let client = fixture.classroom_client(CacheMode::PreferCache, &server, "session=signin");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "auth_latched"
+        );
+        assert!(client.source.load(&url).unwrap().is_none());
+        // The login target is outside the reviewed transcript scope, so no
+        // anonymous follow-up is sent at all.
+        assert_eq!(server.count(), 1);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
+    }
+
+    #[test]
+    fn transcript_redirect_chains_stay_bounded_and_other_session_routes_still_refuse() {
+        let fixture = Fixture::new();
+        let mut hop = 0usize;
+        let server = Server::new(move |socket, request| {
+            // The initial URL already carries format=json&sub_id=42, so the
+            // first hop must use the other reviewed order before alternating;
+            // otherwise *next != current ends the chain immediately. Both
+            // targets stay inside the transcript scope and keep the selected
+            // lesson identity.
+            let next = if hop % 2 == 0 {
+                "sub_id=42&format=json"
+            } else {
+                "format=json&sub_id=42"
+            };
+            hop += 1;
+            assert!(
+                request.starts_with("GET /courseapi/v3/web-socket/search-trans-result?")
+            );
+            reply(
+                socket,
+                302,
+                &format!("Location: /courseapi/v3/web-socket/search-trans-result?{next}\r\n"),
+                b"",
+            );
+        });
+        let client =
+            fixture.classroom_client(CacheMode::PreferCache, &server, "session=loop-chain");
+        seed(
+            &client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let url = Url::parse(CLASSROOM_TEST_URL).unwrap();
+        assert_eq!(
+            client.get(&url, classroom_track).unwrap_err().code,
+            "auth_latched"
+        );
+        assert!(client.source.load(&url).unwrap().is_none());
+        assert_eq!(server.count(), 1 + MAX_TRANSCRIPT_REDIRECTS);
+        assert!(!fixture.governor().status().unwrap().safety_latched);
+
+        // The bounded follow is scoped to the transcript endpoint: the other
+        // session-bound classroom reads keep refusing redirects outright.
+        let source_fixture = Fixture::new();
+        let source_server = Server::new(|socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: /courseapi/v3/multi-search/get-sub-detail?sub_id=42\r\n",
+                b"",
+            );
+        });
+        let source_client = source_fixture.classroom_client(
+            CacheMode::PreferCache,
+            &source_server,
+            "session=source-only",
+        );
+        seed(
+            &source_client.source,
+            CLASSROOM_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        let source_url = Url::parse(
+            "https://classroom.msa.buaa.edu.cn/courseapi/v3/multi-search/get-sub-detail?sub_id=42",
+        )
+        .unwrap();
+        let error = source_client
+            .get_source(&source_url, |response| {
+                crate::recordings::subtitles::validate_http_application(&response.body)
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "auth_latched");
+        assert_eq!(source_server.count(), 1);
+        assert!(!source_fixture.governor().status().unwrap().safety_latched);
+    }
+
     fn seed_spoc_html(client: &ArchiveClient, body: &[u8]) {
         seed(client, SPOC_ENTRY_URL, body, false);
         let url = Url::parse(SPOC_ENTRY_URL).unwrap();
@@ -4246,14 +5269,26 @@ mod tests {
         const SCRIPT: &[u8] = b"globalThis.fixtureValue = 'private synthetic source';";
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
-            assert!(request.starts_with("GET /spocnew/js/app.12345678.js "));
-            assert!(!request.to_ascii_lowercase().contains("cookie:"));
-            reply(
-                socket,
-                200,
-                "Content-Type: application/javascript; charset=utf-8\r\n",
-                SCRIPT,
+            assert!(
+                request.starts_with("GET /spocnew/js/app.12345678.js ")
+                    || request.starts_with("GET /spocnew/ ")
             );
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            if request.starts_with("GET /spocnew/ ") {
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: text/html; charset=utf-8\r\n",
+                    ENTRY,
+                );
+            } else {
+                reply(
+                    socket,
+                    200,
+                    "Content-Type: application/javascript; charset=utf-8\r\n",
+                    SCRIPT,
+                );
+            }
         });
         let client = fixture.spoc_client(CacheMode::PreferCache, &server);
         seed_spoc_html(&client, ENTRY);
@@ -4292,13 +5327,10 @@ mod tests {
         let client = fixture.spoc_client(CacheMode::PreferCache, &server);
         let refreshed =
             crate::spoc::script_with_client(client, CacheMode::Revalidate, &target).unwrap();
-        assert_eq!(
-            refreshed["script"]["retrieval"]["cache_status"],
-            "revalidated"
-        );
+        assert_eq!(refreshed["script"]["retrieval"]["cache_status"], "hit");
         assert_eq!(
             refreshed["source_entry"]["retrieval"]["cache_status"],
-            "hit"
+            "revalidated"
         );
         assert_eq!(
             refreshed["script"]["body_sha256"],
@@ -4346,13 +5378,20 @@ mod tests {
     }
 
     #[test]
-    fn spoc_refresh_rejects_wrong_mime_without_revalidating_identical_original_bytes() {
+    fn spoc_refresh_rejects_a_retired_declaration_without_replaying_retained_script_bytes() {
         const SCRIPT_URL: &str = "https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js";
         const SCRIPT: &[u8] = b"globalThis.syntheticSource = true;";
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
-            assert!(request.starts_with("GET /spocnew/js/app.12345678.js "));
-            reply(socket, 200, "Content-Type: text/html\r\n", SCRIPT);
+            assert!(request.starts_with("GET /spocnew/ "));
+            // The current entry bytes no longer declare the selected script:
+            // the declaration retired and the retained bytes are never replayed.
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html; charset=utf-8\r\n",
+                br#"<script src="js/app.99999999.js"></script>"#,
+            );
         });
         let client = fixture.spoc_client(CacheMode::Offline, &server);
         seed_spoc_html(&client, br#"<script src="js/app.12345678.js"></script>"#);
@@ -4376,7 +5415,7 @@ mod tests {
             crate::spoc::script_with_client(client, CacheMode::Revalidate, &target)
                 .unwrap_err()
                 .code,
-            "unavailable"
+            "unsupported"
         );
         let client = fixture.spoc_client(CacheMode::Offline, &server);
         let after = crate::spoc::script_with_client(client, CacheMode::Offline, &target).unwrap();
@@ -4409,11 +5448,19 @@ mod tests {
             false,
         );
         let target = Url::parse("https://spoc.buaa.edu.cn/spocnew/js/app.12345678.js").unwrap();
+        // A missing entry media type cannot authorize a script fetch: the
+        // observation degrades with the exact entry facts instead of claiming
+        // a verified JavaScript snapshot.
+        let snapshot =
+            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target).unwrap();
+        assert_eq!(snapshot["result"], "script_unverified");
+        assert_eq!(snapshot["fallback_reason"], "entry_mime_missing");
+        assert_eq!(snapshot["script"], serde_json::Value::Null);
+        assert_eq!(snapshot["raw_evidence"]["scope"], "entry");
+        assert_eq!(snapshot["raw_evidence"]["raw_withheld"], true);
         assert_eq!(
-            crate::spoc::script_with_client(client, CacheMode::PreferCache, &target)
-                .unwrap_err()
-                .code,
-            "unavailable"
+            snapshot["raw_evidence"]["raw_withheld_reason"],
+            "private_public_source_bytes"
         );
         assert_eq!(server.count(), 0);
     }
@@ -5257,7 +6304,252 @@ mod tests {
         assert_eq!(again.fetched_at_unix_ms, first.fetched_at_unix_ms);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
+        assert!(
+            requests[1].0.duration_since(requests[0].0)
+                >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+        );
+    }
+
+    #[test]
+    fn directory_navigation_exception_is_projection_scoped_and_query_safe() {
+        const MEMBER: &str = "<a href='https://one.buaa.edu.cn/'>One</a>";
+        const NAVIGATION: &str = "<nav><a href='https://sso.example.invalid/login?service=https%3A%2F%2Fportal.example.invalid%2F'>Navigation-only-text</a></nav>";
+        for (outside, member, accepted) in [
+            (NAVIGATION, MEMBER, true),
+            (
+                "<form action='/search'><input name='q'></form>",
+                MEMBER,
+                true,
+            ),
+            (NAVIGATION, "<a href='/public?lang=en'>One</a>", true),
+            ("", "<a href='/public?lang='>One</a>", true),
+            (
+                "<template><a href='/login'>Inert navigation</a></template>",
+                MEMBER,
+                true,
+            ),
+            (
+                "<a href='/login' data-csrf-token='synthetic'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<form action='/login'><input type='password'></form>",
+                MEMBER,
+                false,
+            ),
+            ("<input name='csrf_token' hidden>", MEMBER, false),
+            (
+                "<base href='https://elsewhere.example.invalid/'>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?ticket=synthetic-private'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?token=fixture42'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?id_token=fixture42'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='https://synthetic-user:synthetic-private@example.invalid/login'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?service=https%3A%2F%2Fuser%3Afixture42%40portal.example.invalid%2F'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "<a href='/login?service=%2Fcallback%3Fticket%3Dfixture42'>Navigation</a>",
+                MEMBER,
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?passwd=synthetic-private'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?%70asswd=synthetic-private'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?service=https%3A%2F%2Fuser%3Afixture42%40portal.example.invalid%2F'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?service=%2Fcallback%3Fticket%3Dfixture42'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?token=fixture42'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<a href='/public?id_token=fixture42'>One</a>",
+                false,
+            ),
+            (
+                "",
+                "<span style='display:none'><a href='/login'>One</a></span>",
+                false,
+            ),
+            (
+                "",
+                "<div class='kyjg-box'><div class='kyjg-tit'><h3>Nested</h3></div><div class='kyjg-bd'><a href='/login'>One</a></div></div>",
+                false,
+            ),
+        ] {
+            let body = format!(
+                "<html><title>Directory</title>{outside}<div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'>{member}</div></div></html>"
+            );
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body.as_bytes());
+            });
+            let client = fixture.organization_client(CacheMode::PreferCache, &server);
+            seed(
+                &client,
+                ORGANIZATIONS_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let result = crate::organizations::list_with_client(&client);
+            let retained = client
+                .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+                .unwrap();
+            if accepted {
+                let output = result.unwrap();
+                assert_eq!(output["result"], "directory_snapshot");
+                assert_eq!(output["entries"].as_array().unwrap().len(), 1);
+                assert_eq!(output["entries"][0]["name"], "One");
+                assert!(!output.to_string().contains("Navigation-only-text"));
+                assert!(retained.is_some());
+            } else {
+                assert_eq!(result.unwrap_err().code, "source_refused");
+                assert!(retained.is_none());
+            }
+            assert_eq!(server.count(), 1);
+        }
+    }
+
+    #[test]
+    fn directory_navigation_cannot_authorize_raw_fallback_or_replace_a_prior_capture() {
+        const ORIGINAL: &[u8] = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='/public'>One</a></div></div></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                b"<html><title>Changed</title><a href='/login'>Navigation</a></html>",
+            );
+        });
+        let client = fixture.organization_client(CacheMode::Revalidate, &server);
+        seed(
+            &client,
+            ORGANIZATIONS_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(&client, ORGANIZATIONS_URL, ORIGINAL);
+        assert_eq!(
+            crate::organizations::list_with_client(&client)
+                .unwrap_err()
+                .code,
+            "source_refused"
+        );
+        let retained = client
+            .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, ORIGINAL);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn nested_fragment_route_credentials_never_enter_output_or_replace_a_prior_capture() {
+        const ORIGINAL: &[u8] = b"<html><title>Directory</title><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='/public'>One</a></div></div></html>";
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                200,
+                "Content-Type: text/html\r\n",
+                b"<html><title>Directory</title><a href='/login?service=https%3A%2F%2Fportal.example.invalid%2F%23%2Fcallback%3Fticket%3Dfixture42'>Navigation</a><div class='kyjg-box'><div class='kyjg-tit'><h3>Group</h3></div><div class='kyjg-bd'><a href='/public'>One</a></div></div></html>",
+            );
+        });
+        let client = fixture.organization_client(CacheMode::Revalidate, &server);
+        seed(
+            &client,
+            ORGANIZATIONS_ROBOTS_URL,
+            b"User-agent: *\nAllow: /\n",
+            false,
+        );
+        seed_college_html(&client, ORGANIZATIONS_URL, ORIGINAL);
+        assert_eq!(
+            crate::organizations::list_with_client(&client)
+                .unwrap_err()
+                .code,
+            "source_refused"
+        );
+        let retained = client
+            .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.response.body, ORIGINAL);
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn credential_shaped_directory_fields_never_leave_the_request_or_enter_cache() {
+        for (title, category, name) in [
+            ("passwd=synthetic-private", "Group", "One"),
+            ("Directory", "passwd=synthetic-private", "One"),
+            ("Directory", "Group", "passwd=synthetic-private"),
+        ] {
+            let body = format!(
+                "<html><title>{title}</title><div class='kyjg-box'><div class='kyjg-tit'><h3>{category}</h3></div><div class='kyjg-bd'><a href='https://one.buaa.edu.cn/'>{name}</a></div></div></html>"
+            );
+            let fixture = Fixture::new();
+            let server = Server::new(move |socket, request| {
+                assert!(request.starts_with("GET /jgsz/jxkyjg02.htm "));
+                reply(socket, 200, "Content-Type: text/html\r\n", body.as_bytes());
+            });
+            let client = fixture.organization_client(CacheMode::PreferCache, &server);
+            seed(
+                &client,
+                ORGANIZATIONS_ROBOTS_URL,
+                b"User-agent: *\nAllow: /\n",
+                false,
+            );
+            let error = crate::organizations::list_with_client(&client).unwrap_err();
+            assert_eq!(error.code, "source_refused");
+            assert!(!error.message.contains("synthetic-private"));
+            assert!(
+                client
+                    .load(&Url::parse(ORGANIZATIONS_URL).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(server.count(), 1);
+        }
     }
 
     #[test]
@@ -5290,7 +6582,10 @@ mod tests {
         assert_eq!(count, 1);
         let requests: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].0.duration_since(requests[0].0) >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS));
+        assert!(
+            requests[1].0.duration_since(requests[0].0)
+                >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+        );
         assert_eq!(
             client.snapshot(&url, false).unwrap().cache_status,
             CacheStatus::Hit
@@ -5801,6 +7096,27 @@ mod tests {
     }
 
     #[test]
+    fn archive_capture_redirect_is_refused_before_body_projection_and_persistence() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, _| {
+            reply(
+                socket,
+                302,
+                "Location: https://example.invalid/retargeted\r\n",
+                b"synthetic-private-redirect-body",
+            );
+        });
+        let client = fixture.client(CacheMode::PreferCache, &server);
+        seed_robots(&client);
+        let query = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
+        let error = crate::archive::capture(query, &client).unwrap_err();
+        assert_eq!(error.code, "redirect_refused");
+        assert!(!error.message.contains("synthetic-private"));
+        assert!(client.load(&Url::parse(TARGET).unwrap()).unwrap().is_none());
+        assert_eq!(server.count(), 1);
+    }
+
+    #[test]
     fn rejected_capture_cannot_poison_a_later_valid_replay() {
         let fixture = Fixture::new();
         let mut responses = 0;
@@ -5820,10 +7136,11 @@ mod tests {
         let mut client = fixture.client(CacheMode::PreferCache, &server);
         seed_robots(&client);
         let query = r#"{"url":"https://www.buaa.edu.cn/","timestamp":"20240102030405"}"#;
-        assert_eq!(
-            crate::archive::capture(query, &client).unwrap_err().code,
-            "unavailable"
-        );
+        // An unattributed body is reported as degraded evidence with its
+        // exact bytes preserved, and is never retained as the official replay.
+        let refused = crate::archive::capture(query, &client).unwrap();
+        assert_eq!(refused["result"], "unverified_capture");
+        assert_eq!(refused["fallback_reason"], "memento_attribution_invalid");
         assert!(client.load(&Url::parse(TARGET).unwrap()).unwrap().is_none());
         client.mode = CacheMode::Revalidate;
         let accepted = crate::archive::capture(query, &client).unwrap();
@@ -6066,8 +7383,8 @@ mod tests {
     }
     #[test]
     fn lookup_cursor_is_bound_to_the_query_that_minted_it() {
-        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["20240601000000"]]"#;
-        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk2","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
+        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["uk1+20240601000000%21"]]"#;
+        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
             assert!(
@@ -6076,7 +7393,7 @@ mod tests {
                 ),
                 "unexpected request: {request}"
             );
-            if request.contains("resumeKey=20240601000000") {
+            if request.contains("resumeKey=") {
                 reply(socket, 200, "", PAGE_2);
             } else {
                 reply(socket, 200, "", PAGE_1);
@@ -6090,12 +7407,12 @@ mod tests {
             &client,
         )
         .unwrap();
-        assert_eq!(first["next_cursor"], "20240601000000");
+        assert_eq!(first["next_cursor"], "uk1+20240601000000%21");
         assert_eq!(first["completeness"]["more_results"], true);
         assert_eq!(first["captures"].as_array().unwrap().len(), 1);
 
         let second = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240601000000%21" }"#,
             &client,
         )
         .unwrap();
@@ -6105,7 +7422,7 @@ mod tests {
 
         // A cursor from a different query scope is rejected before any request.
         let cross = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 3, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 3, "cursor": "uk1+20240601000000%21" }"#,
             &client,
         )
         .unwrap_err();
@@ -6114,7 +7431,7 @@ mod tests {
 
         // A cursor never issued for this query is rejected the same way.
         let unknown = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240202000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240202000000%21" }"#,
             &client,
         )
         .unwrap_err();
@@ -6124,7 +7441,7 @@ mod tests {
         // The binding persists across client instances sharing the cache directory.
         let fresh = fixture.client(CacheMode::PreferCache, &server);
         let replayed = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240601000000%21" }"#,
             &fresh,
         )
         .unwrap();
@@ -6137,11 +7454,11 @@ mod tests {
 
     #[test]
     fn cursor_scope_registry_evicts_at_the_entry_cap() {
-        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["20240601000000"]]"#;
-        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk2","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
+        const PAGE_1: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240101000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","abc","100"],[],["uk1+20240601000000%21"]]"#;
+        const PAGE_2: &[u8] = br#"[["urlkey","timestamp","original","mimetype","statuscode","digest","length"],["uk1","20240701000000","https://www.buaa.edu.cn/xwzx.htm","text/html","200","def","120"]]"#;
         let fixture = Fixture::new();
         let server = Server::new(|socket, request| {
-            if request.contains("resumeKey=20240601000000") {
+            if request.contains("resumeKey=") {
                 reply(socket, 200, "", PAGE_2);
             } else {
                 reply(socket, 200, "", PAGE_1);
@@ -6181,13 +7498,13 @@ mod tests {
             &client,
         )
         .unwrap();
-        assert_eq!(first["next_cursor"], "20240601000000");
+        assert_eq!(first["next_cursor"], "uk1+20240601000000%21");
 
         // Recording the next binding must evict the stale entries, not
         // persist an over-cap registry: the continuation verifies and
         // succeeds without a corrupt-cache rejection.
         let second = crate::archive::lookup(
-            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "20240601000000" }"#,
+            r#"{ "url": "https://www.buaa.edu.cn/xwzx.htm", "limit": 2, "cursor": "uk1+20240601000000%21" }"#,
             &client,
         )
         .unwrap();

@@ -132,22 +132,23 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            let document =
-                match college_html(response).and_then(|html| parse_notice_list(&html, &target)) {
-                    Ok(document) => document,
-                    Err(_) if is_safe_public_fallback(response) => {
-                        let mut value = html_fallback(
-                            response,
-                            "announcements_list",
-                            "sse",
-                            "sse_listing_selector_contract",
-                        );
-                        value["category"] = json!("tzgg");
-                        value["page"] = json!(page);
-                        return Ok(value);
-                    }
-                    Err(error) => return Err(error),
-                };
+            let html = college_html(response)?;
+            let document = match parse_notice_list(&html, &target) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    let mut value = html_fallback(
+                        response,
+                        "announcements_list",
+                        "sse",
+                        "sse_listing_selector_contract",
+                    );
+                    value["category"] = json!("tzgg");
+                    value["page"] = json!(page);
+                    return Ok(value);
+                }
+                Err(error) => return Err(error),
+            };
+            super::refuse_unsafe_listing(response, &html)?;
             let entries: Vec<_> = document
                 .entries
                 .iter()
@@ -202,19 +203,20 @@ pub(crate) fn article_with_client(
     bind_college_board(&client, SSE_ROOT_URL, SSE_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document =
-            match college_html(response).and_then(|html| parse_notice_list(&html, &source)) {
-                Ok(document) => document,
-                Err(_) if is_safe_public_fallback(response) => {
-                    return Ok(html_fallback(
-                        response,
-                        "announcements_list",
-                        "sse",
-                        "sse_listing_selector_contract",
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
+        let html = college_html(response)?;
+        let document = match parse_notice_list(&html, &source) {
+            Ok(document) => document,
+            Err(_) if is_safe_public_fallback(response) => {
+                return Ok(html_fallback(
+                    response,
+                    "announcements_list",
+                    "sse",
+                    "sse_listing_selector_contract",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()
@@ -450,5 +452,47 @@ mod tests {
         assert!(plain_url(
             &Url::parse("https://sse.buaa.edu.cn/info/1078/42.htm").unwrap()
         ));
+    }
+
+    #[test]
+    fn sse_listing_with_token_marker_href_is_refused() {
+        // A board that still parses while carrying a credential token
+        // marker is unsafe: the real list callback must refuse it before
+        // serializing entries and before ArchiveClient::get may persist the
+        // response, and the fallback machinery must not turn the page into
+        // exported raw source bytes.
+        let html = r#"<html><head><title>通知公告-空间与地球科学学院</title></head><body>
+            <div class="nymain"><div class="w16"><div class="ny-right"><div class="notice-list"><div><ul>
+            <li><a href="../../info/1078/42.htm?csrf_token=synthetic-fixture"><span>2026.10.10</span><h3>Marked source heading</h3><p>Marked source excerpt.</p></a></li>
+            </ul></div></div></div></div></div></body></html>"#;
+        let document = Html::parse_document(html);
+        let base = Url::parse(SSE_NOTICES_URL).unwrap();
+        let listing = parse_notice_list(&document, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        let marked = response(html);
+        assert!(
+            crate::announcements::refuse_unsafe_listing(&marked, &document).is_err(),
+            "a credential-marked page must be refused as unsafe evidence"
+        );
+        assert!(
+            !is_safe_public_fallback(&marked),
+            "a credential-marked page must not emit fallback source bytes"
+        );
+
+        // The identical row without the marker stays a public listing.
+        let public = html.replace("?csrf_token=synthetic-fixture", "");
+        let document = Html::parse_document(&public);
+        let parsed = parse_notice_list(&document, &base).unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].title, "Marked source heading");
+        let public_response = response(&public);
+        assert!(
+            crate::announcements::refuse_unsafe_listing(&public_response, &document).is_ok()
+        );
     }
 }

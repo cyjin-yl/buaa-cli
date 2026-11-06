@@ -10,9 +10,10 @@ use super::{
     MAX_PARAGRAPH, MAX_TEXT, advertised_page_url_document, article_body, article_category_from_url,
     article_output, bind_college_board, college_directory_attribution, college_html,
     describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
-    inert_element, invalid_article, invalid_list, is_safe_public_fallback_document, parse_iso_date,
-    retrieval, unavailable,
+    inert_element, invalid_article, invalid_list, is_safe_public_fallback,
+    is_safe_public_fallback_document, parse_iso_date, retrieval, unavailable,
 };
+use crate::html::visit_active_text;
 use crate::net::{
     ASE_NOTICES_URL, ASE_ROOT_URL, ArchiveClient, CacheMode, Error, ase_path_allowed,
 };
@@ -77,11 +78,20 @@ fn parse_date(node: ElementRef<'_>) -> Option<String> {
     if spans.next().is_some() {
         return None;
     }
-    let parts = node
-        .text()
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
+    // Inert script/style/template/noscript payload text is not source prose:
+    // only active text nodes count toward the split month-day plus year form.
+    let mut parts = Vec::new();
+    let _ = visit_active_text(
+        node,
+        |_| false,
+        |text| {
+            let part = text.trim();
+            if !part.is_empty() {
+                parts.push(part.to_owned());
+            }
+            parts.len() > 2
+        },
+    );
     if parts.len() != 2 || parts[0] != month_day.as_str() {
         return None;
     }
@@ -358,7 +368,18 @@ pub(crate) fn article_with_client(
     client
         .with_cache_mode(mode)
         .get(target, false, |response| {
-            let document = college_html(response)?;
+            let document = match college_html(response) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    return Ok(Ok(html_fallback(
+                        response,
+                        "announcements_article",
+                        "ase",
+                        "ase_article_selector_contract",
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
             Ok(normalize(response, &document).map(|mut value| {
                 value["publisher"] = json!(PUBLISHER);
                 value["college"] = json!("ase");
@@ -370,6 +391,26 @@ pub(crate) fn article_with_client(
 }
 
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
+    // Unsafe article pages are never retained, whether or not their layout
+    // still matches the reviewed selectors: refuse before parsing or exposing
+    // any of their bytes.
+    if !is_safe_public_fallback_document(response, document) {
+        return Err(unavailable());
+    }
+    // A safe public page whose layout drifted away from the reviewed contract
+    // degrades into retained original evidence for offline repair instead of
+    // an outer error that discards the admitted bytes.
+    normalize_article(response, document).or_else(|_| {
+        Ok(html_fallback(
+            response,
+            "announcements_article",
+            "ase",
+            "ase_article_selector_contract",
+        ))
+    })
+}
+
+fn normalize_article(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
     let forms = Selector::parse(
         "div.nycontent > div.wp > div.nyArc > form[name=\"_newscontent_fromname\"]",
     )
@@ -465,6 +506,8 @@ fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, 
 mod tests {
     use super::*;
     use crate::net::{CacheStatus, Response};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 
@@ -482,15 +525,16 @@ mod tests {
         }
     }
 
+    const LISTING_BOARD: &str = r#"<title>通知公告-航空科学与工程学院</title>
+        <div class="nycontent"><div class="wp"><div class="txtList"><ul>
+        <li><a href="../info/1052/42.htm"><div class="time ddjb"><span>06-03</span>2026</div><div class="txt"><div class="h4 eclips">First title</div><div class="desc line2">First excerpt</div></div></a></li>
+        <li><a href="../info/1285/43.htm"><div class="time ddjb"><span>10-11</span>2026</div><div class="txt"><div class="h4 eclips">Second title</div><div class="desc line2">Second excerpt</div></div></a></li>
+        </ul></div></div></div>"#;
+
     #[test]
     fn ase_listing_preserves_source_order_and_split_dates() {
-        let html = r#"<title>通知公告-航空科学与工程学院</title>
-            <div class="nycontent"><div class="wp"><div class="txtList"><ul>
-            <li><a href="../info/1052/42.htm"><div class="time ddjb"><span>06-03</span>2026</div><div class="txt"><div class="h4 eclips">First title</div><div class="desc line2">First excerpt</div></div></a></li>
-            <li><a href="../info/1285/43.htm"><div class="time ddjb"><span>10-11</span>2026</div><div class="txt"><div class="h4 eclips">Second title</div><div class="desc line2">Second excerpt</div></div></a></li>
-            </ul></div></div></div>"#;
         let base = Url::parse(ASE_NOTICES_URL).unwrap();
-        let document = Html::parse_document(html);
+        let document = Html::parse_document(LISTING_BOARD);
         let listing = parse_listing(&document, &base).unwrap();
         assert_eq!(listing.entries.len(), 2);
         assert_eq!(listing.entries[0].source_order, 1);
@@ -499,6 +543,62 @@ mod tests {
             listing.entries[1].resolved_http_url.as_deref(),
             Some("https://ase.buaa.edu.cn/info/1285/43.htm")
         );
+    }
+
+    #[test]
+    fn review_regression_security_marked_listing_is_refused_before_output_or_cache() {
+        // A board that still parses while carrying a security marker is
+        // unsafe: the real list callback must refuse it before serializing
+        // entries and before ArchiveClient::get may persist the response
+        // (save happens only after the callback returns Ok), and no fallback
+        // export may carry the unsafe bytes.
+        let base = Url::parse(ASE_NOTICES_URL).unwrap();
+        let link_response = response(
+            ASE_NOTICES_URL,
+            &LISTING_BOARD.replace(
+                "href=\"../info/1052/42.htm\"",
+                "href=\"../info/1052/42.htm?csrf_token=synthetic\"",
+            ),
+        );
+        let html = college_html(&link_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&link_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback_document(&link_response, &html));
+
+        let control_response = response(
+            ASE_NOTICES_URL,
+            &format!(
+                "{LISTING_BOARD}<form><input type=\"hidden\" name=\"csrf_token\" value=\"synthetic\"></form>"
+            ),
+        );
+        let html = college_html(&control_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert_eq!(listing.entries.len(), 2);
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&control_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback_document(&control_response, &html));
+
+        // The ordinary public board stays admissible end to end.
+        let response = response(ASE_NOTICES_URL, LISTING_BOARD);
+        let html = college_html(&response).unwrap();
+        assert!(parse_listing(&html, &base).is_ok());
+        assert!(crate::announcements::refuse_unsafe_listing(&response, &html).is_ok());
+        assert!(is_safe_public_fallback_document(&response, &html));
     }
 
     #[test]
@@ -529,5 +629,76 @@ mod tests {
         let response = response("https://ase.buaa.edu.cn/info/1052/42.htm", html);
         let output = normalize(&response, &college_html(&response).unwrap()).unwrap();
         assert_eq!(output["published_at"], Value::Null);
+    }
+
+    #[test]
+    fn review_regression_ase_safe_article_drift_returns_preserved_evidence() {
+        // A public article page whose layout drifted away from the reviewed
+        // selectors must degrade into retained original evidence for offline
+        // repair, not an unavailable error that discards the admitted bytes.
+        const BODY: &[u8] = br#"<html><head><title>ASE article drift</title></head><body><div class="migrated-layout"><h2>Drifted article</h2><p>Selector contract broken.</p></div></body></html>"#;
+        let source = response(
+            "https://ase.buaa.edu.cn/info/1052/42.htm",
+            std::str::from_utf8(BODY).unwrap(),
+        );
+        let document = college_html(&source).unwrap();
+        assert!(is_safe_public_fallback_document(&source, &document));
+        let output = normalize(&source, &document).unwrap();
+        assert_eq!(output["type"], "announcements_article");
+        assert_eq!(output["result"], "fallback");
+        assert_eq!(output["college"], "ase");
+        assert_eq!(
+            STANDARD
+                .decode(output["raw_html"].as_str().unwrap())
+                .unwrap()
+                .as_slice(),
+            BODY
+        );
+        assert_eq!(output["raw_html_sha256"], format!("{:x}", Sha256::digest(BODY)));
+        assert_eq!(output["body_byte_length"], BODY.len() as u64);
+    }
+
+    #[test]
+    fn review_regression_ase_unsafe_article_drift_is_refused() {
+        // The degraded-evidence contract never applies to a page carrying an
+        // active authentication surface: its bytes are withheld entirely.
+        let html = r#"<html><body><form><input type="password" name="password"></form><div class="migrated-layout"><p>Drifted article.</p></div></body></html>"#;
+        let source = response("https://ase.buaa.edu.cn/info/1052/42.htm", html);
+        let document = college_html(&source).unwrap();
+        assert!(!is_safe_public_fallback_document(&source, &document));
+        assert!(normalize(&source, &document).is_err());
+    }
+
+    #[test]
+    fn review_regression_ase_inert_markup_in_date_keeps_real_date() {
+        // An inert script/style payload inside the date node is not source
+        // text: the surrounding MM-DD span plus year still resolves, while
+        // genuinely ambiguous date nodes stay null.
+        let html = r#"<title>通知公告-航空科学与工程学院</title>
+            <div class="nycontent"><div class="wp"><div class="txtList"><ul>
+            <li><a href="../info/1052/42.htm"><div class="time ddjb"><span>06-03</span><script>_click_add_(1)</script>2026</div><div class="txt"><div class="h4 eclips">Script date</div><div class="desc line2">Excerpt</div></div></a></li>
+            <li><a href="../info/1052/43.htm"><div class="time ddjb"><script>window.counter()</script><span>06-04</span>2026<style>.x{opacity:0}</style></div><div class="txt"><div class="h4 eclips">Style date</div><div class="desc line2">Excerpt</div></div></a></li>
+            <li><a href="../info/1052/44.htm"><div class="time ddjb"><span>06-05</span>2025 2026</div><div class="txt"><div class="h4 eclips">Two years</div><div class="desc line2">Excerpt</div></div></a></li>
+            <li><a href="../info/1052/45.htm"><div class="time ddjb"><span>06-06</span><span>2026</span></div><div class="txt"><div class="h4 eclips">Two spans</div><div class="desc line2">Excerpt</div></div></a></li>
+            <li><a href="../info/1052/46.htm"><div class="time ddjb"><span>06-07</span>twenty-six</div><div class="txt"><div class="h4 eclips">Word year</div><div class="desc line2">Excerpt</div></div></a></li>
+            </ul></div></div></div>"#;
+        let base = Url::parse(ASE_NOTICES_URL).unwrap();
+        let document = Html::parse_document(html);
+        let listing = parse_listing(&document, &base).unwrap();
+        let dates: Vec<Option<&str>> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.date.as_deref())
+            .collect();
+        assert_eq!(
+            dates,
+            vec![
+                Some("2026-06-03"),
+                Some("2026-06-04"),
+                None,
+                None,
+                None,
+            ]
+        );
     }
 }

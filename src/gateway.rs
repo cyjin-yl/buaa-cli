@@ -1,5 +1,13 @@
 //! Governed BUAA SRun gateway operations.
 //! Credentials are accepted only through bounded JSON stdin and are never stored.
+//!
+//! Observed refusal classification: the SRun portal answers `error = "E2531"`
+//! when the submitted `ip`/`ac_id` cannot reach an authentication path in the
+//! caller's environment (observed on a non-campus gateway path). That is an
+//! environment/AC-path refusal, not a credential rejection: `gateway login`
+//! reports `environment_refused`, records no latch, and never retries. All
+//! other challenge or portal refusals keep the credential classification
+//! (`auth_latched`, one authentication attempt, explicit operator review).
 mod crypto;
 
 use crate::governor::{self, Governor, Outcome, RequestKind, ResumeAuthorization};
@@ -171,6 +179,10 @@ enum AppOutcome {
     Http,
     CredentialRejected,
     AccountLocked,
+    /// Determinate environment/AC-path refusal (observed `E2531`): it is
+    /// neither a credential rejection nor an indeterminate authentication, so
+    /// it consumes no latch and clears the network-failure streak.
+    EnvironmentRefused,
 }
 
 struct Processed<T> {
@@ -201,6 +213,28 @@ fn rejected() -> Error {
         "auth_latched",
         "gateway authentication was rejected; explicit operator review is required",
     )
+}
+fn environment_refused() -> Error {
+    Error::new(
+        "environment_refused",
+        "gateway refused the login in this environment; correct the campus network/AC path before resubmitting (no retry or latch)",
+    )
+}
+
+/// Distinguish a determinate environment/AC-path refusal from a credential
+/// rejection. `E2531` is the observed non-campus-path refusal (see module
+/// note); every other refusal keeps the credential classification.
+enum LoginRefusal {
+    Credential,
+    Environment,
+}
+
+fn classify_login_refusal(error: &str) -> LoginRefusal {
+    if error.trim().eq_ignore_ascii_case("e2531") {
+        LoginRefusal::Environment
+    } else {
+        LoginRefusal::Credential
+    }
 }
 
 fn unix_ms() -> Result<u64, Error> {
@@ -355,11 +389,18 @@ impl GatewayTransport {
             .headers()
             .iter()
             .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
-        if lease.observe_http_many(
-            status,
-            response.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()),
-            challenge_header,
-        ).is_err() {
+        if lease
+            .observe_http_many(
+                status,
+                response
+                    .headers()
+                    .get_all("retry-after")
+                    .iter()
+                    .map(|value| value.to_str().ok()),
+                challenge_header,
+            )
+            .is_err()
+        {
             drop(response);
             return Err(unavailable());
         }
@@ -398,8 +439,12 @@ impl GatewayTransport {
             application_outcome,
             AppOutcome::CredentialRejected | AppOutcome::AccountLocked
         );
+        // A determinate environment refusal is not indeterminate: it neither
+        // consumes a latch nor counts as a failed network interaction.
         let indeterminate_authentication = kind == RequestKind::Authentication
-            && processed.as_ref().is_none_or(|value| value.result.is_err());
+            && processed.as_ref().is_none_or(|value| {
+                value.result.is_err() && !matches!(value.outcome, AppOutcome::EnvironmentRefused)
+            });
         let outcome = Outcome::Http {
             status,
             retry_after: retry_after.as_deref(),
@@ -1013,9 +1058,15 @@ fn login_with(mut request: LoginInput, transport: &GatewayTransport) -> Result<V
                     result: Ok(value),
                     outcome: AppOutcome::Http,
                 },
-                _ => Processed {
-                    result: Err(rejected()),
-                    outcome: AppOutcome::AccountLocked,
+                _ => match classify_login_refusal(&parsed.error) {
+                    LoginRefusal::Environment => Processed {
+                        result: Err(environment_refused()),
+                        outcome: AppOutcome::EnvironmentRefused,
+                    },
+                    LoginRefusal::Credential => Processed {
+                        result: Err(rejected()),
+                        outcome: AppOutcome::AccountLocked,
+                    },
                 },
             }
         },
@@ -1074,7 +1125,16 @@ fn login_with(mut request: LoginInput, transport: &GatewayTransport) -> Result<V
                 outcome: AppOutcome::Http,
             }
         } else {
-            Processed { result: Err(rejected()), outcome: AppOutcome::CredentialRejected }
+            match classify_login_refusal(&parsed.error) {
+                LoginRefusal::Environment => Processed {
+                    result: Err(environment_refused()),
+                    outcome: AppOutcome::EnvironmentRefused,
+                },
+                LoginRefusal::Credential => Processed {
+                    result: Err(rejected()),
+                    outcome: AppOutcome::CredentialRejected,
+                },
+            }
         }
     })
 }
@@ -1426,6 +1486,7 @@ pub fn schema() -> Value {
         },
         "login":{
             "input":{"type":"object","additionalProperties":false,"required":["username","password","ip","ac_id","intent"],"x-maxInputBytes":16384,"properties":{"username":{"allOf":[identity["username"].clone(),{"pattern":no_control}]},"password":{"type":"string","minLength":1,"maxLength":1024,"pattern":no_control,"writeOnly":true},"ip":identity["ip"].clone(),"ac_id":identity["ac_id"].clone(),"intent":{"type":"string","description":"Exactly LOGIN <username> <ip>."}}},"options":{"--online":{"const":true},"prerequisite":"gateway resume-auth"},
+            "failure_classification":{"environment_refused":{"classification":"environment","latch":false,"automatic_retry":false,"observed_cause":"SRun error E2531: submitted ip/ac_id has no reachable authentication path from the caller's network environment (observed on a non-campus gateway path)"},"auth_latched":{"classification":"credential_or_indeterminate","authentication_attempt_consumed":true,"requires_explicit_review":true,"automatic_retry":false}},
             "output":{"type":"object","additionalProperties":false,"required":["schema_version","type","result","requested_ip","server_online_ip","ip_matches_request","server_reported_success","provenance","authentication_attempts","automatic_retry"],"properties":{"schema_version":{"const":1},"type":{"const":"gateway_login"},"result":{"const":"connected"},"requested_ip":ip.clone(),"server_online_ip":{"anyOf":[ip.clone(),{"type":"null"}]},"ip_matches_request":{"type":["boolean","null"]},"server_reported_success":{"const":true},"provenance":provenance.clone(),"authentication_attempts":{"const":1},"automatic_retry":{"const":false}}}
         },
         "logout-plan":{
@@ -1818,14 +1879,10 @@ mod tests {
         assert_eq!(repeated["idempotency"], "idempotent_hit");
         let observations: Vec<_> = server.requests.try_iter().collect();
         assert_eq!(observations.len(), 3);
-        assert!(
-            observations
-                .windows(2)
-                .all(|pair| {
-                    pair[1].0.duration_since(pair[0].0)
-                        >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
-                })
-        );
+        assert!(observations.windows(2).all(|pair| {
+            pair[1].0.duration_since(pair[0].0)
+                >= Duration::from_millis(crate::governor::MIN_INTERVAL_MS)
+        }));
     }
 
     #[test]
@@ -1962,7 +2019,8 @@ mod tests {
             "username":"student","ip":"10.0.0.2","ac_id":62,
             "operation_id":plan["operation_id"],"plan_hash":plan["plan_hash"],
             "intent":plan["required_intent"]
-        }).to_string();
+        })
+        .to_string();
         let server = Server::new(|socket, request, _| {
             let (callback, _) = callback_and_query(request);
             let body = format!("{callback}({})", json!({"error":"ok","res":"ok"}));
@@ -1971,16 +2029,30 @@ mod tests {
         let transport = transport(&fixture, &server);
         let error = commit_logout_from(parse_logout_commit(&input).unwrap(), &cache, |request| {
             commit_logout_with(request, &transport, &cache)
-        }).unwrap_err();
+        })
+        .unwrap_err();
         assert_eq!(error.code, "unknown_outcome");
         assert!(!transport.governor.status().unwrap().safety_latched);
         let account = logout_account_fingerprint("student");
         assert!(load_logout_unknown(&cache, &account).unwrap().is_some());
-        assert!(load_logout_receipt(&cache, plan["plan_hash"].as_str().unwrap(), &account,
-            plan["operation_id"].as_str().unwrap()).unwrap().is_none());
-        assert_eq!(commit_logout_from(parse_logout_commit(&input).unwrap(), &cache, |_| {
-            panic!("unknown logout must not be retried")
-        }).unwrap_err().code, "unknown_outcome");
+        assert!(
+            load_logout_receipt(
+                &cache,
+                plan["plan_hash"].as_str().unwrap(),
+                &account,
+                plan["operation_id"].as_str().unwrap()
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(
+            commit_logout_from(parse_logout_commit(&input).unwrap(), &cache, |_| {
+                panic!("unknown logout must not be retried")
+            })
+            .unwrap_err()
+            .code,
+            "unknown_outcome"
+        );
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
     #[test]
@@ -2287,6 +2359,52 @@ mod tests {
         assert_eq!(result.unwrap_err().code, "unavailable");
         let status = transport.governor.status().unwrap();
         assert!(!status.safety_latched && !status.authentication_armed);
+    }
+
+    #[test]
+    fn e2531_portal_refusal_is_environment_not_credential_rejection() {
+        let fixture = Fixture::new();
+        let server = Server::new(|socket, request, index| match index {
+            0 => reply(
+                socket,
+                request,
+                json!({"error":"ok","challenge":"0123456789abcdef0123456789abcdef"}),
+            ),
+            1 => reply(socket, request, json!({"error":"E2531","res":"fail"})),
+            _ => panic!("environment refusal retried the gateway"),
+        });
+        let transport = transport(&fixture, &server);
+        let login = parse_login(r#"{"username":"student","password":"synthetic-secret","ip":"10.0.0.2","ac_id":62,"intent":"LOGIN student 10.0.0.2"}"#).unwrap();
+        let error = match login_with(login, &transport) {
+            Err(error) => error,
+            Ok(_) => panic!("environment refusal was accepted as connected"),
+        };
+        assert_eq!(error.code, "environment_refused");
+        assert!(!error.message.contains("student"));
+        assert!(!error.message.contains("synthetic-secret"));
+        let status = transport.governor.status().unwrap();
+        assert!(!status.safety_latched && !status.authentication_armed);
+        assert_eq!(status.consecutive_network_failures, 0);
+        assert_eq!(server.count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn e2531_challenge_refusal_never_sends_credentials() {
+        let fixture = Fixture::new();
+        let server =
+            Server::new(|socket, request, _| reply(socket, request, json!({"error":"E2531"})));
+        let transport = transport(&fixture, &server);
+        let login = parse_login(r#"{"username":"student","password":"synthetic-secret","ip":"10.0.0.2","ac_id":62,"intent":"LOGIN student 10.0.0.2"}"#).unwrap();
+        let error = match login_with(login, &transport) {
+            Err(error) => error,
+            Ok(_) => panic!("environment refusal was accepted as connected"),
+        };
+        assert_eq!(error.code, "environment_refused");
+        let status = transport.governor.status().unwrap();
+        assert!(!status.safety_latched && !status.authentication_armed);
+        assert_eq!(status.consecutive_network_failures, 0);
+        // The credential submission must not follow a refused challenge.
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
 
     #[test]

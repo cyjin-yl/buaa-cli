@@ -1685,13 +1685,12 @@ fn assess_html_challenge(text: &str) -> (ChallengeAssessment, bool) {
                 || ["placeholder", "title", "aria-label", "aria-description"]
                     .into_iter()
                     .filter_map(|name| value.attr(name))
-                    .any(|text| challenge_marker_matches(text)
-                        || text.to_ascii_lowercase().contains("verification code"))
+                    .any(challenge_text_cue)
                 || value.attr("autocomplete").is_some_and(|text| {
                     text.split_ascii_whitespace().any(|token| token.eq_ignore_ascii_case("one-time-code"))
                 })
                 || (value.name() == "label"
-                    && challenge_marker_matches(&active_element_text(element)));
+                    && challenge_text_cue(&active_cue_text(element)));
             if review_cue {
                 unreviewed = true;
             }
@@ -1705,12 +1704,7 @@ fn assess_html_challenge(text: &str) -> (ChallengeAssessment, bool) {
         }
         let value = element.value();
         let button_cue = if value.name() == "button" {
-            let mut text = String::new();
-            visit_active_text(element, |_| false, |part| {
-                text.push_str(part);
-                false
-            });
-            Some(std::borrow::Cow::Owned(text))
+            Some(std::borrow::Cow::Owned(active_cue_text(element)))
         } else if value.name() == "input"
             && value.attr("type").is_some_and(|kind| {
                 ["button", "submit", "reset"].iter().any(|name| kind.eq_ignore_ascii_case(name))
@@ -1771,6 +1765,21 @@ pub(crate) fn active_element_text(element: ElementRef<'_>) -> String {
                 }
                 output.push_str(word);
             }
+            false
+        },
+    );
+    output
+}
+
+/// Raw text concatenated without inserted separators so an inline element
+/// inside a cue word (CAP<span>TCHA</span>) still spells the marker.
+fn active_cue_text(element: ElementRef<'_>) -> String {
+    let mut output = String::new();
+    let _ = visit_active_text(
+        element,
+        |_| false,
+        |text| {
+            output.push_str(text);
             false
         },
     );
@@ -2827,6 +2836,45 @@ mod tests {
             assert_eq!(html_assessment(&body), ChallengeAssessment::Unreviewed);
             let prefix = format!("<input name=captcha>{body}");
             assert_eq!(assess_challenge_body(prefix.as_bytes(), Some("text/html; charset=utf-8"), true), ChallengeAssessment::Detected);
+        }
+    }
+
+    #[test]
+    fn challenge_entity_and_split_label_cues_withhold_consumer_evidence() {
+        // The entity-decoded attribute holds U+00A0 between the marker words,
+        // and a child element splits the label marker into separate text
+        // nodes. Both spell a challenge cue the same as their plain forms.
+        for body in [
+            r#"<input placeholder="Verification&nbsp;code">"#,
+            r#"<input placeholder="Verification&#160;code">"#,
+            r#"<label for="answer">CAP<span>TCHA</span></label><input id="answer">"#,
+        ] {
+            let output = crate::checkin::parse_response(body.as_bytes(), Some("text/html"));
+            assert_eq!(output["result"], "fallback", "{body}");
+            assert_eq!(output["raw_evidence"]["raw_withheld"], true, "{body}");
+            assert!(output["raw_evidence"]["data"].is_null(), "{body}");
+        }
+    }
+
+    #[test]
+    fn challenge_ordinary_control_pages_still_release_evidence() {
+        for body in [
+            r#"<input name="q" placeholder="Search courses">"#,
+            r#"<label for="who">Your <span>name</span></label><input id="who">"#,
+            r#"<form><label>Classroom</label><input type="text"><button type="submit">Submit</button></form>"#,
+            r#"<label>CAP <span>TCHA</span> lunch</label>"#,
+        ] {
+            let output = crate::checkin::parse_response(body.as_bytes(), Some("text/html"));
+            assert_eq!(output["result"], "fallback", "{body}");
+            let data = output["raw_evidence"]["data"]
+                .as_str()
+                .unwrap_or_else(|| panic!("withheld bytes: {body}"));
+            assert_eq!(
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+                    .unwrap_or_else(|_| panic!("invalid evidence encoding: {body}")),
+                body.as_bytes(),
+                "{body}"
+            );
         }
     }
 

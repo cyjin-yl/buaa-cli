@@ -10,7 +10,7 @@
 
 use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
-    advertised_page_url, article_category_from_url, article_output, article_paragraphs,
+    advertised_page_url_document, article_category_from_url, article_output, article_paragraphs,
     bind_college_board, college_directory_attribution, college_html, declared_jsp_attachment_hints,
     describe_college_surface, element_text, entry_in_scope, failed_contract, html_fallback,
     inert_element, invalid_article, invalid_list, is_admitted_html, is_http,
@@ -211,16 +211,21 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
     if page == 1 {
         return Ok(latest);
     }
-    client.get(&latest, false, |response| {
-        college_html(response)?;
-        advertised_page_url(
-            &response.body,
+    let result: Result<Url, Error> = client.get(&latest, false, |response| {
+        let document = college_html(response)?;
+        let selected = advertised_page_url_document(
+            &document,
             &latest,
             page,
             "div.pb_sys_common span.p_no a[href]",
             |url| plain_url(url) && url.path().starts_with("/xwdt/tzgg/"),
-        )
-    })
+        );
+        if selected.is_err() && !super::is_safe_public_fallback_document(response, &document) {
+            return Err(unavailable());
+        }
+        Ok(selected)
+    })?;
+    result
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -249,22 +254,23 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
     client
         .with_cache_mode(mode)
         .get(&target, false, |response| {
-            let document =
-                match college_html(response).and_then(|html| parse_listing(&html, &target)) {
-                    Ok(document) => document,
-                    Err(_) if is_safe_public_fallback(response) => {
-                        let mut value = html_fallback(
-                            response,
-                            "announcements_list",
-                            "sem",
-                            "sem_listing_selector_contract",
-                        );
-                        value["category"] = json!(CATEGORY);
-                        value["page"] = json!(page);
-                        return Ok(value);
-                    }
-                    Err(error) => return Err(error),
-                };
+            let html = college_html(response)?;
+            let document = match parse_listing(&html, &target) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback(response) => {
+                    let mut value = html_fallback(
+                        response,
+                        "announcements_list",
+                        "sem",
+                        "sem_listing_selector_contract",
+                    );
+                    value["category"] = json!(CATEGORY);
+                    value["page"] = json!(page);
+                    return Ok(value);
+                }
+                Err(error) => return Err(error),
+            };
+            super::refuse_unsafe_listing(response, &html)?;
             let entries: Vec<_> = document
                 .entries
                 .iter()
@@ -320,7 +326,8 @@ fn article_with_client(
     bind_college_board(&client, SEM_ROOT_URL, SEM_NOTICES_URL, &mut attribution)?;
     let source = listing_url(&client, source_page)?;
     let listing = client.get(&source, false, |response| {
-        let document = match college_html(response).and_then(|html| parse_listing(&html, &source)) {
+        let html = college_html(response)?;
+        let document = match parse_listing(&html, &source) {
             Ok(document) => document,
             Err(_) if is_safe_public_fallback(response) => {
                 return Ok(html_fallback(
@@ -332,6 +339,7 @@ fn article_with_client(
             }
             Err(error) => return Err(error),
         };
+        super::refuse_unsafe_listing(response, &html)?;
         if !document
             .entries
             .iter()
@@ -535,17 +543,18 @@ mod tests {
         }
     }
 
+    const LISTING_BOARD: &str = r#"
+        <title>通知公告-经济管理学院</title>
+        <ul class="d-newsU5">
+          <li><a class="inner" href="../info/1024/42.htm"><div class="date"><div class="t1">09-08</div><div class="t2">/ 2026</div></div><div class="text"><h4 class="tit">Policy notice</h4></div></a></li>
+          <li><a class="inner" href="https://mp.weixin.qq.com/s/example"><div class="date"><div class="t1">bad</div><div class="t2">/ 2026</div></div><div class="text"><h4 class="tit">External notice</h4></div></a></li>
+        </ul>
+    "#;
+
     #[test]
     fn listing_preserves_external_links_and_split_dates() {
-        let source = r#"
-            <title>通知公告-经济管理学院</title>
-            <ul class="d-newsU5">
-              <li><a class="inner" href="../info/1024/42.htm"><div class="date"><div class="t1">09-08</div><div class="t2">/ 2026</div></div><div class="text"><h4 class="tit">Policy notice</h4></div></a></li>
-              <li><a class="inner" href="https://mp.weixin.qq.com/s/example"><div class="date"><div class="t1">bad</div><div class="t2">/ 2026</div></div><div class="text"><h4 class="tit">External notice</h4></div></a></li>
-            </ul>
-        "#;
         let base = Url::parse(SEM_NOTICES_URL).unwrap();
-        let listing = parse_listing(&Html::parse_document(source), &base).unwrap();
+        let listing = parse_listing(&Html::parse_document(LISTING_BOARD), &base).unwrap();
         assert_eq!(listing.entries.len(), 2);
         assert_eq!(listing.entries[0].date.as_deref(), Some("2026-09-08"));
         assert_eq!(
@@ -557,6 +566,62 @@ mod tests {
             listing.entries[1].resolved_http_url.as_deref(),
             Some("https://mp.weixin.qq.com/s/example")
         );
+    }
+
+    #[test]
+    fn review_regression_security_marked_listing_is_refused_before_output_or_cache() {
+        // A board that still parses while carrying a security marker is
+        // unsafe: the real list callback must refuse it before serializing
+        // entries and before ArchiveClient::get may persist the response
+        // (save happens only after the callback returns Ok), and no fallback
+        // export may carry the unsafe bytes.
+        let base = Url::parse(SEM_NOTICES_URL).unwrap();
+        let link_response = response(
+            &LISTING_BOARD.replace(
+                "href=\"../info/1024/42.htm\"",
+                "href=\"../info/1024/42.htm?csrf_token=synthetic\"",
+            ),
+            SEM_NOTICES_URL,
+        );
+        let html = college_html(&link_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert!(
+            serde_json::to_string(&listing)
+                .unwrap()
+                .contains("csrf_token"),
+            "the declared marker link would otherwise reach serialized output"
+        );
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&link_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback(&link_response));
+
+        let control_response = response(
+            &format!(
+                "{LISTING_BOARD}<form><input type=\"hidden\" name=\"csrf_token\" value=\"synthetic\"></form>"
+            ),
+            SEM_NOTICES_URL,
+        );
+        let html = college_html(&control_response).unwrap();
+        let listing = parse_listing(&html, &base).unwrap();
+        assert_eq!(listing.entries.len(), 2);
+        assert_eq!(
+            crate::announcements::refuse_unsafe_listing(&control_response, &html)
+                .unwrap_err()
+                .code,
+            "unavailable"
+        );
+        assert!(!is_safe_public_fallback(&control_response));
+
+        // The ordinary public board stays admissible end to end.
+        let response = response(LISTING_BOARD, SEM_NOTICES_URL);
+        let html = college_html(&response).unwrap();
+        assert!(parse_listing(&html, &base).is_ok());
+        assert!(crate::announcements::refuse_unsafe_listing(&response, &html).is_ok());
+        assert!(is_safe_public_fallback(&response));
     }
 
     #[test]

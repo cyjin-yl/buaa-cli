@@ -304,6 +304,183 @@ pub fn boot_review_commit(input: &str) -> Result<Value, crate::net::Error> {
     review_governor()?.commit_review(commit)
 }
 
+
+/// Offline review of one unknown request outcome.
+///
+/// A process that dies inside an admitted request leaves `pending` set, and the
+/// durable design then refuses every later request until an operator records
+/// what actually happened. This preview/commit pair is that operator path: the
+/// preview states the exact retained bytes, the commit requires an intent that
+/// binds their hash and one explicitly chosen settlement. Nothing is inferred
+/// from the clock, and the original bytes are preserved before the rewrite.
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OutcomeReviewPlan {
+    schema_version: u32,
+    #[serde(rename = "type")]
+    kind: String,
+    state_sha256: String,
+    pending: String,
+    safety_latched: bool,
+    network_failures: u32,
+    request_wait_ms: u64,
+    cooldown_wait_ms: u64,
+    instruction: String,
+}
+
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Settlement {
+    /// The request completed successfully; clear the failure streak.
+    Success,
+    /// Local preflight refused the request: nothing was transmitted.
+    NoRequestSent,
+    /// The request was transmitted and the transport failed.
+    NetworkFailure,
+    /// The service answered with a credential rejection.
+    CredentialRejected,
+    /// The service answered with an interactive challenge.
+    CaptchaRequired,
+    /// The service directed a cooldown via Retry-After or an unlabeled 429.
+    /// The value is a *relative* wait in milliseconds, applied from the
+    /// state's own clock domain — never an absolute deadline, which would
+    /// silently cross clock domains after a reboot.
+    Cooldown { wait_ms: u64 },
+    /// The request was answered but none of the listed effects applied
+    /// (e.g. a fully consumed 404/500, a safety observation, or an account
+    /// lock before death). State-identical to `no_request_sent`; recorded
+    /// truthfully rather than mislabeled.
+    RequestAnswered,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutcomeReviewCommit {
+    plan: OutcomeReviewPlan,
+    settlement: Settlement,
+    intent: String,
+}
+
+fn outcome_review_plan(state: &State, bytes: &[u8], _now: u64) -> Result<OutcomeReviewPlan, crate::net::Error> {
+    let pending = state.pending.ok_or_else(|| {
+        crate::net::Error::new("conflict", "no request outcome is pending review")
+    })?;
+    Ok(OutcomeReviewPlan {
+        schema_version: 1,
+        kind: "governor_outcome_review_plan".into(),
+        state_sha256: format!("{:x}", Sha256::digest(bytes)),
+        pending: match pending {
+            RequestKind::Authentication => "authentication".into(),
+            _ => "request".into(),
+        },
+        safety_latched: state.safety_latched,
+        network_failures: state.network_failures,
+        // Anchor retained waits to the persisted observation timestamp, like
+        // the boot review plan. Anchoring to `now` would let the plan drift
+        // between preview and commit and permanently refuse a valid commit.
+        request_wait_ms: retained_wait(state.next_request_ms, state.last_observed_ms),
+        cooldown_wait_ms: retained_wait(state.cooldown_until_ms, state.last_observed_ms),
+        instruction: "review the retained evidence, then commit with intent \"REVIEW GOVERNOR OUTCOME <state_sha256>\" and one explicit settlement".into(),
+    })
+}
+
+pub fn review_outcome_plan() -> Result<Value, crate::net::Error> {
+    let governor = review_governor()?;
+    review_outcome_plan_at(&governor)
+}
+
+fn review_outcome_plan_at(governor: &Governor) -> Result<Value, crate::net::Error> {
+    let (lock, _) = governor.open_lock(false).map_err(|_| boot_review_safety())?;
+    let _lock = lock_exclusive(lock).map_err(|_| boot_review_busy())?;
+    let (state, bytes) = governor.load_record().map_err(|_| boot_review_safety())?;
+    serde_json::to_value(outcome_review_plan(&state, &bytes, 0)?)
+        .map_err(|_| boot_review_safety())
+}
+
+pub fn review_outcome_commit(input: &str) -> Result<Value, crate::net::Error> {
+    let governor = review_governor()?;
+    review_outcome_commit_at(&governor, input)
+}
+
+fn review_outcome_commit_at(governor: &Governor, input: &str) -> Result<Value, crate::net::Error> {
+    if input.len() > MAX_STATE_BYTES as usize {
+        return Err(crate::net::Error::new("invalid_input", "outcome review input exceeds its limit"));
+    }
+    let commit: OutcomeReviewCommit = serde_json::from_str(input)
+        .map_err(|_| crate::net::Error::new("invalid_input", "invalid outcome review input"))?;
+    if commit.intent != format!("REVIEW GOVERNOR OUTCOME {}", commit.plan.state_sha256) {
+        return Err(crate::net::Error::new("permission", "exact outcome review intent is required"));
+    }
+    let (lock, _) = governor.open_lock(false).map_err(|_| boot_review_safety())?;
+    let _lock = lock_exclusive(lock).map_err(|_| boot_review_busy())?;
+    let (mut state, bytes) = governor.load_record().map_err(|_| boot_review_safety())?;
+    let expected = outcome_review_plan(&state, &bytes, 0)?;
+    if expected != commit.plan {
+        return Err(boot_review_busy());
+    }
+    governor.preserve_outcome_history(&expected.state_sha256, &bytes)?;
+    // Keep one clock domain. When the pending state survived a reboot, its
+    // deadlines live in the dead boot's BOOTTIME domain; injecting `now` (the
+    // new boot's uptime) would cross clocks and corrupt every retained wait.
+    // In the same boot `now` is correct; on a foreign boot the state's own
+    // last_observed_ms is the only coherent reference — the later boot
+    // review then rebases the preserved waits onto the live clock.
+    let same_boot = state.boot_id == governor.boot_id;
+    let clock = if same_boot {
+        now_ms().map_err(|_| boot_review_safety())?
+    } else {
+        state.last_observed_ms
+    };
+    // Reserve the post-completion request gap every real finish performs.
+    state.next_request_ms = state
+        .next_request_ms
+        .max(deadline(clock, state.request_interval_ms).map_err(|_| boot_review_safety())?);
+    // A killed background poll also owes its background interval, matching
+    // prepare_finish's BackgroundPoll branch.
+    if state.pending == Some(RequestKind::BackgroundPoll) {
+        state.next_background_ms = state
+            .next_background_ms
+            .max(deadline(clock, state.background_interval_ms).map_err(|_| boot_review_safety())?);
+    }
+    match commit.settlement {
+        Settlement::Success => state.network_failures = 0,
+        Settlement::NetworkFailure => {
+            state.network_failures = state.network_failures.saturating_add(1).min(6);
+            let base = (30_000_u64 << (state.network_failures - 1)).min(720_000);
+            state.cooldown_until_ms = state
+                .cooldown_until_ms
+                .max(deadline(clock, base).map_err(|_| boot_review_safety())?);
+        }
+        Settlement::CredentialRejected | Settlement::CaptchaRequired => {}
+        Settlement::NoRequestSent => {}
+        Settlement::Cooldown { wait_ms } => {
+            state.cooldown_until_ms = state
+                .cooldown_until_ms
+                .max(deadline(clock, wait_ms).map_err(|_| boot_review_safety())?);
+        }
+        Settlement::RequestAnswered => {}
+    }
+    state.pending = None;
+    if same_boot {
+        state.last_observed_ms = clock;
+    }
+    governor.save(&state, false).map_err(|_| {
+        crate::net::Error::new(
+            "unavailable",
+            "governor outcome review persistence is indeterminate; inspect retained history before further action",
+        )
+    })?;
+    Ok(json!({
+        "schema_version": 1,
+        "type": "governor_outcome_review",
+        "result": "recorded",
+        "settlement": commit.settlement,
+        "state_sha256": expected.state_sha256,
+        "history_preserved": true,
+        "network_request_performed": false
+    }))
+}
+
 fn boot_review_safety() -> crate::net::Error {
     crate::net::Error::new(
         "safety_latched",
@@ -337,9 +514,63 @@ pub fn boot_review_schema() -> Value {
         }
     });
     json!({
-        "commands":["boot-review-plan","boot-review-commit --offline"],
+        "commands":["boot-review-plan","boot-review-commit --offline","review-outcome-plan","review-outcome-commit --offline"],
         "network_access":false,"max_input_bytes":MAX_STATE_BYTES,
         "plan_stdout_schema":plan,
+        "outcome_review":{
+            "commands":["review-outcome-plan","review-outcome-commit --offline"],
+            "network_access":false,"max_input_bytes":MAX_STATE_BYTES,
+            "plan_stdout_schema":{
+                "type":"object","additionalProperties":false,
+                "required":["schema_version","type","state_sha256","pending","safety_latched","network_failures","request_wait_ms","cooldown_wait_ms","instruction"],
+                "properties":{
+                    "schema_version":{"const":1},"type":{"const":"governor_outcome_review_plan"},
+                    "state_sha256":hash,"pending":{"enum":["request","authentication"]},
+                    "safety_latched":{"type":"boolean"},"network_failures":{"type":"integer","minimum":0,"maximum":6},
+                    "request_wait_ms":milliseconds,"cooldown_wait_ms":milliseconds,
+                    "instruction":{"type":"string"}
+                }
+            },
+            "commit_stdin_schema":{
+                "type":"object","additionalProperties":false,"required":["plan","settlement","intent"],
+                "properties":{
+                    "plan":{
+                        "type":"object","additionalProperties":false,
+                        "required":["schema_version","type","state_sha256","pending","safety_latched","network_failures","request_wait_ms","cooldown_wait_ms","instruction"],
+                        "properties":{
+                            "schema_version":{"const":1},"type":{"const":"governor_outcome_review_plan"},
+                            "state_sha256":hash,"pending":{"enum":["request","authentication"]},
+                            "safety_latched":{"type":"boolean"},"network_failures":{"type":"integer","minimum":0,"maximum":6},
+                            "request_wait_ms":milliseconds,"cooldown_wait_ms":milliseconds,
+                            "instruction":{"type":"string"}
+                        }
+                    },
+                    "settlement":{"oneOf":[
+                        {"const":"success"},{"const":"no_request_sent"},{"const":"network_failure"},
+                        {"const":"credential_rejected"},{"const":"captcha_required"},{"const":"request_answered"},
+                        {"type":"object","additionalProperties":false,"required":["cooldown"],
+                         "properties":{"cooldown":{"type":"object","additionalProperties":false,"required":["wait_ms"],
+                          "properties":{"wait_ms":{"type":"integer","minimum":0,"maximum":u64::MAX}}}}}
+                    ]},
+                    "intent":{"type":"string","pattern":"^REVIEW GOVERNOR OUTCOME [0-9a-f]{64}$"}
+                }
+            },
+            "commit_stdout_schema":{
+                "type":"object","additionalProperties":false,
+                "required":["schema_version","type","result","settlement","state_sha256","history_preserved","network_request_performed"],
+                "properties":{
+                    "schema_version":{"const":1},"type":{"const":"governor_outcome_review"},
+                    "result":{"const":"recorded"},
+                    "settlement":{"oneOf":[
+                        {"const":"success"},{"const":"no_request_sent"},{"const":"network_failure"},
+                        {"const":"credential_rejected"},{"const":"captcha_required"},{"const":"request_answered"},
+                        {"type":"object"}
+                    ]},
+                    "state_sha256":hash,"history_preserved":{"const":true},"network_request_performed":{"const":false}
+                }
+            },
+            "semantics":"Exact retained-state SHA-256 and intent are rechecked under the permanent lock. Retained waits anchor to the persisted observation timestamp so the preview cannot drift against its own commit. Original bytes are preserved before atomic replacement. The operator records what actually happened; nothing is inferred from the clock."
+        },
         "commit_stdin_schema":{
             "type":"object","additionalProperties":false,"required":["plan","intent"],
             "properties":{"plan":plan,"intent":{"type":"string","pattern":"^MIGRATE GOVERNOR BOOT [0-9a-f]{64}$"}}
@@ -681,6 +912,40 @@ impl Governor {
             authentication_was_armed: state.authentication_armed,
             authentication_armed_after_commit: false,
         })
+    }
+
+
+    fn preserve_outcome_history(&self, state_sha256: &str, bytes: &[u8]) -> Result<(), crate::net::Error> {
+        let name = format!("outcome-review-{state_sha256}.json");
+        let unavailable =
+            || crate::net::Error::new("unavailable", "cannot durably preserve governor history");
+        match open_child(&self.directory, &name, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL) {
+            Ok(mut file) => {
+                validate_private_file(&file).map_err(|_| unavailable())?;
+                file.write_all(bytes).map_err(|_| unavailable())?;
+                file.sync_all().map_err(|_| unavailable())?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // A crash between create and fsync can leave a truncated file.
+                // Require the retained bytes to match exactly, never treat a
+                // partial archive as preserved evidence.
+                let existing = open_child(&self.directory, &name, libc::O_RDONLY)
+                    .map_err(|_| unavailable())?;
+                validate_private_file(&existing).map_err(|_| unavailable())?;
+                let mut retained = Vec::new();
+                std::io::Read::read_to_end(
+                    &mut std::io::Read::take(&existing, MAX_STATE_BYTES + 1),
+                    &mut retained,
+                )
+                    .map_err(|_| unavailable())?;
+                if retained != bytes {
+                    return Err(unavailable());
+                }
+            }
+            Err(_) => return Err(unavailable()),
+        }
+        self.directory.sync_all().map_err(|_| unavailable())?;
+        Ok(())
     }
 
     fn preserve_review_history(
@@ -1551,6 +1816,8 @@ mod tests {
     include!("../tests/governor_process.rs");
     governor_process_regressions!();
 
+    use serde_json::json;
+
     fn old_boot_fixture() -> (Fixture, Governor) {
         let fixture = Fixture::new();
         let governor = fixture.open();
@@ -2002,5 +2269,174 @@ mod tests {
             ),
             Some(ordinary_gap + 1)
         );
+    }
+
+    #[test]
+    fn outcome_review_plan_refuses_when_nothing_is_pending() {
+        let fixture = Fixture::new();
+        let governor = Governor::isolated_for_test(&fixture.state_dir()).unwrap();
+        let error = super::review_outcome_plan_at(&governor).unwrap_err();
+        assert_eq!(error.code, "conflict");
+        assert_eq!(governor.load_record().unwrap().0.pending, None);
+        assert!(
+            !fs::read_dir(fixture.state_dir())
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("outcome-review-"))
+        );
+    }
+
+    #[test]
+    fn outcome_review_commit_refuses_wrong_intent_without_changing_state() {
+        let fixture = Fixture::new();
+        let governor = Governor::isolated_for_test(&fixture.state_dir()).unwrap();
+        let mut state = governor.load().unwrap();
+        state.pending = Some(RequestKind::Interactive);
+        governor.save(&state, false).unwrap();
+        let (_, original) = governor.load_record().unwrap();
+        let plan = super::review_outcome_plan_at(&governor).unwrap();
+        for intent in [
+            "REVIEW GOVERNOR OUTCOME 0000000000000000000000000000000000000000000000000000000000000000",
+            "MIGRATE GOVERNOR BOOT 0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            let input = json!({
+                "plan": plan,
+                "settlement": "no_request_sent",
+                "intent": intent,
+            });
+            let error = super::review_outcome_commit_at(&governor, &input.to_string())
+                .unwrap_err();
+            assert_eq!(error.code, "permission", "{input}");
+            assert_eq!(governor.load_record().unwrap().1, original);
+            assert!(
+                !fs::read_dir(fixture.state_dir())
+                    .unwrap()
+                    .any(|entry| entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("outcome-review-"))
+            );
+        }
+        assert_eq!(governor.load().unwrap().pending, Some(RequestKind::Interactive));
+    }
+
+    #[test]
+    fn outcome_review_commit_records_settlement_and_preserves_pending_state() {
+        let fixture = Fixture::new();
+        let governor = Governor::isolated_for_test(&fixture.state_dir()).unwrap();
+        let mut state = governor.load().unwrap();
+        state.pending = Some(RequestKind::Interactive);
+        governor.save(&state, false).unwrap();
+        let (_, original) = governor.load_record().unwrap();
+        let plan = super::review_outcome_plan_at(&governor).unwrap();
+        let state_sha256 = plan["state_sha256"].as_str().unwrap().to_string();
+        let input = json!({
+            "plan": plan,
+            "settlement": "no_request_sent",
+            "intent": format!("REVIEW GOVERNOR OUTCOME {state_sha256}"),
+        });
+        let receipt = super::review_outcome_commit_at(&governor, &input.to_string()).unwrap();
+        assert_eq!(receipt["type"], "governor_outcome_review");
+        assert_eq!(receipt["result"], "recorded");
+        assert_eq!(receipt["settlement"], "no_request_sent");
+        assert_eq!(receipt["state_sha256"], state_sha256);
+        assert_eq!(receipt["network_request_performed"], false);
+        // The exact pre-review bytes are preserved before the rewrite.
+        let history = fixture
+            .state_dir()
+            .join(format!("outcome-review-{state_sha256}.json"));
+        assert_eq!(fs::read(&history).unwrap(), original);
+        // The settlement clears pending; ordinary scheduling gates reopen.
+        let settled = governor.load().unwrap();
+        assert_eq!(settled.pending, None);
+        assert_eq!(settled.network_failures, 0);
+        assert!(governor.status().is_ok());
+    }
+
+    #[test]
+    fn outcome_review_success_clears_failure_streak() {
+        let fixture = Fixture::new();
+        let governor = Governor::isolated_for_test(&fixture.state_dir()).unwrap();
+        let mut state = governor.load().unwrap();
+        state.pending = Some(RequestKind::Interactive);
+        state.network_failures = 3;
+        governor.save(&state, false).unwrap();
+        let plan = super::review_outcome_plan_at(&governor).unwrap();
+        let state_sha256 = plan["state_sha256"].as_str().unwrap().to_string();
+        let input = json!({
+            "plan": plan,
+            "settlement": "success",
+            "intent": format!("REVIEW GOVERNOR OUTCOME {state_sha256}"),
+        });
+        super::review_outcome_commit_at(&governor, &input.to_string()).unwrap();
+        let settled = governor.load().unwrap();
+        assert_eq!(settled.network_failures, 0);
+        assert_eq!(settled.pending, None);
+    }
+
+    #[test]
+    fn outcome_review_cooldown_records_server_deadline() {
+        let fixture = Fixture::new();
+        let governor = Governor::isolated_for_test(&fixture.state_dir()).unwrap();
+        let mut state = governor.load().unwrap();
+        state.pending = Some(RequestKind::Interactive);
+        governor.save(&state, false).unwrap();
+        let plan = super::review_outcome_plan_at(&governor).unwrap();
+        let state_sha256 = plan["state_sha256"].as_str().unwrap().to_string();
+        let base = governor.load().unwrap().last_observed_ms;
+        let input = json!({
+            "plan": plan,
+            "settlement": {"cooldown": {"wait_ms": 9_999_999}},
+            "intent": format!("REVIEW GOVERNOR OUTCOME {state_sha256}"),
+        });
+        super::review_outcome_commit_at(&governor, &input.to_string()).unwrap();
+        let settled = governor.load().unwrap();
+        // Relative wait applied from the state's clock domain; the commit's
+        // own `now` is >= the pre-read `base`, so assert the deadline is at
+        // least the full wait rather than an exact (racy) base.
+        assert!(settled.cooldown_until_ms >= base + 9_999_999);
+        assert_eq!(settled.pending, None);
+    }
+
+    #[test]
+    fn outcome_review_cross_boot_preserves_state_clock_domain() {
+        let fixture = Fixture::new();
+        let governor = Governor::isolated_for_test(&fixture.state_dir()).unwrap();
+        let mut state = governor.load().unwrap();
+        // Simulate a pending state that survived a reboot: its deadlines and
+        // last_observed live in the dead boot's clock domain (a large uptime).
+        state.boot_id = "00000000-0000-0000-0000-000000000000".into();
+        state.pending = Some(RequestKind::Interactive);
+        state.last_observed_ms = 86_400_000; // 1 day of dead-boot uptime
+        state.next_request_ms = 86_400_000 + 5_000;
+        state.cooldown_until_ms = 86_400_000 + 60_000;
+        governor.save(&state, false).unwrap();
+        let plan = super::review_outcome_plan_at(&governor).unwrap();
+        let state_sha256 = plan["state_sha256"].as_str().unwrap().to_string();
+        let input = json!({
+            "plan": plan,
+            "settlement": {"cooldown": {"wait_ms": 30_000}},
+            "intent": format!("REVIEW GOVERNOR OUTCOME {state_sha256}"),
+        });
+        super::review_outcome_commit_at(&governor, &input.to_string()).unwrap();
+        // load() refuses a foreign boot_id; load_record() reads it verbatim.
+        let settled = {
+            let (state, _) = governor.load_record().unwrap();
+            state
+        };
+        // last_observed stays in the dead-boot domain (not injected with the
+        // new boot's small uptime); the relative cooldown advances from the
+        // state's own last_observed, not from new-boot uptime or an absolute
+        // guess the operator cannot express.
+        assert_eq!(settled.last_observed_ms, 86_400_000);
+        // max() keeps the larger of the retained 86_460_000 and the applied
+        // relative wait (86_430_000): the retained deadline is preserved, not
+        // collapsed, and never below the applied value.
+        assert!(settled.cooldown_until_ms >= 86_460_000);
+        assert!(settled.cooldown_until_ms >= 86_400_000 + 30_000);
     }
 }

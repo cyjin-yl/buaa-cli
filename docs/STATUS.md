@@ -1,5 +1,187 @@
 ## Development status
 
+## 2026-11-06: reviewed privacy and contract repairs; live reads still pending
+
+A fresh independent review of `760bbe0342b4cbd247f369555487e1bc90736b4f`
+requested changes in two Boya paths and two directory paths; all four were
+reproduced with real offline exchanges before repair. Boya now screens the
+decrypted plaintext before any ciphertext fallback and re-screens retained
+pagination records against values issued by later pages. Directory admission
+refuses `token`/`id_token` query keys and screens the query portion of nested
+fragment routes. Refused sources are not emitted or cached.
+
+Wider capability audits found and repaired further consumer-visible defects:
+successful announcement parses now pass the shared listing safety gate;
+transportation refuses non-HTML surfaces; admitted page originals survive an
+unadvertised ordinal; raw fallback withholds credential constructs found in
+inert or script text; YGY refuses looping pagers; ASE ignores inert markup in
+dates; IAI requires a real viewer call. Organization, timetable and drive
+admission screen escaped strings and member names; evaluation and electricity
+require object roots; HTML-declared electricity bodies take the HTML privacy
+path; iHome re-screens retained pages and cache entries against later-issued
+cookies; physics results stay finite; local catalog pagination continues past
+stale full-text rows.
+
+The complete offline gate passed 1,389 library tests and all 116 integration
+tests, with three existing ignored workers. These are synthetic and offline
+results. No post-repair authorized campus read has been performed yet, so
+no service acceptance is upgraded here; GSMIS HTTP 403 and the earlier Boya
+`session_cookie_refused` observation remain the latest live facts.
+
+A post-repair authorized `buaa boya session --online` at head `1b2ad38`
+reached the business handler with exit 0 and `upstream_error`: the server
+returned `系统异常，请稍后再试` (status 1) with zero pages fetched. Cookie
+handling no longer blocks; the pre-repair `session_cookie_refused` path is
+resolved. The remaining error is a business-layer issue from the Boya
+server, not a client privacy or protocol defect. No course list was
+obtained and no credential echo was detected. Complete pagination,
+owner-present mutation and status reconciliation remain unverified.
+
+## 2026-11-05: directory refresh verified; GSMIS and Boya reads incomplete
+
+A fresh `buaa organizations list --refresh` completed with exit 0, HTTP 200
+and `result=directory_snapshot`: 50 entries in 6 categories, from 41,845
+original bytes. The source SHA-256 is
+`9f639884881b05379ea1cf2e4a7727347be0c2f2098a915270253b4b6ee3616a`.
+Completeness covers exactly the captured official directory document. The
+repair screens projected titles, category/member labels and decoded URLs
+before output or caching. Harmless login navigation outside every directory
+group is admitted only for a successful structured projection; raw fallback,
+active authentication controls, challenge headers and active bases retain
+the full-document refusal rules. `source_refused` now has public exit 3.
+
+Two authorized session attempts used protected JSON stdin without persisting
+credentials or tokens. `buaa timetable session --online` reached a real GSMIS
+response but returned `sensitive_response_withheld`, HTTP 403 and
+`fallback_reason=session_cookie_issued`, with `network_performed=true`.
+Its exit 0 is degraded evidence, not a parsed timetable or accepted session.
+No schedule rows or live-derived ICS were obtained.
+
+`buaa boya session --online` requested semester courses starting at page 0,
+size 20, with a local traversal bound of 20 pages. It exited 7 with public
+error `unavailable`. The retained diagnostic exactly matches the business
+handler's `session_cookie_refused` branch; source inspection places that
+branch after its HTTP-200, complete-body and challenge checks. No course
+list was emitted, and encryption compatibility or complete pagination is
+not established. This observation predates the response-cookie admission
+and privacy repairs below. Neither
+attempt is counted as completed authenticated service acceptance.
+
+The repaired Boya path retains issued values in bounded, zeroizing,
+invocation-only memory and screens escaped literals even when strict JSON
+admission rejects duplicate keys. An escaped literal without a closing quote
+or with an invalid escape is withheld with `response_safety_unreviewed`;
+this reason distinguishes an incomplete safety review from a confirmed echo.
+Six real loopback exchanges prove Unicode and solidus-escaped withholding,
+both malformed-string boundaries, and exact original-byte preservation for
+harmless ordinary and escaped duplicate-key bodies. The original Unicode
+example was already withheld by a generic guard; the failing-before proof
+used a solidus-escaped issued value instead.
+
+Directory URL screening now checks every nested authority and query,
+resolves relative targets against their enclosing URL, and refuses before
+output or fresh cache retention. Empty harmless query values remain valid.
+Six actual native CLI cases in isolated mount/network namespaces returned
+four `source_refused` refusals (exit 3) and two one-entry cache snapshots.
+The retained official document also replayed as the same 50 entries and six
+categories with its unchanged source digest, without another campus read.
+
+The current complete offline gate passed 62 focused cases, 1,326 library
+tests and all 116 integration tests, with three existing ignored workers.
+Earlier failing receipts remain retained. These offline passes do not
+upgrade the two service observations above.
+
+Gitea publication remains incomplete. Initial DNS and LAN HTTPS observations
+failed; the existing SSH endpoint passed strict host key checking and
+returned main at
+`53553e58b6223a5bf6730b77cae47cc8123a7f69`; an exact main fetch succeeded.
+Main and local history diverge, while main's tree equals the common-base
+tree. The published leaf and its immediate parent are ancestors of the
+local head. Native metadata confirms that PR 164 remains based on PR 163;
+both are open with work-in-progress title prefixes. No review, commit-status
+or Actions-run records were found for their observed published tips. The
+Tailnet service completed strict TLS but its anonymous API required sign-in
+with HTTP 403. No push or merge is claimed.
+
+## 2026-11-05: earlier offline governor outcome review and session implementation
+
+Credential-free reachability was checked first: `sso.buaa.edu.cn`,
+`gsmis.buaa.edu.cn` and `bykc.buaa.edu.cn` all complete TLS with
+`ssl_verify_result=0`. The GSMIS portal entry answers `302` to
+`sso.buaa.edu.cn/login?service=…`; the bykc entry answers `302` to
+`sso.buaa.edu.cn/login?noAutoRedirect=true&service=…`. Each `service=` value
+equals the `GSMIS_CAS_SERVICE` / `BYKC_CAS_SERVICE` constant in
+`src/recordings/session.rs` byte-for-byte, so the configured CAS profiles
+match the current sign-on entries. The redirects were read, never followed
+with a ticket, and no credential was submitted: deployment identity, not an
+authenticated session.
+
+Three bounded additions are carried by commits `6d4bafd` (both session read
+paths and the outcome-review commands), `bd4e455` (outcome-review hardening,
+both session schemas, acceptance evidence) and `98c05d3` (bounded
+outcome-review archive readback). None performs a campus write, retry,
+refresh, persistence or second authentication: the two session paths keep the
+existing Authentication lease and settlement contract, while the outcome
+review only settles an already-observed pending outcome offline. The initial
+proof was offline; the later authorized attempts and current blockers are
+recorded above.
+
+`buaa governor review-outcome-plan` / `review-outcome-commit --offline` resolve
+exactly one unknown (`pending`) outcome offline, under the permanent governor
+lock. The preview refuses when nothing is pending and reports the retained
+state SHA-256, pending kind, latch, failure count and the waits anchored to
+the persisted `last_observed_ms`; the commit rechecks that exact plan and
+requires intent `REVIEW GOVERNOR OUTCOME <state_sha256>` plus one settlement:
+`success` (clears the failure streak), `no_request_sent`, `network_failure`
+(increments the streak and its capped backoff), `credential_rejected`,
+`captcha_required`, `request_answered` (a truthful state no-op) or
+`cooldown{wait_ms}`, applied relative to the state's own clock domain and
+never as an absolute `until_ms`. The original bytes are preserved as
+`outcome-review-<sha>.json` before the atomic rewrite — an existing archive
+must read back byte-identical or the commit refuses — and the directory entry
+is synchronized. A pending state that survived a reboot keeps every deadline
+in the dead boot's clock domain, and the commit reserves the post-completion
+request gap a real `finish` performs, plus the background gap for a killed
+`BackgroundPoll`. It still cannot clear a latch, grant authentication or
+migrate unknown/corrupt history. Both commands, with plan/stdin/stdout
+schemas, are declared in the published governor schema.
+
+`buaa timetable session [--online]` performs one explicit in-memory CAS login
+to GSMIS followed by exactly one `loadXskbData.do` read. Input is object-only
+and rejects duplicate fields and trailing documents: `authorized`,
+`username`, `password`, `intent` (`LOGIN <username> timetable`) and
+`read{operation=xskb, enabled, xnxqdm}`, where `xnxqdm` is exactly five ASCII
+digits. A disabled read returns `result=disabled` with
+`network_performed=false` before any governor or network access; without
+`--online` the command refuses before a request. The issued cookie is used
+only by that single read and is never stored; credential/cookie echoes,
+challenges and responses that newly issue a session cookie are withheld with
+length and SHA-256 only, never raw bytes.
+
+`buaa boya session [--online]` performs the same pattern for the bykc service:
+one login, the handoff token taken once via `take_service_credential`, then
+one prepared `sscv` read operation through `BoyaClient::prepare`/`execute`.
+A semester-course operation may traverse the caller's declared page bound
+under the same lease. The token is never persisted and `preview_write` stays blocked. In `bd4e455` the
+module's `login` text changed from "token issuance blocked before transport…"
+to describe that implemented one-login contract.
+
+Verified offline: six focused outcome-review cases (nothing-pending refusal,
+wrong-intent refusal with unchanged bytes, recorded settlement with preserved
+pre-review bytes, `success` clearing the streak, relative cooldown, cross-boot
+clock domain), four focused timetable-session cases and the full 1217-test
+library gate with three existing ignored workers. Native CLI smoke refused
+before transport; both session schemas and the governor outcome-review
+schemas passed a Draft 2020-12 check, which accepted valid inputs and rejected
+`until_ms`, unknown settlements and 4- or 6-digit `xnxqdm`.
+
+At the initial implementation gate, the only `--online` smoke invocation
+refused missing authorization before transport. The later attempts above
+supersede that reachability limit but still produced no parsed live schedule,
+live-derived ICS or complete Boya course list. Postgraduate timetable and
+Boya acceptance therefore remain `partial-offline`. Matching sign-on entries
+alone establishes neither service acceptance nor the encrypted response contract.
+
 ## 2026-11-04: online CAS reads verified for Smart classrooms and iHome
 
 Two more bounded session profiles completed one authorized in-memory CAS login
@@ -2008,7 +2190,7 @@ The board uses `div.text-list > ul > li` rows, `div.text-ldata > div > p` month/
 
 The official directory snapshot binds visible member13 电子信息工程学院 under 信息学科群 with exact literal/resolved `http://www.ee.buaa.edu.cn/`. Public read-only reconnaissance found the root-declared `/index/tzgg.htm` 通知公告 board, source-advertised `pb_sys_common` pagination, canonical `/info/1062/` article links, and the bounded selectors retained by the adapter (`ul.news-ul > li`, direct row `a`/`span`, and the direct `article-tt`/`article-sm`/`vsb_content` structure). This is source-contract discovery only; raw HTTP bytes and personal notice text are not committed.
 
-The selected HTTPS candidate `https://www.ee.buaa.edu.cn/` is currently blocked before source admission: certificate SAN/hostname validation reports no alternative certificate subject name for `www.ee.buaa.edu.cn`; a separately probed canonical `ee.buaa.edu.cn` TLS handshake ended unexpectedly. Plain HTTP is not used as a fallback and no TLS verification is disabled. The adapter therefore truthfully exposes `college-source ee root|notices` as `surface_blocked` with `fallback_reason.code=tls_transport_blocked`, preserves the exact HTTP directory attribution and selected HTTPS candidate, and rejects EE listing/article reads as unsupported before transport. No board/article content, all-college/history/attachment coverage or online capability is claimed until a validated HTTPS source is available.
+The selected HTTPS candidate `https://www.ee.buaa.edu.cn/` is currently blocked before source admission: certificate SAN/hostname validation reports no alternative certificate subject name for `www.ee.buaa.edu.cn`; a separately probed canonical `ee.buaa.edu.cn` TLS handshake ended unexpectedly. Plain HTTP is not used as a fallback and no TLS verification is disabled. The adapter validates the reviewed category/page/date/article-namespace inputs and then fails closed as `unsupported` before transport with that TLS blocker message, preserving the exact HTTP directory attribution and selected HTTPS candidate. No board/article content, all-college/history/attachment coverage or online capability is claimed until a validated HTTPS source is available.
 ## Artificial Intelligence college announcements
 
 The `iai` adapter binds the official-directory member 人工智能学院 while preserving its exact literal/resolved `http://iai.buaa.edu.cn/` identity. The source is deliberately observed over HTTPS at `https://iai.buaa.edu.cn/`; this is recorded as a separate observation, not an alias or silent protocol upgrade. The retained root declares `index/tzgg.htm` (通知公告), whose `mainBox/listText` direct `li > a + i` rows preserve source order, canonical `YYYY-MM-DD` dates and `/info/1024/<id>.htm` article links. The board's current pagination widget advertises no later ordinal, so page 2 and beyond remain unavailable rather than inferred.

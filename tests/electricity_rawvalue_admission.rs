@@ -9,7 +9,8 @@ fn balance_html(usage: &str) -> String {
 #[test]
 fn chart_object_must_not_be_reinterpreted_as_a_number() {
     let source = balance_html(r#"{"$serde_json::private::RawValue":"0"}"#);
-    let output = parse_balance_fixture(source.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+    let output =
+        parse_balance_fixture(source.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
     assert_eq!(output["result"], "degraded");
     assert!(output["balance"].is_null());
 }
@@ -17,18 +18,22 @@ fn chart_object_must_not_be_reinterpreted_as_a_number() {
 #[test]
 fn directory_object_id_must_not_be_reinterpreted_as_a_number() {
     let source = br#"[{"id":{"$serde_json::private::RawValue":"1"},"identityNo":"synthetic"}]"#;
-    assert!(parse_directory_fixture(source, r#"{"identity_no":"synthetic"}"#).is_err());
+    assert!(
+        parse_directory_fixture(source, r#"{"building":"B","room":"101","meter_no":"M1"}"#)
+            .is_err()
+    );
 }
 
 #[test]
 fn literal_numeric_chart_and_directory_ids_remain_usable() {
     let source = balance_html("0");
-    let output = parse_balance_fixture(source.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
+    let output =
+        parse_balance_fixture(source.as_bytes(), Some("text/html; charset=utf-8")).unwrap();
     assert_eq!(output["result"], "parsed");
     assert_eq!(output["balance"]["history"]["usage_kwh"][0], 0);
     let row = parse_directory_fixture(
-        br#"[{"id":1,"identityNo":"synthetic"}]"#,
-        r#"{"identity_no":"synthetic"}"#,
+        br#"[{"id":1,"building":"B","room":"101","meterNo":"M1"}]"#,
+        r#"{"building":"B","room":"101","meter_no":"M1"}"#,
     )
     .unwrap()
     .unwrap();

@@ -14,7 +14,7 @@ use std::os::unix::{
     ffi::OsStrExt,
     fs::{MetadataExt, OpenOptionsExt},
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const MAX_FIELD: usize = 4096;
@@ -25,7 +25,6 @@ const MAX_SCHEMA: usize = 16 * 1024;
 pub(crate) struct Catalog {
     connection: Connection,
     fingerprint: String,
-    canonical: PathBuf,
     /// Held, not read: keeps the bound descriptor open for the catalog's lifetime.
     #[allow(dead_code)]
     identity: fs::File,
@@ -42,9 +41,12 @@ impl Catalog {
         // the post-open identity check bind this connection to the fd's inode,
         // not to two pathname stats bracketing the SQLite open (rename-swap
         // ABA window). The descriptor stays open for the catalog's lifetime.
+        // O_NONBLOCK prevents a FIFO or device path from hanging this blocking
+        // open before its type can be checked; the regular-file rejection below
+        // still applies to every non-regular file.
         let identity = fs::OpenOptions::new()
             .read(true)
-            .custom_flags(0)
+            .custom_flags(libc::O_NONBLOCK)
             .open(&canonical)
             .map_err(|_| unavailable())?;
         let metadata = identity.metadata().map_err(|_| unavailable())?;
@@ -76,7 +78,6 @@ impl Catalog {
         Ok(Self {
             connection,
             fingerprint: format!("{:x}", hash.finalize()),
-            canonical,
             identity,
         })
     }
@@ -121,17 +122,17 @@ impl Catalog {
     /// can yield a rowid whose current text no longer matches the query.
     /// Re-verify every returned row against a temporary FTS5 table built from
     /// the current content with the same tokenizer, and drop rows that do not
-    /// match. Bounded by the result LIMIT and the page byte limit.
+    /// match. Verification uses an independent in-memory connection: it needs
+    /// no catalog data beyond the already retrieved rows, so it never reopens
+    /// the catalog pathname and a retained snapshot keeps working after the
+    /// file is renamed or rotated. Bounded by the result LIMIT and the page
+    /// byte limit.
     fn verify_phrase(
         &self,
         literal: &str,
         rows: &[(i64, &str, Option<&str>)],
     ) -> Result<Vec<i64>, Error> {
-        let connection = Connection::open_with_flags(
-            &self.canonical,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|_| unavailable())?;
+        let connection = Connection::open_in_memory().map_err(|_| unavailable())?;
         Self::harden(&connection)?;
         connection
             .execute_batch(
@@ -189,62 +190,78 @@ impl Catalog {
             }
         }
         literal.push('"');
-        let mut statement = match after_id {
-            None => self.connection.prepare(
+        // One ordered cursor serves every candidate batch. Ordering by the FTS
+        // rowid lets the index supply its native ascending order, so the scan
+        // streams rowids and visits each candidate row exactly once; a heavily
+        // stale index cannot multiply the sort/scan cost per batch. Ordering
+        // by s.id instead leaves the planner a temporary sort it would redo on
+        // every continuation query, which can exhaust the progress budget.
+        let mut statement = self
+            .connection
+            .prepare(
                 "SELECT s.id,s.asset_id,s.segment_index,s.start_ms,s.end_ms,s.speaker,s.language,s.text
                  FROM transcript_fts JOIN transcript_segment AS s ON transcript_fts.rowid=s.id
                  WHERE transcript_fts MATCH ?1 AND (?2 IS NULL OR s.asset_id COLLATE BINARY=?2)
-                 ORDER BY s.id LIMIT ?3",
-            ),
-            Some(_) => self.connection.prepare(
-                "SELECT s.id,s.asset_id,s.segment_index,s.start_ms,s.end_ms,s.speaker,s.language,s.text
-                 FROM transcript_fts JOIN transcript_segment AS s ON transcript_fts.rowid=s.id
-                 WHERE transcript_fts MATCH ?1 AND (?2 IS NULL OR s.asset_id COLLATE BINARY=?2) AND s.id>?3
-                 ORDER BY s.id LIMIT ?4",
-            ),
-        }
-        .map_err(|_| unavailable())?;
-        let mut rows = match after_id {
-            Some(after_id) => statement.query(params![literal, asset_id, after_id, limit as i64]),
-            None => statement.query(params![literal, asset_id, limit as i64]),
-        }
-        .map_err(|_| unavailable())?;
+                 AND (?3 IS NULL OR s.id>?3)
+                 ORDER BY transcript_fts.rowid",
+            )
+            .map_err(|_| unavailable())?;
+        // Scan candidate batches until `limit` verified rows are collected or
+        // the index is exhausted: stale FTS rows are dropped by verify_phrase,
+        // so applying the SQL limit before verification could report an
+        // incomplete or empty page while unverified candidates remain.
+        let mut rows = statement
+            .query(params![literal, asset_id, after_id])
+            .map_err(|_| unavailable())?;
         let mut result = Vec::new();
         let mut text_bytes = 0usize;
-        while let Some(row) = rows.next().map_err(|_| unavailable())? {
-            let segment_text = text(row, 7, MAX_TEXT)?;
-            text_bytes += segment_text.len();
-            if text_bytes > MAX_PAGE_TEXT {
-                return Err(Error::new(
-                    "unavailable",
-                    "recording segment page exceeds the byte limit; reduce page size",
-                ));
+        loop {
+            // Fetch only the remaining page slots; a smaller final batch or an
+            // exhausted index (short page) ends the scan.
+            let want = limit - result.len();
+            let mut batch = Vec::new();
+            while batch.len() < want {
+                let Some(row) = rows.next().map_err(|_| unavailable())? else {
+                    break;
+                };
+                let segment_text = text(row, 7, MAX_TEXT)?;
+                text_bytes += segment_text.len();
+                if text_bytes > MAX_PAGE_TEXT {
+                    return Err(Error::new(
+                        "unavailable",
+                        "recording segment page exceeds the byte limit; reduce page size",
+                    ));
+                }
+                let start_ms = optional_integer(row, 3)?;
+                let end_ms = optional_integer(row, 4)?;
+                if matches!((start_ms, end_ms), (Some(start), Some(end)) if end < start) {
+                    return Err(invalid_data());
+                }
+                batch.push(Segment {
+                    id: signed_integer(row, 0)?,
+                    asset_id: identifier(row, 1)?,
+                    segment_index: integer(row, 2)?,
+                    start_ms,
+                    end_ms,
+                    speaker: optional_text(row, 5)?,
+                    language: optional_text(row, 6)?,
+                    text: segment_text.to_owned(),
+                });
             }
-            let start_ms = optional_integer(row, 3)?;
-            let end_ms = optional_integer(row, 4)?;
-            if matches!((start_ms, end_ms), (Some(start), Some(end)) if end < start) {
-                return Err(invalid_data());
+            let scanned = batch.len();
+            if !batch.is_empty() {
+                let rows = batch
+                    .iter()
+                    .map(|row| (row.id, row.text.as_str(), row.speaker.as_deref()))
+                    .collect::<Vec<_>>();
+                let kept = self.verify_phrase(&literal, &rows)?;
+                batch.retain(|row| kept.contains(&row.id));
+                result.extend(batch);
             }
-            result.push(Segment {
-                id: signed_integer(row, 0)?,
-                asset_id: identifier(row, 1)?,
-                segment_index: integer(row, 2)?,
-                start_ms,
-                end_ms,
-                speaker: optional_text(row, 5)?,
-                language: optional_text(row, 6)?,
-                text: segment_text.to_owned(),
-            });
+            if result.len() >= limit || scanned < want {
+                return Ok(result);
+            }
         }
-        if !result.is_empty() {
-            let rows = result
-                .iter()
-                .map(|row| (row.id, row.text.as_str(), row.speaker.as_deref()))
-                .collect::<Vec<_>>();
-            let kept = self.verify_phrase(&literal, &rows)?;
-            result.retain(|row| kept.contains(&row.id));
-        }
-        Ok(result)
     }
 
     pub(crate) fn asset(&self, id: &str) -> Result<Option<Asset>, Error> {
@@ -949,5 +966,145 @@ mod tests {
         let rows = catalog.search_segments("needle", None, None, 10).unwrap();
         assert_eq!(rows.iter().map(|row| row.id).collect::<Vec<_>>(), [synced]);
         assert!(rows.iter().all(|row| row.text.contains("needle")));
+    }
+
+    #[test]
+    fn filtered_index_rows_do_not_end_the_verified_page_early() {
+        let fixture = Fixture::new();
+        fixture.asset("a", "transcript", HASH);
+        let stale_first = fixture.segment("a", 0, "old needle term", None, None);
+        let stale_second = fixture.segment("a", 1, "older needle term", None, None);
+        let live_third = fixture.segment("a", 2, "current needle term", None, None);
+        let live_fourth = fixture.segment("a", 3, "current needle tail", None, None);
+        // Upstream writes that skipped the FTS sync triggers leave the index
+        // carrying old text for these rowids; verification drops them.
+        for stale in [stale_first, stale_second] {
+            fixture
+                .db()
+                .execute(
+                    "UPDATE transcript_segment SET text='rewritten entirely fresh' WHERE id=?1",
+                    [stale],
+                )
+                .unwrap();
+        }
+        let catalog = Catalog::open(&fixture.path).unwrap();
+        // Consumer contract: a page plus its pagination row must be filled by
+        // scanning past filtered rows, not by counting index hits alone. The
+        // first index batch holds exactly the two stale rows; continuing must
+        // reach both live segments with no gap.
+        let page = catalog
+            .search_segments("needle", None, None, 2)
+            .unwrap()
+            .iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>();
+        assert_eq!(page, [live_third, live_fourth]);
+        // Keyset resume starts after the last verified row, not after the last
+        // scanned index row.
+        assert_eq!(
+            catalog
+                .search_segments("needle", None, Some(live_third), 1)
+                .unwrap()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            [live_fourth]
+        );
+    }
+
+    #[test]
+    fn stale_index_prefix_still_reaches_first_live_match() {
+        let fixture = Fixture::new();
+        fixture.asset("a", "transcript", HASH);
+        // 20,000 indexed matches in one transaction keeps the setup bounded.
+        let connection = fixture.db();
+        connection
+            .execute_batch("PRAGMA synchronous=OFF; BEGIN;")
+            .unwrap();
+        let mut insert = connection
+            .prepare("INSERT INTO transcript_segment(asset_id,segment_index,text) VALUES('a',?1,'needle')")
+            .unwrap();
+        let mut ids = Vec::new();
+        for index in 0i64..20_000 {
+            insert.execute([index]).unwrap();
+            ids.push(connection.last_insert_rowid());
+        }
+        drop(insert);
+        connection.execute_batch("COMMIT;").unwrap();
+        // Writes that skipped the sync trigger leave 10,000 stale index rows
+        // at the front of the ordered scan; verification drops each one, so
+        // the candidate stream must keep scanning rather than report empty or
+        // restart a sort heavy enough to exhaust the instruction budget.
+        connection
+            .execute(
+                "UPDATE transcript_segment SET text='gone' WHERE id<=?1",
+                [ids[9_999]],
+            )
+            .unwrap();
+        let first_live = ids[10_000];
+        let catalog = Catalog::open(&fixture.path).unwrap();
+        // Contract: the stale prefix is scanned once and the first live match
+        // is returned, not an unavailable error or an empty page.
+        assert_eq!(
+            catalog
+                .search_segments("needle", None, None, 1)
+                .unwrap()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            [first_live]
+        );
+        // Continuation past the last row genuinely exhausts the index.
+        assert!(
+            catalog
+                .search_segments("needle", None, Some(ids[19_999]), 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn retained_snapshot_survives_catalog_path_removal() {
+        let fixture = Fixture::new();
+        fixture.asset("a", "transcript", HASH);
+        let segment = fixture.segment("a", 0, "retained needle snapshot", None, None);
+        let catalog = Catalog::open(&fixture.path).unwrap();
+        // The held inode and its snapshot survive the original pathname going
+        // away entirely; phrase verification must not reopen that path.
+        let rotated = fixture.path.with_file_name("rotated.sqlite");
+        fs::rename(&fixture.path, &rotated).unwrap();
+        assert!(!fixture.path.exists());
+        assert_eq!(
+            catalog
+                .search_segments("needle", None, None, 10)
+                .unwrap()
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            [segment]
+        );
+    }
+
+    #[test]
+    fn special_file_paths_are_rejected_without_blocking() {
+        let fixture = Fixture::new();
+        let fifo = fixture.path.with_file_name("catalog-fifo");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live NUL-terminated path for this test-owned FIFO.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        // With no writer, a blocking open(2) on a FIFO never returns; the
+        // identity open must stay nonblocking so the regular-file check is
+        // actually reached. Assert through a bounded channel rather than
+        // letting a regression hang the test.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let code = Catalog::open(&path).err().map(|error| error.code);
+            let _ = sender.send(code);
+        });
+        let code = receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("catalog open must reject a FIFO without blocking");
+        assert_eq!(code, Some("invalid_input"));
     }
 }

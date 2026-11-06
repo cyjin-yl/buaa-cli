@@ -57,6 +57,7 @@ fn read_input_optional() -> Result<Option<String>, CliError> {
 fn service_error(error: buaa_cli::net::Error) -> CliError {
     let (code, exit) = match error.code {
         "invalid_input" => ("invalid_input", 2),
+        "source_refused" => ("source_refused", 3),
         "unsupported" | "redirect_refused" | "unsupported_encoding" => ("unsupported", 3),
         "auth_latched" | "safety_latched" | "challenge_requires_human" => ("auth_latched", 4),
         "scoped_cookie_unusable" => ("scoped_cookie_unusable", 7),
@@ -247,10 +248,22 @@ fn run_governor(args: &[String]) -> CliResult {
             5,
             "boot review commit requires --offline and exact typed stdin intent".into(),
         )),
+        Some("review-outcome-plan") if args.len() == 1 => {
+            emit(&buaa_cli::governor::review_outcome_plan().map_err(service_error)?)
+        }
+        Some("review-outcome-commit") if args.len() == 2 && args[1] == "--offline" => {
+            let input = read_input()?;
+            emit(&buaa_cli::governor::review_outcome_commit(&input).map_err(service_error)?)
+        }
+        Some("review-outcome-commit") => Err((
+            "permission",
+            5,
+            "outcome review commit requires --offline and exact typed stdin intent".into(),
+        )),
         _ => Err((
             "unsupported",
             3,
-            "expected governor boot-review-plan or boot-review-commit --offline".into(),
+            "expected governor boot-review-plan|boot-review-commit --offline|review-outcome-plan|review-outcome-commit --offline".into(),
         )),
     }
 }
@@ -465,14 +478,24 @@ fn online_flag(args: &[String]) -> Result<bool, CliError> {
     match args.first().map(String::as_str) {
         None => Ok(false),
         Some("--online") if args.len() == 1 => Ok(true),
-        _ => Err(("invalid_input", 2, "expected at most one of --online".into())),
+        _ => Err((
+            "invalid_input",
+            2,
+            "expected at most one of --online".into(),
+        )),
     }
 }
 
 fn run_ihome(args: &[String]) -> CliResult {
     let operation = match args.first().map(String::as_str) {
         Some(operation @ ("list" | "detail")) => operation,
-        _ => return Err(("unsupported", 3, "expected ihome list, detail or session".into())),
+        _ => {
+            return Err((
+                "unsupported",
+                3,
+                "expected ihome list, detail or session".into(),
+            ));
+        }
     };
     let online = online_flag(&args[1..])?;
     let input = Zeroizing::new(read_input()?);
@@ -557,7 +580,7 @@ fn json_input(input: &str) -> Result<Value, CliError> {
 }
 
 fn json_text(value: &Value, key: &str) -> String {
-            value
+    value
         .get(key)
         .and_then(Value::as_str)
         .unwrap_or_default()
@@ -592,12 +615,17 @@ struct CoursegradingStatusInput {
     content_type: Option<Zeroizing<String>>,
 }
 
-fn zeroizing_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Zeroizing<String>, D::Error> {
+fn zeroizing_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Zeroizing<String>, D::Error> {
     <String as serde::Deserialize>::deserialize(deserializer).map(Zeroizing::new)
 }
 
-fn optional_zeroizing_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Zeroizing<String>>, D::Error> {
-    <Option<String> as serde::Deserialize>::deserialize(deserializer).map(|value|value.map(Zeroizing::new))
+fn optional_zeroizing_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Zeroizing<String>>, D::Error> {
+    <Option<String> as serde::Deserialize>::deserialize(deserializer)
+        .map(|value| value.map(Zeroizing::new))
 }
 
 fn run_coursegrading(args: &[String]) -> CliResult {
@@ -640,19 +668,34 @@ fn run_coursegrading(args: &[String]) -> CliResult {
         }
         _ => {
             let input = Zeroizing::new(read_input()?);
-            if !input.trim_start_matches([' ', '\t', '\r', '\n']).starts_with('{') {
-                return Err(("invalid_input", 2, "coursegrading status requires a JSON object".into()));
+            if !input
+                .trim_start_matches([' ', '\t', '\r', '\n'])
+                .starts_with('{')
+            {
+                return Err((
+                    "invalid_input",
+                    2,
+                    "coursegrading status requires a JSON object".into(),
+                ));
             }
-            let value: CoursegradingStatusInput = serde_json::from_str(input.as_str())
-                .map_err(|_| ("invalid_input", 2, "invalid coursegrading status input".into()))?;
-            let bytes = Zeroizing::new(base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                value.body_base64.as_str(),
-            )
-            .map_err(|_| ("invalid_input", 2, "body_base64 must be base64".to_string()))?);
+            let value: CoursegradingStatusInput =
+                serde_json::from_str(input.as_str()).map_err(|_| {
+                    (
+                        "invalid_input",
+                        2,
+                        "invalid coursegrading status input".into(),
+                    )
+                })?;
+            let bytes = Zeroizing::new(
+                base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    value.body_base64.as_str(),
+                )
+                .map_err(|_| ("invalid_input", 2, "body_base64 must be base64".to_string()))?,
+            );
             buaa_cli::coursegrading::parse_status(
                 &bytes,
-                value.content_type.as_ref().map(|value|value.as_str()),
+                value.content_type.as_ref().map(|value| value.as_str()),
             )
         }
     };
@@ -724,7 +767,7 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "departments inventory|retrieve [--online]", "contribution scan", "timetable-pg parse", "smart [--online]", "smart session [--online]", "ihome list|detail [--online]", "ihome session [--online]", "welearn materials|search|fetch|practice [--online]", "aerospace materials|search|fetch|practice [--online]", "enrol [--online]", "evaluation [--online]", "checkin [--online]", "boya [--online]", "drive [--online]", "shuttle [--online]", "electricity [--online]", "os-lab read|plan [--online]", "coursegrading unsupported|probe-https|preview|status [--online]", "physics-experiment [--online]", "physics-reference catalog|retrieve [--online]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "departments inventory|retrieve [--online]", "contribution scan|plan", "governor boot-review|review-outcome-plan|review-outcome-commit", "timetable ics", "timetable session [--online]", "timetable-pg parse", "smart [--online]", "smart session [--online]", "smart token [--online]", "ihome list|detail [--online]", "ihome session [--online]", "welearn materials|search|fetch|practice [--online]", "aerospace materials|search|fetch|practice [--online]", "enrol [--online]", "evaluation [--online]", "checkin [--online]", "boya [--online]", "boya session [--online]", "drive [--online]", "shuttle [--online]", "electricity [--online]", "os-lab read|plan [--online]", "coursegrading unsupported|probe-https|preview|status [--online]", "physics-experiment [--online]", "physics-reference catalog|retrieve [--online]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
             "network_policy": {"default":"offline", "opt_in":NETWORK_OPT_IN, "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
             "help": "recordings subtitles export reads authorized caller-supplied normalized segments, srt/vtt format and absolute new output path from JSON stdin; it is offline and does not verify source, rights or native track association. timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting. 'recordings session --offline' with intent 'RESUME CLASSROOM AUTH' validates durable governor state without sending a request; 'recordings session diagnose --online' submits no credential. Authentication attempts are always admitted — no latch requires clearing; challenges and HTTP 401/403 are reported per request."
         })),
@@ -737,7 +780,7 @@ fn run() -> CliResult {
             "schema_version": 1,
             "commands": command_schemas(),
             "errors":{"stream":"stderr","format":"JSON","fields":["schema_version","error","message"],
-            "exit_codes":{"invalid_input":2,"unsupported":3,"auth_latched":4,"authorization_required":4,"permission":5,"unavailable":7,"scoped_cookie_unusable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
+            "exit_codes":{"invalid_input":2,"source_refused":3,"unsupported":3,"auth_latched":4,"authorization_required":4,"permission":5,"unavailable":7,"scoped_cookie_unusable":7,"rate_limited":8,"conflict":9,"unknown_outcome":9}},
             "network_policy":{"default":"offline","opt_in":NETWORK_OPT_IN,"campus_account_enabled":true,"automatic_authentication_retry":false,"public_official_directory_enabled":true}
         })),
         "timed-input" => {
@@ -877,6 +920,8 @@ fn run() -> CliResult {
         "departments" => run_departments(&args[1..]),
         "smart" if args.get(1).map(String::as_str) == Some("session") =>
             run_json_module(&args[2..], buaa_cli::smart::session),
+        "smart" if args.get(1).map(String::as_str) == Some("token") =>
+            run_json_module(&args[2..], buaa_cli::smart::token),
         "smart" => run_json_module(&args[1..], buaa_cli::smart::read),
         "ihome" if args.get(1).map(String::as_str) == Some("session") =>
             run_json_module(&args[2..], buaa_cli::ihome::session),
@@ -908,6 +953,8 @@ fn run() -> CliResult {
             emit(&output)
         }
         "checkin" => run_json_module(&args[1..], buaa_cli::checkin::run),
+        "boya" if args.get(1).map(String::as_str) == Some("session") =>
+            run_json_module(&args[2..], buaa_cli::boya::session),
         "boya" => run_json_module(&args[1..], buaa_cli::boya::run),
         "drive" => run_json_module(&args[1..], buaa_cli::drive::run),
         "shuttle" => run_json_module(&args[1..], buaa_cli::shuttle::run),
@@ -916,6 +963,11 @@ fn run() -> CliResult {
         "contribution" if args.len() == 2 && args[1] == "scan" => {
             let input = Zeroizing::new(read_input()?);
             let output = buaa_cli::contribution::scan(input.as_str()).map_err(service_error)?;
+            emit(&output)
+        }
+        "contribution" if args.len() == 2 && args[1] == "plan" => {
+            let input = Zeroizing::new(read_input()?);
+            let output = buaa_cli::contribution::plan(input.as_str()).map_err(service_error)?;
             emit(&output)
         }
         "timetable-pg" if args.len() == 2 && args[1] == "parse" => {
@@ -968,6 +1020,8 @@ fn run() -> CliResult {
             }
             emit(&output)
         }
+        "timetable" if args.get(1).map(String::as_str) == Some("session") =>
+            run_json_module(&args[2..], buaa_cli::timetable::session),
         "physics"
             if args.len() == 2
                 && (args[1] == "pendulum" || args[1] == "fit" || args[1] == "type-a") =>

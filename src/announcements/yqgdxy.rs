@@ -8,18 +8,373 @@ use super::{
     ArticleDocument, ListQuery, ListingDocument, ListingEntry, MAX_ENTRIES, MAX_HREF, MAX_TEXT,
     advertised_page_url_document, article_body, bind_college_board, college_directory_attribution,
     college_html, describe_college_surface, element_text, entry_in_scope, failed_contract,
-    html_fallback, inert_element, invalid_article, invalid_list, is_http,
+    inert_element, invalid_article, invalid_list, is_http,
     is_safe_public_fallback_document, parse_iso_date, retrieval, unavailable,
 };
 use crate::net::{
     ArchiveClient, CacheMode, Error, YQGDXY_NOTICES_URL, YQGDXY_ROOT_URL, yqgdxy_path_allowed,
 };
-use scraper::{Html, Selector};
+use scraper::{Html, Node, Selector};
 use serde_json::{Value, json};
 use url::Url;
 
 const LISTED_ROOT_URL: &str = "http://yqgdxy.buaa.edu.cn/";
 pub(super) const PUBLISHER: &str = "北京航空航天大学仪器科学与光电工程学院";
+
+/// Decodes only bounded `&#N;`/`&#xN;` numeric references; malformed or named
+/// entities pass through literally. Marker bytes hidden behind a numeric
+/// reference stay reachable to the source scan through this decode.
+fn decode_numeric_entities(source: &str) -> Option<String> {
+    if !source.contains("&#") {
+        return None;
+    }
+    let mut decoded = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(start) = rest.find("&#") {
+        decoded.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let (digits, hex) = match after.strip_prefix(['x', 'X']) {
+            Some(tail) => (tail, true),
+            None => (after, false),
+        };
+        let end = digits
+            .find(|c: char| {
+                if hex {
+                    !c.is_ascii_hexdigit()
+                } else {
+                    !c.is_ascii_digit()
+                }
+            })
+            .unwrap_or(digits.len());
+        if end == 0 || end == digits.len() || digits.as_bytes()[end] != b';' {
+            decoded.push_str("&#");
+            rest = after;
+            continue;
+        }
+        match u32::from_str_radix(&digits[..end], if hex { 16 } else { 10 })
+            .ok()
+            .and_then(char::from_u32)
+        {
+            Some(c) => decoded.push(c),
+            None => decoded.push_str(&rest[start..start + 2 + (hex as usize) + end + 1]),
+        }
+        rest = &digits[end + 1..];
+    }
+    decoded.push_str(rest);
+    Some(decoded)
+}
+
+/// Whether the exact source bytes may leave the adapter or enter the cache.
+/// The shared element scan misses credential markers inside inert
+/// script/style/template payloads, comments and discarded raw attributes, so
+/// the whole body is screened literally and after numeric-entity decoding.
+/// Credential-shaped keys that make a `key=value`, `key:`, name/id attribute
+/// or JSON member an actual credential field rather than prose. Substring
+/// needles cover compound names (csrf_token, requestVerificationToken); the
+/// exact set keeps short words like `cas` or `sso` from matching inside
+/// unrelated tokens like `cascade` or `association`.
+fn credentialish_key(key: &str) -> bool {
+    const CONTAINS: &[&str] = &[
+        "password",
+        "passwd",
+        "passphrase",
+        "csrf",
+        "xsrf",
+        "token",
+        "ticket",
+        "secret",
+        "credential",
+        "captcha",
+        "session",
+        "authenticity",
+        "verification",
+        "antiforgery",
+        "apikey",
+        "accesskey",
+        "secretkey",
+        "privatekey",
+        "passcode",
+        "passkey",
+        "login",
+        "signin",
+        "oauth",
+        "saml",
+        "jwt",
+        "turnstile",
+        "challenge",
+    ];
+    const EXACT: &[&str] = &[
+        "auth",
+        "authentication",
+        "authorization",
+        "authorize",
+        "login",
+        "signin",
+        "signon",
+        "sso",
+        "cas",
+        "user",
+        "username",
+        "userid",
+        "uid",
+        "account",
+        "pwd",
+        "bearer",
+        "otp",
+        "totp",
+        "sid",
+        "jsessionid",
+        "cookie",
+    ];
+    let compact: String = key
+        .bytes()
+        .filter(|byte| byte.is_ascii_alphanumeric())
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect();
+    if compact.is_empty() {
+        return false;
+    }
+    CONTAINS.iter().any(|needle| compact.contains(needle))
+        || EXACT.contains(&compact.as_str())
+        || key
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .map(str::to_ascii_lowercase)
+            .any(|part| EXACT.contains(&part.as_str()))
+}
+
+/// The leading unquoted-or-quoted value token after a `key=` or `key:` marker.
+fn value_token(rest: &str) -> &str {
+    let value = rest.trim_start_matches(['"', '\'']);
+    let end = value
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .unwrap_or(value.len());
+    &value[..end]
+}
+
+/// A `key=` assignment carries a credential field when the key is
+/// credential-named and a value follows, when name/id carries a credential
+/// field identity, or when type selects a password control.
+fn credentialish_assignment(key: &str, rest: &str) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    if key.eq_ignore_ascii_case("name") || key.eq_ignore_ascii_case("id") {
+        let value = value_token(rest);
+        return !value.is_empty() && credentialish_key(value);
+    }
+    if key.eq_ignore_ascii_case("type") {
+        return value_token(rest).eq_ignore_ascii_case("password");
+    }
+    credentialish_key(key)
+        && (!value_token(rest).is_empty()
+            || rest
+                .chars()
+                .next()
+                .is_some_and(|c| matches!(c, '{' | '[' | '(')))
+}
+
+/// Literal token shapes that mark live credential material: `Bearer`/`Basic`
+/// auth values, JWT segments and CAS `ST-` service tickets.
+fn known_token_prefix(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let token_run = |start: usize| -> usize {
+        bytes
+            .get(start..)
+            .unwrap_or(&[])
+            .iter()
+            .take_while(|c| {
+                c.is_ascii_alphanumeric() || matches!(**c, b'_' | b'-' | b'.' | b'~' | b'=')
+            })
+            .count()
+    };
+    let boundary = |at: usize| at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+    for keyword in ["Bearer ", "Basic ", "Token "] {
+        for (at, _) in source.match_indices(keyword) {
+            if boundary(at) && token_run(at + keyword.len()) >= 8 {
+                return true;
+            }
+        }
+    }
+    for (at, _) in source.match_indices("eyJ") {
+        if boundary(at) && token_run(at) >= 16 {
+            return true;
+        }
+    }
+    for (at, _) in source.match_indices("ST-") {
+        if !boundary(at) {
+            continue;
+        }
+        let digits = bytes[at + 3..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        let tail = at + 3 + digits;
+        if digits >= 4
+            && tail < bytes.len()
+            && bytes[tail] == b'-'
+            && token_run(tail + 1) >= 8
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// A credential-bearing construct anywhere in the source bytes, including
+/// inert script bodies, comments and raw attributes: a credential-named
+/// `key=` or `key:` field with a value, a JSON/object `"key":` member, a
+/// name/id/type attribute carrying credential semantics, or a literal token
+/// shape. Prose words alone never match: every pattern requires a value or
+/// structured field, so "without authentication signals" stays safe.
+fn credential_construct(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut at = 0;
+    while at < n {
+        match bytes[at] {
+            b'"' | b'\'' => {
+                let quote = bytes[at];
+                let mut end = at + 1;
+                while end < n && bytes[end] != quote {
+                    if bytes[end] == b'\\' {
+                        end += 1;
+                    }
+                    end += 1;
+                }
+                if end >= n {
+                    at += 1;
+                    continue;
+                }
+                let inner = &source[at + 1..end];
+                let rest = source[end + 1..].trim_start();
+                if (rest.starts_with(':')
+                    && rest[1..]
+                        .trim_start()
+                        .chars()
+                        .next()
+                        .is_some_and(|c| !matches!(c, ',' | '}' | ']' | ':'))
+                    && credentialish_key(inner))
+                    || credential_construct(inner)
+                {
+                    return true;
+                }
+                at = end + 1;
+            }
+            b'=' | b':' => {
+                let mut start = at;
+                while start > 0 && bytes[start - 1].is_ascii_whitespace() {
+                    start -= 1;
+                }
+                let key_end = start;
+                while start > 0
+                    && (bytes[start - 1].is_ascii_alphanumeric()
+                        || bytes[start - 1] == b'_'
+                        || bytes[start - 1] == b'-')
+                {
+                    start -= 1;
+                }
+                let key = &source[start..key_end];
+                let rest = source[at + 1..].trim_start();
+                if bytes[at] == b'=' {
+                    if credentialish_assignment(key, rest) {
+                        return true;
+                    }
+                } else if source[key_end..at]
+                    .bytes()
+                    .all(|b| b.is_ascii_whitespace())
+                    && credentialish_key(key)
+                    && rest
+                        .chars()
+                        .next()
+                        .is_some_and(|c| {
+                            c.is_ascii_digit() || matches!(c, '"' | '\'' | '{' | '[')
+                        })
+                {
+                    return true;
+                }
+                at += 1;
+            }
+            _ => at += 1,
+        }
+    }
+    known_token_prefix(source)
+}
+
+/// DOM decoding resolves entities the literal scan cannot see, so credential
+/// field identities hidden behind named entities in name/id/type attribute
+/// values are screened a second time.
+fn credential_dom_attrs(document: &Html) -> bool {
+    document
+        .tree
+        .root()
+        .descendants()
+        .any(|node| match node.value() {
+            Node::Element(element) => element.attrs.iter().any(|(name, value)| {
+                let attr = name.local.as_ref();
+                if attr.eq_ignore_ascii_case("type") {
+                    return value.trim().eq_ignore_ascii_case("password");
+                }
+                (attr.eq_ignore_ascii_case("name") || attr.eq_ignore_ascii_case("id"))
+                    && credentialish_key(value)
+            }),
+            _ => false,
+        })
+}
+
+/// Whether the exact source bytes may leave the adapter or enter the cache.
+/// The shared element scan misses credential constructs inside inert
+/// script/style/template payloads, comments and discarded raw attributes, so
+/// the whole body is screened literally and after numeric-entity decoding;
+/// a DOM pass catches named-entity-obfuscated field attributes. Ordinary
+/// prose mentioning authentication, login, CAS or CSRF is not a construct
+/// and stays exportable.
+fn export_safe_body(bytes: &[u8]) -> bool {
+    let Ok(source) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    if credential_construct(source)
+        || decode_numeric_entities(source)
+            .is_some_and(|decoded| credential_construct(&decoded))
+    {
+        return false;
+    }
+    !credential_dom_attrs(&Html::parse_document(source))
+}
+
+/// The shared degraded-evidence envelope with original-byte export gated on
+/// the source-text marker scan. A structurally safe drifted page keeps its
+/// exact bytes, hash and length; a body carrying credential-named fields or
+/// markers in inert/comment text publishes no bytes and no header values.
+fn html_fallback(
+    response: &crate::net::Response,
+    output_type: &str,
+    college: &str,
+    reason: &str,
+) -> Value {
+    if export_safe_body(&response.body) {
+        let mut value = super::html_fallback(response, output_type, college, reason);
+        value["raw_withheld"] = json!(false);
+        value["raw_withheld_reason"] = Value::Null;
+        return value;
+    }
+    let mut provenance = retrieval(response);
+    provenance["http"] =
+        json!({"status": response.status, "headers": {}, "headers_withheld": true});
+    json!({
+        "schema_version": 1,
+        "type": output_type,
+        "result": "fallback",
+        "college": college,
+        "raw_html": Value::Null,
+        "raw_withheld": true,
+        "raw_withheld_reason": "source_screening_refused",
+        "raw_html_sha256": response.sha256,
+        "content_type": "text/html",
+        "body_byte_length": response.body.len(),
+        "fallback_reason": reason,
+        "retrieval": provenance,
+    })
+}
 
 fn plain_url(url: &Url) -> bool {
     url.scheme() == "https"
@@ -68,11 +423,15 @@ pub(super) fn surface(mode: CacheMode, page: &str) -> Result<Value, Error> {
         )?;
     }
     let target = Url::parse(raw).map_err(|_| unavailable())?;
-    client
-        .with_cache_mode(mode)
-        .get(&target, false, |response| {
+    client.with_cache_mode(mode).get_with_archive_status_and_persistence(
+        &target,
+        false,
+        |_, _| false,
+        |_, response| export_safe_body(&response.body),
+        |response| {
             describe_college_surface(response, "yqgdxy", attribution)
-        })
+        },
+    )
 }
 
 /// Parse the source-ordered `nymain/ny-right/text-list` view.
@@ -170,21 +529,24 @@ fn listing_url(client: &ArchiveClient, page: u32) -> Result<Url, Error> {
     if page == 1 {
         return Ok(latest);
     }
-    let result: Result<Url, Error> = client.get(&latest, false, |response| {
-        let document = college_html(response)?;
-        let selected = advertised_page_url_document(
-            &document,
-            &latest,
-            page,
-            "div.nymain > div.ny-right > div.text-list > div.pagination span.p_no a[href]",
-            |url| plain_url(url) && url.path().starts_with("/tzgg/"),
-        );
-        if selected.is_err() && !is_safe_public_fallback_document(response, &document) {
-            return Err(unavailable());
-        }
-        Ok(selected)
-    })?;
-    result
+    client.get_with_archive_status_and_persistence(
+        &latest,
+        false,
+        |_, _| false,
+        |_, response| export_safe_body(&response.body),
+        |response| {
+            let document = college_html(response)?;
+            super::refuse_unsafe_listing(response, &document)?;
+            let selected = advertised_page_url_document(
+                &document,
+                &latest,
+                page,
+                "div.nymain > div.ny-right > div.text-list > div.pagination span.p_no a[href]",
+                |url| plain_url(url) && url.path().starts_with("/tzgg/"),
+            );
+            Ok(selected)
+        },
+    )?
 }
 
 pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
@@ -215,9 +577,12 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
         &mut attribution,
     )?;
     let target = listing_url(&client, page)?;
-    client
-        .with_cache_mode(mode)
-        .get(&target, false, |response| {
+    client.with_cache_mode(mode).get_with_archive_status_and_persistence(
+        &target,
+        false,
+        |_, _| false,
+        |_, response| export_safe_body(&response.body),
+        |response| {
             let html = college_html(response)?;
             let document = match parse_listing(&html, &target) {
                 Ok(document) => document,
@@ -234,6 +599,7 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
                 }
                 Err(error) => return Err(error),
             };
+            super::refuse_unsafe_listing(response, &html)?;
             let entries: Vec<_> = document
                 .entries
                 .iter()
@@ -263,7 +629,8 @@ pub(super) fn list(mode: CacheMode, query: &ListQuery) -> Result<Value, Error> {
                 },
                 "retrieval":retrieval(response)
             }))
-        })
+        },
+    )
 }
 
 pub(super) fn article(mode: CacheMode, raw: &str, source_page: u32) -> Result<Value, Error> {
@@ -295,58 +662,74 @@ pub(crate) fn article_with_client(
         &mut attribution,
     )?;
     let source = listing_url(&client, source_page)?;
-    let listing_result: Result<Value, Error> = client.get(&source, false, |response| {
-        let html = college_html(response)?;
-        let document = match parse_listing(&html, &source) {
-            Ok(document) => document,
-            Err(_) if is_safe_public_fallback_document(response, &html) => {
-                return Ok(Ok(html_fallback(
-                    response,
-                    "announcements_list",
-                    "yqgdxy",
-                    "yqgdxy_listing_selector_contract",
+    let listing_result: Result<Value, Error> = client.get_with_archive_status_and_persistence(
+        &source,
+        false,
+        |_, _| false,
+        |_, response| export_safe_body(&response.body),
+        |response| {
+            let html = college_html(response)?;
+            let document = match parse_listing(&html, &source) {
+                Ok(document) => document,
+                Err(_) if is_safe_public_fallback_document(response, &html) => {
+                    return Ok(Ok(html_fallback(
+                        response,
+                        "announcements_list",
+                        "yqgdxy",
+                        "yqgdxy_listing_selector_contract",
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
+            super::refuse_unsafe_listing(response, &html)?;
+            if !document
+                .entries
+                .iter()
+                .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
+            {
+                return Ok(Err(Error::new(
+                    "unsupported",
+                    "retained notice page does not declare the selected Yqgdxy article",
                 )));
             }
-            Err(error) => return Err(error),
-        };
-        super::refuse_unsafe_listing(response, &html)?;
-        if !document
-            .entries
-            .iter()
-            .any(|entry| entry.resolved_http_url.as_deref() == Some(target.as_str()))
-        {
-            return Ok(Err(Error::new(
-                "unsupported",
-                "retained notice page does not declare the selected Yqgdxy article",
-            )));
-        }
-        Ok(Ok(retrieval(response)))
-    })?;
+            Ok(Ok(retrieval(response)))
+        },
+    )?;
     let listing = listing_result?;
     if listing.get("result").and_then(Value::as_str) == Some("fallback") {
         return Err(Error::new(
             "unavailable",
-            "retained Yqgdxy notice page could not be parsed; the admitted board snapshot was retained for offline repair",
+            if listing["raw_withheld"] == true {
+                "retained Yqgdxy notice page could not be parsed and its credential-bearing bytes were withheld without retention"
+            } else {
+                "retained Yqgdxy notice page could not be parsed; the admitted board snapshot was retained for offline repair"
+            },
         ));
     }
-    client.with_cache_mode(mode).get(target, false, |response| {
-        let html = college_html(response)?;
-        let mut output = match normalize(response, &html) {
-            Ok(value) => value,
-            Err(_) if is_safe_public_fallback_document(response, &html) => html_fallback(
-                response,
-                "announcements_article",
-                "yqgdxy",
-                "yqgdxy_article_selector_contract",
-            ),
-            Err(error) => return Err(error),
-        };
-        output["publisher"] = json!(PUBLISHER);
-        output["college"] = json!("yqgdxy");
-        output["directory_attribution"] = attribution;
-        output["source_listing"] = listing;
-        Ok(output)
-    })
+    client.with_cache_mode(mode).get_with_archive_status_and_persistence(
+        target,
+        false,
+        |_, _| false,
+        |_, response| export_safe_body(&response.body),
+        |response| {
+            let html = college_html(response)?;
+            let mut output = match normalize(response, &html) {
+                Ok(value) => value,
+                Err(_) if is_safe_public_fallback_document(response, &html) => html_fallback(
+                    response,
+                    "announcements_article",
+                    "yqgdxy",
+                    "yqgdxy_article_selector_contract",
+                ),
+                Err(error) => return Err(error),
+            };
+            output["publisher"] = json!(PUBLISHER);
+            output["college"] = json!("yqgdxy");
+            output["directory_attribution"] = attribution;
+            output["source_listing"] = listing;
+            Ok(output)
+        },
+    )
 }
 
 fn normalize(response: &crate::net::Response, document: &Html) -> Result<Value, Error> {
@@ -455,6 +838,8 @@ fn parse_article_with_completeness(
 mod tests {
     use super::*;
     use crate::net::{CacheStatus, Response};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 
@@ -642,5 +1027,141 @@ mod tests {
         assert!(!plain_url(
             &Url::parse("https://other.example/info/1053/1.htm").unwrap()
         ));
+    }
+
+    fn listing_fixture(controls: &str) -> String {
+        format!(
+            r#"<title>Fixture</title>{controls}<div class="nymain"><div class="ny-right"><div class="text-list"><ul><li><a href="/info/1053/42.htm">Fixture notice</a><span>2026-10-21</span></li></ul></div></div></div>"#
+        )
+    }
+
+    #[test]
+    fn successful_listing_with_credential_control_is_refused() {
+        // A listing whose rows parse cleanly is still an authentication-bearing
+        // page when it carries a credential control, so the snapshot must be
+        // refused rather than retained or reported as a successful listing.
+        let source = response(
+            YQGDXY_NOTICES_URL,
+            &listing_fixture(
+                r#"<form><input type="hidden" name="csrf_token" value="synthetic-fixture"></form>"#,
+            ),
+        );
+        let document = college_html(&source).unwrap();
+        assert!(parse_listing(&document, &Url::parse(YQGDXY_NOTICES_URL).unwrap()).is_ok());
+        assert!(super::super::refuse_unsafe_listing(&source, &document).is_err());
+
+        // The same page without the credential control is a public listing.
+        let public = response(YQGDXY_NOTICES_URL, &listing_fixture(""));
+        let document = college_html(&public).unwrap();
+        assert!(parse_listing(&document, &Url::parse(YQGDXY_NOTICES_URL).unwrap()).is_ok());
+        assert!(super::super::refuse_unsafe_listing(&public, &document).is_ok());
+    }
+
+    #[test]
+    fn unparseable_page_with_credential_bytes_withholds_source_body() {
+        // A parse failure on a page that carries a credential-named field in
+        // inert script bytes must still not export the source body to
+        // consumers, and the response must not become a new cached snapshot.
+        const BODY: &[u8] = br#"<title>Fixture</title><script type="text/javascript">window.site = {"csrf_token":"synthetic-fixture-token"};</script><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned listing</a></li></ul></div>"#;
+        let source = response(YQGDXY_NOTICES_URL, std::str::from_utf8(BODY).unwrap());
+        let document = college_html(&source).unwrap();
+        assert!(parse_listing(&document, &Url::parse(YQGDXY_NOTICES_URL).unwrap()).is_err());
+        // Structurally safe: the credential bytes sit inside an inert script,
+        // so the failure takes the fallback branch rather than a refusal.
+        assert!(super::super::refuse_unsafe_listing(&source, &document).is_ok());
+        let output = html_fallback(
+            &source,
+            "announcements_list",
+            "yqgdxy",
+            "yqgdxy_listing_selector_contract",
+        );
+        assert_eq!(output["result"], "fallback");
+        // Consumer-visible withheld bytes: no field may carry the source body.
+        assert!(output["raw_html"].is_null());
+        let encoded_body = STANDARD.encode(BODY);
+        assert!(
+            !output.to_string().contains(encoded_body.as_str()),
+            "withheld source body must not appear in the emitted output"
+        );
+        assert!(output["body_byte_length"].is_number());
+
+        // An equally safe parse failure without credential bytes preserves the
+        // exact source body for offline repair.
+        const PUBLIC: &[u8] = br#"<title>Fixture</title><script type="text/javascript">window.site = {"theme":"light"};</script><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned listing</a></li></ul></div>"#;
+        let public = response(YQGDXY_NOTICES_URL, std::str::from_utf8(PUBLIC).unwrap());
+        let document = college_html(&public).unwrap();
+        assert!(parse_listing(&document, &Url::parse(YQGDXY_NOTICES_URL).unwrap()).is_err());
+        assert!(super::super::refuse_unsafe_listing(&public, &document).is_ok());
+        let output = html_fallback(
+            &public,
+            "announcements_list",
+            "yqgdxy",
+            "yqgdxy_listing_selector_contract",
+        );
+        assert_eq!(output["result"], "fallback");
+        assert_eq!(
+            STANDARD
+                .decode(output["raw_html"].as_str().unwrap())
+                .unwrap()
+                .as_slice(),
+            PUBLIC
+        );
+    }
+
+    #[test]
+    fn prose_time_colons_stay_exportable_while_token_fields_withhold() {
+        // A credentialish word separated from the colon by prose words is not
+        // a field: "session 将于 19:00" keeps exact bytes. An adjacent
+        // unquoted token field with a value still withholds the body.
+        const PROSE: &[u8] = r#"<title>Fixture</title><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned</a></li></ul></div><p>第三期 session 将于 19:00 开始</p>"#.as_bytes();
+        let prose = response(YQGDXY_NOTICES_URL, std::str::from_utf8(PROSE).unwrap());
+        let output = html_fallback(
+            &prose,
+            "announcements_list",
+            "yqgdxy",
+            "yqgdxy_listing_selector_contract",
+        );
+        assert_eq!(
+            STANDARD
+                .decode(output["raw_html"].as_str().unwrap())
+                .unwrap()
+                .as_slice(),
+            PROSE
+        );
+
+        const FIELD: &[u8] = br#"<title>Fixture</title><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned</a></li></ul></div><script>var s = {token : "synthetic-fixture"};</script>"#;
+        let field = response(YQGDXY_NOTICES_URL, std::str::from_utf8(FIELD).unwrap());
+        let output = html_fallback(
+            &field,
+            "announcements_list",
+            "yqgdxy",
+            "yqgdxy_listing_selector_contract",
+        );
+        assert!(output["raw_html"].is_null());
+
+        const COMPACT: &[u8] = br#"<title>Fixture</title><div class="notices"><ul><li><a href="/info/1053/42.htm">Unowned</a></li></ul></div><script>var s = {token:"x"};</script>"#;
+        let compact = response(YQGDXY_NOTICES_URL, std::str::from_utf8(COMPACT).unwrap());
+        assert!(
+            html_fallback(
+                &compact,
+                "announcements_list",
+                "yqgdxy",
+                "yqgdxy_listing_selector_contract",
+            )["raw_html"]
+                .is_null()
+        );
+
+        for whitespace in ["\n", "\r\n"] {
+            let body = format!(
+                "<title>Fixture</title><div class=\"notices\"><ul><li><a href=\"/info/1053/42.htm\">Unowned</a></li></ul></div><script>var s = {{token{whitespace}: \"x\"}};</script>"
+            );
+            let output = html_fallback(
+                &response(YQGDXY_NOTICES_URL, &body),
+                "announcements_list",
+                "yqgdxy",
+                "yqgdxy_listing_selector_contract",
+            );
+            assert!(output["raw_html"].is_null(), "{whitespace:?} gap must withhold");
+        }
     }
 }
