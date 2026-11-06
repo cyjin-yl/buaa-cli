@@ -276,7 +276,7 @@ fn credential_construct(source: &str) -> bool {
                     }
                 } else if source[key_end..at]
                     .bytes()
-                    .all(|b| matches!(b, b' ' | b'\t'))
+                    .all(|b| b.is_ascii_whitespace())
                     && credentialish_key(key)
                     && rest
                         .chars()
@@ -1136,5 +1136,19 @@ mod tests {
             "shenyuan_listing_selector_contract",
         );
         assert!(compact["raw_html"].is_null());
+
+        for whitespace in ["\n", "\r\n"] {
+            let body = format!(
+                "{}<script>var s = {{token{whitespace}: \"x\"}};</script>",
+                "<title>通知公告</title><section class=\"n_zhuanti\"><div id=\"tab_a2\"><ul class=\"list_box_03s\"><li><a class=\"a\" href=\"../info/1083/42.htm\">Fixture</a></li></ul></div></section>",
+            );
+            let output = super::html_fallback(
+                &listing_response(&body),
+                "announcements_list",
+                "shenyuan",
+                "shenyuan_listing_selector_contract",
+            );
+            assert!(output["raw_html"].is_null(), "{whitespace:?} gap must withhold");
+        }
     }
 }

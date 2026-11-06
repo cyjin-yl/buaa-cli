@@ -275,7 +275,7 @@ fn credential_construct(source: &str) -> bool {
                     }
                 } else if source[key_end..at]
                     .bytes()
-                    .all(|b| matches!(b, b' ' | b'\t'))
+                    .all(|b| b.is_ascii_whitespace())
                     && credentialish_key(key)
                     && rest
                         .chars()
@@ -1220,5 +1220,19 @@ mod tests {
             "zfai_listing_selector_contract",
         );
         assert!(compact["raw_html"].is_null());
+
+        for whitespace in ["\n", "\r\n"] {
+            let body = format!(
+                "{}<script>var s = {{token{whitespace}: \"x\"}};</script>",
+                "<title>信息公告</title><div class=\"news\"><ul class=\"list12\"><li><a class=\"a\" href=\"info/1196/42.htm\">Fixture</a></li></ul></div>",
+            );
+            let output = super::html_fallback(
+                &listing_response(&body),
+                "announcements_list",
+                "zfai",
+                "zfai_listing_selector_contract",
+            );
+            assert!(output["raw_html"].is_null(), "{whitespace:?} gap must withhold");
+        }
     }
 }

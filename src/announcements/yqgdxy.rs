@@ -281,7 +281,7 @@ fn credential_construct(source: &str) -> bool {
                     }
                 } else if source[key_end..at]
                     .bytes()
-                    .all(|b| matches!(b, b' ' | b'\t'))
+                    .all(|b| b.is_ascii_whitespace())
                     && credentialish_key(key)
                     && rest
                         .chars()
@@ -1150,5 +1150,18 @@ mod tests {
             )["raw_html"]
                 .is_null()
         );
+
+        for whitespace in ["\n", "\r\n"] {
+            let body = format!(
+                "<title>Fixture</title><div class=\"notices\"><ul><li><a href=\"/info/1053/42.htm\">Unowned</a></li></ul></div><script>var s = {{token{whitespace}: \"x\"}};</script>"
+            );
+            let output = html_fallback(
+                &response(YQGDXY_NOTICES_URL, &body),
+                "announcements_list",
+                "yqgdxy",
+                "yqgdxy_listing_selector_contract",
+            );
+            assert!(output["raw_html"].is_null(), "{whitespace:?} gap must withhold");
+        }
     }
 }
