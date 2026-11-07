@@ -1237,8 +1237,9 @@ pub(crate) fn session_with_network(
     let prepared = cas::authenticate_service(&mut lease, &client, CasService::Gsmis, credentials)
         .and_then(|mut session| {
             let url = url::Url::parse(TIMETABLE_URL).map_err(|_| session_invalid())?;
+            let init_url = url::Url::parse(TIMETABLE_INIT_URL).map_err(|_| session_invalid())?;
             let (cookie, expiry) = session.cookie_header(&url)?;
-            let cookie = cookie.ok_or_else(|| {
+            cookie.ok_or_else(|| {
                 error(
                     "auth_latched",
                     "the timetable session cookie is missing; no read was sent",
@@ -1251,6 +1252,13 @@ pub(crate) fn session_with_network(
                     "the timetable cookie expired before initialization; no request was sent",
                 ));
             }
+            let (cookie, _) = session.cookie_header(&init_url)?;
+            let cookie = cookie.ok_or_else(|| {
+                error(
+                    "auth_latched",
+                    "the timetable initialization cookie is missing; no initialization was sent",
+                )
+            })?;
             let init = session_request(&client, TIMETABLE_INIT_URL, &cookie)
                 .form(&[("XH", "")])
                 .timeout(std::time::Duration::from_secs(45))
@@ -1287,11 +1295,11 @@ pub(crate) fn session_with_network(
                 (Some(value), None) => value.to_str().ok().map(str::to_owned),
                 _ => None,
             };
-            session.absorb_gsmis_headers(&url, init.headers())?;
             initialization_observed = Some((init_status, init_retry.clone(), init_challenge));
             lease
                 .observe_http_many(init_status, init.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()), init_challenge)
                 .map_err(|_| error("governor_error", "cannot persist timetable initialization"))?;
+            session.absorb_gsmis_headers(&init_url, init.headers())?;
             let mut init_body = Zeroizing::new(Vec::new());
             init.take(SESSION_BODY_LIMIT + 1)
                 .read_to_end(&mut init_body)
