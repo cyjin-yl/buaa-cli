@@ -337,9 +337,15 @@
     {
       "id": "smart",
       "title": "Smart BUAA services",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Typed discovery and supported service reads; exams, rooms, library seats, study rooms and sunlight check-in individually gated; no bogus attendance.",
       "evidence": {
+        "live_reads_2026_11_06": {
+          "scope": "Classrooms and library premises selected reads only, at commit 38c7ba78e0e867495dfc19556474afe922f633cb plus the documentation-only successor.",
+          "observed": "Owner-authorized protected-stdin CAS sessions returned result=ok, network_performed=true, source=network and the selected service identities for classrooms and library.",
+          "cause_and_repair": "The sign-on form's relative action drops the page query under RFC3986 resolution. Preserve its service parameter and revalidate the result against pinned_login_route.",
+          "limits": "Exams, cgyy and running are caller-token reads and were not exercised; full discovery, cache behavior, writes and attendance remain unverified. The result is a bounded live read, not complete Smart acceptance."
+        },
         "candidate_offline": "Synthetic cases exercised reserved RawValue-marker refusal and ordinary controls. Normalized numeric credential echoes were reproduced and withheld; generated HTTP status no longer masks a session denial, and a 2,001-number allocation regression passed after a length guard. Scoped source review found no further issue.",
         "session_offline_2026_11_01": {
           "command": "buaa smart session [--online] with protected JSON stdin",
@@ -485,7 +491,7 @@
     {
       "id": "timetable-pg",
       "title": "Postgraduate timetable/ICS",
-      "status": "partial-offline",
+      "status": "partial-live-unverified",
       "acceptance": "Postgraduate timetable contract verified from a real GSMIS xskb response, plus standards-compliant ICS.",
       "sources": [
         "https://github.com/roife/BUAAIcsGen",
@@ -495,6 +501,7 @@
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
       ],
       "evidence": {
+        "degraded_read_2026_11_06": "After service-parameter preservation, one owner-authorized CAS session reached the GSMIS xskb endpoint, which returned HTTP 403 with a text/html body. The response was withheld as response_safety_unreviewed; no schedule rows or live-derived ICS were obtained. This is degraded live evidence, not timetable acceptance.",
         "offline_observation_2026_10_31": {
           "command": "buaa timetable-pg parse with an empty object",
           "observed": "invalid_input exit 2: the parser requires an operator-supplied timetable payload",
@@ -551,9 +558,10 @@
     {
       "id": "boya",
       "title": "Boya browse/enrol/drop/check/status",
-      "status": "partial-offline",
+      "status": "partial-live-unverified",
       "acceptance": "Paginated reads; confirmed owner-present mutations and status reconciliation.",
       "evidence": {
+        "degraded_read_2026_11_06": "After service-parameter preservation, the owner-authorized session reached queryStudentSemesterCourseByPage and returned upstream_error with zero entries and complete=false. No course list, pagination or mutation was accepted. This is a server-side business failure, not service acceptance.",
         "candidate_offline": "Synthetic AES-encrypted responses reproduced an unnecessary token:null fallback, decrypted scalar credential echoes and generated-null false positives. Post-fix cases passed with missing-versus-explicit-null, ordinary, upstream-error and denial controls; scoped source review found no further issue.",
         "json_string_envelope_2026_11_02": "Pinned MIT public UBAA LocalBykcApi.kt at e8a397fcb35a68147eee65a94c66ffb84e2f09fe lines 478-482 admits raw ciphertext or a JSON string. Two quoted-response regressions failed before repair while the raw-wire control passed. After repair, 25 Boya library cases, two focused CLI cases and a separate native consumer passed: raw/quoted source preservation, original-wire fallback and sensitive ciphertext withholding. Only the quoted form is decoded into zeroizing storage; raw ciphertext stays borrowed. Fallback original bytes, length and SHA-256 bind the unchanged wire body. No new endpoint, authentication retry or live compatibility claim.",
         "remaining": "Current response contract, authorized session, complete pagination and owner-present mutation/postcondition are unverified. Synthetic encrypted data is not a live response.",
@@ -641,9 +649,14 @@
     {
       "id": "ihome",
       "title": "ihome announcements",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Incremental dated full text, exact source and attachments.",
       "evidence": {
+        "live_read_2026_11_06": {
+          "scope": "One list page at the default page size, using owner-authorized protected-stdin CAS at commit 38c7ba78e0e867495dfc19556474afe922f633cb plus the documentation-only successor.",
+          "observed": "result=entries and entry_count=20; the fixed service parameter allowed the CAS handoff to reach the list read.",
+          "limits": "Detail, attachments, incremental completeness, persistence and writes are not established by this read. An earlier authorized page at limit=10 genuinely contained zero entries; no empty-history claim follows from either single page."
+        },
         "prior_safety_offline": "Four synthetic integration cases and a separate native consumer exercised literal JSON and session-safety facts; scoped source review found no new concrete issue.",
         "candidate_offline": "2026-11-01: six source-protocol regressions failed before repair and passed after; the expanded iHome suite passed 60 offline cases. Twelve actual cache-only CLI scenarios and emitted schema preserved untitled records, positive business admission, safe fallback originals, pagination/duplicate stop conditions and token privacy; every scenario output validated against the emitted JSON Schema. Two independent source reviews found no concrete defect in their record/privacy and pagination scopes.",
         "session_offline": "2026-11-01: one explicitly authorized CAS login and one list page/detail implemented under the existing Authentication lease, with exact callback-only HTTPS upgrade and in-memory terminal fragment consumption. A same-origin premature business GET failed before restriction and passed afterward. The expanded 84 focused cases and a separate complete-header guard/bounds case passed. Actual CLI runs verified disabled list/detail, empty disabled values and pre-network refusal/secret withholding. No persistence, automatic pagination, refresh, retry or business writes.",
