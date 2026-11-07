@@ -41,6 +41,21 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-07: current-term timetable binding, native read still blocked
+
+The current deployment's `wdkbapp` page binds its student context through
+`initXsxx.do` before the term read. The Rust client now performs that step,
+applies the reviewed in-memory cookie refresh, rejects an empty student
+context and keeps explicit term selection. 32 focused cases and the complete
+offline suite passed: 1,417 library tests, all integration/CLI tests, three
+existing ignored workers.
+
+The owner-authorized browser observed the current term `20261` and a
+successful current-term response. Native CLI attempts remain rejected or
+interrupted by connection/cooldown state, so no parsed native timetable or
+live-derived ICS is claimed. The browser result is a source-contract proof,
+not native service acceptance. No retry, write or bypass was added.
+
 ## 2026-11-07: 0.2.0 release candidate
 
 Version 0.2.0 includes the CAS `service` preservation fix and original error

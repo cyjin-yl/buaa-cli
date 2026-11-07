@@ -501,6 +501,7 @@
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
       ],
       "evidence": {
+        "current_context_repair_2026_11_07": "The owner-authorized browser observed the current wdkbapp page, current term 20261, initXsxx.do student context and a successful current-term read. The Rust client now performs that same initialization, applies reviewed cookie replacements, rejects an empty student context and preserves explicit term selection. The browser observation is not a successful native CLI acceptance: native attempts still include connect/refusal/cooldown outcomes. 32 focused cases and the complete offline suite passed; live timetable and live-derived ICS remain unverified.",
         "degraded_read_2026_11_06": "After service-parameter preservation, one owner-authorized CAS session reached the GSMIS xskb endpoint, which returned HTTP 403 with a text/html body. The response was withheld as response_safety_unreviewed; no schedule rows or live-derived ICS were obtained. This is degraded live evidence, not timetable acceptance.",
         "offline_observation_2026_10_31": {
           "command": "buaa timetable-pg parse with an empty object",

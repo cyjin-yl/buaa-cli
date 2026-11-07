@@ -22,7 +22,8 @@
 //!
 //! A separate `session` entry point performs, on explicit authorization and
 //! `--online`, one in-memory CAS sign-on to the graduate timetable service
-//! followed by exactly one `loadXskbData.do` read in the same invocation. It
+//! followed by its student-context initialization and exactly one
+//! `loadXskbData.do` read in the same invocation. It
 //! never retries, refreshes or caches, and credential material never leaves
 //! the invocation. The GSMIS service re-issues its session cookie on the
 //! read; those declarations are absorbed into the invocation's in-memory
@@ -501,8 +502,8 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Graduate timetable session: one explicit in-memory CAS login to GSMIS
-// followed by exactly one loadXskbData.do read. Secrets are stdin-only inputs;
+// Graduate timetable session: one explicit in-memory CAS login to GSMIS,
+// one student-context initialization and exactly one loadXskbData.do read. Secrets are stdin-only inputs;
 // they are never persisted, logged or placed inside a generic Value tree. The
 // read performs no writes, retries, refreshes or pagination. A session cookie
 // issued by the read response is absorbed into the same invocation-only jar
@@ -511,7 +512,9 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
 const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
 const SESSION_MAX_INPUT: usize = 65536;
 const TIMETABLE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do";
-const TIMETABLE_REFERER: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
+const TIMETABLE_REFERER: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do#/xskcb";
+const TIMETABLE_INIT_URL: &str =
+    "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/wdkcb/initXsxx.do";
 
 fn error(code: &'static str, message: &'static str) -> Error {
     Error::new(code, message)
@@ -611,9 +614,42 @@ fn valid_term_code(term: &str) -> bool {
 }
 
 fn xskb_request(client: &Client, cookie: &str, term: &str) -> reqwest::blocking::RequestBuilder {
-    client
-        .post(TIMETABLE_URL)
+    session_request(client, TIMETABLE_URL, cookie)
         .form(&[("ZC", ""), ("XNXQDM", term), ("XH", ""), ("XQDM", "")])
+}
+
+/// The live GSMIS application admits only its own student-context envelope.
+/// Inspect shape and field identity, never export the returned account values.
+fn student_context_present(bytes: &[u8]) -> Result<bool, Error> {
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    let value = PrivateValue::deserialize(&mut de)
+        .map_err(|_| error("upstream_parse", "timetable context is not strict JSON"))?;
+    de.end()
+        .map_err(|_| error("upstream_parse", "timetable context has trailing content"))?;
+    let Some(rows) = value.0.get("data").and_then(Value::as_array) else {
+        return Err(error("upstream_parse", "timetable context has no data array"));
+    };
+    for row in rows {
+        let Some(row) = row.as_object() else {
+            return Err(error("upstream_parse", "timetable context row is not an object"));
+        };
+        let Some(id) = row.get("XH").and_then(Value::as_str) else {
+            return Err(error("upstream_parse", "timetable context has no student identity field"));
+        };
+        if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+            return Err(error("upstream_parse", "timetable context identity is not admissible"));
+        }
+    }
+    Ok(!rows.is_empty())
+}
+
+fn session_request(
+    client: &Client,
+    url: &str,
+    cookie: &str,
+) -> reqwest::blocking::RequestBuilder {
+    client
+        .post(url)
         .header("Cookie", cookie)
         .header("Accept", "application/json, text/javascript, */*; q=0.01")
         .header("X-Requested-With", "XMLHttpRequest")
@@ -1149,7 +1185,7 @@ fn admit_read_body(
 }
 
 /// One explicit in-memory CAS login to the graduate timetable service followed
-/// by exactly one `loadXskbData.do` read. The session never persists, refreshes
+/// by student-context initialization and exactly one `loadXskbData.do` read. The session never persists, refreshes
 /// or retries; the issued cookie is used for the single read only.
 pub fn session(input: &str, online: bool) -> Result<Value, Error> {
     session_with_network(input, online, || {
@@ -1197,8 +1233,9 @@ pub(crate) fn session_with_network(
     }
     let (client, governor) = network()?;
     let mut lease = net::acquire_kind(&governor, RequestKind::Authentication)?;
+    let mut initialization_observed: Option<(u16, Option<String>, bool)> = None;
     let prepared = cas::authenticate_service(&mut lease, &client, CasService::Gsmis, credentials)
-        .and_then(|session| {
+        .and_then(|mut session| {
             let url = url::Url::parse(TIMETABLE_URL).map_err(|_| session_invalid())?;
             let (cookie, expiry) = session.cookie_header(&url)?;
             let cookie = cookie.ok_or_else(|| {
@@ -1206,6 +1243,92 @@ pub(crate) fn session_with_network(
                     "auth_latched",
                     "the timetable session cookie is missing; no read was sent",
                 )
+            })?;
+            admit_session_read(&mut lease)?;
+            if expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+                return Err(error(
+                    "scoped_cookie_unusable",
+                    "the timetable cookie expired before initialization; no request was sent",
+                ));
+            }
+            let init = session_request(&client, TIMETABLE_INIT_URL, &cookie)
+                .form(&[("XH", "")])
+                .timeout(std::time::Duration::from_secs(45))
+                .header("Accept-Encoding", "identity")
+                .build()
+                .map_err(|_| session_invalid())?;
+            let mut init = init;
+            if let Some(value) = init.headers_mut().get_mut("cookie") {
+                value.set_sensitive(true);
+            }
+            let init = client.execute(init).map_err(|_| {
+                if std::env::var_os("BUAA_LOCAL_TRANSPORT_ERROR_CLASS").is_some() {
+                    eprintln!("local_timetable_init_transport");
+                }
+                error(
+                    "network_error",
+                    "timetable context initialization failed; no read was sent",
+                )
+            })?;
+            let init_status = init.status().as_u16();
+            let init_retry = init
+                .headers()
+                .get_all("retry-after")
+                .iter()
+                .find_map(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let init_challenge = init.headers().iter().any(|(name, value)| {
+                net::challenge_header(name.as_str(), value.as_bytes())
+            });
+            let init_content_type = match (
+                init.headers().get_all("content-type").iter().next(),
+                init.headers().get_all("content-type").iter().nth(1),
+            ) {
+                (Some(value), None) => value.to_str().ok().map(str::to_owned),
+                _ => None,
+            };
+            session.absorb_gsmis_headers(&url, init.headers())?;
+            initialization_observed = Some((init_status, init_retry.clone(), init_challenge));
+            lease
+                .observe_http_many(init_status, init.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()), init_challenge)
+                .map_err(|_| error("governor_error", "cannot persist timetable initialization"))?;
+            let mut init_body = Zeroizing::new(Vec::new());
+            init.take(SESSION_BODY_LIMIT + 1)
+                .read_to_end(&mut init_body)
+                .map_err(|_| error("network_error", "timetable context body read failed"))?;
+            if init_body.len() as u64 > SESSION_BODY_LIMIT {
+                return Err(error("body_limit", "timetable context exceeds its body limit"));
+            }
+            let init_assessment = crate::html::assess_challenge_body(
+                &init_body,
+                init_content_type.as_deref(),
+                true,
+            );
+            if init_challenge || init_assessment == crate::html::ChallengeAssessment::Detected {
+                return Err(error("challenge_requires_human", "timetable context requires review"));
+            }
+            if net::carries_secret(&init_body, &input.username)
+                || net::carries_secret(&init_body, &input.password)
+                || contains_cookie(&init_body, &cookie)
+                || session.contains_secret_bytes(&init_body)
+            {
+                return Err(error("credential_echo", "timetable context contains credential material"));
+            }
+            if init_status == 429 || init_retry.is_some() {
+                return Err(error("cooldown", "timetable initialization was deferred"));
+            }
+            if init_status != 200 {
+                if std::env::var_os("BUAA_LOCAL_TRANSPORT_ERROR_CLASS").is_some() {
+                    eprintln!("local_timetable_init_http_status={init_status}");
+                }
+                return Err(error("authentication_unconfirmed", "timetable context initialization was refused by GSMIS; inspect its HTTP status and safety receipt"));
+            }
+            if !student_context_present(&init_body)? {
+                return Err(error("authentication_unconfirmed", "the current account has no student timetable context"));
+            }
+            let (cookie, expiry) = session.cookie_header(&url)?;
+            let cookie = cookie.ok_or_else(|| {
+                error("auth_latched", "the initialized timetable session has no usable cookie")
             })?;
             let builder = xskb_request(&client, &cookie, &input.read.xnxqdm);
             let mut request = builder
@@ -1234,6 +1357,17 @@ pub(crate) fn session_with_network(
                 "auth_latched" => lease.finish(Outcome::CredentialRejected),
                 "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
                 "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ if initialization_observed.is_some() => {
+                    let (status, retry_after, challenge) = initialization_observed
+                        .take()
+                        .expect("initialized observation is present");
+                    lease.finish(Outcome::Http {
+                        status,
+                        retry_after: retry_after.as_deref(),
+                        challenge,
+                        network_failure: false,
+                    })
+                }
                 _ => lease.finish_without_request(),
             };
             settled.map_err(|_| {
@@ -1435,7 +1569,7 @@ pub fn schema() -> Value {
         }
     });
     schema["session"] = json!({
-        "description": "One explicit in-memory CAS login to GSMIS followed by exactly one loadXskbData.do read; no persistence, refresh, retry or writes. Session cookies issued by the read are absorbed into the invocation-only jar and screened as credential material, never persisted or replayed.",
+        "description": "One explicit in-memory CAS login to GSMIS, one initXsxx.do student-context initialization and exactly one loadXskbData.do read; no persistence, refresh, retry or writes. Session cookies issued by the read are absorbed into the invocation-only jar and screened as credential material, never persisted or replayed.",
         "input": {
             "type": "object",
             "additionalProperties": false,
@@ -1459,6 +1593,7 @@ pub fn schema() -> Value {
         },
         "intent": "LOGIN <username> timetable",
         "read_url": TIMETABLE_URL,
+        "context_read_url": TIMETABLE_INIT_URL,
         "read_method": "POST form ZC=&XNXQDM={term}&XH=&XQDM=",
         "output": "timetable_pg parsed shape, or result degraded/fallback with raw_response_base64+raw_response_sha256+content_type+fallback_reason+http_status for a non-2xx, non-UTF-8 or unparsable body that clears the safety screens, or sensitive_response_withheld when credential/challenge/cookie material or an unreviewed body is detected, or result session_expired (evidence withheld) when the body is a recognized login denial and no rows are emitted; plus service, source, network_performed, write_operations_performed",
         "validation": "object root only; disabled read performs no I/O; enabled read requires authorized=true, exact intent, five-ASCII-digit xnxqdm and --online before transport or admission"
@@ -1751,6 +1886,26 @@ mod tests {
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    #[test]
+    fn student_context_requires_a_complete_bound_identity() {
+        let valid = br#"{"data":[{"XH":"synthetic-student","YXDM":"1","YXDM_DISPLAY":"Synthetic"}]}"#;
+        assert_eq!(student_context_present(valid), Ok(true));
+        assert_eq!(student_context_present(br#"{"data":[]}"#), Ok(false));
+        for invalid in [
+            br#"{"data":[{"YXDM":"1"}]}"#.as_slice(),
+            br#"{"data":[{"XH":""}]}"#,
+            br#"{"data":[{"XH":"a","XH":"b"}]}"#,
+            br#"{"data":[{"XH":7}]}"#,
+            br#"{"data":[{"XH":"synthetic-student"}]} trailing"#,
+            br#"[]"#,
+        ] {
+            assert_eq!(
+                student_context_present(invalid).unwrap_err().code,
+                "upstream_parse"
+            );
+        }
+    }
 
     fn session_input() -> Value {
         json!({

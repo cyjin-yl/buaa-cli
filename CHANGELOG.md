@@ -17,6 +17,16 @@
 
 ## Unreleased
 
+- timetable: initialize the current GSMIS student context before the selected
+  term's read; preserve same-session cookie replacement and refuse missing
+  context, malformed responses, expired credentials and deferred requests.
+- session: retain the original admission failure category instead of hiding
+  it behind a generic verdict; publish `network_error` and
+  `authentication_unconfirmed` in the CLI error contract.
+- verification: the current account's live timetable page and read contract
+  were observed in an owner-authorized browser; the native CLI still has
+  connection/refusal/cooldown outcomes and is not yet live-accepted.
+
 - Withhold Boya original ciphertext when the decrypted body cannot be screened,
   and re-screen retained pagination records against values issued by later
   pages. Screen organization query keys `token`/`id_token` and the query
