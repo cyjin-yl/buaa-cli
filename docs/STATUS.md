@@ -41,6 +41,23 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-07: 0.2.0 release candidate
+
+Version 0.2.0 includes the CAS `service` preservation fix and original error
+classification. The 2026-11-06 owner-authorized reads established `result=ok`
+for Smart classrooms and library and 20 entries for iHome. These are the
+selected bounded reads only, not full Smart or iHome acceptance; remaining
+service discovery, attachments, and mutations retain their boundaries.
+
+The same CAS repair reaches GSMIS and Boya. GSMIS still answers HTTP 403 and
+Boya still reports an upstream error; no timetable rows or Boya course list
+were obtained. These are degraded live observations, not successful service
+acceptance.
+
+The release gate and crates.io readback are recorded after they run. The
+earlier verification summaries below remain historical evidence for their
+named source versions, not statements about this release tree.
+
 ## 2026-11-06: reviewed privacy and contract repairs; live reads still pending
 
 A fresh independent review of `760bbe0342b4cbd247f369555487e1bc90736b4f`

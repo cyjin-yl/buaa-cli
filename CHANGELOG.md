@@ -1,4 +1,4 @@
-## 2026-11-06: CAS service parameter fix; three services live-verified
+## 0.2.0 — 2026-11-07
 
 - session: preserve `service` query parameter through relative form action resolution (RFC 3986 drops it; CAS needs it to issue tickets)
 - session: stop masking real error codes behind `authentication_unconfirmed`; pass through original code and message for diagnosis
@@ -11,6 +11,7 @@
 - net: bounded same-origin transcript redirects with per-hop challenge/robots review and selected-lesson identity binding
 - governance: closed #19 as duplicate of #17 (skills-fs); closed #145 (physics-reference scoped); closed #142 (smart verified); closed #134 (ihome verified)
 - governance: closed PRs #131–#163 (heads already on main); merged #164 and #165
+- release: package 0.2.0 with the verified CAS and response-admission fixes
 
 # Changelog
 

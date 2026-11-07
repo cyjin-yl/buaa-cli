@@ -1503,6 +1503,74 @@ fn library_responder_with_cookies(
     }
 }
 
+/// Exercise the actual business `perform_read` through the one-shot session
+/// flow. Only the business response varies; CAS and token exchange still use
+/// the same strict-TLS, pinned-host harness as production session reads.
+fn run_library_business_read_with_issued_cookies(
+    name: &str,
+    cookies: &[&str],
+    content_type: &str,
+    body: &str,
+) -> Value {
+    run_library_business_read_with_response(name, cookies, content_type, body, false)
+}
+
+fn run_library_business_read_with_response(
+    name: &str,
+    cookies: &[&str],
+    content_type: &str,
+    body: &str,
+    challenge_header: bool,
+) -> Value {
+    let cookies: Vec<String> = cookies.iter().map(|cookie| (*cookie).to_owned()).collect();
+    let content_type = content_type.to_owned();
+    let body = body.to_owned();
+    let library = library_responder(
+        r#"{"code":0,"data":{"member":{"token":"synthetic-library-token-7h3k"}}}"#,
+        r#"{"code":0,"data":{"list":[]}}"#,
+    );
+    let harness = CasHarness::with_responders(
+        sso_responder(
+            CasService::Library,
+            "https://booking.lib.buaa.edu.cn/v4/login/cas#cas=ST-terminal-synthetic",
+            &[],
+        ),
+        |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        },
+        move |request| {
+            if request.target == "/v4/space/pcTopFor" {
+                let mut headers = vec![("Content-Type", content_type.as_str())];
+                if challenge_header {
+                    headers.push(("CF-Mitigated", "challenge"));
+                }
+                headers.extend(
+                    cookies
+                        .iter()
+                        .map(|cookie| ("Set-Cookie", cookie.as_str())),
+                );
+                http_response("200 OK", &headers, &body)
+            } else {
+                library(request)
+            }
+        },
+    );
+    let (result, factory_used) = run_session(
+        &harness,
+        &session_input("library", library_read()),
+        name,
+    );
+    assert!(factory_used, "{name}: the strict-TLS client was injected");
+    let output = result.expect("the issued-cookie business read still settles");
+    assert_eq!(output["source"], "network", "{name}");
+    assert_eq!(output["network_performed"], true, "{name}");
+    output
+}
+
 #[test]
 fn smart_session_classrooms_logs_in_once_and_projects_the_real_search_result() {
     let search = r#"{"e":0,"d":{"list":{"BuildingA":[{"kxsds":"1,2,3","roomName":"101"}]}}}"#;
@@ -2142,6 +2210,215 @@ fn smart_session_withholds_encoded_complete_cookie_headers() {
         assert!(output.get("data").is_none());
         assert!(!output.to_string().contains(&encoded));
     }
+}
+
+#[test]
+fn smart_session_issued_business_json_escape_is_withheld() {
+    // Both duplicate-key orders are screened before Value's last-member-wins
+    // projection. Quoting the Set-Cookie value does not change its decoded
+    // credential spelling.
+    for (name, cookie, body) in [
+        (
+            "unquoted-first",
+            "sid=abc; Path=/; Secure; HttpOnly",
+            r#"{"code":500,"message":"\u0061bc","message":"ordinary"}"#,
+        ),
+        (
+            "quoted-last",
+            "sid=\"abc\"; Path=/; Secure; HttpOnly",
+            r#"{"code":500,"message":"ordinary","message":"\u0061bc"}"#,
+        ),
+    ] {
+        let output = run_library_business_read_with_issued_cookies(
+            &format!("issued-json-{name}"),
+            &[cookie],
+            "application/json",
+            body,
+        );
+        assert_eq!(output["result"], "sensitive_response_withheld", "{name}");
+        assert_eq!(output["fallback_reason"], "credential_echo", "{name}");
+        assert!(output.get("upstream_message").is_none(), "{name}");
+        assert!(output.get("data").is_none(), "{name}");
+    }
+
+    // An escape/document that cannot be completely decoded is not a safe
+    // business response. It remains withheld rather than exposing a prefix or
+    // manufacturing a message from the unreviewed bytes.
+    let output = run_library_business_read_with_issued_cookies(
+        "issued-json-incomplete",
+        &["sid=abc; Path=/; Secure; HttpOnly"],
+        "application/json",
+        r#"{"code":500,"message":"\u00"#,
+    );
+    assert_eq!(output["result"], "sensitive_response_withheld");
+    assert_eq!(output["fallback_reason"], "response_safety_unreviewed");
+    assert!(output.get("upstream_message").is_none());
+    assert!(output.get("data").is_none());
+}
+
+#[test]
+fn smart_session_issued_business_metadata_echo_clears_content_type() {
+    let output = run_library_business_read_with_issued_cookies(
+        "issued-metadata-echo",
+        &["sid=abc; Path=/; Secure; HttpOnly"],
+        "application/abc",
+        r#"{"code":1,"data":{"list":[]}}"#,
+    );
+    assert_eq!(output["result"], "sensitive_response_withheld");
+    assert_eq!(output["fallback_reason"], "credential_echo");
+    assert!(output["content_type"].is_null());
+    assert!(output.get("data").is_none());
+}
+
+#[test]
+fn smart_session_issued_business_encoded_pair_echo_is_withheld() {
+    use base64::Engine as _;
+    for (name, cookie, pair) in [
+        ("unquoted", "sid=abc; Path=/; Secure", "sid=abc"),
+        (
+            "quoted-raw",
+            "sid=\"abc\"; Path=/; Secure",
+            "sid=\"abc\"",
+        ),
+        (
+            "quoted-canonical",
+            "sid=\"abc\"; Path=/; Secure",
+            "sid=abc",
+        ),
+    ] {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(pair);
+        let body = json!({"code":1,"data":{"list":[{"id":"ordinary","name":encoded}]}})
+            .to_string();
+        let output = run_library_business_read_with_issued_cookies(
+            &format!("issued-encoded-pair-{name}"),
+            &[cookie],
+            "application/json",
+            &body,
+        );
+        assert_eq!(output["result"], "sensitive_response_withheld", "{name}");
+        assert_eq!(output["fallback_reason"], "credential_echo", "{name}");
+        assert!(output.get("data").is_none(), "{name}");
+        assert!(!output.to_string().contains(&encoded), "{name}");
+    }
+}
+
+#[test]
+fn smart_session_issued_business_numeric_echo_is_withheld() {
+    // Library code=1 is a successful envelope: the exponent in projected data
+    // must be checked in the numeric spelling a consumer receives.
+    let data = run_library_business_read_with_issued_cookies(
+        "issued-numeric-data",
+        &["sid=1000.0; Path=/; Secure"],
+        "application/json",
+        r#"{"code":1,"data":{"list":[{"n":1e3}]}}"#,
+    );
+    assert_eq!(data["result"], "sensitive_response_withheld");
+    assert_eq!(data["fallback_reason"], "credential_echo");
+    assert!(data.get("data").is_none());
+
+    // A numeric upstream business code is source material too, even when no
+    // data projection exists.
+    let code = run_library_business_read_with_issued_cookies(
+        "issued-numeric-code",
+        &["sid=500.0; Path=/; Secure"],
+        "application/json",
+        r#"{"code":5e2,"message":"ordinary"}"#,
+    );
+    assert_eq!(code["result"], "sensitive_response_withheld");
+    assert_eq!(code["fallback_reason"], "credential_echo");
+    assert!(code.get("upstream_code").is_none());
+}
+
+#[test]
+fn smart_session_issued_business_safe_controls_remain_admitted() {
+    let ordinary_body = r#"{"code":1,"data":{"list":[{"id":"ordinary","name":"ordinary cookie content"}]}}"#;
+    let ordinary = run_library_business_read_with_issued_cookies(
+        "issued-ordinary-content",
+        &["sid=ordinary-private; Path=/; Secure"],
+        "application/json",
+        ordinary_body,
+    );
+    assert_eq!(ordinary["result"], "ok");
+    assert_eq!(ordinary["data"][0]["name"], "ordinary cookie content");
+
+    // Cookie deletion, including quoted empty deletion, carries no value to
+    // echo and must not make ordinary content sensitive.
+    let empty = run_library_business_read_with_issued_cookies(
+        "issued-empty-values",
+        &["empty=; Path=/; Max-Age=0", "quoted=\"\"; Path=/; Max-Age=0"],
+        "application/json",
+        r#"{"code":1,"data":{"list":[{"id":"empty-safe","name":""}]}}"#,
+    );
+    assert_eq!(empty["result"], "ok");
+    assert_eq!(empty["data"][0]["id"], "empty-safe");
+
+    // The established content-based path admits a complete JSON document even
+    // when its MIME is not JSON, but does not admit genuine HTML by that path.
+    let plain_json = run_library_business_read_with_issued_cookies(
+        "issued-plain-mime-json",
+        &["sid=ordinary-private; Path=/; Secure"],
+        "text/plain; charset=utf-8",
+        ordinary_body,
+    );
+    assert_eq!(plain_json["result"], "ok");
+    assert_eq!(plain_json["data"][0]["id"], "ordinary");
+
+    let html = run_library_business_read_with_issued_cookies(
+        "issued-real-html",
+        &["sid=ordinary-private; Path=/; Secure"],
+        "text/html",
+        "<html><body>an actual HTML page</body></html>",
+    );
+    assert_eq!(html["result"], "sensitive_response_withheld");
+    assert_eq!(html["fallback_reason"], "unknown_content_type");
+    assert!(html.get("data").is_none());
+}
+
+/// A complete JSON document that exceeds the HTML challenge-review byte
+/// budget is still a valid response when its content is genuinely JSON.
+/// The content-based `json_document` check must run before the HTML body
+/// assessment, so a >1MiB JSON response labeled text/html is projected
+/// rather than rejected by the HTML DOM budget or withheld as unreviewed.
+#[test]
+fn smart_session_projects_large_json_document_labeled_text_html() {
+    // The HTML challenge budget is 1 MiB; the body must exceed it while
+    // remaining valid JSON that the library premises envelope can project.
+    let padding = "x".repeat(1048577);
+    let body = format!(
+        r#"{{"code":1,"data":{{"list":[{{"id":"large","name":"{padding}"}}]}}}}"#
+    );
+    assert!(body.len() > 1048576, "body must exceed the HTML budget");
+    let output = run_library_business_read_with_issued_cookies(
+        "issued-large-json-html-mime",
+        &["sid=ordinary-private; Path=/; Secure"],
+        "text/html",
+        &body,
+    );
+    assert_eq!(output["result"], "ok");
+    assert!(output.get("challenge_required").is_none());
+    let rows = output["data"].as_array().expect("projected list rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], "large");
+}
+
+/// A JSON string value that contains markup-shaped content (e.g.
+/// `<input name=captcha>`) is not an HTML challenge when the complete
+/// document is valid JSON. The `json_document` guard must prevent the
+/// HTML parser from misclassifying embedded markup as a challenge.
+#[test]
+fn smart_session_projects_json_containing_captcha_input_markup() {
+    let body = r#"{"code":1,"data":{"list":[{"id":"markup","name":"<input name=captcha type=hidden>"}]}}"#;
+    let output = run_library_business_read_with_issued_cookies(
+        "issued-json-with-captcha-markup",
+        &["sid=ordinary-private; Path=/; Secure"],
+        "text/html",
+        body,
+    );
+    assert_eq!(output["result"], "ok");
+    assert!(output.get("challenge_required").is_none());
+    let rows = output["data"].as_array().expect("projected list rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "<input name=captcha type=hidden>");
 }
 
 /// The library exchange issues a path-scoped sign-on cookie that never
