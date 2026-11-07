@@ -27,6 +27,9 @@
 - session: retain the original admission failure category instead of hiding
   it behind a generic verdict; publish `network_error` and
   `authentication_unconfirmed` in the CLI error contract.
+- session: classify an SSO `/login` HTTP 401 after the credential POST as
+  `auth_latched`, so callers do not mistake a sign-on rejection for an
+  unconfirmed relying-party handoff.
 - verification: the current account's live timetable page and read contract
   were observed in an owner-authorized browser; the native CLI still has
   connection/refusal/cooldown outcomes and is not yet live-accepted.

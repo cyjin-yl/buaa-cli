@@ -6465,6 +6465,15 @@ pub(crate) fn authenticate_service(
     if landed.retry_after.is_some() || landed.status == 429 {
         return Err(deferred());
     }
+    if landed.status == 401
+        && landed.url.host_str() == Some("sso.buaa.edu.cn")
+        && landed.url.path() == "/login"
+    {
+        return Err(Error::new(
+            "auth_latched",
+            "Service authentication was rejected by the sign-on service; no retry was performed.",
+        ));
+    }
     // Body facts matter as much as header facts: a 200 that still carries a
     // challenge control, an unreviewed challenge/interaction, or a password
     // form means the sign-on did not complete, whatever relying party the

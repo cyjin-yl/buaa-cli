@@ -54,12 +54,14 @@ not an output echo, while password and cookie material remain refused.
 Thirty-three focused cases pass.
 
 The owner-authorized browser observed the current term `20261` and a
-successful current-term response. Two post-repair native attempts stopped
-before the application step: one CAS transport connect error and one
-relying-party handoff confirmation failure. No parsed native timetable or
-live-derived ICS is claimed. The browser result is a source-contract proof,
-not native service acceptance. Authentication retries are stopped pending a
-new diagnosis; no write or bypass was added.
+successful current-term response. The first two post-repair native attempts
+stopped before the application step at CAS transport and handoff
+confirmation. A later diagnostic using only fixed safe metadata observed the
+credential POST ending at SSO `/login` with HTTP 401; no application request
+was sent. That invocation returned `authentication_unconfirmed` before the
+separate SSO-401 classification repair. No parsed native timetable or
+live-derived ICS is claimed. Authentication attempts are stopped as a
+rejection signal; no write or bypass was added.
 
 ### Boya bounded reads
 

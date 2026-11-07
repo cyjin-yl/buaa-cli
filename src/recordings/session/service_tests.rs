@@ -1824,6 +1824,40 @@ fn smart_session_library_stops_when_the_issued_token_is_missing_or_rejected() {
 }
 
 #[test]
+fn service_session_classifies_sso_401_as_credential_rejection() {
+    let original = sso_responder(
+        CasService::SmartClassrooms,
+        "https://app.buaa.edu.cn/site/classRoomQuery/index",
+        &[],
+    );
+    let harness = CasHarness::with_responders(
+        move |request| {
+            if request.method == "POST" {
+                http_response(
+                    "401 Unauthorized",
+                    &[("Content-Type", "text/html")],
+                    "<html><body>synthetic sign-on refusal</body></html>",
+                )
+            } else {
+                original(request)
+            }
+        },
+        |_| {
+            panic!("a rejected sign-on must not reach the relying party")
+        },
+        |_| panic!("a Smart rejection must not reach Library"),
+    );
+    let (result, _) = run_session(
+        &harness,
+        &session_input("classrooms", classrooms_read()),
+        "sso-401-rejection",
+    );
+    assert_eq!(result.unwrap_err().code, "auth_latched");
+    assert_one_credential_post(&harness, CasService::SmartClassrooms);
+    assert!(harness.app.observed().is_empty());
+}
+
+#[test]
 fn smart_session_stops_on_a_challenged_or_deferred_sign_on() {
     // A challenge on the sign-on page never reaches the credential
     // submission.
