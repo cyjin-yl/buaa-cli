@@ -517,8 +517,7 @@ const TIMETABLE_PAGE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*d
 const TIMETABLE_PORTAL_URL: &str =
     "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
 const TIMETABLE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do";
-const TIMETABLE_REFERER: &str =
-    "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do#/xskcb";
+const TIMETABLE_REFERER: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do";
 const TIMETABLE_INIT_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/wdkcb/initXsxx.do";
 
 fn error(code: &'static str, message: &'static str) -> Error {
@@ -618,7 +617,11 @@ fn valid_term_code(term: &str) -> bool {
     bytes.len() == 5 && bytes.iter().all(u8::is_ascii_digit)
 }
 
-fn xskb_request(client: &Client, cookie: &str, term: &str) -> reqwest::blocking::RequestBuilder {
+fn xskb_request(
+    client: &Client,
+    cookie: reqwest::header::HeaderValue,
+    term: &str,
+) -> reqwest::blocking::RequestBuilder {
     session_request(client, TIMETABLE_URL, cookie).form(&[
         ("ZC", ""),
         ("XNXQDM", term),
@@ -664,7 +667,11 @@ fn student_context_present(bytes: &[u8]) -> Result<bool, Error> {
     Ok(!rows.is_empty())
 }
 
-fn session_request(client: &Client, url: &str, cookie: &str) -> reqwest::blocking::RequestBuilder {
+fn session_request(
+    client: &Client,
+    url: &str,
+    cookie: reqwest::header::HeaderValue,
+) -> reqwest::blocking::RequestBuilder {
     client
         .post(url)
         .header("Cookie", cookie)
@@ -746,7 +753,6 @@ fn screen_context_response(
     response: &ContextResponse,
     input: &SessionInput,
     session: &cas::ServiceSession,
-    cookie: &str,
     expected_identity_echo: bool,
 ) -> Result<(), Error> {
     let assessment =
@@ -764,13 +770,31 @@ fn screen_context_response(
     // material remain refused at both steps.
     if (!expected_identity_echo && net::carries_secret(&response.body, &input.username))
         || net::carries_secret(&response.body, &input.password)
-        || contains_cookie(&response.body, cookie)
         || session.contains_secret_bytes(&response.body)
     {
         return Err(error(
             "credential_echo",
             "timetable context contains credential material",
         ));
+    }
+    match decoded_body_screening(&response.body, &|candidate: &[u8]| {
+        (!expected_identity_echo && net::carries_secret(candidate, &input.username))
+            || net::carries_secret(candidate, &input.password)
+            || session.contains_secret_bytes(candidate)
+    }) {
+        BodyScreening::Clear => {}
+        BodyScreening::Echo => {
+            return Err(error(
+                "credential_echo",
+                "timetable context contains decoded credential material",
+            ));
+        }
+        BodyScreening::Unreviewable => {
+            return Err(error(
+                "response_safety_unreviewed",
+                "timetable context cannot be screened completely",
+            ));
+        }
     }
     Ok(())
 }
@@ -843,21 +867,6 @@ fn withheld(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'sta
         "body_byte_length": bytes.len(),
         "raw_response_sha256": format!("{:x}", Sha256::digest(bytes)),
     })
-}
-
-fn contains_cookie(bytes: &[u8], cookie: &str) -> bool {
-    net::carries_secret(bytes, cookie)
-        || cookie
-            .split(';')
-            .filter_map(|part| part.split_once('='))
-            .any(|(_, value)| {
-                let value = value.trim();
-                net::carries_secret(bytes, value)
-                    || value
-                        .strip_prefix('"')
-                        .and_then(|inner| inner.strip_suffix('"'))
-                        .is_some_and(|unquoted| net::carries_secret(bytes, unquoted))
-            })
 }
 
 /// Upper bound on the `Set-Cookie` declarations one read response can
@@ -1358,7 +1367,7 @@ pub(crate) fn session_with_network(
             let url = url::Url::parse(TIMETABLE_URL).map_err(|_| session_invalid())?;
             let page_url = url::Url::parse(TIMETABLE_PAGE_URL).map_err(|_| session_invalid())?;
             let init_url = url::Url::parse(TIMETABLE_INIT_URL).map_err(|_| session_invalid())?;
-            let (page_cookie, page_expiry) = session.cookie_header(&page_url)?;
+            let (page_cookie, page_expiry) = session.cookie_header_for_transmission(&page_url)?;
             let page_cookie = page_cookie.ok_or_else(|| {
                 error(
                     "authentication_unconfirmed",
@@ -1374,7 +1383,7 @@ pub(crate) fn session_with_network(
             }
             let mut page = client
                 .get(TIMETABLE_PAGE_URL)
-                .header("Cookie", &*page_cookie)
+                .header("Cookie", page_cookie)
                 .header(
                     "Accept",
                     "text/html",
@@ -1400,7 +1409,7 @@ pub(crate) fn session_with_network(
                 &page_url,
                 &mut initialization_observed,
             )?;
-            screen_context_response(&page, &input, &session, &page_cookie, false)?;
+            screen_context_response(&page, &input, &session, false)?;
             if page.status == 429 || page.retry_after.is_some() {
                 return Err(error(
                     "cooldown",
@@ -1427,7 +1436,7 @@ pub(crate) fn session_with_network(
                 ));
             }
 
-            let (cookie, init_expiry) = session.cookie_header(&init_url)?;
+            let (cookie, init_expiry) = session.cookie_header_for_transmission(&init_url)?;
             let cookie = cookie.ok_or_else(|| {
                 error(
                     "auth_latched",
@@ -1441,7 +1450,7 @@ pub(crate) fn session_with_network(
                     "the timetable cookie expired before initialization; no initialization was sent",
                 ));
             }
-            let init = session_request(&client, TIMETABLE_INIT_URL, &cookie)
+            let init = session_request(&client, TIMETABLE_INIT_URL, cookie)
                 .form(&[("XH", "")])
                 .timeout(std::time::Duration::from_secs(45))
                 .header("Accept-Encoding", "identity")
@@ -1464,7 +1473,7 @@ pub(crate) fn session_with_network(
                 &init_url,
                 &mut initialization_observed,
             )?;
-            screen_context_response(&init, &input, &session, &cookie, true)?;
+            screen_context_response(&init, &input, &session, true)?;
             if init.status == 429 || init.retry_after.is_some() {
                 return Err(error("cooldown", "timetable initialization was deferred"));
             }
@@ -1474,11 +1483,11 @@ pub(crate) fn session_with_network(
             if !student_context_present(&init.body)? {
                 return Err(error("authentication_unconfirmed", "the current account has no student timetable context"));
             }
-            let (cookie, expiry) = session.cookie_header(&url)?;
+            let (cookie, expiry) = session.cookie_header_for_transmission(&url)?;
             let cookie = cookie.ok_or_else(|| {
                 error("auth_latched", "the initialized timetable session has no usable cookie")
             })?;
-            let builder = xskb_request(&client, &cookie, &input.read.xnxqdm);
+            let builder = xskb_request(&client, cookie, &input.read.xnxqdm);
             let mut request = builder
                 .timeout(std::time::Duration::from_secs(45))
                 .header("Accept-Encoding", "identity")
@@ -1488,9 +1497,9 @@ pub(crate) fn session_with_network(
                 value.set_sensitive(true);
             }
             admit_session_read(&mut lease)?;
-            Ok((session, cookie, expiry, request))
+            Ok((session, expiry, request))
         });
-    let (session, cookie, cookie_expiry, request) = match prepared {
+    let (session, cookie_expiry, request) = match prepared {
         Ok(prepared) => prepared,
         Err(failure) => {
             if matches!(
@@ -1532,7 +1541,6 @@ pub(crate) fn session_with_network(
     let contains = |candidate: &[u8]| {
         net::carries_secret(candidate, &input.username)
             || net::carries_secret(candidate, &input.password)
-            || contains_cookie(candidate, &cookie)
             || session.contains_secret_bytes(candidate)
     };
     let mut response = match lease.start_request(|| {
@@ -2058,11 +2066,25 @@ mod session_tests {
     fn internal_student_context_allows_only_the_expected_identity_echo() {
         let input: SessionInput =
             serde_json::from_str(&session_input().to_string()).expect("synthetic session input");
-        let session = cas::ServiceSession::test_session_with_cookies(
+        let mut session = cas::ServiceSession::test_session_with_cookies(
             CasService::Gsmis,
             TIMETABLE_PAGE_URL,
             &["GS_SESSIONID=synthetic-cookie; Path=/gsapp/"],
         );
+        let page_url = url::Url::parse(TIMETABLE_PAGE_URL).unwrap();
+        session
+            .cookie_header_for_transmission(&page_url)
+            .expect("the complete context header is retained");
+        let mut rotation = reqwest::header::HeaderMap::new();
+        rotation.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static(
+                "GS_SESSIONID=synthetic-rotated; Path=/gsapp/",
+            ),
+        );
+        session
+            .absorb_gsmis_headers(&page_url, &rotation)
+            .expect("the rotated cookie is admitted");
         let response = |body: String| ContextResponse {
             status: 200,
             retry_after: None,
@@ -2072,43 +2094,38 @@ mod session_tests {
         };
         let context =
             response(json!({"data":[{"XH":input.username.as_str(),"XM":"Synthetic"}]}).to_string());
+        let first_secret_char = input.password.chars().next().unwrap();
+        let escaped_secret = format!(
+            "\\u{:04x}{}",
+            first_secret_char as u32,
+            &input.password[first_secret_char.len_utf8()..]
+        );
+        let escaped_secret_body =
+            json!({"data":[{"XH":input.username.as_str()}],"echo":input.password.as_str()})
+                .to_string()
+                .replace(input.password.as_str(), &escaped_secret);
         assert_eq!(
-            screen_context_response(
-                &context,
-                &input,
-                &session,
-                "GS_SESSIONID=synthetic-cookie",
-                true
-            ),
+            screen_context_response(&context, &input, &session, true),
             Ok(())
         );
         assert_eq!(
-            screen_context_response(
-                &context,
-                &input,
-                &session,
-                "GS_SESSIONID=synthetic-cookie",
-                false,
-            )
-            .unwrap_err()
-            .code,
+            screen_context_response(&context, &input, &session, false)
+                .unwrap_err()
+                .code,
             "credential_echo"
         );
         for body in [
             json!({"data":[{"XH":input.username.as_str()}],"echo":input.password.as_str()})
                 .to_string(),
             json!({"data":[{"XH":input.username.as_str()}],"echo":"synthetic-cookie"}).to_string(),
+            json!({"data":[{"XH":input.username.as_str()}],"echo":STANDARD.encode("GS_SESSIONID=synthetic-cookie")})
+                .to_string(),
+            escaped_secret_body,
         ] {
             assert_eq!(
-                screen_context_response(
-                    &response(body),
-                    &input,
-                    &session,
-                    "GS_SESSIONID=synthetic-cookie",
-                    true,
-                )
-                .unwrap_err()
-                .code,
+                screen_context_response(&response(body), &input, &session, true)
+                    .unwrap_err()
+                    .code,
                 "credential_echo"
             );
         }

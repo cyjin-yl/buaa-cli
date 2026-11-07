@@ -21,6 +21,9 @@
   term's read through the current `wdkbapp` application document; preserve
   same-session cookie replacement at both steps and refuse missing context,
   malformed responses, expired credentials and deferred requests.
+- timetable: retain complete context-request Cookie headers in the bounded
+  echo guard across cookie rotation, screen decoded context strings, and omit
+  the fragment from the browser-bound Referer.
 - session: retain the original admission failure category instead of hiding
   it behind a generic verdict; publish `network_error` and
   `authentication_unconfirmed` in the CLI error contract.

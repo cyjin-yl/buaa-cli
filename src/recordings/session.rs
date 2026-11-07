@@ -6269,6 +6269,24 @@ impl ServiceSession {
         }
     }
 
+    /// Retain the complete transmitted header in the bounded echo guard before
+    /// returning a sensitive request header. Later cookie rotation must not
+    /// erase an encoded composite spelling of an earlier header.
+    pub(crate) fn cookie_header_for_transmission(
+        &mut self,
+        url: &Url,
+    ) -> Result<(Option<HeaderValue>, Option<SystemTime>), Error> {
+        let (cookie, expiry) = self.cookie_header(url)?;
+        let Some(cookie) = cookie else {
+            return Ok((None, expiry));
+        };
+        let index = self.jar.retain_transmitted_header(cookie)?;
+        let mut header = HeaderValue::from_str(self.jar.transmitted_headers[index].as_str())
+            .map_err(|_| invalid())?;
+        header.set_sensitive(true);
+        Ok((Some(header), expiry))
+    }
+
     pub(crate) fn absorb_library_headers(
         &mut self,
         url: &Url,
