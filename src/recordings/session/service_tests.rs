@@ -3254,11 +3254,7 @@ fn ihome_session_refuses_shaped_callbacks_and_plaintext_downgrades() {
             &ihome_session_input(ihome_list_read()),
             &format!("ihome-shaped-callback-{name}"),
         );
-        assert_eq!(
-            result.unwrap_err().code,
-            "authentication_unconfirmed",
-            "{name}"
-        );
+        assert_eq!(result.unwrap_err().code, "invalid_input", "{name}");
         assert_one_credential_post(&harness, CasService::Ihome);
         assert!(
             harness.ihome.observed().is_empty(),
@@ -3310,7 +3306,7 @@ fn ihome_session_refuses_shaped_callbacks_and_plaintext_downgrades() {
         &ihome_session_input(ihome_list_read()),
         "ihome-plaintext-downgrade",
     );
-    assert_eq!(result.unwrap_err().code, "authentication_unconfirmed");
+    assert_eq!(result.unwrap_err().code, "invalid_input");
     assert_eq!(
         downgrade.ihome.observed().len(),
         1,
@@ -3367,11 +3363,7 @@ fn ihome_session_refuses_a_malformed_or_nonterminal_terminal_fragment() {
             &ihome_session_input(ihome_list_read()),
             &format!("ihome-terminal-{name}"),
         );
-        assert_eq!(
-            result.unwrap_err().code,
-            "authentication_unconfirmed",
-            "{name}"
-        );
+        assert_eq!(result.unwrap_err().code, "invalid_input", "{name}");
         assert_one_credential_post(&harness, CasService::Ihome);
         assert_eq!(
             harness.ihome.observed().len(),
