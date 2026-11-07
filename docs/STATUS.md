@@ -43,18 +43,32 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## 2026-11-07: current-term timetable binding, native read still blocked
 
-The current deployment's `wdkbapp` page binds its student context through
-`initXsxx.do` before the term read. The Rust client now performs that step,
-applies the reviewed in-memory cookie refresh, rejects an empty student
-context and keeps explicit term selection. 32 focused cases and the complete
-offline suite passed: 1,417 library tests, all integration/CLI tests, three
-existing ignored workers.
+The current deployment's `wdkbapp` document issues application cookies and
+binds its student context through `initXsxx.do` before the term read. A
+same-session browser comparison succeeded with and without `_yhz`; a fixed
+no-role document GET followed by initialization also succeeded. The Rust
+client now performs that document step, applies reviewed in-memory cookie
+refreshes, rejects an empty student context and keeps explicit term selection.
+The initialization body stays internal: its expected XH/username identity is
+not an output echo, while password and cookie material remain refused.
+Thirty-three focused cases pass.
 
 The owner-authorized browser observed the current term `20261` and a
-successful current-term response. Native CLI attempts remain rejected or
-interrupted by connection/cooldown state, so no parsed native timetable or
+successful current-term response. Two post-repair native attempts stopped
+before the application step: one CAS transport connect error and one
+relying-party handoff confirmation failure. No parsed native timetable or
 live-derived ICS is claimed. The browser result is a source-contract proof,
-not native service acceptance. No retry, write or bypass was added.
+not native service acceptance. Authentication retries are stopped pending a
+new diagnosis; no write or bypass was added.
+
+### Boya bounded reads
+
+The native `chosen` whole-list read previously returned `success`,
+`complete=true` and zero entries for the selected window. A separate
+`semester_courses` invocation with `pageNumber=1`, `pageSize=20` and
+`maxPages=20` did not reach the business read: CAS did not confirm the Boya
+token landing. Complete course pagination and all mutations remain
+unverified. No retry or write occurred.
 
 ## 2026-11-07: 0.2.0 release candidate
 

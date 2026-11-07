@@ -22,8 +22,9 @@
 //!
 //! A separate `session` entry point performs, on explicit authorization and
 //! `--online`, one in-memory CAS sign-on to the graduate timetable service
-//! followed by its student-context initialization and exactly one
-//! `loadXskbData.do` read in the same invocation. It
+//! followed by the current timetable application document, its
+//! student-context initialization and exactly one `loadXskbData.do`
+//! read in the same invocation. It
 //! never retries, refreshes or caches, and credential material never leaves
 //! the invocation. The GSMIS service re-issues its session cookie on the
 //! read; those declarations are absorbed into the invocation's in-memory
@@ -31,7 +32,7 @@
 //! replayed.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -503,18 +504,22 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
 
 // ---------------------------------------------------------------------------
 // Graduate timetable session: one explicit in-memory CAS login to GSMIS,
-// one student-context initialization and exactly one loadXskbData.do read. Secrets are stdin-only inputs;
-// they are never persisted, logged or placed inside a generic Value tree. The
-// read performs no writes, retries, refreshes or pagination. A session cookie
-// issued by the read response is absorbed into the same invocation-only jar
-// and screened like every other credential, never exported or persisted.
+// one application document, one student-context initialization and exactly
+// one loadXskbData.do read. Secrets are stdin-only inputs; they are never
+// persisted, logged or placed inside a generic Value tree. The read performs
+// no writes, retries, refreshes or pagination. Session cookies issued by the
+// application and read responses are absorbed into the same invocation-only
+// jar and screened like every other credential, never exported or persisted.
 
 const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
 const SESSION_MAX_INPUT: usize = 65536;
+const TIMETABLE_PAGE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do";
+const TIMETABLE_PORTAL_URL: &str =
+    "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
 const TIMETABLE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do";
-const TIMETABLE_REFERER: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do#/xskcb";
-const TIMETABLE_INIT_URL: &str =
-    "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/wdkcb/initXsxx.do";
+const TIMETABLE_REFERER: &str =
+    "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do#/xskcb";
+const TIMETABLE_INIT_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/wdkcb/initXsxx.do";
 
 fn error(code: &'static str, message: &'static str) -> Error {
     Error::new(code, message)
@@ -614,8 +619,12 @@ fn valid_term_code(term: &str) -> bool {
 }
 
 fn xskb_request(client: &Client, cookie: &str, term: &str) -> reqwest::blocking::RequestBuilder {
-    session_request(client, TIMETABLE_URL, cookie)
-        .form(&[("ZC", ""), ("XNXQDM", term), ("XH", ""), ("XQDM", "")])
+    session_request(client, TIMETABLE_URL, cookie).form(&[
+        ("ZC", ""),
+        ("XNXQDM", term),
+        ("XH", ""),
+        ("XQDM", ""),
+    ])
 }
 
 /// The live GSMIS application admits only its own student-context envelope.
@@ -627,33 +636,143 @@ fn student_context_present(bytes: &[u8]) -> Result<bool, Error> {
     de.end()
         .map_err(|_| error("upstream_parse", "timetable context has trailing content"))?;
     let Some(rows) = value.0.get("data").and_then(Value::as_array) else {
-        return Err(error("upstream_parse", "timetable context has no data array"));
+        return Err(error(
+            "upstream_parse",
+            "timetable context has no data array",
+        ));
     };
     for row in rows {
         let Some(row) = row.as_object() else {
-            return Err(error("upstream_parse", "timetable context row is not an object"));
+            return Err(error(
+                "upstream_parse",
+                "timetable context row is not an object",
+            ));
         };
         let Some(id) = row.get("XH").and_then(Value::as_str) else {
-            return Err(error("upstream_parse", "timetable context has no student identity field"));
+            return Err(error(
+                "upstream_parse",
+                "timetable context has no student identity field",
+            ));
         };
         if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
-            return Err(error("upstream_parse", "timetable context identity is not admissible"));
+            return Err(error(
+                "upstream_parse",
+                "timetable context identity is not admissible",
+            ));
         }
     }
     Ok(!rows.is_empty())
 }
 
-fn session_request(
-    client: &Client,
-    url: &str,
-    cookie: &str,
-) -> reqwest::blocking::RequestBuilder {
+fn session_request(client: &Client, url: &str, cookie: &str) -> reqwest::blocking::RequestBuilder {
     client
         .post(url)
         .header("Cookie", cookie)
         .header("Accept", "application/json, text/javascript, */*; q=0.01")
         .header("X-Requested-With", "XMLHttpRequest")
         .header("Referer", TIMETABLE_REFERER)
+}
+
+struct ContextResponse {
+    status: u16,
+    retry_after: Option<String>,
+    challenge: bool,
+    content_type: Option<String>,
+    body: Zeroizing<Vec<u8>>,
+}
+
+/// Persist response safety facts before any cookie or body processing can
+/// fail, then absorb the reviewed same-origin cookie declarations and retain
+/// a bounded body for the caller's challenge and credential-echo screens.
+fn receive_context_response(
+    response: Response,
+    lease: &mut RequestLease<'_>,
+    session: &mut cas::ServiceSession,
+    url: &url::Url,
+    observed: &mut Option<(u16, Option<String>, bool)>,
+) -> Result<ContextResponse, Error> {
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get_all("retry-after")
+        .iter()
+        .find_map(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let challenge = response
+        .headers()
+        .iter()
+        .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
+    let content_type = match (
+        response.headers().get_all("content-type").iter().next(),
+        response.headers().get_all("content-type").iter().nth(1),
+    ) {
+        (Some(value), None) => value.to_str().ok().map(str::to_owned),
+        _ => None,
+    };
+    *observed = Some((status, retry_after.clone(), challenge));
+    lease
+        .observe_http_many(
+            status,
+            response
+                .headers()
+                .get_all("retry-after")
+                .iter()
+                .map(|value| value.to_str().ok()),
+            challenge,
+        )
+        .map_err(|_| error("governor_error", "cannot persist timetable response"))?;
+    session.absorb_gsmis_headers(url, response.headers())?;
+    let mut body = Zeroizing::new(Vec::new());
+    response
+        .take(SESSION_BODY_LIMIT + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| error("network_error", "timetable context body read failed"))?;
+    if body.len() as u64 > SESSION_BODY_LIMIT {
+        return Err(error(
+            "body_limit",
+            "timetable context exceeds its body limit",
+        ));
+    }
+    Ok(ContextResponse {
+        status,
+        retry_after,
+        challenge,
+        content_type,
+        body,
+    })
+}
+
+fn screen_context_response(
+    response: &ContextResponse,
+    input: &SessionInput,
+    session: &cas::ServiceSession,
+    cookie: &str,
+    expected_identity_echo: bool,
+) -> Result<(), Error> {
+    let assessment =
+        crate::html::assess_challenge_body(&response.body, response.content_type.as_deref(), true);
+    if response.challenge || assessment == crate::html::ChallengeAssessment::Detected {
+        return Err(error(
+            "challenge_requires_human",
+            "timetable context requires review",
+        ));
+    }
+    // initXsxx returns the authenticated student's XH, normally the CAS
+    // username. Its body is consumed only by student_context_present and is
+    // never exported, so that expected identity is not an output echo. The
+    // application document has no such exception; password and cookie
+    // material remain refused at both steps.
+    if (!expected_identity_echo && net::carries_secret(&response.body, &input.username))
+        || net::carries_secret(&response.body, &input.password)
+        || contains_cookie(&response.body, cookie)
+        || session.contains_secret_bytes(&response.body)
+    {
+        return Err(error(
+            "credential_echo",
+            "timetable context contains credential material",
+        ));
+    }
+    Ok(())
 }
 
 /// Book the follow-up read slot under the shared governor. A cooldown is a
@@ -1237,28 +1356,91 @@ pub(crate) fn session_with_network(
     let prepared = cas::authenticate_service(&mut lease, &client, CasService::Gsmis, credentials)
         .and_then(|mut session| {
             let url = url::Url::parse(TIMETABLE_URL).map_err(|_| session_invalid())?;
+            let page_url = url::Url::parse(TIMETABLE_PAGE_URL).map_err(|_| session_invalid())?;
             let init_url = url::Url::parse(TIMETABLE_INIT_URL).map_err(|_| session_invalid())?;
-            let (cookie, expiry) = session.cookie_header(&url)?;
-            cookie.ok_or_else(|| {
+            let (page_cookie, page_expiry) = session.cookie_header(&page_url)?;
+            let page_cookie = page_cookie.ok_or_else(|| {
                 error(
-                    "auth_latched",
-                    "the timetable session cookie is missing; no read was sent",
+                    "authentication_unconfirmed",
+                    "the timetable application cookie is missing; no entry was sent",
                 )
             })?;
             admit_session_read(&mut lease)?;
-            if expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+            if page_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
                 return Err(error(
                     "scoped_cookie_unusable",
-                    "the timetable cookie expired before initialization; no request was sent",
+                    "the timetable cookie expired before application entry; no request was sent",
                 ));
             }
-            let (cookie, _) = session.cookie_header(&init_url)?;
+            let mut page = client
+                .get(TIMETABLE_PAGE_URL)
+                .header("Cookie", &*page_cookie)
+                .header(
+                    "Accept",
+                    "text/html",
+                )
+                .header("Referer", TIMETABLE_PORTAL_URL)
+                .timeout(std::time::Duration::from_secs(45))
+                .header("Accept-Encoding", "identity")
+                .build()
+                .map_err(|_| session_invalid())?;
+            if let Some(value) = page.headers_mut().get_mut("cookie") {
+                value.set_sensitive(true);
+            }
+            let page = client.execute(page).map_err(|_| {
+                error(
+                    "network_error",
+                    "timetable application entry failed; no initialization or read was sent",
+                )
+            })?;
+            let page = receive_context_response(
+                page,
+                &mut lease,
+                &mut session,
+                &page_url,
+                &mut initialization_observed,
+            )?;
+            screen_context_response(&page, &input, &session, &page_cookie, false)?;
+            if page.status == 429 || page.retry_after.is_some() {
+                return Err(error(
+                    "cooldown",
+                    "timetable application entry was deferred",
+                ));
+            }
+            if page.status != 200 {
+                return Err(error(
+                    "authentication_unconfirmed",
+                    "timetable application entry was refused by GSMIS; no initialization was sent",
+                ));
+            }
+            let page_mime = page
+                .content_type
+                .as_deref()
+                .and_then(|value| value.split(';').next())
+                .map(str::trim);
+            if !page_mime.is_some_and(|value| value.eq_ignore_ascii_case("text/html"))
+                || page.body.iter().all(|byte| byte.is_ascii_whitespace())
+            {
+                return Err(error(
+                    "authentication_unconfirmed",
+                    "timetable application entry was not a nonempty HTML document; no initialization was sent",
+                ));
+            }
+
+            let (cookie, init_expiry) = session.cookie_header(&init_url)?;
             let cookie = cookie.ok_or_else(|| {
                 error(
                     "auth_latched",
                     "the timetable initialization cookie is missing; no initialization was sent",
                 )
             })?;
+            admit_session_read(&mut lease)?;
+            if init_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+                return Err(error(
+                    "scoped_cookie_unusable",
+                    "the timetable cookie expired before initialization; no initialization was sent",
+                ));
+            }
             let init = session_request(&client, TIMETABLE_INIT_URL, &cookie)
                 .form(&[("XH", "")])
                 .timeout(std::time::Duration::from_secs(45))
@@ -1270,68 +1452,26 @@ pub(crate) fn session_with_network(
                 value.set_sensitive(true);
             }
             let init = client.execute(init).map_err(|_| {
-                if std::env::var_os("BUAA_LOCAL_TRANSPORT_ERROR_CLASS").is_some() {
-                    eprintln!("local_timetable_init_transport");
-                }
                 error(
                     "network_error",
                     "timetable context initialization failed; no read was sent",
                 )
             })?;
-            let init_status = init.status().as_u16();
-            let init_retry = init
-                .headers()
-                .get_all("retry-after")
-                .iter()
-                .find_map(|value| value.to_str().ok())
-                .map(str::to_owned);
-            let init_challenge = init.headers().iter().any(|(name, value)| {
-                net::challenge_header(name.as_str(), value.as_bytes())
-            });
-            let init_content_type = match (
-                init.headers().get_all("content-type").iter().next(),
-                init.headers().get_all("content-type").iter().nth(1),
-            ) {
-                (Some(value), None) => value.to_str().ok().map(str::to_owned),
-                _ => None,
-            };
-            initialization_observed = Some((init_status, init_retry.clone(), init_challenge));
-            lease
-                .observe_http_many(init_status, init.headers().get_all("retry-after").iter().map(|value| value.to_str().ok()), init_challenge)
-                .map_err(|_| error("governor_error", "cannot persist timetable initialization"))?;
-            session.absorb_gsmis_headers(&init_url, init.headers())?;
-            let mut init_body = Zeroizing::new(Vec::new());
-            init.take(SESSION_BODY_LIMIT + 1)
-                .read_to_end(&mut init_body)
-                .map_err(|_| error("network_error", "timetable context body read failed"))?;
-            if init_body.len() as u64 > SESSION_BODY_LIMIT {
-                return Err(error("body_limit", "timetable context exceeds its body limit"));
-            }
-            let init_assessment = crate::html::assess_challenge_body(
-                &init_body,
-                init_content_type.as_deref(),
-                true,
-            );
-            if init_challenge || init_assessment == crate::html::ChallengeAssessment::Detected {
-                return Err(error("challenge_requires_human", "timetable context requires review"));
-            }
-            if net::carries_secret(&init_body, &input.username)
-                || net::carries_secret(&init_body, &input.password)
-                || contains_cookie(&init_body, &cookie)
-                || session.contains_secret_bytes(&init_body)
-            {
-                return Err(error("credential_echo", "timetable context contains credential material"));
-            }
-            if init_status == 429 || init_retry.is_some() {
+            let init = receive_context_response(
+                init,
+                &mut lease,
+                &mut session,
+                &init_url,
+                &mut initialization_observed,
+            )?;
+            screen_context_response(&init, &input, &session, &cookie, true)?;
+            if init.status == 429 || init.retry_after.is_some() {
                 return Err(error("cooldown", "timetable initialization was deferred"));
             }
-            if init_status != 200 {
-                if std::env::var_os("BUAA_LOCAL_TRANSPORT_ERROR_CLASS").is_some() {
-                    eprintln!("local_timetable_init_http_status={init_status}");
-                }
+            if init.status != 200 {
                 return Err(error("authentication_unconfirmed", "timetable context initialization was refused by GSMIS; inspect its HTTP status and safety receipt"));
             }
-            if !student_context_present(&init_body)? {
+            if !student_context_present(&init.body)? {
                 return Err(error("authentication_unconfirmed", "the current account has no student timetable context"));
             }
             let (cookie, expiry) = session.cookie_header(&url)?;
@@ -1475,11 +1615,9 @@ pub(crate) fn session_with_network(
     let assessment =
         crate::html::assess_challenge_body(&bytes, content_type.as_deref(), !incomplete);
     let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
-    let metadata_echo = content_type
-        .as_deref()
-        .is_some_and(|value| {
-            contains(value.as_bytes()) || issued.contains_secret_bytes(value.as_bytes())
-        });
+    let metadata_echo = content_type.as_deref().is_some_and(|value| {
+        contains(value.as_bytes()) || issued.contains_secret_bytes(value.as_bytes())
+    });
     let body_screening = decoded_body_screening(&bytes, &contains);
     // JSON-escaped spellings of an issued cookie value are screened with the
     // same decoded-literal pass the stdin credentials receive.
@@ -1577,7 +1715,7 @@ pub fn schema() -> Value {
         }
     });
     schema["session"] = json!({
-        "description": "One explicit in-memory CAS login to GSMIS, one initXsxx.do student-context initialization and exactly one loadXskbData.do read; no persistence, refresh, retry or writes. Session cookies issued by the read are absorbed into the invocation-only jar and screened as credential material, never persisted or replayed.",
+        "description": "One explicit in-memory CAS login to GSMIS, one wdkbapp application document, one initXsxx.do student-context initialization and exactly one loadXskbData.do read; no persistence, refresh, retry or writes. Session cookies issued by the application and read responses are absorbed into the invocation-only jar and screened as credential material, never persisted or replayed.",
         "input": {
             "type": "object",
             "additionalProperties": false,
@@ -1897,7 +2035,8 @@ mod session_tests {
 
     #[test]
     fn student_context_requires_a_complete_bound_identity() {
-        let valid = br#"{"data":[{"XH":"synthetic-student","YXDM":"1","YXDM_DISPLAY":"Synthetic"}]}"#;
+        let valid =
+            br#"{"data":[{"XH":"synthetic-student","YXDM":"1","YXDM_DISPLAY":"Synthetic"}]}"#;
         assert_eq!(student_context_present(valid), Ok(true));
         assert_eq!(student_context_present(br#"{"data":[]}"#), Ok(false));
         for invalid in [
@@ -1911,6 +2050,66 @@ mod session_tests {
             assert_eq!(
                 student_context_present(invalid).unwrap_err().code,
                 "upstream_parse"
+            );
+        }
+    }
+
+    #[test]
+    fn internal_student_context_allows_only_the_expected_identity_echo() {
+        let input: SessionInput =
+            serde_json::from_str(&session_input().to_string()).expect("synthetic session input");
+        let session = cas::ServiceSession::test_session_with_cookies(
+            CasService::Gsmis,
+            TIMETABLE_PAGE_URL,
+            &["GS_SESSIONID=synthetic-cookie; Path=/gsapp/"],
+        );
+        let response = |body: String| ContextResponse {
+            status: 200,
+            retry_after: None,
+            challenge: false,
+            content_type: Some("application/json".into()),
+            body: Zeroizing::new(body.into_bytes()),
+        };
+        let context =
+            response(json!({"data":[{"XH":input.username.as_str(),"XM":"Synthetic"}]}).to_string());
+        assert_eq!(
+            screen_context_response(
+                &context,
+                &input,
+                &session,
+                "GS_SESSIONID=synthetic-cookie",
+                true
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            screen_context_response(
+                &context,
+                &input,
+                &session,
+                "GS_SESSIONID=synthetic-cookie",
+                false,
+            )
+            .unwrap_err()
+            .code,
+            "credential_echo"
+        );
+        for body in [
+            json!({"data":[{"XH":input.username.as_str()}],"echo":input.password.as_str()})
+                .to_string(),
+            json!({"data":[{"XH":input.username.as_str()}],"echo":"synthetic-cookie"}).to_string(),
+        ] {
+            assert_eq!(
+                screen_context_response(
+                    &response(body),
+                    &input,
+                    &session,
+                    "GS_SESSIONID=synthetic-cookie",
+                    true,
+                )
+                .unwrap_err()
+                .code,
+                "credential_echo"
             );
         }
     }
@@ -2251,9 +2450,7 @@ mod session_tests {
     /// The `contains` predicate plays the role of the transmitted cookie,
     /// issued jar and stdin credentials in production.
     fn screened_admission(status: u16, content_type: Option<&str>, body: &[u8]) -> ReadAdmission {
-        let contains = |candidate: &[u8]| {
-            crate::net::carries_secret(candidate, "secret-canary-9")
-        };
+        let contains = |candidate: &[u8]| crate::net::carries_secret(candidate, "secret-canary-9");
         let screening = decoded_body_screening(body, &contains);
         let assessment = complete_assessment(content_type, body);
         admit_read_body(
@@ -2431,10 +2628,7 @@ mod session_tests {
                 ..ReadScreening::default()
             },
         );
-        assert_eq!(
-            admission.output["result"],
-            "sensitive_response_withheld"
-        );
+        assert_eq!(admission.output["result"], "sensitive_response_withheld");
         assert_eq!(
             admission.output["fallback_reason"],
             "response_safety_unreviewed"
@@ -2476,11 +2670,9 @@ mod session_tests {
             "20261",
             assessment,
             ReadScreening {
-                echo: jar.contains_secret_bytes(body)
-                    || issued_screening == BodyScreening::Echo,
+                echo: jar.contains_secret_bytes(body) || issued_screening == BodyScreening::Echo,
                 metadata_unreviewed: !jar.complete,
-                body_unreviewed: issued_screening == BodyScreening::Unreviewable
-                    || !jar.complete,
+                body_unreviewed: issued_screening == BodyScreening::Unreviewable || !jar.complete,
                 ..ReadScreening::default()
             },
         )
