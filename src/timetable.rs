@@ -1519,6 +1519,12 @@ fn settle_camoufox(
     let settled = match code {
         "auth_latched" => lease.finish(Outcome::CredentialRejected),
         "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+        "body_limit" if status.is_some() => lease.finish(Outcome::Http {
+            status: status.unwrap_or(500),
+            retry_after,
+            challenge,
+            network_failure: true,
+        }),
         "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
         _ if status.is_some() => lease.finish(Outcome::Http {
             status: status.unwrap_or(500),

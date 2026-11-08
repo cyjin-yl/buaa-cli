@@ -1335,7 +1335,7 @@ def perform_login(page, jar, flow, username, password):
             raise _error("auth_latched", status)
         if status == 429:
             raise _error(
-                "unavailable", status, flow.get("retry_after"), False
+                "cooldown", status, flow.get("retry_after"), flow.get("header_challenge", False)
             )
         if flow.get("header_challenge"):
             raise _error("challenge_requires_human")
