@@ -37,9 +37,10 @@
 - verification: the explicit Camofox CLI backend is live-verified for the
   current timetable and ICS; historical native failures remain documented and
   are not relabeled as accepted.
-- verification: Boya's chosen whole-list read succeeded for the selected
-  window; a separate bounded semester-course attempt stopped before its
-  business read when the CAS token landing was not confirmed.
+- verification: Boya's chosen whole-list read and current semester-course
+  pagination are live-verified; the native traversal completed 7 pages and 137
+  unique entries. Earlier token-landing/business failures remain historical;
+  mutations and their postconditions remain unverified.
 
 - Withhold Boya original ciphertext when the decrypted body cannot be screened,
   and re-screen retained pagination records against values issued by later
