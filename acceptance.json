@@ -491,7 +491,7 @@
     {
       "id": "timetable-pg",
       "title": "Postgraduate timetable/ICS",
-      "status": "partial-live-unverified",
+      "status": "partial-live-verified",
       "acceptance": "Postgraduate timetable contract verified from a real GSMIS xskb response, plus standards-compliant ICS.",
       "sources": [
         "https://github.com/roife/BUAAIcsGen",
@@ -501,6 +501,21 @@
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
       ],
       "evidence": {
+        "camoufox_live_read_2026_11_08": {
+          "command": "buaa timetable session --online on doesworkstation with protected JSON stdin and backend=camoufox",
+          "result": "parsed",
+          "backend": "camoufox",
+          "network_performed": true,
+          "term": "20261",
+          "schedule_row_count": 30,
+          "calendar_event_count": 274,
+          "semester_start": "2026-09-07",
+          "weeks": 30,
+          "ics_sha256": "459e98656fc7a363efca3e6f8b42c212846a9b73bb694a8cd3f941d3dccdac6b",
+          "stdout_sha256": "6c532f5aaabc7af27bce2fd11fe9146861f72876adee693fda3237d4270a3947",
+          "independent_consumer": "icalendar parsed 274 VEVENTs; their DTSTART/DTEND/SUMMARY/LOCATION multiset exactly equals the normalized timetable derivation; UIDs are unique, required properties are present, CRLF is preserved and every physical line is at most 75 octets",
+          "scope": "Real CLI execution through a fresh strict-TLS Camoufox context with real guard JavaScript and visible exact inputs. No cookies, storage state, init body or authentication trace values were exported. The default native transport and other terms/services remain separately unverified; no mutation occurred."
+        },
         "current_context_repair_2026_11_07": "The owner-authorized browser observed the current wdkbapp page, current term 20261, initXsxx.do student context and a successful current-term read. A controlled same-session comparison admitted initXsxx.do with and without _yhz; a fixed no-role application-document GET followed by initXsxx.do also succeeded, and disabled-JavaScript navigation showed that the document issues _WEU through HTTP Set-Cookie. The Rust client now loads that document, absorbs reviewed cookie replacements, initializes the student context and preserves explicit term selection. Its internal-only initialization body permits the expected XH/username identity while still refusing password, cookie and other session-material echoes. Complete transmitted context Cookie headers remain in the bounded echo guard across rotation. Thirty-three focused cases pass. Three post-repair native attempts stopped before this chain: one CAS transport connect error, one relying-party handoff confirmation failure, and one safe diagnostic observation of HTTP 401 at SSO /login. The last invocation returned authentication_unconfirmed before the separate 401 classification repair; it produced no application read. No parsed native timetable or live-derived ICS is claimed, and authentication attempts are stopped.",
         "degraded_read_2026_11_06": "After service-parameter preservation, one owner-authorized CAS session reached the GSMIS xskb endpoint, which returned HTTP 403 with a text/html body. The response was withheld as response_safety_unreviewed; no schedule rows or live-derived ICS were obtained. This is degraded live evidence, not timetable acceptance.",
         "offline_observation_2026_10_31": {
@@ -533,7 +548,7 @@
           "scope": "Deployment identity only. No credential was submitted, no session established, no timetable read performed; the redirect was read, not followed with a ticket."
         }
       },
-      "blocker": "Earlier authorized GSMIS invocations reached real HTTP-403 responses and remain historical degraded evidence. The current application-document repair has not been exercised end-to-end natively. Its latest safe diagnostic observed HTTP 401 at SSO /login after the credential POST; no application request was sent. Authentication is stopped as a rejection signal. No parsed live schedule or live-derived ICS has been obtained; status stays partial-live-unverified."
+      "blocker": "The explicit Camofox backend is live-verified for the current term and live-derived ICS. Historical native HTTP 401/403 failures remain evidence for that transport, not a claim that it is accepted. Other terms, services and mutations remain outside this proof; status is partial-live-verified."
     },
     {
       "id": "checkin",

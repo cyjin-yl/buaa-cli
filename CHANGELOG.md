@@ -24,15 +24,19 @@
 - timetable: retain complete context-request Cookie headers in the bounded
   echo guard across cookie rotation, screen decoded context strings, and omit
   the fragment from the browser-bound Referer.
+- timetable: add an explicit `backend="camoufox"` that runs the real SSO guard
+  and current GSMIS read in one fresh strict-TLS browser context, without
+  exporting cookies or storage state; real CLI verification produced 30
+  schedule rows and 274 independently validated ICS events.
 - session: retain the original admission failure category instead of hiding
   it behind a generic verdict; publish `network_error` and
   `authentication_unconfirmed` in the CLI error contract.
 - session: classify an SSO `/login` HTTP 401 after the credential POST as
   `auth_latched`, so callers do not mistake a sign-on rejection for an
   unconfirmed relying-party handoff.
-- verification: the current account's live timetable page and read contract
-  were observed in an owner-authorized browser; the native CLI still has
-  connection/refusal/cooldown outcomes and is not yet live-accepted.
+- verification: the explicit Camofox CLI backend is live-verified for the
+  current timetable and ICS; historical native failures remain documented and
+  are not relabeled as accepted.
 - verification: Boya's chosen whole-list read succeeded for the selected
   window; a separate bounded semester-course attempt stopped before its
   business read when the CAS token landing was not confirmed.

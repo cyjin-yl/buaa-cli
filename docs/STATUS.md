@@ -41,6 +41,24 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-08: real Camofox CLI timetable/ICS verified
+
+`buaa timetable session --online` now accepts an explicit
+`backend:"camoufox"`. On doesworkstation, the actual CLI used a fresh
+strict-TLS Camoufox context, ran the real SSO guard and completed the current
+GSMIS application/init/xskb chain without exporting cookies, storage state or
+authentication material. The current-term read returned `result=parsed`, 30
+schedule rows and 274 ICS events, with `network_performed=true`.
+
+Independent `icalendar` consumption parsed all 274 events and matched the
+complete DTSTART/DTEND/SUMMARY/LOCATION multiset against the normalized
+timetable. UIDs are unique, required properties are present, CRLF is used and
+all physical lines satisfy the 75-octet bound. ICS SHA-256 is
+`459e98656fc7a363efca3e6f8b42c212846a9b73bb694a8cd3f941d3dccdac6b`.
+This is current-term real-CLI acceptance for the explicit backend, not native
+transport acceptance, other-service coverage or mutation authorization.
+Earlier native failures below remain unchanged historical evidence.
+
 ## 2026-11-07: current-term timetable binding, native read still blocked
 
 The current deployment's `wdkbapp` document issues application cookies and
