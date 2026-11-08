@@ -4,6 +4,10 @@
 
 The interoperability profile uses reviewed non-sensitive field, key, relation and FTS semantics. The implementation and fixture SQL are original. No private implementation, record, media file, operational default or credential is included in this project.
 
+## Intended use
+
+The search is built around managing a transcript corpus of recorded teaching material. In the current workflow it pairs with SPOC lecture replay: replay captures are transcribed, registered as catalog assets, and this command searches those course transcripts — for example, to recover homework requirements and submission deadlines from a lecture, or to cross-check a deadline stated in a recording against the course task list. The same catalog can hold any other transcribed audio the operator registers, such as meeting notes. The catalog contains only assets already registered by the operator, and the command performs no capture itself.
+
 ## Input and output
 
 ```sh
