@@ -3437,7 +3437,6 @@ pub(crate) fn http_client() -> Result<Client, Error> {
         .build()
         .map_err(|_| unavailable())
 }
-
 fn allowed_origin(url: &Url, service: CasService) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
@@ -3649,7 +3648,18 @@ fn send(
             SessionStart::Sent(request.send())
         }) {
             Ok(SessionStart::Sent(Ok(response))) => response,
-            Ok(SessionStart::Sent(Err(_))) => return Err(unavailable()),
+            Ok(SessionStart::Sent(Err(error))) => {
+                let message = if error.is_timeout() {
+                    "Classroom session request timed out."
+                } else if error.is_connect() {
+                    "Classroom session transport could not connect."
+                } else if error.is_request() {
+                    "Classroom session request could not be constructed."
+                } else {
+                    "Classroom session transport failed before a reviewed response."
+                };
+                return Err(Error::new("network_error", message));
+            }
             Ok(SessionStart::CookieUnusable) => return Err(scoped_cookie_unusable()),
             Err(crate::governor::FollowupError::Governor(_)) => {
                 return Err(governor_state_unknown());
@@ -6259,6 +6269,24 @@ impl ServiceSession {
         }
     }
 
+    /// Retain the complete transmitted header in the bounded echo guard before
+    /// returning a sensitive request header. Later cookie rotation must not
+    /// erase an encoded composite spelling of an earlier header.
+    pub(crate) fn cookie_header_for_transmission(
+        &mut self,
+        url: &Url,
+    ) -> Result<(Option<HeaderValue>, Option<SystemTime>), Error> {
+        let (cookie, expiry) = self.cookie_header(url)?;
+        let Some(cookie) = cookie else {
+            return Ok((None, expiry));
+        };
+        let index = self.jar.retain_transmitted_header(cookie)?;
+        let mut header = HeaderValue::from_str(self.jar.transmitted_headers[index].as_str())
+            .map_err(|_| invalid())?;
+        header.set_sensitive(true);
+        Ok((Some(header), expiry))
+    }
+
     pub(crate) fn absorb_library_headers(
         &mut self,
         url: &Url,
@@ -6267,6 +6295,23 @@ impl ServiceSession {
         if self.jar.service != CasService::Library
             || !allowed(url, self.jar.service)
             || url.host_str() != Some("booking.lib.buaa.edu.cn")
+        {
+            return Err(invalid());
+        }
+        self.jar.absorb(url, headers)
+    }
+
+    /// Apply one reviewed same-origin GSMIS response's cookie declarations to
+    /// the in-memory session before the following read. Replaced/expired
+    /// values remain in the invocation's echo guard; nothing is persisted.
+    pub(crate) fn absorb_gsmis_headers(
+        &mut self,
+        url: &Url,
+        headers: &HeaderMap,
+    ) -> Result<(), Error> {
+        if self.jar.service != CasService::Gsmis
+            || !allowed(url, self.jar.service)
+            || url.host_str() != Some(GSMIS_HOST)
         {
             return Err(invalid());
         }
@@ -6419,6 +6464,15 @@ pub(crate) fn authenticate_service(
     }
     if landed.retry_after.is_some() || landed.status == 429 {
         return Err(deferred());
+    }
+    if landed.status == 401
+        && landed.url.host_str() == Some("sso.buaa.edu.cn")
+        && landed.url.path() == "/login"
+    {
+        return Err(Error::new(
+            "auth_latched",
+            "Service authentication was rejected by the sign-on service; no retry was performed.",
+        ));
     }
     // Body facts matter as much as header facts: a 200 that still carries a
     // challenge control, an unreviewed challenge/interaction, or a password

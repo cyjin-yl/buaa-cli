@@ -22,7 +22,9 @@
 //!
 //! A separate `session` entry point performs, on explicit authorization and
 //! `--online`, one in-memory CAS sign-on to the graduate timetable service
-//! followed by exactly one `loadXskbData.do` read in the same invocation. It
+//! followed by the current timetable application document, its
+//! student-context initialization and exactly one `loadXskbData.do`
+//! read in the same invocation. It
 //! never retries, refreshes or caches, and credential material never leaves
 //! the invocation. The GSMIS service re-issues its session cookie on the
 //! read; those declarations are absorbed into the invocation's in-memory
@@ -30,11 +32,15 @@
 //! replayed.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::Read;
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::process::CommandExt;
+use std::process::Child;
+use std::time::{Duration, Instant};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
@@ -501,17 +507,22 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Graduate timetable session: one explicit in-memory CAS login to GSMIS
-// followed by exactly one loadXskbData.do read. Secrets are stdin-only inputs;
-// they are never persisted, logged or placed inside a generic Value tree. The
-// read performs no writes, retries, refreshes or pagination. A session cookie
-// issued by the read response is absorbed into the same invocation-only jar
-// and screened like every other credential, never exported or persisted.
+// Graduate timetable session: one explicit in-memory CAS login to GSMIS,
+// one application document, one student-context initialization and exactly
+// one loadXskbData.do read. Secrets are stdin-only inputs; they are never
+// persisted, logged or placed inside a generic Value tree. The read performs
+// no writes, retries, refreshes or pagination. Session cookies issued by the
+// application and read responses are absorbed into the same invocation-only
+// jar and screened like every other credential, never exported or persisted.
 
 const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
 const SESSION_MAX_INPUT: usize = 65536;
+const TIMETABLE_PAGE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do";
+const TIMETABLE_PORTAL_URL: &str =
+    "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
 const TIMETABLE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do";
-const TIMETABLE_REFERER: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
+const TIMETABLE_REFERER: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do";
+const TIMETABLE_INIT_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/wdkcb/initXsxx.do";
 
 fn error(code: &'static str, message: &'static str) -> Error {
     Error::new(code, message)
@@ -550,12 +561,21 @@ where
     deserializer.deserialize_map(Object(std::marker::PhantomData))
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SessionBackend {
+    #[default]
+    Native,
+    Camoufox,
+}
+
 struct SessionInput {
     authorized: bool,
     username: Zeroizing<String>,
     password: Zeroizing<String>,
     intent: Zeroizing<String>,
     read: SessionRead,
+    backend: SessionBackend,
 }
 
 impl<'de> Deserialize<'de> for SessionInput {
@@ -572,6 +592,8 @@ impl<'de> Deserialize<'de> for SessionInput {
             intent: Zeroizing<String>,
             #[serde(deserialize_with = "deserialize_object")]
             read: SessionRead,
+            #[serde(default)]
+            backend: SessionBackend,
         }
         let raw: Raw = deserialize_object(deserializer)?;
         Ok(Self {
@@ -580,6 +602,7 @@ impl<'de> Deserialize<'de> for SessionInput {
             password: raw.password,
             intent: raw.intent,
             read: raw.read,
+            backend: raw.backend,
         })
     }
 }
@@ -610,14 +633,186 @@ fn valid_term_code(term: &str) -> bool {
     bytes.len() == 5 && bytes.iter().all(u8::is_ascii_digit)
 }
 
-fn xskb_request(client: &Client, cookie: &str, term: &str) -> reqwest::blocking::RequestBuilder {
+fn xskb_request(
+    client: &Client,
+    cookie: reqwest::header::HeaderValue,
+    term: &str,
+) -> reqwest::blocking::RequestBuilder {
+    session_request(client, TIMETABLE_URL, cookie).form(&[
+        ("ZC", ""),
+        ("XNXQDM", term),
+        ("XH", ""),
+        ("XQDM", ""),
+    ])
+}
+
+/// The live GSMIS application admits only its own student-context envelope.
+/// Inspect shape and field identity, never export the returned account values.
+fn student_context_present(bytes: &[u8]) -> Result<bool, Error> {
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    let value = PrivateValue::deserialize(&mut de)
+        .map_err(|_| error("upstream_parse", "timetable context is not strict JSON"))?;
+    de.end()
+        .map_err(|_| error("upstream_parse", "timetable context has trailing content"))?;
+    let Some(rows) = value.0.get("data").and_then(Value::as_array) else {
+        return Err(error(
+            "upstream_parse",
+            "timetable context has no data array",
+        ));
+    };
+    for row in rows {
+        let Some(row) = row.as_object() else {
+            return Err(error(
+                "upstream_parse",
+                "timetable context row is not an object",
+            ));
+        };
+        let Some(id) = row.get("XH").and_then(Value::as_str) else {
+            return Err(error(
+                "upstream_parse",
+                "timetable context has no student identity field",
+            ));
+        };
+        if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+            return Err(error(
+                "upstream_parse",
+                "timetable context identity is not admissible",
+            ));
+        }
+    }
+    Ok(!rows.is_empty())
+}
+
+fn session_request(
+    client: &Client,
+    url: &str,
+    cookie: reqwest::header::HeaderValue,
+) -> reqwest::blocking::RequestBuilder {
     client
-        .post(TIMETABLE_URL)
-        .form(&[("ZC", ""), ("XNXQDM", term), ("XH", ""), ("XQDM", "")])
+        .post(url)
         .header("Cookie", cookie)
         .header("Accept", "application/json, text/javascript, */*; q=0.01")
         .header("X-Requested-With", "XMLHttpRequest")
         .header("Referer", TIMETABLE_REFERER)
+}
+
+struct ContextResponse {
+    status: u16,
+    retry_after: Option<String>,
+    challenge: bool,
+    content_type: Option<String>,
+    body: Zeroizing<Vec<u8>>,
+}
+
+/// Persist response safety facts before any cookie or body processing can
+/// fail, then absorb the reviewed same-origin cookie declarations and retain
+/// a bounded body for the caller's challenge and credential-echo screens.
+fn receive_context_response(
+    response: Response,
+    lease: &mut RequestLease<'_>,
+    session: &mut cas::ServiceSession,
+    url: &url::Url,
+    observed: &mut Option<(u16, Option<String>, bool)>,
+) -> Result<ContextResponse, Error> {
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get_all("retry-after")
+        .iter()
+        .find_map(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let challenge = response
+        .headers()
+        .iter()
+        .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
+    let content_type = match (
+        response.headers().get_all("content-type").iter().next(),
+        response.headers().get_all("content-type").iter().nth(1),
+    ) {
+        (Some(value), None) => value.to_str().ok().map(str::to_owned),
+        _ => None,
+    };
+    *observed = Some((status, retry_after.clone(), challenge));
+    lease
+        .observe_http_many(
+            status,
+            response
+                .headers()
+                .get_all("retry-after")
+                .iter()
+                .map(|value| value.to_str().ok()),
+            challenge,
+        )
+        .map_err(|_| error("governor_error", "cannot persist timetable response"))?;
+    session.absorb_gsmis_headers(url, response.headers())?;
+    let mut body = Zeroizing::new(Vec::new());
+    response
+        .take(SESSION_BODY_LIMIT + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| error("network_error", "timetable context body read failed"))?;
+    if body.len() as u64 > SESSION_BODY_LIMIT {
+        return Err(error(
+            "body_limit",
+            "timetable context exceeds its body limit",
+        ));
+    }
+    Ok(ContextResponse {
+        status,
+        retry_after,
+        challenge,
+        content_type,
+        body,
+    })
+}
+
+fn screen_context_response(
+    response: &ContextResponse,
+    input: &SessionInput,
+    session: &cas::ServiceSession,
+    expected_identity_echo: bool,
+) -> Result<(), Error> {
+    let assessment =
+        crate::html::assess_challenge_body(&response.body, response.content_type.as_deref(), true);
+    if response.challenge || assessment == crate::html::ChallengeAssessment::Detected {
+        return Err(error(
+            "challenge_requires_human",
+            "timetable context requires review",
+        ));
+    }
+    // initXsxx returns the authenticated student's XH, normally the CAS
+    // username. Its body is consumed only by student_context_present and is
+    // never exported, so that expected identity is not an output echo. The
+    // application document has no such exception; password and cookie
+    // material remain refused at both steps.
+    if (!expected_identity_echo && net::carries_secret(&response.body, &input.username))
+        || net::carries_secret(&response.body, &input.password)
+        || session.contains_secret_bytes(&response.body)
+    {
+        return Err(error(
+            "credential_echo",
+            "timetable context contains credential material",
+        ));
+    }
+    match decoded_body_screening(&response.body, &|candidate: &[u8]| {
+        (!expected_identity_echo && net::carries_secret(candidate, &input.username))
+            || net::carries_secret(candidate, &input.password)
+            || session.contains_secret_bytes(candidate)
+    }) {
+        BodyScreening::Clear => {}
+        BodyScreening::Echo => {
+            return Err(error(
+                "credential_echo",
+                "timetable context contains decoded credential material",
+            ));
+        }
+        BodyScreening::Unreviewable => {
+            return Err(error(
+                "response_safety_unreviewed",
+                "timetable context cannot be screened completely",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Book the follow-up read slot under the shared governor. A cooldown is a
@@ -688,21 +883,6 @@ fn withheld(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'sta
         "body_byte_length": bytes.len(),
         "raw_response_sha256": format!("{:x}", Sha256::digest(bytes)),
     })
-}
-
-fn contains_cookie(bytes: &[u8], cookie: &str) -> bool {
-    net::carries_secret(bytes, cookie)
-        || cookie
-            .split(';')
-            .filter_map(|part| part.split_once('='))
-            .any(|(_, value)| {
-                let value = value.trim();
-                net::carries_secret(bytes, value)
-                    || value
-                        .strip_prefix('"')
-                        .and_then(|inner| inner.strip_suffix('"'))
-                        .is_some_and(|unquoted| net::carries_secret(bytes, unquoted))
-            })
 }
 
 /// Upper bound on the `Set-Cookie` declarations one read response can
@@ -1148,8 +1328,930 @@ fn admit_read_body(
     ReadAdmission { output, denied }
 }
 
+const CAMOUFOX_HELPER: &str = include_str!("../scripts/camoufox_timetable.py");
+
+enum CamoufoxOutput {
+    Read(CamoufoxRead),
+    Error(CamoufoxError),
+}
+
+impl<'de> Deserialize<'de> for CamoufoxOutput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = CamoufoxOutput;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a strict Camoufox result object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut result: Option<String> = None;
+                let mut schema_version: Option<u32> = None;
+                let mut http_status: Option<u16> = None;
+                let mut content_type: Option<Option<String>> = None;
+                let mut body_base64: Option<Option<Zeroizing<String>>> = None;
+                let mut body_sha256: Option<Option<String>> = None;
+                let mut body_byte_length: Option<Option<u64>> = None;
+                let mut header_challenge: Option<bool> = None;
+                let mut retry_after: Option<Option<String>> = None;
+                let mut denied: Option<bool> = None;
+                let mut refusal_reason: Option<Option<String>> = None;
+                let mut error_code: Option<String> = None;
+                let mut message: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    macro_rules! field {
+                        ($field:ident) => {
+                            if $field.is_some() {
+                                return Err(serde::de::Error::custom("duplicate envelope member"));
+                            }
+                        };
+                    }
+                    match key.as_str() {
+                        "result" => field!(result),
+                        "schema_version" => field!(schema_version),
+                        "http_status" => field!(http_status),
+                        "content_type" => field!(content_type),
+                        "body_base64" => field!(body_base64),
+                        "body_sha256" => field!(body_sha256),
+                        "body_byte_length" => field!(body_byte_length),
+                        "header_challenge" => field!(header_challenge),
+                        "retry_after" => field!(retry_after),
+                        "denied" => field!(denied),
+                        "refusal_reason" => field!(refusal_reason),
+                        "error" => field!(error_code),
+                        "message" => field!(message),
+                        _ => return Err(serde::de::Error::custom("unknown envelope member")),
+                    }
+                    match key.as_str() {
+                        "result" => result = Some(map.next_value()?),
+                        "schema_version" => schema_version = Some(map.next_value()?),
+                        "http_status" => http_status = Some(map.next_value()?),
+                        "content_type" => content_type = Some(map.next_value()?),
+                        "body_base64" => {
+                            body_base64 =
+                                Some(map.next_value::<Option<String>>()?.map(Zeroizing::new));
+                        }
+                        "body_sha256" => body_sha256 = Some(map.next_value()?),
+                        "body_byte_length" => body_byte_length = Some(map.next_value()?),
+                        "header_challenge" => header_challenge = Some(map.next_value()?),
+                        "retry_after" => retry_after = Some(map.next_value()?),
+                        "denied" => denied = Some(map.next_value()?),
+                        "refusal_reason" => refusal_reason = Some(map.next_value()?),
+                        "error" => error_code = Some(map.next_value()?),
+                        "message" => message = Some(map.next_value()?),
+                        _ => unreachable!(),
+                    }
+                }
+                let schema_version: u32 = schema_version
+                    .ok_or_else(|| serde::de::Error::missing_field("schema_version"))?;
+                match result.as_deref() {
+                    Some("read") if error_code.is_some() || message.is_some() => {
+                        Err(serde::de::Error::custom("error members on a read envelope"))
+                    }
+                    Some("read") => Ok(CamoufoxOutput::Read(CamoufoxRead {
+                        schema_version,
+                        http_status: http_status
+                            .ok_or_else(|| serde::de::Error::missing_field("http_status"))?,
+                        content_type: content_type
+                            .ok_or_else(|| serde::de::Error::missing_field("content_type"))?,
+                        body_base64: body_base64
+                            .ok_or_else(|| serde::de::Error::missing_field("body_base64"))?,
+                        body_sha256: body_sha256
+                            .ok_or_else(|| serde::de::Error::missing_field("body_sha256"))?,
+                        body_byte_length: body_byte_length
+                            .ok_or_else(|| serde::de::Error::missing_field("body_byte_length"))?,
+                        header_challenge: header_challenge
+                            .ok_or_else(|| serde::de::Error::missing_field("header_challenge"))?,
+                        retry_after: retry_after.unwrap_or(None),
+                        denied: denied.ok_or_else(|| serde::de::Error::missing_field("denied"))?,
+                        refusal_reason: refusal_reason
+                            .ok_or_else(|| serde::de::Error::missing_field("refusal_reason"))?,
+                    })),
+                    Some("error")
+                        if content_type.is_some()
+                            || body_base64.is_some()
+                            || body_sha256.is_some()
+                            || body_byte_length.is_some()
+                            || denied.is_some()
+                            || refusal_reason.is_some() =>
+                    {
+                        Err(serde::de::Error::custom(
+                            "read members on an error envelope",
+                        ))
+                    }
+                    Some("error") => Ok(CamoufoxOutput::Error(CamoufoxError {
+                        schema_version,
+                        error: error_code
+                            .ok_or_else(|| serde::de::Error::missing_field("error"))?,
+                        message: message
+                            .ok_or_else(|| serde::de::Error::missing_field("message"))?,
+                        http_status,
+                        retry_after: retry_after.unwrap_or(None),
+                        header_challenge: header_challenge.unwrap_or(false),
+                    })),
+                    Some(_) => Err(serde::de::Error::custom("unknown result variant")),
+                    None => Err(serde::de::Error::missing_field("result")),
+                }
+            }
+        }
+        deserializer.deserialize_map(Visitor)
+    }
+}
+
+struct CamoufoxRead {
+    schema_version: u32,
+    http_status: u16,
+    content_type: Option<String>,
+    body_base64: Option<Zeroizing<String>>,
+    body_sha256: Option<String>,
+    body_byte_length: Option<u64>,
+    header_challenge: bool,
+    retry_after: Option<String>,
+    denied: bool,
+    refusal_reason: Option<String>,
+}
+
+struct CamoufoxError {
+    schema_version: u32,
+    error: String,
+    #[allow(dead_code)]
+    message: String,
+    http_status: Option<u16>,
+    retry_after: Option<String>,
+    header_challenge: bool,
+}
+
+fn camoufox_failure(code: &str) -> Error {
+    match code {
+        "auth_latched" => error("auth_latched", "Camoufox CAS authentication was rejected"),
+        "challenge_requires_human" => error(
+            "challenge_requires_human",
+            "Camoufox CAS authentication requires a human challenge",
+        ),
+        "network_error" => error("network_error", "Camoufox timetable transport failed"),
+        "authentication_unconfirmed" => error(
+            "authentication_unconfirmed",
+            "Camoufox CAS handoff could not be confirmed",
+        ),
+        "credential_echo" => error(
+            "credential_echo",
+            "Camoufox response contains credential material",
+        ),
+        "response_safety_unreviewed" => error(
+            "response_safety_unreviewed",
+            "Camoufox response could not be screened completely",
+        ),
+        "cooldown" => error("cooldown", "the service deferred the timetable session"),
+        "invalid_input" => session_invalid(),
+        _ => error("unavailable", "Camoufox runtime is unavailable"),
+    }
+}
+
+fn settle_camoufox(
+    lease: RequestLease<'_>,
+    code: &str,
+    status: Option<u16>,
+    retry_after: Option<&str>,
+    challenge: bool,
+) -> Result<(), Error> {
+    let settled = match code {
+        "auth_latched" => lease.finish(Outcome::CredentialRejected),
+        "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+        "body_limit" if status.is_some() => lease.finish(Outcome::Http {
+            status: status.unwrap_or(500),
+            retry_after,
+            challenge,
+            network_failure: true,
+        }),
+        "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+        _ if status.is_some() => lease.finish(Outcome::Http {
+            status: status.unwrap_or(500),
+            retry_after,
+            challenge,
+            network_failure: false,
+        }),
+        _ => lease.finish_without_request(),
+    };
+    settled.map_err(|_| error("governor_error", "cannot settle Camoufox timetable attempt"))
+}
+
+/// Parent-enforced bound slightly above the helper's own 600s SIGALRM
+/// deadline.  The parent never waits past this point even if the helper or a
+/// spawned browser process ignores its own deadline.
+const CAMOUFOX_PARENT_DEADLINE: Duration = Duration::from_secs(630);
+/// After the helper exits, or after its stdin delivery fails, only this much
+/// extra time is spent finishing the pipes; a detached grandchild holding a
+/// write end must not stall the release of the authentication lease.
+const CAMOUFOX_DRAIN_WINDOW: Duration = Duration::from_millis(500);
+/// Bounded wait for the killed helper to become reapable.
+const CAMOUFOX_REAP_WAIT: Duration = Duration::from_secs(5);
+const CAMOUFOX_POLL_MS: i32 = 50;
+/// Stored-stdout cap equal to the historical `wait_with_output` bound: the
+/// caller rejects any stream longer than this, so retaining more would be
+/// memory spent on bytes that can never be admitted.
+const CAMOUFOX_STDOUT_CAP: usize = SESSION_BODY_LIMIT as usize * 2 + 65536;
+
+enum CamoufoxWait {
+    Deadline,
+    InputFailed,
+    Failed,
+}
+
+struct CamoufoxCollected {
+    output: std::process::Output,
+    /// True stdout stream length in bytes, including any tail discarded
+    /// after the stored cap; the caller's bound is checked against this.
+    stdout_len: u64,
+}
+
+fn camoufox_unavailable() -> Error {
+    error("unavailable", "Camoufox runtime is unavailable")
+}
+
+fn camoufox_nonblocking(fd: std::os::unix::io::RawFd) -> Result<(), Error> {
+    // SAFETY: `fd` is an open descriptor owned by this process; F_GETFL and
+    // F_SETFL only read or update its file-status flags.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return Err(camoufox_unavailable());
+        }
+    }
+    Ok(())
+}
+
+/// Create the credential-input pipe.  The blocking, close-on-exec read end is
+/// installed as the helper's stdin while the nonblocking write end stays
+/// private to the parent, so the parent never blocks inside write(2) yet the
+/// helper's own read end keeps ordinary blocking semantics.
+fn camoufox_stdin_pipe() -> Result<(std::fs::File, std::fs::File), Error> {
+    let mut fds = [-1 as libc::c_int; 2];
+    // SAFETY: `fds` is a valid two-element array filled by pipe2; both
+    // descriptors are O_CLOEXEC so nothing extra leaks into the helper.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return Err(camoufox_unavailable());
+    }
+    // SAFETY: both descriptors were just created by pipe2 and are owned here;
+    // they are adopted exactly once into Files or closed on the error path.
+    unsafe {
+        if camoufox_nonblocking(fds[1]).is_err() {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+            return Err(camoufox_unavailable());
+        }
+        Ok((
+            std::fs::File::from_raw_fd(fds[0]),
+            std::fs::File::from_raw_fd(fds[1]),
+        ))
+    }
+}
+
+/// Read whatever is immediately available from a nonblocking descriptor.
+/// `count` tracks the real stream length even after `stored` stops growing,
+/// so the caller's output bound still applies to discarded bytes.
+/// Returns true when the descriptor reached EOF or failed.
+fn camoufox_drain(
+    fd: std::os::unix::io::RawFd,
+    stored: &mut Vec<u8>,
+    count: &mut u64,
+    cap: usize,
+) -> bool {
+    let mut buffer = [0u8; 16384];
+    loop {
+        // SAFETY: `fd` stays open for the duration of the call and `buffer`
+        // is a valid writable region of this thread's stack.
+        let read =
+            unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
+        if read > 0 {
+            let read = read as usize;
+            *count = count.saturating_add(read as u64);
+            let capacity = cap.saturating_sub(stored.len());
+            if capacity > 0 {
+                stored.extend_from_slice(&buffer[..read.min(capacity)]);
+            }
+            continue;
+        }
+        if read == 0 {
+            return true;
+        }
+        let error = std::io::Error::last_os_error().raw_os_error();
+        if error == Some(libc::EINTR) {
+            continue;
+        }
+        return error != Some(libc::EAGAIN) && error != Some(libc::EWOULDBLOCK);
+    }
+}
+
+/// Write more of the pending credential input through the nonblocking pipe.
+/// Returns true when the whole input has been handed to the kernel.
+fn camoufox_stdin_write(fd: std::os::unix::io::RawFd, pending: &mut &[u8]) -> Result<bool, Error> {
+    if pending.is_empty() {
+        return Ok(true);
+    }
+    // SAFETY: `fd` is the nonblocking write end of the session pipe and
+    // `pending` is borrowed from `input_text` for the call.
+    let written =
+        unsafe { libc::write(fd, pending.as_ptr().cast::<libc::c_void>(), pending.len()) };
+    if written > 0 {
+        *pending = &pending[written as usize..];
+        return Ok(pending.is_empty());
+    }
+    if written == 0 {
+        return Err(error(
+            "unavailable",
+            "Camoufox input could not be delivered",
+        ));
+    }
+    let os_error = std::io::Error::last_os_error().raw_os_error();
+    if os_error == Some(libc::EINTR) {
+        return Ok(false);
+    }
+    if os_error == Some(libc::EAGAIN) || os_error == Some(libc::EWOULDBLOCK) {
+        return Ok(false);
+    }
+    Err(error(
+        "unavailable",
+        "Camoufox input could not be delivered",
+    ))
+}
+
+/// Terminate the helper's entire process group, then reap the leader.
+/// The helper becomes its own group leader before exec, so `kill(-pid)` also
+/// reaches any browser descendants it spawned; the per-leader fallback covers
+/// the child even if group delivery fails.  Every wait inside this routine
+/// is bounded, so it can never reintroduce an unbounded wait.
+fn camoufox_stop(child: &mut Child) -> Result<(), Error> {
+    let pid = i32::try_from(child.id()).map_err(|_| camoufox_unavailable())?;
+    // SAFETY: both calls address only the spawned helper and its process
+    // group; an ESRCH result means that member is already gone.
+    unsafe {
+        let _ = libc::kill(-pid, libc::SIGKILL);
+        let _ = libc::kill(pid, libc::SIGKILL);
+    }
+    let deadline = Instant::now()
+        .checked_add(CAMOUFOX_REAP_WAIT)
+        .ok_or_else(camoufox_unavailable)?;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {}
+            Err(_) => return Err(camoufox_unavailable()),
+        }
+        if Instant::now() >= deadline {
+            // SIGKILL guarantees eventual reaping; a leader still unreaped
+            // past this bound is a kernel-level anomaly, reported not
+            // retried.  `Child::drop` itself never blocks.
+            let _ = child.kill();
+            let _ = child.try_wait();
+            return Err(camoufox_unavailable());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Bounded parent wait for the helper, replacing `wait_with_output`.  Stdout
+/// and stderr are drained through poll(2) with nonblocking descriptors, the
+/// credential input is written through the private nonblocking pipe, and on
+/// deadline or failure the whole process group is terminated and reaped
+/// before returning, so no path leaves a running helper or a permanently
+/// blocked read behind.  Stderr is drained only to keep the helper unblocked
+/// and is never retained or surfaced.
+fn camoufox_wait(
+    child: &mut Child,
+    stdin_write: std::fs::File,
+    input_text: &str,
+    stdout: std::process::ChildStdout,
+    stderr: std::process::ChildStderr,
+) -> Result<CamoufoxCollected, CamoufoxWait> {
+    let stdin_fd = stdin_write.as_raw_fd();
+    let mut stdin: Option<std::fs::File> = (!input_text.is_empty()).then_some(stdin_write);
+    let mut pending: &[u8] = input_text.as_bytes();
+    let mut stdin_failed = false;
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+    let mut stdout_stored: Vec<u8> = Vec::new();
+    let mut stdout_count = 0u64;
+    let mut stderr_stored: Vec<u8> = Vec::new();
+    let mut stderr_count = 0u64;
+    let mut status: Option<std::process::ExitStatus> = None;
+    let mut result: Option<CamoufoxWait> = None;
+    let deadline = Instant::now()
+        .checked_add(CAMOUFOX_PARENT_DEADLINE)
+        .unwrap_or_else(Instant::now);
+    // Once the helper has exited, the pipes only get this much extra time;
+    // once credential delivery fails, the run cannot produce a usable
+    // result, so the same short window applies.
+    let mut wait_limit = deadline;
+
+    loop {
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(Some(exit)) => {
+                    status = Some(exit);
+                    wait_limit = Instant::now()
+                        .checked_add(CAMOUFOX_DRAIN_WINDOW)
+                        .unwrap_or(deadline)
+                        .min(deadline);
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    result = Some(CamoufoxWait::Failed);
+                    break;
+                }
+            }
+        }
+        if status.is_some() && stdin.is_none() && !stdout_open && !stderr_open {
+            // The helper is reaped and every pipe reached EOF; nothing is
+            // left to service.
+            break;
+        }
+        if stdin.is_none() && !stdout_open && !stderr_open && status.is_none() {
+            // Nothing left to service; poll is unnecessary while the child
+            // still runs, but the wait bound is still enforced.
+            std::thread::sleep(Duration::from_millis(CAMOUFOX_POLL_MS as u64));
+            if Instant::now() >= wait_limit {
+                result = Some(if stdin_failed {
+                    CamoufoxWait::InputFailed
+                } else {
+                    CamoufoxWait::Deadline
+                });
+                break;
+            }
+            continue;
+        }
+        if Instant::now() >= wait_limit {
+            if status.is_some() {
+                break;
+            }
+            result = Some(if stdin_failed {
+                CamoufoxWait::InputFailed
+            } else {
+                CamoufoxWait::Deadline
+            });
+            break;
+        }
+        let mut fds = [
+            libc::pollfd {
+                fd: -1,
+                events: 0,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: -1,
+                events: 0,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: -1,
+                events: 0,
+                revents: 0,
+            },
+        ];
+        if let Some(file) = stdin.as_ref() {
+            fds[0].fd = file.as_raw_fd();
+            fds[0].events = libc::POLLOUT;
+        }
+        if stdout_open {
+            fds[1].fd = stdout.as_raw_fd();
+            fds[1].events = libc::POLLIN;
+        }
+        if stderr_open {
+            fds[2].fd = stderr.as_raw_fd();
+            fds[2].events = libc::POLLIN;
+        }
+        // SAFETY: `fds` is a valid array for the duration of the call and
+        // every nonnegative descriptor it carries is owned by this process.
+        let ready = unsafe {
+            libc::poll(
+                fds.as_mut_ptr(),
+                fds.len() as libc::nfds_t,
+                CAMOUFOX_POLL_MS,
+            )
+        };
+        if ready < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            result = Some(CamoufoxWait::Failed);
+            break;
+        }
+        if stdin.is_some() {
+            let events = fds[0].revents;
+            let mut close_stdin = false;
+            if events & libc::POLLOUT != 0 {
+                match camoufox_stdin_write(stdin_fd, &mut pending) {
+                    Ok(true) => close_stdin = true,
+                    Ok(false) => {}
+                    Err(_) => {
+                        close_stdin = true;
+                        stdin_failed = true;
+                    }
+                }
+            } else if events & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                close_stdin = true;
+                stdin_failed = true;
+            }
+            if close_stdin {
+                // Closing the write end is the only EOF the helper's
+                // blocking stdin read understands; undelivered input means
+                // the run is already doomed, so only a short finish window
+                // remains.
+                stdin = None;
+                if stdin_failed {
+                    wait_limit = Instant::now()
+                        .checked_add(CAMOUFOX_DRAIN_WINDOW)
+                        .unwrap_or(deadline)
+                        .min(deadline);
+                }
+            }
+        }
+        if stdout_open {
+            let events = fds[1].revents;
+            if events & libc::POLLIN != 0 {
+                if camoufox_drain(
+                    stdout.as_raw_fd(),
+                    &mut stdout_stored,
+                    &mut stdout_count,
+                    CAMOUFOX_STDOUT_CAP,
+                ) {
+                    stdout_open = false;
+                }
+            } else if events & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                stdout_open = false;
+            }
+        }
+        if stderr_open {
+            let events = fds[2].revents;
+            if events & libc::POLLIN != 0 {
+                if camoufox_drain(stderr.as_raw_fd(), &mut stderr_stored, &mut stderr_count, 0) {
+                    stderr_open = false;
+                }
+            } else if events & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                stderr_open = false;
+            }
+        }
+    }
+
+    if status.is_none() {
+        // Deadline, wait failure or poll failure: the whole process group is
+        // terminated and the leader reaped before returning.  A stop failure
+        // degrades the outcome but never reintroduces an unbounded wait.
+        if camoufox_stop(child).is_err() {
+            result = Some(CamoufoxWait::Failed);
+        }
+        if let Ok(Some(exit)) = child.try_wait() {
+            status = Some(exit);
+        }
+    }
+    // Final nonblocking drain picks up output still buffered in the pipes
+    // after a clean exit; after a kill it cannot block because every
+    // descriptor is O_NONBLOCK and no blocking reader lease remains.
+    if stdout_open {
+        let _ = camoufox_drain(
+            stdout.as_raw_fd(),
+            &mut stdout_stored,
+            &mut stdout_count,
+            CAMOUFOX_STDOUT_CAP,
+        );
+    }
+    if stderr_open {
+        let _ = camoufox_drain(stderr.as_raw_fd(), &mut stderr_stored, &mut stderr_count, 0);
+    }
+    drop(stdin);
+    drop(stdout);
+    drop(stderr);
+    match (status, result, stdin_failed) {
+        (Some(exit), None, false) => Ok(CamoufoxCollected {
+            output: std::process::Output {
+                status: exit,
+                stdout: stdout_stored,
+                stderr: Vec::new(),
+            },
+            stdout_len: stdout_count,
+        }),
+        (_, Some(outcome), _) => Err(outcome),
+        (_, None, true) => Err(CamoufoxWait::InputFailed),
+        (None, None, false) => Err(CamoufoxWait::Failed),
+    }
+}
+
+fn camoufox_read(
+    input: &SessionInput,
+    lease: RequestLease<'_>,
+    read: CamoufoxRead,
+) -> Result<Value, Error> {
+    let status = read.http_status;
+    let retry_after = read.retry_after.as_deref();
+    if read.schema_version != 1 || !(100..=599).contains(&status) {
+        settle_camoufox(lease, "unavailable", None, None, false)?;
+        return Err(error(
+            "unavailable",
+            "Camoufox helper response identity is invalid",
+        ));
+    }
+    let reason = read.refusal_reason.as_deref();
+    if reason == Some("body_limit") {
+        settle_camoufox(
+            lease,
+            "body_limit",
+            Some(status),
+            retry_after,
+            read.header_challenge,
+        )?;
+        return Err(error(
+            "body_limit",
+            "Camoufox response body exceeds its bound",
+        ));
+    }
+    if !matches!(
+        reason,
+        None | Some(
+            "credential_echo"
+                | "response_safety_unreviewed"
+                | "challenge_requires_human"
+                | "session_denied"
+        )
+    ) || reason.is_some() == read.body_base64.is_some()
+        || (reason == Some("session_denied")) != read.denied
+        || read.body_sha256.as_deref().is_some_and(|value| {
+            value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        settle_camoufox(
+            lease,
+            "unavailable",
+            Some(status),
+            retry_after,
+            read.header_challenge,
+        )?;
+        return Err(error(
+            "unavailable",
+            "Camoufox helper response admission facts are inconsistent",
+        ));
+    }
+    let body = match read.body_base64.as_deref() {
+        Some(encoded) => match STANDARD.decode(encoded.as_bytes()) {
+            Ok(body) => Zeroizing::new(body),
+            Err(_) => {
+                settle_camoufox(lease, "unavailable", Some(status), retry_after, false)?;
+                return Err(error(
+                    "unavailable",
+                    "Camoufox response body encoding is invalid",
+                ));
+            }
+        },
+        None => Zeroizing::new(Vec::new()),
+    };
+    if body.len() as u64 > SESSION_BODY_LIMIT {
+        settle_camoufox(lease, "body_limit", Some(status), retry_after, false)?;
+        return Err(error(
+            "body_limit",
+            "Camoufox response body exceeds its bound",
+        ));
+    }
+    if read.body_base64.is_some() {
+        let digest = format!("{:x}", Sha256::digest(&body));
+        if read.body_byte_length != Some(body.len() as u64)
+            || read.body_sha256.as_deref() != Some(digest.as_str())
+        {
+            settle_camoufox(lease, "unavailable", Some(status), retry_after, false)?;
+            return Err(error(
+                "unavailable",
+                "Camoufox response body does not match its declared identity",
+            ));
+        }
+    }
+    let contains = |candidate: &[u8]| {
+        net::carries_secret(candidate, &input.username)
+            || net::carries_secret(candidate, &input.password)
+    };
+    let metadata_echo = read
+        .content_type
+        .as_deref()
+        .is_some_and(|value| contains(value.as_bytes()));
+    let body_screening = decoded_body_screening(&body, &contains);
+    let assessment = if read.body_base64.is_some() {
+        crate::html::assess_challenge_body(&body, read.content_type.as_deref(), true)
+    } else {
+        // The helper has already assessed a withheld body. An empty local
+        // placeholder must not overwrite its terminal classification.
+        crate::html::ChallengeAssessment::Clear
+    };
+    let challenge =
+        read.header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
+    let mut denied = read.denied;
+    let mut output = if denied {
+        let mut output = withheld(
+            status,
+            if metadata_echo {
+                None
+            } else {
+                read.content_type.as_deref()
+            },
+            &body,
+            "session_expired",
+        );
+        output["result"] = json!("session_expired");
+        output
+    } else {
+        let admission = admit_read_body(
+            status,
+            read.content_type.as_deref(),
+            &body,
+            &input.read.xnxqdm,
+            assessment,
+            ReadScreening {
+                header_challenge: read.header_challenge,
+                metadata_echo,
+                echo: reason == Some("credential_echo")
+                    || contains(&body)
+                    || body_screening == BodyScreening::Echo,
+                body_unreviewed: reason == Some("response_safety_unreviewed")
+                    || body_screening == BodyScreening::Unreviewable,
+                metadata_unreviewed: false,
+            },
+        );
+        denied |= admission.denied;
+        admission.output
+    };
+    if read.body_base64.is_none() {
+        if let Some(length) = read.body_byte_length {
+            output["body_byte_length"] = json!(length);
+        }
+        if let Some(digest) = read.body_sha256 {
+            output["raw_response_sha256"] = json!(digest);
+        } else {
+            output
+                .as_object_mut()
+                .and_then(|value| value.remove("raw_response_sha256"));
+        }
+    }
+    output["backend"] = json!("camoufox");
+    if denied {
+        lease
+            .finish(Outcome::CredentialRejected)
+            .map_err(|_| error("governor_error", "cannot settle Camoufox session denial"))?;
+    } else {
+        lease
+            .finish(Outcome::Http {
+                status,
+                retry_after,
+                challenge,
+                network_failure: false,
+            })
+            .map_err(|_| error("governor_error", "cannot settle Camoufox read"))?;
+    }
+    Ok(with_provenance(output, true))
+}
+
+/// Execute the real browser helper without exporting cookies or storage state.
+/// Only the final response body crosses the process boundary, after the helper
+/// has screened it against all browser-issued session material.
+fn camoufox_session(input_text: &str, input: &SessionInput) -> Result<Value, Error> {
+    let governor = Governor::open()
+        .map_err(|_| error("governor_error", "shared request admission unavailable"))?;
+    let lease = net::acquire_kind(&governor, RequestKind::Authentication)?;
+    let (stdin_read, stdin_write) = match camoufox_stdin_pipe() {
+        Ok(pipe) => pipe,
+        Err(_) => {
+            settle_camoufox(lease, "unavailable", None, None, false)?;
+            return Err(error("unavailable", "Camoufox helper could not be started"));
+        }
+    };
+    let mut command = std::process::Command::new("python3");
+    command
+        .arg("-c")
+        .arg(CAMOUFOX_HELPER)
+        .stdin(std::process::Stdio::from(stdin_read))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .env_clear();
+    for key in [
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "XAUTHORITY",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "SSL_CERT_FILE",
+        "BUAA_CAMOUFOX_XDG_CACHE_HOME",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    // SAFETY: setpgid is async-signal-safe and runs in the child between fork
+    // and exec, after stdio setup; it makes the helper its own process-group
+    // leader so the parent can terminate the whole browser tree with
+    // kill(-pid) without touching unrelated processes.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            settle_camoufox(lease, "unavailable", None, None, false)?;
+            return Err(error("unavailable", "Python/Camoufox could not be started"));
+        }
+    };
+    let collected = (|| -> Result<CamoufoxCollected, CamoufoxWait> {
+        let stdout = child.stdout.take().ok_or(CamoufoxWait::Failed)?;
+        let stderr = child.stderr.take().ok_or(CamoufoxWait::Failed)?;
+        camoufox_nonblocking(stdout.as_raw_fd()).map_err(|_| CamoufoxWait::Failed)?;
+        camoufox_nonblocking(stderr.as_raw_fd()).map_err(|_| CamoufoxWait::Failed)?;
+        camoufox_wait(&mut child, stdin_write, input_text, stdout, stderr)
+    })();
+    let collected = match collected {
+        Ok(collected) => collected,
+        Err(wait) => {
+            // The wait already terminated and reaped the helper; this
+            // idempotent stop only covers setup failures that never reached
+            // the wait loop with the child still running.
+            let _ = camoufox_stop(&mut child);
+            match wait {
+                CamoufoxWait::InputFailed => {
+                    settle_camoufox(lease, "unavailable", None, None, false)?;
+                    return Err(error(
+                        "unavailable",
+                        "Camoufox input could not be delivered",
+                    ));
+                }
+                CamoufoxWait::Deadline | CamoufoxWait::Failed => {
+                    settle_camoufox(lease, "network_error", None, None, false)?;
+                    return Err(error(
+                        "network_error",
+                        "Camoufox helper did not finish cleanly",
+                    ));
+                }
+            }
+        }
+    };
+    if collected.stdout_len > CAMOUFOX_STDOUT_CAP as u64 {
+        settle_camoufox(lease, "body_limit", None, None, false)?;
+        return Err(error(
+            "body_limit",
+            "Camoufox helper output exceeds its bound",
+        ));
+    }
+    let output = collected.output;
+    let mut deserializer = serde_json::Deserializer::from_slice(&output.stdout);
+    let parsed: CamoufoxOutput = match deserialize_object(&mut deserializer) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            settle_camoufox(lease, "unavailable", None, None, false)?;
+            return Err(error(
+                "unavailable",
+                "Camoufox helper returned an invalid envelope",
+            ));
+        }
+    };
+    if deserializer.end().is_err() {
+        settle_camoufox(lease, "unavailable", None, None, false)?;
+        return Err(error(
+            "unavailable",
+            "Camoufox helper returned trailing content",
+        ));
+    }
+    match parsed {
+        CamoufoxOutput::Error(failure) => {
+            if failure.schema_version != 1
+                || failure
+                    .http_status
+                    .is_some_and(|status| !(100..=599).contains(&status))
+            {
+                settle_camoufox(lease, "unavailable", None, None, false)?;
+                return Err(error(
+                    "unavailable",
+                    "Camoufox helper schema or HTTP status is unsupported",
+                ));
+            }
+            let error = camoufox_failure(&failure.error);
+            let code = error.code;
+            settle_camoufox(
+                lease,
+                code,
+                failure.http_status,
+                failure.retry_after.as_deref(),
+                failure.header_challenge,
+            )?;
+            Err(error)
+        }
+        CamoufoxOutput::Read(read) => camoufox_read(input, lease, read),
+    }
+}
+
 /// One explicit in-memory CAS login to the graduate timetable service followed
-/// by exactly one `loadXskbData.do` read. The session never persists, refreshes
+/// by student-context initialization and exactly one `loadXskbData.do` read. The session never persists, refreshes
 /// or retries; the issued cookie is used for the single read only.
 pub fn session(input: &str, online: bool) -> Result<Value, Error> {
     session_with_network(input, online, || {
@@ -1162,14 +2264,14 @@ pub fn session(input: &str, online: bool) -> Result<Value, Error> {
 }
 
 pub(crate) fn session_with_network(
-    input: &str,
+    input_text: &str,
     online: bool,
     network: impl FnOnce() -> Result<(Client, Governor), Error>,
 ) -> Result<Value, Error> {
-    if input.len() > SESSION_MAX_INPUT {
+    if input_text.len() > SESSION_MAX_INPUT {
         return Err(session_invalid());
     }
-    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let mut deserializer = serde_json::Deserializer::from_str(input_text);
     let input: SessionInput =
         deserialize_object(&mut deserializer).map_err(|_| session_invalid())?;
     deserializer.end().map_err(|_| session_invalid())?;
@@ -1195,19 +2297,138 @@ pub(crate) fn session_with_network(
             "timetable sessions require explicit online permission; no authentication was attempted",
         ));
     }
+    if input.backend == SessionBackend::Camoufox {
+        return camoufox_session(input_text, &input);
+    }
     let (client, governor) = network()?;
     let mut lease = net::acquire_kind(&governor, RequestKind::Authentication)?;
+    let mut initialization_observed: Option<(u16, Option<String>, bool)> = None;
     let prepared = cas::authenticate_service(&mut lease, &client, CasService::Gsmis, credentials)
-        .and_then(|session| {
+        .and_then(|mut session| {
             let url = url::Url::parse(TIMETABLE_URL).map_err(|_| session_invalid())?;
-            let (cookie, expiry) = session.cookie_header(&url)?;
+            let page_url = url::Url::parse(TIMETABLE_PAGE_URL).map_err(|_| session_invalid())?;
+            let init_url = url::Url::parse(TIMETABLE_INIT_URL).map_err(|_| session_invalid())?;
+            let (page_cookie, page_expiry) = session.cookie_header_for_transmission(&page_url)?;
+            let page_cookie = page_cookie.ok_or_else(|| {
+                error(
+                    "authentication_unconfirmed",
+                    "the timetable application cookie is missing; no entry was sent",
+                )
+            })?;
+            admit_session_read(&mut lease)?;
+            if page_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+                return Err(error(
+                    "scoped_cookie_unusable",
+                    "the timetable cookie expired before application entry; no request was sent",
+                ));
+            }
+            let mut page = client
+                .get(TIMETABLE_PAGE_URL)
+                .header("Cookie", page_cookie)
+                .header(
+                    "Accept",
+                    "text/html",
+                )
+                .header("Referer", TIMETABLE_PORTAL_URL)
+                .timeout(std::time::Duration::from_secs(45))
+                .header("Accept-Encoding", "identity")
+                .build()
+                .map_err(|_| session_invalid())?;
+            if let Some(value) = page.headers_mut().get_mut("cookie") {
+                value.set_sensitive(true);
+            }
+            let page = client.execute(page).map_err(|_| {
+                error(
+                    "network_error",
+                    "timetable application entry failed; no initialization or read was sent",
+                )
+            })?;
+            let page = receive_context_response(
+                page,
+                &mut lease,
+                &mut session,
+                &page_url,
+                &mut initialization_observed,
+            )?;
+            screen_context_response(&page, &input, &session, false)?;
+            if page.status == 429 || page.retry_after.is_some() {
+                return Err(error(
+                    "cooldown",
+                    "timetable application entry was deferred",
+                ));
+            }
+            if page.status != 200 {
+                return Err(error(
+                    "authentication_unconfirmed",
+                    "timetable application entry was refused by GSMIS; no initialization was sent",
+                ));
+            }
+            let page_mime = page
+                .content_type
+                .as_deref()
+                .and_then(|value| value.split(';').next())
+                .map(str::trim);
+            if !page_mime.is_some_and(|value| value.eq_ignore_ascii_case("text/html"))
+                || page.body.iter().all(|byte| byte.is_ascii_whitespace())
+            {
+                return Err(error(
+                    "authentication_unconfirmed",
+                    "timetable application entry was not a nonempty HTML document; no initialization was sent",
+                ));
+            }
+
+            let (cookie, init_expiry) = session.cookie_header_for_transmission(&init_url)?;
             let cookie = cookie.ok_or_else(|| {
                 error(
                     "auth_latched",
-                    "the timetable session cookie is missing; no read was sent",
+                    "the timetable initialization cookie is missing; no initialization was sent",
                 )
             })?;
-            let builder = xskb_request(&client, &cookie, &input.read.xnxqdm);
+            admit_session_read(&mut lease)?;
+            if init_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+                return Err(error(
+                    "scoped_cookie_unusable",
+                    "the timetable cookie expired before initialization; no initialization was sent",
+                ));
+            }
+            let init = session_request(&client, TIMETABLE_INIT_URL, cookie)
+                .form(&[("XH", "")])
+                .timeout(std::time::Duration::from_secs(45))
+                .header("Accept-Encoding", "identity")
+                .build()
+                .map_err(|_| session_invalid())?;
+            let mut init = init;
+            if let Some(value) = init.headers_mut().get_mut("cookie") {
+                value.set_sensitive(true);
+            }
+            let init = client.execute(init).map_err(|_| {
+                error(
+                    "network_error",
+                    "timetable context initialization failed; no read was sent",
+                )
+            })?;
+            let init = receive_context_response(
+                init,
+                &mut lease,
+                &mut session,
+                &init_url,
+                &mut initialization_observed,
+            )?;
+            screen_context_response(&init, &input, &session, true)?;
+            if init.status == 429 || init.retry_after.is_some() {
+                return Err(error("cooldown", "timetable initialization was deferred"));
+            }
+            if init.status != 200 {
+                return Err(error("authentication_unconfirmed", "timetable context initialization was refused by GSMIS; inspect its HTTP status and safety receipt"));
+            }
+            if !student_context_present(&init.body)? {
+                return Err(error("authentication_unconfirmed", "the current account has no student timetable context"));
+            }
+            let (cookie, expiry) = session.cookie_header_for_transmission(&url)?;
+            let cookie = cookie.ok_or_else(|| {
+                error("auth_latched", "the initialized timetable session has no usable cookie")
+            })?;
+            let builder = xskb_request(&client, cookie, &input.read.xnxqdm);
             let mut request = builder
                 .timeout(std::time::Duration::from_secs(45))
                 .header("Accept-Encoding", "identity")
@@ -1217,9 +2438,9 @@ pub(crate) fn session_with_network(
                 value.set_sensitive(true);
             }
             admit_session_read(&mut lease)?;
-            Ok((session, cookie, expiry, request))
+            Ok((session, expiry, request))
         });
-    let (session, cookie, cookie_expiry, request) = match prepared {
+    let (session, cookie_expiry, request) = match prepared {
         Ok(prepared) => prepared,
         Err(failure) => {
             if matches!(
@@ -1234,6 +2455,17 @@ pub(crate) fn session_with_network(
                 "auth_latched" => lease.finish(Outcome::CredentialRejected),
                 "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
                 "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ if initialization_observed.is_some() => {
+                    let (status, retry_after, challenge) = initialization_observed
+                        .take()
+                        .expect("initialized observation is present");
+                    lease.finish(Outcome::Http {
+                        status,
+                        retry_after: retry_after.as_deref(),
+                        challenge,
+                        network_failure: false,
+                    })
+                }
                 _ => lease.finish_without_request(),
             };
             settled.map_err(|_| {
@@ -1250,7 +2482,6 @@ pub(crate) fn session_with_network(
     let contains = |candidate: &[u8]| {
         net::carries_secret(candidate, &input.username)
             || net::carries_secret(candidate, &input.password)
-            || contains_cookie(candidate, &cookie)
             || session.contains_secret_bytes(candidate)
     };
     let mut response = match lease.start_request(|| {
@@ -1333,11 +2564,9 @@ pub(crate) fn session_with_network(
     let assessment =
         crate::html::assess_challenge_body(&bytes, content_type.as_deref(), !incomplete);
     let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
-    let metadata_echo = content_type
-        .as_deref()
-        .is_some_and(|value| {
-            contains(value.as_bytes()) || issued.contains_secret_bytes(value.as_bytes())
-        });
+    let metadata_echo = content_type.as_deref().is_some_and(|value| {
+        contains(value.as_bytes()) || issued.contains_secret_bytes(value.as_bytes())
+    });
     let body_screening = decoded_body_screening(&bytes, &contains);
     // JSON-escaped spellings of an issued cookie value are screened with the
     // same decoded-literal pass the stdin credentials receive.
@@ -1435,7 +2664,7 @@ pub fn schema() -> Value {
         }
     });
     schema["session"] = json!({
-        "description": "One explicit in-memory CAS login to GSMIS followed by exactly one loadXskbData.do read; no persistence, refresh, retry or writes. Session cookies issued by the read are absorbed into the invocation-only jar and screened as credential material, never persisted or replayed.",
+        "description": "One explicit in-memory CAS login to GSMIS, one wdkbapp application document, one initXsxx.do student-context initialization and exactly one loadXskbData.do read; no persistence, refresh, retry or writes. Session cookies issued by the application and read responses are absorbed into the invocation-only jar and screened as credential material, never persisted or replayed.",
         "input": {
             "type": "object",
             "additionalProperties": false,
@@ -1445,6 +2674,7 @@ pub fn schema() -> Value {
                 "username": {"type": "string"},
                 "password": {"type": "string"},
                 "intent": {"type": "string"},
+                "backend": {"enum": ["native", "camoufox"], "default": "native"},
                 "read": {
                     "type": "object",
                     "additionalProperties": false,
@@ -1459,9 +2689,18 @@ pub fn schema() -> Value {
         },
         "intent": "LOGIN <username> timetable",
         "read_url": TIMETABLE_URL,
+        "context_read_url": TIMETABLE_INIT_URL,
         "read_method": "POST form ZC=&XNXQDM={term}&XH=&XQDM=",
         "output": "timetable_pg parsed shape, or result degraded/fallback with raw_response_base64+raw_response_sha256+content_type+fallback_reason+http_status for a non-2xx, non-UTF-8 or unparsable body that clears the safety screens, or sensitive_response_withheld when credential/challenge/cookie material or an unreviewed body is detected, or result session_expired (evidence withheld) when the body is a recognized login denial and no rows are emitted; plus service, source, network_performed, write_operations_performed",
         "validation": "object root only; disabled read performs no I/O; enabled read requires authorized=true, exact intent, five-ASCII-digit xnxqdm and --online before transport or admission"
+    });
+    schema["session"]["camoufox"] = json!({
+        "selection": "Explicit backend=camoufox; native remains the default",
+        "runtime": "Existing Python/Camoufox installation and a real display; no download or synthetic browser telemetry",
+        "flow": "The real CAS guard and all GSMIS reads run inside one fresh strict-TLS browser context",
+        "authentication_state_export": false,
+        "cookies_or_storage_exported": false,
+        "automatic_retry_or_fallback": false
     });
     schema
 }
@@ -1752,6 +2991,96 @@ mod tests {
 mod session_tests {
     use super::*;
 
+    #[test]
+    fn student_context_requires_a_complete_bound_identity() {
+        let valid =
+            br#"{"data":[{"XH":"synthetic-student","YXDM":"1","YXDM_DISPLAY":"Synthetic"}]}"#;
+        assert_eq!(student_context_present(valid), Ok(true));
+        assert_eq!(student_context_present(br#"{"data":[]}"#), Ok(false));
+        for invalid in [
+            br#"{"data":[{"YXDM":"1"}]}"#.as_slice(),
+            br#"{"data":[{"XH":""}]}"#,
+            br#"{"data":[{"XH":"a","XH":"b"}]}"#,
+            br#"{"data":[{"XH":7}]}"#,
+            br#"{"data":[{"XH":"synthetic-student"}]} trailing"#,
+            br#"[]"#,
+        ] {
+            assert_eq!(
+                student_context_present(invalid).unwrap_err().code,
+                "upstream_parse"
+            );
+        }
+    }
+
+    #[test]
+    fn internal_student_context_allows_only_the_expected_identity_echo() {
+        let input: SessionInput =
+            serde_json::from_str(&session_input().to_string()).expect("synthetic session input");
+        let mut session = cas::ServiceSession::test_session_with_cookies(
+            CasService::Gsmis,
+            TIMETABLE_PAGE_URL,
+            &["GS_SESSIONID=synthetic-cookie; Path=/gsapp/"],
+        );
+        let page_url = url::Url::parse(TIMETABLE_PAGE_URL).unwrap();
+        session
+            .cookie_header_for_transmission(&page_url)
+            .expect("the complete context header is retained");
+        let mut rotation = reqwest::header::HeaderMap::new();
+        rotation.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static(
+                "GS_SESSIONID=synthetic-rotated; Path=/gsapp/",
+            ),
+        );
+        session
+            .absorb_gsmis_headers(&page_url, &rotation)
+            .expect("the rotated cookie is admitted");
+        let response = |body: String| ContextResponse {
+            status: 200,
+            retry_after: None,
+            challenge: false,
+            content_type: Some("application/json".into()),
+            body: Zeroizing::new(body.into_bytes()),
+        };
+        let context =
+            response(json!({"data":[{"XH":input.username.as_str(),"XM":"Synthetic"}]}).to_string());
+        let first_secret_char = input.password.chars().next().unwrap();
+        let escaped_secret = format!(
+            "\\u{:04x}{}",
+            first_secret_char as u32,
+            &input.password[first_secret_char.len_utf8()..]
+        );
+        let escaped_secret_body =
+            json!({"data":[{"XH":input.username.as_str()}],"echo":input.password.as_str()})
+                .to_string()
+                .replace(input.password.as_str(), &escaped_secret);
+        assert_eq!(
+            screen_context_response(&context, &input, &session, true),
+            Ok(())
+        );
+        assert_eq!(
+            screen_context_response(&context, &input, &session, false)
+                .unwrap_err()
+                .code,
+            "credential_echo"
+        );
+        for body in [
+            json!({"data":[{"XH":input.username.as_str()}],"echo":input.password.as_str()})
+                .to_string(),
+            json!({"data":[{"XH":input.username.as_str()}],"echo":"synthetic-cookie"}).to_string(),
+            json!({"data":[{"XH":input.username.as_str()}],"echo":STANDARD.encode("GS_SESSIONID=synthetic-cookie")})
+                .to_string(),
+            escaped_secret_body,
+        ] {
+            assert_eq!(
+                screen_context_response(&response(body), &input, &session, true)
+                    .unwrap_err()
+                    .code,
+                "credential_echo"
+            );
+        }
+    }
+
     fn session_input() -> Value {
         json!({
             "authorized": true,
@@ -1760,6 +3089,83 @@ mod session_tests {
             "intent": "LOGIN synthetic-operator-4b7 timetable",
             "read": {"operation": "xskb", "enabled": true, "xnxqdm": "20261"}
         })
+    }
+
+    #[test]
+    fn browser_backend_requires_an_explicit_typed_selection() {
+        let input: SessionInput =
+            serde_json::from_str(&session_input().to_string()).expect("default session input");
+        assert_eq!(input.backend, SessionBackend::Native);
+        let mut browser = session_input();
+        browser["backend"] = json!("camoufox");
+        let input: SessionInput =
+            serde_json::from_str(&browser.to_string()).expect("explicit Camoufox input");
+        assert_eq!(input.backend, SessionBackend::Camoufox);
+        browser["backend"] = json!("automatic");
+        assert!(serde_json::from_str::<SessionInput>(&browser.to_string()).is_err());
+    }
+
+    #[test]
+    fn camoufox_terminal_refusals_preserve_result_and_evidence_contract() {
+        use std::os::unix::fs::DirBuilderExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        struct OwnedDirectory(std::path::PathBuf);
+        impl Drop for OwnedDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let digest = "00".repeat(32);
+        for (reason, denied, expected) in [
+            ("session_denied", true, "session_expired"),
+            ("credential_echo", false, "sensitive_response_withheld"),
+            (
+                "challenge_requires_human",
+                false,
+                "sensitive_response_withheld",
+            ),
+        ] {
+            let input: SessionInput = serde_json::from_str(&session_input().to_string()).unwrap();
+            let path = std::env::temp_dir().join(format!(
+                "buaa-cli-camoufox-read-{}-{}-{}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                reason
+            ));
+            let owned = OwnedDirectory(path.clone());
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&path)
+                .expect("new private test directory");
+            let _directory = crate::governor::open_directory(&path, true, true).unwrap();
+            let governor = Governor::isolated_for_test(&path).unwrap();
+            let lease = governor.try_acquire(RequestKind::Authentication).unwrap();
+            let read = CamoufoxRead {
+                schema_version: 1,
+                http_status: 200,
+                content_type: Some("application/json".into()),
+                body_base64: None,
+                body_sha256: Some(digest.clone()),
+                body_byte_length: Some(123),
+                header_challenge: reason == "challenge_requires_human",
+                retry_after: Some("60".into()),
+                denied,
+                refusal_reason: Some(reason.into()),
+            };
+            let output = camoufox_read(&input, lease, read).expect("terminal result");
+            assert_eq!(output["result"], expected, "{reason}");
+            assert_eq!(output["raw_response_sha256"], digest);
+            assert_eq!(output["body_byte_length"], 123);
+            assert_eq!(output["backend"], "camoufox");
+            assert_eq!(output["network_performed"], true);
+            if reason == "challenge_requires_human" {
+                assert_eq!(output["challenge_required"], true);
+            }
+            drop(governor);
+            drop(_directory);
+            drop(owned);
+        }
     }
 
     #[test]
@@ -2088,9 +3494,7 @@ mod session_tests {
     /// The `contains` predicate plays the role of the transmitted cookie,
     /// issued jar and stdin credentials in production.
     fn screened_admission(status: u16, content_type: Option<&str>, body: &[u8]) -> ReadAdmission {
-        let contains = |candidate: &[u8]| {
-            crate::net::carries_secret(candidate, "secret-canary-9")
-        };
+        let contains = |candidate: &[u8]| crate::net::carries_secret(candidate, "secret-canary-9");
         let screening = decoded_body_screening(body, &contains);
         let assessment = complete_assessment(content_type, body);
         admit_read_body(
@@ -2268,10 +3672,7 @@ mod session_tests {
                 ..ReadScreening::default()
             },
         );
-        assert_eq!(
-            admission.output["result"],
-            "sensitive_response_withheld"
-        );
+        assert_eq!(admission.output["result"], "sensitive_response_withheld");
         assert_eq!(
             admission.output["fallback_reason"],
             "response_safety_unreviewed"
@@ -2313,11 +3714,9 @@ mod session_tests {
             "20261",
             assessment,
             ReadScreening {
-                echo: jar.contains_secret_bytes(body)
-                    || issued_screening == BodyScreening::Echo,
+                echo: jar.contains_secret_bytes(body) || issued_screening == BodyScreening::Echo,
                 metadata_unreviewed: !jar.complete,
-                body_unreviewed: issued_screening == BodyScreening::Unreviewable
-                    || !jar.complete,
+                body_unreviewed: issued_screening == BodyScreening::Unreviewable || !jar.complete,
                 ..ReadScreening::default()
             },
         )

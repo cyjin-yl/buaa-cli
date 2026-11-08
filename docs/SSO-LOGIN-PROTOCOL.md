@@ -7,7 +7,9 @@ working-service acceptance certificate or permission to evade service controls.
 The account owner authorized observation of their normal login. Challenges must
 be completed normally by the operator; no fabricated interaction telemetry,
 challenge bypass, weakened TLS or automatic authentication retry is justified.
-Camoufox was a development observation tool, not a CLI runtime dependency.
+At that date Camoufox was only a development observation tool. The optional
+current backend described below changes that runtime boundary explicitly; it
+does not turn browser observation into native-reqwest evidence.
 
 Only protocol structure is published here. Passwords, account identifiers,
 service tickets, session cookies, execution tokens, private course identifiers
@@ -90,6 +92,30 @@ anti-bot policy, whether telemetry is mandatory, whether it is stored, or
 whether its absence caused a CLI failure. The script's input bucketing does
 not establish that its complete payload is free of sensitive data. Do not
 replay or fabricate the payload, spoof fingerprints, or disable challenges.
+
+## 2026-11-08: real Camoufox login and current GSMIS acceptance
+
+A new owner-assisted trace established the current sequence: the public
+`init.js` issues `/clcks`; the visible frame executes the real guard and
+`POST /fingerprint` returns an `ab_fp` cookie; the subsequent credential POST
+uses that cookie, receives HTTP 302 and follows the ticket-bearing GSMIS
+portal continuation to a ticketless HTTP 200. The trace retains only fixed
+routes, statuses, cookie names and aggregate interaction facts.
+
+The implementation must use the visible `#unPassword`/`#pwPassword` controls,
+exact per-handle value readback and real pointer/keyboard input. The parent
+`doLogin` function is checked in the **main world** with Camoufox's `mw:`
+prefix; an isolated-world probe incorrectly reported it missing. The actual
+iframe inputs have no form owner; Enter invokes the frame's `loginPassword()`
+and then the reviewed parent `#loginForm` action. No fake `#loginbutton` or
+unreviewed navigation is used.
+
+The explicit `backend="camoufox"` runs this flow and the current GSMIS reads
+inside one fresh strict-TLS context. It does not export cookies, storage state
+or authentication material. The actual CLI returned 30 current schedule rows
+and 274 ICS events; independent `icalendar` validation matched the complete
+normalized event multiset and RFC 5545 bounds. Native-transport failures remain
+separate evidence, not accepted behavior.
 
 ## Failed CLI observations and unresolved cause
 

@@ -41,6 +41,55 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-08: real Camofox CLI timetable/ICS verified
+
+`buaa timetable session --online` now accepts an explicit
+`backend:"camoufox"`. On doesworkstation, the actual CLI used a fresh
+strict-TLS Camoufox context, ran the real SSO guard and completed the current
+GSMIS application/init/xskb chain without exporting cookies, storage state or
+authentication material. The current-term read returned `result=parsed`, 30
+schedule rows and 274 ICS events, with `network_performed=true`.
+
+Independent `icalendar` consumption parsed all 274 events and matched the
+complete DTSTART/DTEND/SUMMARY/LOCATION multiset against the normalized
+timetable. UIDs are unique, required properties are present, CRLF is used and
+all physical lines satisfy the 75-octet bound. ICS SHA-256 is
+`459e98656fc7a363efca3e6f8b42c212846a9b73bb694a8cd3f941d3dccdac6b`.
+This is current-term real-CLI acceptance for the explicit backend, not native
+transport acceptance, other-service coverage or mutation authorization.
+Earlier native failures below remain unchanged historical evidence.
+
+## 2026-11-07: current-term timetable binding, native read still blocked
+
+The current deployment's `wdkbapp` document issues application cookies and
+binds its student context through `initXsxx.do` before the term read. A
+same-session browser comparison succeeded with and without `_yhz`; a fixed
+no-role document GET followed by initialization also succeeded. The Rust
+client now performs that document step, applies reviewed in-memory cookie
+refreshes, rejects an empty student context and keeps explicit term selection.
+The initialization body stays internal: its expected XH/username identity is
+not an output echo, while password and cookie material remain refused.
+Thirty-three focused cases pass.
+
+The owner-authorized browser observed the current term `20261` and a
+successful current-term response. The first two post-repair native attempts
+stopped before the application step at CAS transport and handoff
+confirmation. A later diagnostic using only fixed safe metadata observed the
+credential POST ending at SSO `/login` with HTTP 401; no application request
+was sent. That invocation returned `authentication_unconfirmed` before the
+separate SSO-401 classification repair. No parsed native timetable or
+live-derived ICS is claimed. Authentication attempts are stopped as a
+rejection signal; no write or bypass was added.
+
+### Boya bounded reads
+
+The native `chosen` whole-list read previously returned `success`,
+`complete=true` and zero entries for the selected window. A separate
+`semester_courses` invocation with `pageNumber=1`, `pageSize=20` and
+`maxPages=20` did not reach the business read: CAS did not confirm the Boya
+token landing. Complete course pagination and all mutations remain
+unverified. No retry or write occurred.
+
 ## 2026-11-07: 0.2.0 release candidate
 
 Version 0.2.0 includes the CAS `service` preservation fix and original error
