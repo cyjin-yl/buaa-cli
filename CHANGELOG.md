@@ -17,6 +17,16 @@
 
 ## Unreleased
 
+- shuttle: admit ordinary responses that issue cookies only after screening
+  raw bytes, streaming decoded JSON (including duplicate members), retained
+  MIME metadata and final text/numeric projections against every issued
+  spelling, including whitespace-compacted text. Preserve untrimmed, quoted
+  and normalized-pair carriers in the shared bounded zeroizing guard; refuse
+  malformed or unreviewable declarations and never adopt or retransmit them.
+- shuttle: recognize the exact upstream missing-authentication script response
+  as `authentication_required` rather than a CSRF parse failure, retain its
+  safe original bytes and settle the online request as a credential rejection
+  without executing page script or attempting authentication.
 - timetable: initialize the current GSMIS student context before the selected
   term's read through the current `wdkbapp` application document; preserve
   same-session cookie replacement at both steps and refuse missing context,

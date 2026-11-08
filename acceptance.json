@@ -1127,11 +1127,24 @@
       "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
       "evidence": {
         "candidate_offline": "An operator-supplied CLI page reproduced a percent-encoded CSRF echo in visible text; two post-fix cases passed, including an ordinary page control and encoded variants.",
-        "remaining": "Mixed-separator CSRF values passed focused synthetic post-fix cases; their pre-fix variant was source-traced but its run was blocked by the heavy-work slot. No authenticated timetable, availability, booking, payment or cancellation contract has been verified.",
+        "remaining": "The anonymous HTTPS page explicitly requires authentication. No authenticated timetable, availability, HTTPS CAS session, booking, payment or cancellation contract has been verified. Writes remain unauthorized and blocked.",
         "offline_observation_2026_10_31": {
           "command": "buaa shuttle with an empty object",
           "observed": "invalid_input exit 2: typed request required",
           "live_blocker": "No authorized live shuttle page read in this run."
+        },
+        "online_observation_2026_11_08": {
+        "scope": "Two deliberate credential-free reads of the same fixed HTTPS ticketInfoPage date/numeric candidate, with no redirect, cookie transmission, authentication, booking, payment, cancellation or automatic retry.",
+        "initial_result": "HTTP 200 was refused solely because the response issued a session cookie; no body was admitted.",
+        "post_repair_result": "The client admitted a safe 92-byte text/html original. Its exact upstream response explicitly reported missing authentication; this is not a timetable or availability success.",
+        "original_sha256": "b09d9f605e392cddd32c20098f7da0e5d962934870f879d35a6a208ab3285839",
+        "repairs": "Issued cookies now join a bounded invocation-only zeroizing guard without adoption, persistence or retransmission. Screening covers raw bytes, streaming decoded JSON without duplicate-member collapse, retained metadata and the final structured projection, including untrimmed and quoted carriers. The exact missing-authentication response is classified as authentication_required and the online lease settles as credential rejection.",
+        "native_replay": "The final actual CLI replayed the retained original offline with status=blocked, authentication_required=true, read_only=true, submitted=false and exact raw-body round trip. Actual schema exposes the new marker and retains online_verified=false.",
+        "regressions": "The ordinary-cookie and missing-authentication regressions failed before repair. Independent review identified HTML-decoded output, quoted bare JSON values, duplicate JSON members and untrimmed-value retention defects; all four failed before their corrections and passed afterward. Follow-up review identified whitespace-compacted split-node output and normalized cookie-pair omissions; those plus malformed declarations, truncated JSON-shaped input and numeric projections failed before correction and passed afterward. A final raw escaped-solidus view covers malformed or non-JSON-prefixed text without relying on successful JSON parsing. Count/byte/undecodable-header exhaustion and missing-authentication near-miss cases are also covered.",
+        "final_tests": "1433 library tests passed with three existing ignored workers; 116 integration tests passed. Actual locked offline build and final retained-source/schema smoke passed.",
+        "independent_review": "Four review rounds covered all reported raw/decoded/projection and classification paths. Every finding had failing-before/passing-after consumer evidence; the final re-review reported no findings.",
+        "quality_gate_limits": "The current all-tree formatter and strict-Clippy checks fail on unrelated unchanged baseline code; neither is claimed green.",
+        "acceptance_boundary": "Anonymous missing-authentication evidence only. No authenticated schedule, seat availability, HTTPS CAS acceptance or mutation postcondition was observed."
         }
       },
       "sources": [

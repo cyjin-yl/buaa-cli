@@ -343,15 +343,15 @@ fn observed_response_rejection(
 }
 
 /// Complete admitted/refused observation for one live response, computed
-/// before the original shared lease settles. Issued session cookies withhold
-/// projected and raw body bytes; denial, challenge, cooldown and body-failure
-/// facts are preserved as independent refusals.
+/// before the original shared lease settles. Newly issued cookies join an
+/// invocation-only echo guard; they are never adopted, persisted or returned.
+/// Denial, challenge, cooldown and body-failure facts remain independent.
 struct LiveResponse<'a> {
     status: u16,
     retry: bool,
     challenge: bool,
     complete: bool,
-    issued: bool,
+    issued: &'a crate::net::IssuedCookies,
     assessment: &'a ChallengeAssessment,
     bytes: &'a [u8],
     content_type: Option<&'a str>,
@@ -378,20 +378,28 @@ fn live_admission(operation: &str, response: LiveResponse<'_>) -> Value {
             "response incomplete or exceeds byte limit; no subsequent request permitted",
         );
     }
-    if issued {
+    if issued.overflowed()
+        || issued.echoed(bytes)
+        || content_type.is_some_and(|value| issued.echoed(value.as_bytes()))
+    {
         return json!({"operation":operation,"status":"blocked","http_status":status,"body_complete":complete,
-        "reason":"response issued session cookie; body admission refused"});
+        "reason":"response echoed newly issued session material or its cookie headers could not be reviewed; body and metadata withheld"});
     }
     if let Some(rejection) = review_rejection(operation, bytes, content_type, assessment) {
         return rejection;
     }
-    if operation == "service" {
-        return json!({"operation":operation,"status":"unsupported","reason":AUTH_REASON,"https_probe_status":status,"https_cas_acceptance":"unknown","evidence":evidence(bytes,content_type,"HTTPS callback reachability does not prove CAS service acceptance",assessment)});
+    let result = if operation == "service" {
+        json!({"operation":operation,"status":"unsupported","reason":AUTH_REASON,"https_probe_status":status,"https_cas_acceptance":"unknown","evidence":evidence(bytes,content_type,"HTTPS callback reachability does not prove CAS service acceptance",assessment)})
+    } else if status != 200 {
+        json!({"operation":operation,"status":"blocked","reason":"HTTP response requires operator review; redirects are not followed","http_status":status,"evidence":evidence(bytes,content_type,"non-success response",assessment)})
+    } else {
+        parse_page_assessed(bytes, content_type, operation, assessment)
+    };
+    if issued.echoed_value(&result) {
+        return json!({"operation":operation,"status":"blocked","http_status":status,"body_complete":complete,
+        "reason":"decoded response projection echoed newly issued session material; output withheld"});
     }
-    if status != 200 {
-        return json!({"operation":operation,"status":"blocked","reason":"HTTP response requires operator review; redirects are not followed","http_status":status,"evidence":evidence(bytes,content_type,"non-success response",assessment)});
-    }
-    parse_page_assessed(bytes, content_type, operation, assessment)
+    result
 }
 // Accept only one unambiguous, literal assignment. Never execute page scripts.
 fn csrf(text: &str) -> Option<&str> {
@@ -425,6 +433,11 @@ fn parse_page(bytes: &[u8], content_type: Option<&str>, operation: &str) -> Valu
     parse_page_assessed(bytes, content_type, operation, &assessment)
 }
 
+fn reports_missing_authentication(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).ok().map(str::trim)
+        == Some("<script>alert('未获取到认证信息，请退出后重新进入');history.back()</script>")
+}
+
 fn parse_page_assessed(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -433,6 +446,12 @@ fn parse_page_assessed(
 ) -> Value {
     if let Some(rejection) = review_rejection(operation, bytes, content_type, assessment) {
         return rejection;
+    }
+    if reports_missing_authentication(bytes) {
+        return json!({"operation":operation,"status":"blocked","authentication_required":true,
+        "reason":"upstream explicitly reported missing authentication; a deliberate authenticated session is required",
+        "read_only":true,"submitted":false,"written_requests":0,
+        "evidence":evidence(bytes,content_type,"upstream missing-authentication response retained without following its script",assessment)});
     }
     let Ok(text) = std::str::from_utf8(bytes) else {
         return json!({"operation":operation,"status":"degraded","evidence":evidence(bytes,content_type,"response is not UTF-8",assessment)});
@@ -829,8 +848,12 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
             "cannot persist shuttle HTTP headers",
         ));
     }
-    // Issuance alone is not a challenge or an authentication rejection.
-    let issued = crate::net::issues_session_cookie(response.headers());
+    // Issuance alone is not a challenge or an authentication rejection. Keep
+    // every newly issued spelling only for this invocation's echo screen.
+    let mut issued = crate::net::IssuedCookies::new();
+    for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
+        issued.absorb(value.to_str().ok());
+    }
     let mut bytes = Vec::new();
     let read = response
         .by_ref()
@@ -857,20 +880,23 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
             retry,
             challenge,
             complete,
-            issued,
+            issued: &issued,
             assessment: &assessment,
             bytes: &bytes,
             content_type: content_type.as_deref(),
         },
     );
-    lease
-        .finish(Outcome::Http {
+    if result["authentication_required"] == true {
+        lease.finish(Outcome::CredentialRejected)
+    } else {
+        lease.finish(Outcome::Http {
             status,
             retry_after: retry_after.as_deref(),
             challenge,
             network_failure: !complete,
         })
-        .map_err(|_| Error::new("governor_error", "cannot persist shuttle request outcome"))?;
+    }
+    .map_err(|_| Error::new("governor_error", "cannot persist shuttle request outcome"))?;
     Ok(decorate_schedule(operation, result, route, date))
 }
 
@@ -922,6 +948,7 @@ pub fn schema() -> Value {
         "output":{"type":"object","required":["operation","status"],"properties":{
             "operation":{"enum":["page","availability","schedule","purchase","cancel","service"]},
             "status":{"enum":["ok","blocked","unsupported","preview","observed","degraded"]},
+            "authentication_required":{"const":true,"description":"The upstream explicitly reported missing authentication; no page script was executed and no authenticated retry occurred."},
             "refusal_code":{"type":"string","const":MUTATION_REFUSAL_CODE,
                 "description":"Set when purchase or cancel cannot proceed: exact typed intent, immutable preview confirmation and an independent postcondition are all required."},
             "missing_preconditions":{"type":"array","items":{"enum":["exact_typed_intent","immutable_preview_confirmation","independent_postcondition"]}},
@@ -1380,6 +1407,10 @@ mod tests {
             assessment = ChallengeAssessment::Unreviewed;
         }
         let challenge = matches!(&assessment, ChallengeAssessment::Detected);
+        let mut issued = crate::net::IssuedCookies::new();
+        for value in headers.get_all(reqwest::header::SET_COOKIE) {
+            issued.absorb(value.to_str().ok());
+        }
         live_admission(
             operation,
             LiveResponse {
@@ -1387,7 +1418,7 @@ mod tests {
                 retry: headers.contains_key(reqwest::header::RETRY_AFTER),
                 challenge,
                 complete,
-                issued: crate::net::issues_session_cookie(headers),
+                issued: &issued,
                 assessment: &assessment,
                 bytes,
                 content_type,
@@ -1395,63 +1426,191 @@ mod tests {
         )
     }
     #[test]
-    fn issued_session_cookie_withholds_service_raw_fallback_and_page_text() {
-        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, LOCATION, SET_COOKIE};
+    fn issued_cookie_admits_ordinary_page_but_withholds_every_echo() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let page_body = b"<body>Shuttle 08:00<script>var csrf_token='abc_123';</script></body>";
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
-        let service_body = b"freshopaque123";
-        let clean = admit_fixture("service", 200, &headers, service_body, true);
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        headers.insert(
+            SET_COOKIE,
+            HeaderValue::from_static("shuttle=private-value; Path=/; Secure; HttpOnly"),
+        );
+        let ordinary = admit_fixture("page", 200, &headers, page_body, true);
+        assert_eq!(ordinary["status"], "ok");
+        assert_eq!(ordinary["visible_page_text"], "Shuttle 08:00");
+        assert!(!ordinary.to_string().contains("private-value"));
+
+        for echoed in [
+            "private-value".to_owned(),
+            STANDARD.encode("shuttle=private-value"),
+            STANDARD.encode("private-value"),
+        ] {
+            let body = format!("<body>{echoed}<script>var csrf_token='abc_123';</script></body>");
+            let withheld = admit_fixture("page", 200, &headers, body.as_bytes(), true);
+            assert_eq!(withheld["status"], "blocked");
+            assert!(withheld.get("visible_page_text").is_none());
+            assert!(withheld.get("evidence").is_none());
+            assert!(!withheld.to_string().contains("private-value"));
+        }
+
+        headers.insert(
+            SET_COOKIE,
+            HeaderValue::from_static("shuttle=\"private-value\"; Path=/; Secure"),
+        );
+        let encoded_unquoted_pair = STANDARD.encode("shuttle=private-value");
+        let body = format!(
+            "<body>{encoded_unquoted_pair}<script>var csrf_token='abc_123';</script></body>"
+        );
+        let withheld = admit_fixture("page", 200, &headers, body.as_bytes(), true);
+        assert_eq!(withheld["status"], "blocked");
+        assert!(!withheld.to_string().contains("private-value"));
+
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; session=private-value"),
+        );
+        let metadata = admit_fixture("page", 200, &headers, page_body, true);
+        assert_eq!(metadata["status"], "blocked");
+        assert!(metadata.get("evidence").is_none());
+        assert!(!metadata.to_string().contains("private-value"));
+
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        headers.insert(SET_COOKIE, HeaderValue::from_static("shuttle=; Max-Age=0"));
+        let deletion = admit_fixture("page", 200, &headers, page_body, true);
+        assert_eq!(deletion["status"], "ok");
+        headers.insert(SET_COOKIE, HeaderValue::from_static("malformed"));
+        let malformed = admit_fixture("page", 200, &headers, page_body, true);
+        assert_eq!(malformed["status"], "blocked");
+        assert!(malformed.get("evidence").is_none());
+    }
+    #[test]
+    fn missing_authentication_page_is_not_a_csrf_parse_failure() {
+        let body = "<script>alert('未获取到认证信息，请退出后重新进入');history.back()</script>";
+        let result = parse_page(body.as_bytes(), Some("text/html"), "page");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["authentication_required"], true);
+        assert_eq!(result["read_only"], true);
+        assert_eq!(result["submitted"], false);
         assert_eq!(
             STANDARD
-                .decode(clean["evidence"]["body_base64"].as_str().unwrap())
+                .decode(result["evidence"]["body_base64"].as_str().unwrap())
                 .unwrap(),
-            service_body
+            body.as_bytes()
         );
-        for value in [
-            HeaderValue::from_static("x=freshopaque123"),
-            HeaderValue::from_static("x=q"),
-            HeaderValue::from_static("malformed"),
-            HeaderValue::from_static("x=; Max-Age=0"),
-            HeaderValue::from_bytes(&[0xff]).unwrap(),
-        ] {
-            headers.insert(SET_COOKIE, value);
-            let result = admit_fixture("service", 200, &headers, service_body, true);
-            assert_eq!(result["status"], "blocked");
-            assert_eq!(
-                result["reason"],
-                "response issued session cookie; body admission refused"
-            );
-            assert!(result.get("evidence").is_none());
-            assert!(!result.to_string().contains("freshopaque123"));
-        }
-        let page_body =
-            b"<body>Shuttle freshopaque123<script>var csrf_token='abc_123';</script></body>";
+        assert_ne!(
+            result["evidence"]["fallback_reason"],
+            "missing or ambiguous literal csrf_token assignment"
+        );
+        let ordinary =
+            "<body>未获取到认证信息的旧公告仍可读<script>var csrf_token='abc_123';</script></body>";
+        let result = parse_page(ordinary.as_bytes(), Some("text/html"), "page");
+        assert_eq!(result["status"], "ok");
+        assert!(result.get("authentication_required").is_none());
+    }
+    #[test]
+    fn issued_cookie_html_entity_echo_is_withheld() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
-        headers.remove(SET_COOKIE);
-        let clean = admit_fixture("page", 200, &headers, page_body, true);
-        assert_eq!(clean["status"], "ok");
-        assert_eq!(clean["visible_page_text"], "Shuttle freshopaque123");
-        headers.insert(SET_COOKIE, HeaderValue::from_static("x=freshopaque123"));
-        let result = admit_fixture("page", 200, &headers, page_body, true);
+        headers.insert(
+            SET_COOKIE,
+            HeaderValue::from_static("shuttle=private-value"),
+        );
+        let body = b"<body>&#112;rivate-value<script>var csrf_token='abc_123';</script></body>";
+        let result = admit_fixture("page", 200, &headers, body, true);
         assert_eq!(result["status"], "blocked");
         assert!(result.get("visible_page_text").is_none());
         assert!(result.get("evidence").is_none());
-        assert!(!result.to_string().contains("freshopaque123"));
-        let redirect = admit_fixture("page", 302, &headers, page_body, true);
-        assert_eq!(redirect["http_status"], 302);
-        assert!(redirect.get("evidence").is_none());
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/freshopaque123"),
-        );
-        headers.insert(
-            LOCATION,
-            HeaderValue::from_static("https://example.invalid/freshopaque123"),
-        );
-        let result = admit_fixture("service", 200, &headers, service_body, true);
+        assert!(!result.to_string().contains("private-value"));
+    }
+    #[test]
+    fn issued_cookie_json_escaped_unquoted_value_is_withheld() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(SET_COOKIE, HeaderValue::from_static("sid=\"abc/123\""));
+        let result = admit_fixture("service", 200, &headers, br#"{"x":"abc\/123"}"#, true);
         assert_eq!(result["status"], "blocked");
         assert!(result.get("evidence").is_none());
-        assert!(!result.to_string().contains("freshopaque123"));
+        assert!(!result.to_string().contains("abc/123"));
+    }
+    #[test]
+    fn issued_cookie_duplicate_json_member_echo_is_withheld() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(SET_COOKIE, HeaderValue::from_static("sid=abc/123"));
+        let result = admit_fixture(
+            "service",
+            200,
+            &headers,
+            br#"{"x":"abc\/123","x":"ordinary"}"#,
+            true,
+        );
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("evidence").is_none());
+        assert!(!result.to_string().contains("abc/123"));
+    }
+    #[test]
+    fn issued_cookie_split_node_projection_is_withheld() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        headers.insert(SET_COOKIE, HeaderValue::from_static("shuttle=private-value"));
+        let body = b"<body><span>pri</span><span>vate-value</span><script>var csrf_token='abc_123';</script></body>";
+        let result = admit_fixture("page", 200, &headers, body, true);
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("visible_page_text").is_none());
+        assert!(result.get("evidence").is_none());
+    }
+    #[test]
+    fn issued_cookie_normalized_pair_echo_is_withheld() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        headers.insert(SET_COOKIE, HeaderValue::from_static("sid = abc; Path=/"));
+        let body = STANDARD.encode("sid=abc");
+        let result = admit_fixture("service", 200, &headers, body.as_bytes(), true);
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("evidence").is_none());
+    }
+    #[test]
+    fn issued_cookie_malformed_declarations_fail_closed() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        for declaration in ["sid=\"unterminated", "sid=abc, other=private"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+            headers.insert(SET_COOKIE, HeaderValue::from_str(declaration).unwrap());
+            let result = admit_fixture("service", 200, &headers, b"ordinary", true);
+            assert_eq!(result["status"], "blocked");
+            assert!(result.get("evidence").is_none());
+        }
+    }
+    #[test]
+    fn issued_cookie_truncated_json_shaped_body_is_withheld() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        headers.insert(SET_COOKIE, HeaderValue::from_static("sid=abc/123"));
+        let result = admit_fixture("service", 200, &headers, br#"{"x":"abc\/123"#, true);
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("evidence").is_none());
+    }
+    #[test]
+    fn issued_cookie_prefixed_json_escape_is_withheld() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE};
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        headers.insert(SET_COOKIE, HeaderValue::from_static("sid=abc/123"));
+        let result = admit_fixture(
+            "service",
+            200,
+            &headers,
+            br#"x{"x":"abc\/123"}"#,
+            true,
+        );
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("evidence").is_none());
     }
     #[test]
     fn denial_cooldown_and_body_failure_survive_cookie_withholding() {

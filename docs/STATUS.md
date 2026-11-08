@@ -41,6 +41,43 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-08: shuttle anonymous read and admission repairs
+
+Two deliberate, credential-free reads of the fixed HTTPS `ticketInfoPage`
+endpoint selected the same date and numeric candidate. The first returned HTTP
+200 but the client refused solely because the response issued a session cookie.
+The read path now retains issued values only in a bounded invocation-only echo
+guard; it never adopts, persists or retransmits them. Raw bytes, streaming
+decoded JSON including duplicate members, retained metadata and the final
+structured projection are all screened, including untrimmed and quoted values.
+
+The post-repair read admitted a 92-byte `text/html` original with SHA-256
+`b09d9f605e392cddd32c20098f7da0e5d962934870f879d35a6a208ab3285839`.
+The source explicitly reported missing authentication. The final native CLI
+replayed those retained bytes offline and returned `status=blocked`,
+`authentication_required=true`, `read_only=true`, `submitted=false`, with an
+exact raw-body round trip. No page script, redirect, CAS credential submission,
+booking, payment or cancellation was executed.
+
+This is an anonymous service boundary observation, not an authenticated
+timetable or availability result. The historical reference uses a plaintext
+HTTP CAS service; HTTPS CAS acceptance remains unverified and no HTTP downgrade
+is allowed. Shuttle acceptance remains pending.
+
+Proof: the ordinary-cookie and exact-missing-authentication regressions failed
+before repair. Independent review then exposed four additional echo boundaries;
+each failed before repair and passed afterward. Follow-up review caught
+whitespace-compacted split-node text and normalized cookie-pair spellings;
+those, malformed declarations, truncated JSON-shaped input and numeric
+projections also have red/green coverage. A final raw `\/` equivalence check
+covers malformed/prefixed JSON text without relying on a successful parse.
+The final independent re-review reported no findings.
+Final all-target tests passed
+1433 library cases plus 116 integration cases, with three existing ignored
+workers. The actual build and final retained-source/schema smoke passed. The
+current baseline still has unrelated all-tree formatter and strict-Clippy
+failures; those gates are not claimed as green.
+
 ## 2026-11-08: Boya complete source-declared pagination verified
 
 The actual native `buaa boya session --online` completed
