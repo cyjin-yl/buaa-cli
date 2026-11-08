@@ -17,6 +17,11 @@
 
 ## Unreleased
 
+- shuttle: add an explicit `shuttle session --online` native candidate with
+  zeroizing protected-stdin credentials, exact typed intent, a reviewed
+  HTTP-declared CAS callback upgraded to HTTPS before transmission, and one
+  authentication lease spanning CAS plus one fixed read-only page. The first
+  live attempt did not establish a session and was not retried.
 - shuttle: admit ordinary responses that issue cookies only after screening
   raw bytes, streaming decoded JSON (including duplicate members), retained
   MIME metadata and final text/numeric projections against every issued

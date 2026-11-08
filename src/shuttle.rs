@@ -7,16 +7,19 @@
 //! an explicit refusal code until exact typed intent, immutable preview and an
 //! independent postcondition all exist.
 
-use crate::governor::{FollowupError, Governor, Outcome, RequestKind};
+use crate::governor::{FollowupError, Governor, Outcome, RequestKind, RequestLease};
 use crate::html::{ChallengeAssessment, assess_challenge_body};
 use crate::net::Error;
+use crate::recordings::session::{self as cas, CasService, SsoCredentials};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 const ORIGIN: &str = "https://zhihuixiaoche.buaa.edu.cn";
 const LIMIT: usize = 4 * 1024 * 1024;
@@ -346,16 +349,236 @@ fn observed_response_rejection(
 /// before the original shared lease settles. Newly issued cookies join an
 /// invocation-only echo guard; they are never adopted, persisted or returned.
 /// Denial, challenge, cooldown and body-failure facts remain independent.
+/// `credential` is present only for the deliberately authenticated session
+/// read: it screens the caller's SSO secrets and every value the in-memory
+/// session jar holds (delivered, retired and transmitted spellings) against
+/// the raw body, MIME metadata and the decoded result projection. Anonymous
+/// requests pass `None`, leaving their behavior exactly as before.
 struct LiveResponse<'a> {
     status: u16,
     retry: bool,
     challenge: bool,
     complete: bool,
     issued: &'a crate::net::IssuedCookies,
+    credential: Option<&'a dyn Fn(&[u8]) -> bool>,
     assessment: &'a ChallengeAssessment,
     bytes: &'a [u8],
     content_type: Option<&'a str>,
 }
+
+/// Apply the session credential predicate to every string, key and scalar the
+/// decoded response value produces, including number serializations and the
+/// whitespace-collapsed spellings a projection can assemble across nodes.
+fn credential_text_echoed(contains: &dyn Fn(&[u8]) -> bool, text: &str) -> bool {
+    if contains(text.as_bytes()) {
+        return true;
+    }
+    if !text.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    contains(compact.as_bytes())
+}
+
+fn credential_echoed_value(candidate: &Value, contains: &dyn Fn(&[u8]) -> bool) -> bool {
+    match candidate {
+        Value::String(text) => credential_text_echoed(contains, text),
+        Value::Number(number) => credential_text_echoed(contains, &number.to_string()),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| credential_echoed_value(item, contains)),
+        Value::Object(members) => members.iter().any(|(key, item)| {
+            credential_text_echoed(contains, key) || credential_echoed_value(item, contains)
+        }),
+        _ => false,
+    }
+}
+
+/// Stream every decoded JSON key/value against the session credential
+/// predicate without collapsing duplicate members. This mirrors the
+/// issued-cookie guard's decoded walk: a credential spelling that only
+/// exists after JSON escape decoding is screened, and a JSON-shaped body
+/// that cannot be completely decoded is refused rather than exported under
+/// an unproven screen.
+struct CredentialEchoSeed<'a> {
+    contains: &'a dyn Fn(&[u8]) -> bool,
+    echoed: &'a std::cell::Cell<bool>,
+}
+
+struct CredentialEchoKeySeed<'a> {
+    contains: &'a dyn Fn(&[u8]) -> bool,
+    echoed: &'a std::cell::Cell<bool>,
+}
+
+struct CredentialEchoVisitor<'a> {
+    contains: &'a dyn Fn(&[u8]) -> bool,
+    echoed: &'a std::cell::Cell<bool>,
+}
+
+impl<'de> serde::de::Visitor<'de> for CredentialEchoVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<(), E> {
+        if !self.echoed.get() && credential_text_echoed(self.contains, value) {
+            self.echoed.set(true);
+        }
+        Ok(())
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_seq<S: serde::de::SeqAccess<'de>>(self, mut seq: S) -> Result<(), S::Error> {
+        while seq
+            .next_element_seed(CredentialEchoSeed {
+                contains: self.contains,
+                echoed: self.echoed,
+            })?
+            .is_some()
+        {}
+        Ok(())
+    }
+    fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<(), M::Error> {
+        while map
+            .next_key_seed(CredentialEchoKeySeed {
+                contains: self.contains,
+                echoed: self.echoed,
+            })?
+            .is_some()
+        {
+            map.next_value_seed(CredentialEchoSeed {
+                contains: self.contains,
+                echoed: self.echoed,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for CredentialEchoSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_any(CredentialEchoVisitor {
+            contains: self.contains,
+            echoed: self.echoed,
+        })
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for CredentialEchoKeySeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_str(CredentialEchoVisitor {
+            contains: self.contains,
+            echoed: self.echoed,
+        })
+    }
+}
+
+/// Whether untrusted response bytes carry a credential in literal,
+/// JSON-escaped or structured-decoded form. `contains` itself already covers
+/// the reversible literal encodings (escaped text, base64, percent/form);
+/// this wrapper adds the decoded-member walk for JSON-shaped bodies and
+/// fails closed when that walk cannot complete.
+fn credential_echoed(bytes: &[u8], contains: &dyn Fn(&[u8]) -> bool) -> bool {
+    use serde::de::Deserializer as _;
+    if contains(bytes) {
+        return true;
+    }
+    if let Ok(text) = std::str::from_utf8(bytes)
+        && text.chars().any(char::is_whitespace)
+        && credential_text_echoed(contains, text)
+    {
+        return true;
+    }
+    // JSON may escape a literal solidus as `\/` even when the surrounding
+    // bytes are malformed or have a non-JSON prefix. Review that equivalent
+    // spelling without depending on a successful document parse, mirroring
+    // the issued-cookie guard's decoded pass.
+    if bytes.windows(2).any(|pair| pair == b"\\/") {
+        let mut decoded = Zeroizing::new(Vec::with_capacity(bytes.len()));
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index..].starts_with(b"\\/") {
+                decoded.push(b'/');
+                index += 2;
+            } else {
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+        }
+        if contains(&decoded) {
+            return true;
+        }
+    }
+    let echoed = std::cell::Cell::new(false);
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let parsed = deserializer.deserialize_any(CredentialEchoVisitor {
+        contains,
+        echoed: &echoed,
+    });
+    let complete = parsed.is_ok() && deserializer.end().is_ok();
+    let json_shaped = bytes
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| matches!(byte, b'{' | b'[' | b'"'));
+    echoed.into_inner() || (!complete && json_shaped)
+}
+
+fn credential_html_echoed(
+    bytes: &[u8],
+    content_type: Option<&str>,
+    contains: &dyn Fn(&[u8]) -> bool,
+) -> bool {
+    if !content_type.is_some_and(|value| {
+        value.split(';').next().is_some_and(|mime| {
+            mime.trim().eq_ignore_ascii_case("text/html")
+                || mime.trim().eq_ignore_ascii_case("application/xhtml+xml")
+        })
+    }) {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let document = Html::parse_document(text);
+    let full_text = document
+        .root_element()
+        .descendants()
+        .filter_map(|node| node.value().as_text())
+        .fold(String::new(), |mut combined, text| {
+            combined.push_str(text);
+            combined
+        });
+    if credential_text_echoed(contains, &full_text) {
+        return true;
+    }
+    let elements = Selector::parse("*").expect("constant selector");
+    document.select(&elements).any(|element| {
+        element.value().attrs().any(|(name, value)| {
+            credential_text_echoed(contains, name)
+                || credential_text_echoed(contains, value)
+        })
+    })
+}
+
 fn live_admission(operation: &str, response: LiveResponse<'_>) -> Value {
     let LiveResponse {
         status,
@@ -363,6 +586,7 @@ fn live_admission(operation: &str, response: LiveResponse<'_>) -> Value {
         challenge,
         complete,
         issued,
+        credential,
         assessment,
         bytes,
         content_type,
@@ -385,6 +609,14 @@ fn live_admission(operation: &str, response: LiveResponse<'_>) -> Value {
         return json!({"operation":operation,"status":"blocked","http_status":status,"body_complete":complete,
         "reason":"response echoed newly issued session material or its cookie headers could not be reviewed; body and metadata withheld"});
     }
+    if credential.is_some_and(|contains| {
+        credential_echoed(bytes, contains)
+            || credential_html_echoed(bytes, content_type, contains)
+            || content_type.is_some_and(|value| contains(value.as_bytes()))
+    }) {
+        return json!({"operation":operation,"status":"blocked","http_status":status,"body_complete":complete,
+        "reason":"response echoed authentication session material; body and metadata withheld"});
+    }
     if let Some(rejection) = review_rejection(operation, bytes, content_type, assessment) {
         return rejection;
     }
@@ -393,11 +625,17 @@ fn live_admission(operation: &str, response: LiveResponse<'_>) -> Value {
     } else if status != 200 {
         json!({"operation":operation,"status":"blocked","reason":"HTTP response requires operator review; redirects are not followed","http_status":status,"evidence":evidence(bytes,content_type,"non-success response",assessment)})
     } else {
-        parse_page_assessed(bytes, content_type, operation, assessment)
+        parse_page_assessed(bytes, content_type, operation, assessment, credential)
     };
     if issued.echoed_value(&result) {
         return json!({"operation":operation,"status":"blocked","http_status":status,"body_complete":complete,
         "reason":"decoded response projection echoed newly issued session material; output withheld"});
+    }
+    if credential
+        .is_some_and(|contains| credential_echoed_value(&result, contains))
+    {
+        return json!({"operation":operation,"status":"blocked","http_status":status,"body_complete":complete,
+        "reason":"decoded response projection echoed authentication session material; output withheld"});
     }
     result
 }
@@ -430,7 +668,7 @@ fn csrf(text: &str) -> Option<&str> {
 
 fn parse_page(bytes: &[u8], content_type: Option<&str>, operation: &str) -> Value {
     let assessment = assess_challenge_body(bytes, content_type, true);
-    parse_page_assessed(bytes, content_type, operation, &assessment)
+    parse_page_assessed(bytes, content_type, operation, &assessment, None)
 }
 
 fn reports_missing_authentication(bytes: &[u8]) -> bool {
@@ -443,6 +681,7 @@ fn parse_page_assessed(
     content_type: Option<&str>,
     operation: &str,
     assessment: &ChallengeAssessment,
+    credential: Option<&dyn Fn(&[u8]) -> bool>,
 ) -> Value {
     if let Some(rejection) = review_rejection(operation, bytes, content_type, assessment) {
         return rejection;
@@ -489,6 +728,13 @@ fn parse_page_assessed(
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
+    if credential.is_some_and(|contains| {
+        credential_text_echoed(contains, &original_visible)
+            || credential_text_echoed(contains, &compact_visible)
+    }) {
+        return json!({"operation":operation,"status":"blocked","read_only":true,"submitted":false,
+        "reason":"decoded visible response echoed authentication session material; output withheld"});
+    }
     if crate::net::carries_secret(original_visible.as_bytes(), token)
         || crate::net::carries_secret(compact_visible.as_bytes(), token)
     {
@@ -881,6 +1127,7 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
             challenge,
             complete,
             issued: &issued,
+            credential: None,
             assessment: &assessment,
             bytes: &bytes,
             content_type: content_type.as_deref(),
@@ -898,6 +1145,407 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
     }
     .map_err(|_| Error::new("governor_error", "cannot persist shuttle request outcome"))?;
     Ok(decorate_schedule(operation, result, route, date))
+}
+
+/// Bounded stdin for `buaa shuttle session`: credentials plus one small read
+/// descriptor, never a document. The session boundary itself limits it.
+const SESSION_INPUT_LIMIT: usize = 65536;
+
+fn session_error(code: &'static str, message: &'static str) -> Error {
+    Error::new(code, message)
+}
+
+fn session_invalid() -> Error {
+    session_error(
+        "invalid_input",
+        "shuttle session input does not match the session contract",
+    )
+}
+
+fn deserialize_secret<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Zeroizing<String>, D::Error> {
+    String::deserialize(deserializer).map(Zeroizing::new)
+}
+
+// Serde's struct derives also accept positional sequences. This boundary
+// admits JSON objects only, without a credential-bearing Value tree.
+fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Object<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Object(std::marker::PhantomData))
+}
+
+struct SessionInput {
+    authorized: bool,
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
+    intent: Zeroizing<String>,
+    read: SessionRead,
+}
+
+impl<'de> Deserialize<'de> for SessionInput {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            authorized: bool,
+            #[serde(deserialize_with = "deserialize_secret")]
+            username: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_secret")]
+            password: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_secret")]
+            intent: Zeroizing<String>,
+            #[serde(deserialize_with = "deserialize_object")]
+            read: SessionRead,
+        }
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            authorized: raw.authorized,
+            username: raw.username,
+            password: raw.password,
+            intent: raw.intent,
+            read: raw.read,
+        })
+    }
+}
+
+struct SessionRead {
+    enabled: bool,
+    date: String,
+    route: u64,
+}
+
+impl<'de> Deserialize<'de> for SessionRead {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            enabled: bool,
+            date: String,
+            shifts_number: u64,
+        }
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            enabled: raw.enabled,
+            date: raw.date,
+            route: raw.shifts_number,
+        })
+    }
+}
+
+/// Add the read descriptor and the fixed read-only/provenance facts to any
+/// session outcome without touching the admitted observation fields. An
+/// enabled read always states that availability is not inferred.
+fn session_observation(mut observation: Value, date: &str, route: u64) -> Value {
+    observation["operation"] = json!("session");
+    observation["date"] = json!(date);
+    observation["shifts_number"] = json!(route);
+    observation["read_only"] = json!(true);
+    observation["submitted"] = json!(false);
+    observation["written_requests"] = json!(0);
+    observation["availability_inferred"] = json!(false);
+    observation["availability_reason"] = json!(AVAILABILITY_REASON);
+    observation["service"] = json!("zhihuixiaoche");
+    observation["source"] = json!("network");
+    observation["network_performed"] = json!(true);
+    observation["write_operations_performed"] = json!(false);
+    observation["session_persistent"] = json!(false);
+    observation["session_refresh"] = json!(false);
+    observation["automatic_retry"] = json!(false);
+    observation
+}
+
+/// Book the follow-up read slot under the shared governor. A cooldown is a
+/// durable refusal; pacing sleeps before transmission, never during the CAS
+/// redirect chain (handled inside the authentication itself).
+fn admit_session_read(lease: &mut RequestLease<'_>) -> Result<(), Error> {
+    let reservation = lease.reserve_followup().map_err(|_| {
+        session_error("governor_error", "cannot admit shuttle session follow-up")
+    })?;
+    if !reservation.cooldown_wait.is_zero() {
+        return Err(session_error(
+            "cooldown",
+            "shuttle authentication was deferred; no read or retry was sent",
+        ));
+    }
+    if !reservation.request_wait.is_zero() {
+        std::thread::sleep(reservation.request_wait);
+    }
+    Ok(())
+}
+
+/// One explicit in-memory CAS login to the shuttle service followed by exactly
+/// one read-only ticketInfoPage GET. The session never persists, refreshes or
+/// retries; the issued cookie is used for the single read only, and the read
+/// body is screened against every credential value the attempt held.
+pub fn session(input: &str, online: bool) -> Result<Value, Error> {
+    session_with_network(input, online, || {
+        Ok((
+            cas::http_client()?,
+            Governor::open().map_err(|_| {
+                session_error("governor_error", "shared request admission unavailable")
+            })?,
+        ))
+    })
+}
+
+pub(crate) fn session_with_network(
+    input_text: &str,
+    online: bool,
+    network: impl FnOnce() -> Result<(Client, Governor), Error>,
+) -> Result<Value, Error> {
+    if input_text.len() > SESSION_INPUT_LIMIT {
+        return Err(session_invalid());
+    }
+    let mut deserializer = serde_json::Deserializer::from_str(input_text);
+    let input: SessionInput =
+        deserialize_object(&mut deserializer).map_err(|_| session_invalid())?;
+    deserializer.end().map_err(|_| session_invalid())?;
+    if !input.read.enabled {
+        return Ok(json!({"result":"disabled","read_only":true,"submitted":false,
+            "written_requests":0,"service":"zhihuixiaoche","network_performed":false,
+            "write_operations_performed":false}));
+    }
+    // Reuse the shared read descriptor validators: the session read is the
+    // same ticketInfoPage contract as the anonymous page/availability reads.
+    let descriptor = json!({"date": &input.read.date, "shifts_number": input.read.route});
+    if !valid_date(&descriptor) || !valid_identifier(&descriptor, "shifts_number") {
+        return Err(session_invalid());
+    }
+    if !input.authorized {
+        return Err(session_error(
+            "permission",
+            "explicit authorization for one shuttle authentication attempt is required",
+        ));
+    }
+    let credentials = SsoCredentials::new(&input.username, &input.password)?;
+    if input
+        .intent
+        .strip_prefix("LOGIN ")
+        .and_then(|value| value.strip_suffix(" shuttle"))
+        != Some(input.username.as_str())
+    {
+        return Err(session_invalid());
+    }
+    if !online {
+        return Err(session_error(
+            "online_required",
+            "shuttle sessions require explicit online permission; no authentication was attempted",
+        ));
+    }
+    let (client, governor) = network()?;
+    let mut lease = crate::net::acquire_kind(&governor, RequestKind::Authentication)?;
+    // One authentication RequestLease spans the whole CAS exchange and the
+    // single fixed read: no separate governor acquisition follows the login.
+    let prepared = cas::authenticate_service(&mut lease, &client, CasService::Shuttle, credentials)
+        .and_then(|mut session| {
+            let url = url::Url::parse(&format!(
+                "{ORIGIN}/wechat/ticketInfoPage?shifts_date={}&{ROUTE_PARAMETER}={}",
+                input.read.date, input.read.route
+            ))
+            .map_err(|_| session_invalid())?;
+            let (cookie, expiry) = session.cookie_header_for_transmission(&url)?;
+            let cookie = cookie.ok_or_else(|| {
+                session_error(
+                    "auth_latched",
+                    "the shuttle session has no usable scoped cookie; no read was sent",
+                )
+            })?;
+            admit_session_read(&mut lease)?;
+            let mut request = client
+                .get(url.clone())
+                .header(reqwest::header::COOKIE, cookie)
+                .header("Accept", "text/html")
+                .timeout(Duration::from_secs(30))
+                .build()
+                .map_err(|_| session_invalid())?;
+            if let Some(value) = request.headers_mut().get_mut("cookie") {
+                value.set_sensitive(true);
+            }
+            Ok((session, expiry, url, request))
+        });
+    let (mut session, cookie_expiry, url, request) = match prepared {
+        Ok(prepared) => prepared,
+        Err(failure) => {
+            if matches!(
+                failure.code,
+                "governor_error" | "governor_denied" | "governor_unavailable"
+            ) {
+                // Persistence failure after a send is not a local refusal.
+                // Drop without finishing: retain the pending outcome for review.
+                return Err(failure);
+            }
+            let settled = match failure.code {
+                "auth_latched" => lease.finish(Outcome::CredentialRejected),
+                "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ => lease.finish_without_request(),
+            };
+            settled.map_err(|_| {
+                session_error("governor_error", "cannot settle shuttle authentication attempt")
+            })?;
+            return Err(failure);
+        }
+    };
+    let mut response = match lease.start_request(|| {
+        if cookie_expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+            None
+        } else {
+            Some(client.execute(request))
+        }
+    }) {
+        Ok(Some(Ok(response))) => response,
+        Ok(Some(Err(_))) => {
+            lease
+                .finish(Outcome::NetworkFailure)
+                .map_err(|_| session_error("governor_error", "cannot settle shuttle request"))?;
+            return Err(session_error(
+                "network_error",
+                "shuttle session read failed; no automatic retry",
+            ));
+        }
+        Ok(None) => {
+            lease
+                .finish_without_request()
+                .map_err(|_| session_error("governor_error", "cannot release shuttle request"))?;
+            return Err(session_error(
+                "scoped_cookie_unusable",
+                "the shuttle cookie expired before transmission; no request was sent",
+            ));
+        }
+        Err(FollowupError::Governor(_)) => {
+            return Err(session_error(
+                "governor_error",
+                "request safety admission failed; pending outcome retained",
+            ));
+        }
+    };
+    let status = response.status().as_u16();
+    let header_challenge = response
+        .headers()
+        .iter()
+        .any(|(name, value)| crate::net::challenge_header(name.as_str(), value.as_bytes()));
+    let content_type = response_content_type(response.headers());
+    let mime_reviewed = content_type.is_ok();
+    let content_type = content_type.unwrap_or(None).map(str::to_owned);
+    let retry = response
+        .headers()
+        .contains_key(reqwest::header::RETRY_AFTER);
+    let retry_after = response
+        .headers()
+        .get_all("retry-after")
+        .iter()
+        .find_map(|value| value.to_str().ok())
+        .map(str::to_owned);
+    if lease
+        .observe_http_many(
+            status,
+            response
+                .headers()
+                .get_all("retry-after")
+                .iter()
+                .map(|value| value.to_str().ok()),
+            header_challenge,
+        )
+        .is_err()
+    {
+        drop(response);
+        return Err(session_error(
+            "governor_error",
+            "cannot persist shuttle response headers",
+        ));
+    }
+    // Absorb the read response's Set-Cookie declarations into the session jar
+    // before screening: every newly issued value joins the invocation-only
+    // credential guard, and a declaration the jar cannot review refuses the
+    // whole read rather than leaving material unscreened. Nothing is
+    // persisted, retransmitted or replayed.
+    if let Err(failure) = session.absorb_shuttle_headers(&url, response.headers()) {
+        drop(response);
+        let settled = match failure.code {
+            "governor_error" | "governor_denied" | "governor_unavailable" => return Err(failure),
+            "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+            _ => lease.finish_without_request(),
+        };
+        settled.map_err(|_| {
+            session_error("governor_error", "cannot settle shuttle session read")
+        })?;
+        return Err(failure);
+    }
+    // Keep the raw declaration spellings in the module's own echo guard too so
+    // the existing issued-cookie refusal stays exact for the anonymous path's
+    // contract while the session jar adds the authenticated screen.
+    let mut issued = crate::net::IssuedCookies::new();
+    for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
+        issued.absorb(value.to_str().ok());
+    }
+    let mut bytes = Vec::new();
+    let read = response
+        .by_ref()
+        .take((LIMIT + 1) as u64)
+        .read_to_end(&mut bytes);
+    let complete = read.is_ok() && bytes.len() <= LIMIT;
+    let mut assessment = response_assessment(
+        status,
+        header_challenge,
+        &bytes,
+        content_type.as_deref(),
+        complete,
+    );
+    if !mime_reviewed && matches!(&assessment, ChallengeAssessment::Clear) {
+        assessment = ChallengeAssessment::Unreviewed;
+    }
+    // Cancel any unread body while the original shared lease is still held.
+    drop(response);
+    let challenge = matches!(&assessment, ChallengeAssessment::Detected);
+    // The one read guards on the transmitted cookie header, the whole session
+    // jar and the caller's SSO secrets: a response that echoes any of them is
+    // withheld, never base64-exported. The jar now also holds this response's
+    // issued values, so the screen covers every credential the attempt met.
+    let contains = |candidate: &[u8]| {
+        crate::net::carries_secret(candidate, &input.username)
+            || crate::net::carries_secret(candidate, &input.password)
+            || session.contains_secret_bytes(candidate)
+    };
+    let result = live_admission(
+        "session",
+        LiveResponse {
+            status,
+            retry,
+            challenge,
+            complete,
+            issued: &issued,
+            credential: Some(&contains),
+            assessment: &assessment,
+            bytes: &bytes,
+            content_type: content_type.as_deref(),
+        },
+    );
+    if result["authentication_required"] == true {
+        lease.finish(Outcome::CredentialRejected)
+    } else {
+        lease.finish(Outcome::Http {
+            status,
+            retry_after: retry_after.as_deref(),
+            challenge,
+            network_failure: !complete,
+        })
+    }
+    .map_err(|_| session_error("governor_error", "cannot persist shuttle request outcome"))?;
+    Ok(session_observation(result, &input.read.date, input.read.route))
 }
 
 /// Exact input field/null contract; output is a tagged observation envelope.
@@ -946,7 +1594,7 @@ pub fn schema() -> Value {
     json!({
         "input":{"oneOf":branches},
         "output":{"type":"object","required":["operation","status"],"properties":{
-            "operation":{"enum":["page","availability","schedule","purchase","cancel","service"]},
+            "operation":{"enum":["page","availability","schedule","purchase","cancel","service","session"]},
             "status":{"enum":["ok","blocked","unsupported","preview","observed","degraded"]},
             "authentication_required":{"const":true,"description":"The upstream explicitly reported missing authentication; no page script was executed and no authenticated retry occurred."},
             "refusal_code":{"type":"string","const":MUTATION_REFUSAL_CODE,
@@ -982,6 +1630,28 @@ pub fn schema() -> Value {
         "mutation_policy":{"operations":["purchase","cancel"],"refusal_code":MUTATION_REFUSAL_CODE,
             "required":["exact_typed_intent","immutable_preview_confirmation","independent_postcondition"],
             "reason":"No purchase or cancel is executed without all three; seat availability is never inferred."},
+        "session":{
+            "description":"One explicit in-memory CAS login to zhihuixiaoche.buaa.edu.cn followed by exactly one read-only GET of /wechat/ticketInfoPage under a single RequestLease. The reviewed plaintext CAS callback declaration is upgraded to HTTPS before any request; no plaintext is sent. Session cookies never persist, refresh or replay; every credential value the attempt held (SSO secrets, delivered/retired/transmitted cookie spellings) is screened from the read body, MIME metadata and decoded projection, and nothing credential-bearing is exported.",
+            "input":{"type":"object","additionalProperties":false,
+                "required":["authorized","username","password","intent","read"],
+                "properties":{
+                    "authorized":{"type":"boolean"},
+                    "username":{"type":"string"},
+                    "password":{"type":"string"},
+                    "intent":{"type":"string"},
+                    "read":{"type":"object","additionalProperties":false,
+                        "required":["enabled","date","shifts_number"],
+                        "properties":{
+                            "enabled":{"type":"boolean"},
+                            "date":{"type":"string","format":"date","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                            "shifts_number":{"type":"integer","minimum":1,"maximum":u32::MAX}}}}},
+            "intent":"LOGIN <username> shuttle",
+            "output":{"description":"Same observation envelope as the anonymous read with operation \"session\", the echoed date/shifts_number descriptor and read-only provenance; a disabled read returns {\"result\":\"disabled\"} without opening transport or admission."},
+            "lease":{"description":"The CAS exchange and the one ticketInfoPage GET share one authentication RequestLease; the read is booked as a follow-up reservation with normal pacing, and observed HTTP, challenge and body facts settle under that lease."},
+            "privacy":{"description":"Credentials arrive through protected stdin into zeroizing fields only; no credential enters a JSON Value, the output or any cookie echo. Newly issued Set-Cookie values are absorbed into the invocation-only session jar before response screening."},
+            "limits":{"input_utf8_bytes":SESSION_INPUT_LIMIT},
+            "no_retry":{"description":"No automatic retry, redirect outside the generic CAS chain, session refresh or persistence; 401/403, challenges, cooldowns and incomplete bodies all refuse rather than resubmit."},
+            "validation":"object root only; disabled read performs no I/O; enabled read requires valid date/shifts_number, authorized=true, exact intent and --online before opening transport or admission"},
         "limits":{"input_utf8_bytes":LIMIT*2+16384,"decoded_body_bytes":LIMIT},
         "online_verified":false
     })
@@ -1419,6 +2089,7 @@ mod tests {
                 challenge,
                 complete,
                 issued: &issued,
+                credential: None,
                 assessment: &assessment,
                 bytes,
                 content_type,
@@ -1706,5 +2377,276 @@ mod tests {
                 .unwrap()
                 .contains(&json!("independent_postcondition"))
         );
+    }
+
+    fn session_request_json() -> Value {
+        json!({
+            "authorized": true,
+            "username": "synthetic-operator-4b7",
+            "password": "synthetic-secret-passphrase",
+            "intent": "LOGIN synthetic-operator-4b7 shuttle",
+            "read": {"enabled": true, "date": "2026-11-08", "shifts_number": 7}
+        })
+    }
+
+    /// A network factory that proves the refusal happened before transport:
+    /// any call is a test failure because session admission is offline here.
+    fn no_network() -> Result<(Client, Governor), Error> {
+        panic!("refused input opened network resources")
+    }
+
+    #[test]
+    fn session_input_admission_is_typed_object_only_and_ordered() {
+        let _: fn(&str, bool) -> Result<Value, Error> = session;
+        // Disabled returns before date, authorization, intent or credential
+        // validation and before transport/admission.
+        let mut disabled = session_request_json();
+        disabled["authorized"] = json!(false);
+        disabled["intent"] = json!("LOGIN other smart classrooms");
+        disabled["read"]["enabled"] = json!(false);
+        disabled["read"]["date"] = json!("not-a-date");
+        disabled["read"]["shifts_number"] = json!(0);
+        let result = session_with_network(&disabled.to_string(), false, no_network).unwrap();
+        assert_eq!(result["result"], "disabled");
+        assert_eq!(result["network_performed"], false);
+        assert_eq!(result["write_operations_performed"], false);
+
+        // Non-object roots, unknown/duplicate members and trailing content
+        // are all invalid; no credential-bearing Value tree ever exists.
+        for input in [
+            "[]".to_owned(),
+            r#"["a","b"]"#.to_owned(),
+            "null".to_owned(),
+            format!("{} {{}}", session_request_json()),
+            session_request_json()
+                .to_string()
+                .replace("\"authorized\":true", "\"authorized\":true,\"authorized\":false"),
+            session_request_json()
+                .to_string()
+                .replace("\"authorized\":true", "\"authorized\":true,\"extra\":0"),
+        ] {
+            assert!(session_with_network(&input, true, no_network).is_err());
+        }
+
+        // An enabled read validates the descriptor before authorization.
+        for (date, route) in [("2026-13-08", 7), ("2026-11-8", 7), ("2026-11-08", 0)] {
+            let mut request = session_request_json();
+            request["authorized"] = json!(false);
+            request["read"]["date"] = json!(date);
+            request["read"]["shifts_number"] = json!(route);
+            let error = session_with_network(&request.to_string(), true, no_network).unwrap_err();
+            assert_eq!(error.code, "invalid_input");
+        }
+
+        // Unauthorized, intent mismatch and offline each refuse before
+        // transport or admission, in that order.
+        let mut request = session_request_json();
+        request["authorized"] = json!(false);
+        let error = session_with_network(&request.to_string(), true, no_network).unwrap_err();
+        assert_eq!(error.code, "permission");
+        let mut request = session_request_json();
+        request["intent"] = json!("LOGIN another-operator shuttle");
+        let error = session_with_network(&request.to_string(), true, no_network).unwrap_err();
+        assert_eq!(error.code, "invalid_input");
+        let mut request = session_request_json();
+        request["intent"] = json!("LOGIN synthetic-operator-4b7 timetable");
+        let error = session_with_network(&request.to_string(), true, no_network).unwrap_err();
+        assert_eq!(error.code, "invalid_input");
+        let request = session_request_json();
+        let error = session_with_network(&request.to_string(), false, no_network).unwrap_err();
+        assert_eq!(error.code, "online_required");
+    }
+
+    #[test]
+    fn session_credential_predicate_screens_body_metadata_and_projection() {
+        use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+        let session_secret = |candidate: &[u8]| {
+            crate::net::carries_secret(candidate, "synthetic-operator-4b7")
+                || crate::net::carries_secret(candidate, "synthetic-secret-passphrase")
+                || crate::net::carries_secret(candidate, "session-cookie-private")
+                || crate::net::carries_secret(candidate, "abc/def")
+        };
+        let admit = |headers: &HeaderMap, bytes: &[u8]| {
+            let issued = crate::net::IssuedCookies::new();
+            let assessment = ChallengeAssessment::Clear;
+            live_admission(
+                "session",
+                LiveResponse {
+                    status: 200,
+                    retry: false,
+                    challenge: false,
+                    complete: true,
+                    issued: &issued,
+                    credential: Some(&session_secret),
+                    assessment: &assessment,
+                    bytes,
+                    content_type: headers
+                        .get(CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok()),
+                },
+            )
+        };
+        let csrf = "<script>var csrf_token='abc_123';</script>";
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
+
+        // Ordinary pages still admit with the predicate installed.
+        let ordinary = format!("<body>Shuttle 08:00{csrf}</body>");
+        let result = admit(&headers, ordinary.as_bytes());
+        assert_eq!(result["status"], "ok");
+        assert_eq!(result["visible_page_text"], "Shuttle 08:00");
+
+        // Raw literal echoes of the password or a session cookie withhold
+        // the body instead of reaching base64 evidence.
+        for echoed in ["synthetic-secret-passphrase", "session-cookie-private"] {
+            let body = format!("<body>{echoed}{csrf}</body>");
+            let result = admit(&headers, body.as_bytes());
+            assert_eq!(result["status"], "blocked");
+            assert!(result.get("evidence").is_none());
+            assert!(!result.to_string().contains(echoed));
+        }
+
+        // A secret inside MIME metadata is withheld with its body.
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; note=session-cookie-private"),
+        );
+        let result = admit(&headers, ordinary.as_bytes());
+        assert_eq!(result["status"], "blocked");
+        assert!(!result.to_string().contains("session-cookie-private"));
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        // A decoded JSON escape or member spelling of a credential is caught
+        // even when the raw bytes never contain the literal secret.
+        for body in [
+            br#"{"x":"session-cookie-\u0070rivate"}"#.as_slice(),
+            br#"{"session-cookie-private":"ordinary"}"#.as_slice(),
+            br#"{"x":"session-cookie-private","x":"ordinary"}"#.as_slice(),
+        ] {
+            let result = admit(&headers, body);
+            assert_eq!(result["status"], "blocked");
+            assert!(!result.to_string().contains("session-cookie-private"));
+        }
+        let result = admit(&headers, br#"{"x":"abc/ def"}"#);
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("evidence").is_none());
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
+
+        // A credential assembled only inside the decoded projection (split
+        // text nodes, compacted whitespace) is still refused.
+        let body = format!("<body><span>session-cookie-</span><span>private</span>{csrf}</body>");
+        let result = admit(&headers, body.as_bytes());
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("visible_page_text").is_none());
+        assert!(!result.to_string().contains("session-cookie-private"));
+
+        // Scalar and object-key projection forms match too.
+        assert!(credential_echoed_value(&json!("session-cookie-private"), &session_secret));
+        assert!(credential_echoed_value(
+            &json!({"session-cookie-private": 1}),
+            &session_secret
+        ));
+        assert!(credential_echoed_value(
+            &json!("session-cookie- private"),
+            &session_secret
+        ));
+        assert!(!credential_echoed_value(&json!("ordinary"), &session_secret));
+
+        // The upstream missing-authentication page keeps its dedicated
+        // result (and therefore the CredentialRejected settle) under the
+        // authenticated predicate.
+        let missing = "<script>alert('未获取到认证信息，请退出后重新进入');history.back()</script>";
+        let result = admit(&headers, missing.as_bytes());
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["authentication_required"], true);
+    }
+
+    #[test]
+    fn session_credential_html_attribute_entity_is_withheld() {
+        let contains = |candidate: &[u8]| crate::net::carries_secret(candidate, "abc/def");
+        let issued = crate::net::IssuedCookies::new();
+        let assessment = ChallengeAssessment::Clear;
+        let result = live_admission(
+            "session",
+            LiveResponse {
+                status: 200,
+                retry: false,
+                challenge: false,
+                complete: true,
+                issued: &issued,
+                credential: Some(&contains),
+                assessment: &assessment,
+                bytes: br#"<body data-echo="abc&sol;def">ordinary</body>"#,
+                content_type: Some("text/html"),
+            },
+        );
+        assert_eq!(result["status"], "blocked");
+        assert!(result.get("evidence").is_none());
+        assert!(!result.to_string().contains("abc/def"));
+    }
+
+    #[test]
+    fn session_credential_html_raw_fallback_uses_the_full_projection() {
+        let contains = |candidate: &[u8]| crate::net::carries_secret(candidate, "abc/def");
+        for body in [
+            "<body>abc/ def</body>",
+            "<body>abc/<span>def</span>&amp;</body>",
+        ] {
+            let issued = crate::net::IssuedCookies::new();
+            let assessment = ChallengeAssessment::Clear;
+            let result = live_admission(
+                "session",
+                LiveResponse {
+                    status: 200,
+                    retry: false,
+                    challenge: false,
+                    complete: true,
+                    issued: &issued,
+                    credential: Some(&contains),
+                    assessment: &assessment,
+                    bytes: body.as_bytes(),
+                    content_type: Some("text/html"),
+                },
+            );
+            assert_eq!(result["status"], "blocked", "{body}");
+            assert!(result.get("evidence").is_none());
+            assert!(!result.to_string().contains("abc/def"));
+        }
+    }
+
+    #[test]
+    fn session_schema_publishes_the_actual_input_byte_limit() {
+        assert_eq!(
+            schema()["session"]["limits"]["input_utf8_bytes"],
+            SESSION_INPUT_LIMIT
+        );
+    }
+
+    #[test]
+    fn session_observation_adds_read_only_provenance_without_rewriting() {
+        let observation = session_observation(
+            json!({"status":"ok","visible_page_text":"Shuttle 08:00"}),
+            "2026-11-08",
+            7,
+        );
+        assert_eq!(observation["operation"], "session");
+        assert_eq!(observation["status"], "ok");
+        assert_eq!(observation["date"], "2026-11-08");
+        assert_eq!(observation["shifts_number"], 7);
+        assert_eq!(observation["read_only"], true);
+        assert_eq!(observation["submitted"], false);
+        assert_eq!(observation["written_requests"], 0);
+        assert_eq!(observation["availability_inferred"], false);
+        assert_eq!(observation["session_persistent"], false);
+        assert_eq!(observation["session_refresh"], false);
+        assert_eq!(observation["automatic_retry"], false);
+        // A blocked result stays blocked; availability is still not inferred.
+        let blocked = session_observation(
+            json!({"status":"blocked","reason":"upstream"}),
+            "2026-11-08",
+            7,
+        );
+        assert_eq!(blocked["status"], "blocked");
+        assert_eq!(blocked["availability_inferred"], false);
     }
 }

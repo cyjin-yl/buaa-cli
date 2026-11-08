@@ -41,6 +41,31 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-08: native shuttle session candidate, no session established
+
+`buaa shuttle session --online` now has a typed, object-only, zeroizing
+credential input and exact `LOGIN <username> shuttle` intent. One shared
+Authentication lease covers the generic CAS exchange and exactly one fixed
+`ticketInfoPage` GET. The reference-declared plaintext `/wechat/CASLogin`
+callback is upgraded only at the exact host/path before any request; no
+plaintext is sent. Cookie delivery, rotation, retirement and every raw/decoded
+response projection remain inside the invocation-only credential screen.
+Nothing persists, refreshes, retries or performs a booking/captcha/payment.
+
+Offline proof includes strict-TLS synthetic CAS flows, exact upgrade and
+lookalike refusal, cookie-scope and credential-echo boundaries, typed input and
+schema limits. Final independent review reported no findings. All-target tests
+passed **1444 library plus 116 integration cases**, with three existing ignored
+workers; actual help/schema/disabled/offline-refusal CLI smoke passed.
+
+One deliberate live attempt using protected stdin returned `invalid_input`
+with empty stdout and no credential echo. The governor had a contemporaneous
+HTTP observation and no pending outcome or network-failure increment, but the
+current generic error did not retain the stage. Credential submission, ticket
+redemption, session establishment and any schedule/availability read are
+therefore **not established**. No automatic retry or second authentication was
+performed. Shuttle remains pending.
+
 ## 2026-11-08: shuttle anonymous read and admission repairs
 
 Two deliberate, credential-free reads of the fixed HTTPS `ticketInfoPage`

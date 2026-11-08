@@ -1127,13 +1127,13 @@
       "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
       "evidence": {
         "candidate_offline": "An operator-supplied CLI page reproduced a percent-encoded CSRF echo in visible text; two post-fix cases passed, including an ordinary page control and encoded variants.",
-        "remaining": "The anonymous HTTPS page explicitly requires authentication. No authenticated timetable, availability, HTTPS CAS session, booking, payment or cancellation contract has been verified. Writes remain unauthorized and blocked.",
+        "remaining": "The anonymous HTTPS page explicitly requires authentication. A native strict-TLS CAS candidate was implemented and reviewed, but its single live attempt returned invalid_input without establishing the failure stage, credential submission, a session, timetable or availability. No retry occurred. Booking, payment and cancellation remain unverified and unauthorized.",
         "offline_observation_2026_10_31": {
           "command": "buaa shuttle with an empty object",
           "observed": "invalid_input exit 2: typed request required",
           "live_blocker": "No authorized live shuttle page read in this run."
         },
-        "online_observation_2026_11_08": {
+      "online_observation_2026_11_08": {
         "scope": "Two deliberate credential-free reads of the same fixed HTTPS ticketInfoPage date/numeric candidate, with no redirect, cookie transmission, authentication, booking, payment, cancellation or automatic retry.",
         "initial_result": "HTTP 200 was refused solely because the response issued a session cookie; no body was admitted.",
         "post_repair_result": "The client admitted a safe 92-byte text/html original. Its exact upstream response explicitly reported missing authentication; this is not a timetable or availability success.",
@@ -1145,6 +1145,21 @@
         "independent_review": "Four review rounds covered all reported raw/decoded/projection and classification paths. Every finding had failing-before/passing-after consumer evidence; the final re-review reported no findings.",
         "quality_gate_limits": "The current all-tree formatter and strict-Clippy checks fail on unrelated unchanged baseline code; neither is claimed green.",
         "acceptance_boundary": "Anonymous missing-authentication evidence only. No authenticated schedule, seat availability, HTTPS CAS acceptance or mutation postcondition was observed."
+      },
+      "native_session_candidate_2026_11_08": {
+        "command": "buaa shuttle session --online",
+        "implementation": "Object-only zeroizing protected-stdin credentials, exact LOGIN <username> shuttle intent, one Authentication lease spanning generic CAS and one fixed ticketInfoPage GET. The reference-declared HTTP /wechat/CASLogin callback is upgraded only at the exact host/path before any request. No plaintext, persistence, refresh, retry, mutation, captcha or payment. Read responses retain the anonymous path's raw/decoded/entity/compact/projection credential screening.",
+        "offline_proof": "Strict-TLS synthetic CAS success, exact upgrade/lookalike refusal, scoped-cookie and absorption boundaries, typed input and schema-limit tests. Independent review reported no findings. Final all-target tests: 1444 library passed with three existing ignored workers plus 116 integration passed. Actual help/schema/disabled/offline-refusal smoke passed.",
+        "live_attempt": {
+          "attempts": 1,
+          "result": "invalid_input",
+          "stdout_bytes": 0,
+          "credential_echo": false,
+          "governor": "A contemporaneous HTTP observation was recorded, with no pending outcome and no network-failure increment. The generic error did not retain the stage.",
+          "not_established": "Credential submission, ticket redemption, session establishment, authenticated page content, timetable and availability are not established.",
+          "retry": false
+        },
+        "acceptance_boundary": "Candidate implementation and a failed bounded attempt, not live service acceptance. Shuttle remains pending."
         }
       },
       "sources": [
