@@ -41,6 +41,16 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-08: Boya complete source-declared pagination verified
+
+The actual native `buaa boya session --online` completed
+`queryStudentSemesterCourseByPage` with `result=success`, `complete=true`,
+137 entries and all 7 declared pages. The private output has 137 unique
+integer course IDs, no missing IDs, and page counts 20×6+17, exactly matching
+the source-declared total. No retry, write or credential/course-content export
+occurred. This is complete read pagination, not enrol/drop/check-in or mutation
+postcondition acceptance; #150 remains open for those boundaries.
+
 ## 2026-11-08: real Camofox CLI timetable/ICS verified
 
 `buaa timetable session --online` now accepts an explicit
