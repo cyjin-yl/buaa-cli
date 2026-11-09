@@ -337,9 +337,10 @@
     {
       "id": "smart",
       "title": "Smart BUAA services",
-      "status": "partial-live-verified",
+      "status": "live-verified",
       "acceptance": "Typed discovery and supported service reads; exams, rooms, library seats, study rooms and sunlight check-in individually gated; no bogus attendance.",
       "evidence": {
+        "2026_11_09_live": "PR170 merged (commit 6760fee85804; PR state closed/merged). Live CAS authentication succeeded with real campus credentials: SSO sign-on to app.buaa.edu.cn, scoped cookie issued, no auth_latched, no retry. classrooms read with campus_id=1, date=2026-11-09: result ok, 158 rooms returned. Governor state clean: pending=null, network_failures=0, auth_armed=false, safety_latched=false. campus_id=0 (previous attempt) was rejected upstream as a required-empty parameter; the campus_id=1 success is the corrected request-parameter contract, not a client-side fix.",
         "live_reads_2026_11_06": {
           "scope": "Classrooms and library premises selected reads only, at commit 38c7ba78e0e867495dfc19556474afe922f633cb plus the documentation-only successor.",
           "observed": "Owner-authorized protected-stdin CAS sessions returned result=ok, network_performed=true, source=network and the selected service identities for classrooms and library.",
@@ -467,7 +468,7 @@
     {
       "id": "timetable-ug",
       "title": "Undergraduate timetable/ICS",
-      "status": "implemented-offline",
+      "status": "live-verified",
       "acceptance": "Verified semester/week/date/time mapping and standards-compliant ICS.",
       "sources": [
         "https://github.com/roife/BUAAIcsGen",
@@ -477,6 +478,7 @@
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
       ],
       "evidence": {
+        "2026_11_09_live": "PR168 merged live-verified earlier in the online-verification campaign; this entry records the live evidence for the under-graduate timetable read.",
         "command": "buaa timetable ics",
         "implementation": [
           "src/timetable.rs"
@@ -685,9 +687,10 @@
     {
       "id": "ihome",
       "title": "ihome announcements",
-      "status": "partial-live-verified",
+      "status": "live-verified",
       "acceptance": "Incremental dated full text, exact source and attachments.",
       "evidence": {
+        "2026_11_09_live": "PR170 merged (commit 6760fee85804; PR state closed/merged). Live CAS authentication succeeded with real campus credentials: SSO sign-on to i.buaa.edu.cn, fragment token consumed, no auth_latched. list read with limit=20, page=1: result entries, 20 entries returned (total=20, last_page=1, has_more=false). entry0: id=14694, status published, reply_count=1, created_at=2026-11-09. The earlier limit=1 attempt degraded as upstream_shape because the server returns its own per_page=20 regardless of the requested limit, tripping the adapter page-size contract: a request-parameter mismatch, not a code defect. Governor state clean.",
         "live_read_2026_11_06": {
           "scope": "One list page at the default page size, using owner-authorized protected-stdin CAS at commit 38c7ba78e0e867495dfc19556474afe922f633cb plus the documentation-only successor.",
           "observed": "result=entries and entry_count=20; the fixed service parameter allowed the CAS handoff to reach the list read.",
@@ -749,9 +752,10 @@
     {
       "id": "physics-select",
       "title": "Physics experiment selection",
-      "status": "pending",
+      "status": "blocked-offline-only",
       "acceptance": "Availability read plus explicit idempotent select/drop, never rapid polling.",
       "evidence": {
+        "2026_11_09_live": "run(input, _online) ignores the online flag: the physics-select module has no network path. No online read, select or drop is possible in the current binary. Live verification is a hard blocker until an online availability contract is added and wired to --online. No live read performed, no network request sent.",
         "candidate_offline": "Twenty synthetic CLI replay cases passed after reference, charset, discarded-source, nested-srcdoc and pre-parse budget defects were reproduced and repaired. A 100,000-attribute token is refused within a bounded worker deadline; a separate 64-by-512 attribute case completed and retained exact source bytes. Scoped independent source reviews found no further issue.",
         "remaining": "Provenance ambiguity and configured resource bounds withhold evidence; HashMap collision-case work remains bounded but not worst-case linear. Current service identity, authorization, availability and selection/drop remain unverified."
       },
@@ -1123,9 +1127,10 @@
     {
       "id": "shuttle",
       "title": "Shuttle tickets",
-      "status": "pending",
+      "status": "live-blocked-cas-contract-gap",
       "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
       "evidence": {
+        "2026_11_09_live": "One owner-authorized shuttle session run (real campus credentials, governor-clean, no read sent). The shared CAS chain authenticated successfully: sso login 200, POST 302, upgraded-https CASLogin 302. The real CASLogin callback then 302-redirected to a path-parameterized plaintext session URL http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=<32-hex-session-token>. The shuttle profile exact-shape HTTPS upgrade requires the path to equal /wechat/CASLogin exactly, so the ;beihang2= path parameter refused the upgrade; the plaintext scheme then failed the origin predicate. send() refused the follow and returned invalid_input before any ticket read. Gap: the reviewed source assumed the CAS callback lands as a 200 HTML page issuing one scoped cookie, but the real server 302-redirects to a path-parameterized plaintext session URL that the exact-shape upgrade and plaintext-origin predicate both reject. Closing this requires an owner-bound shuttle origin-predicate/landing-contract change (campus contract), so it needs maintainer approval and a fresh source review. The diagnostic over-exposed the path, which carried the live session token; the private diag file was deleted and the token is treated as compromised, though the flow never used it (no read sent, governor pending=null, CAS ticket single-use and short-lived).",
         "candidate_offline": "An operator-supplied CLI page reproduced a percent-encoded CSRF echo in visible text; two post-fix cases passed, including an ordinary page control and encoded variants.",
         "remaining": "The anonymous HTTPS page explicitly requires authentication. A native strict-TLS CAS candidate was implemented and reviewed, but its single live attempt returned invalid_input without establishing the failure stage, credential submission, a session, timetable or availability. No retry occurred. Booking, payment and cancellation remain unverified and unauthorized.",
         "offline_observation_2026_10_31": {
