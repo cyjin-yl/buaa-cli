@@ -25,11 +25,12 @@ const LIBRARY_TOKEN: &str = "synthetic-library-token-7h3k";
 /// Scoped application cookies; neither is a sign-on credential.
 const SMART_APP_COOKIE: &str = "smart_session=synthetic-app-session";
 const LIBRARY_APP_COOKIE: &str = "lib_session=synthetic-library-session";
-const ALL_SERVICES: [CasService; 4] = [
+const ALL_SERVICES: [CasService; 5] = [
     CasService::Classroom,
     CasService::SmartClassrooms,
     CasService::Library,
     CasService::Ihome,
+    CasService::Shuttle,
 ];
 
 fn url(input: &str) -> Url {
@@ -111,6 +112,24 @@ fn each_profile_admits_only_its_reviewed_origins() {
         &url("https://classroom.msa.buaa.edu.cn/arbitrary/path?q=v"),
         CasService::Classroom
     ));
+    // The shuttle profile admits the sign-on host and its own HTTPS host
+    // only; the declared plaintext callback never passes as a request
+    // target, only its upgraded HTTPS spelling does.
+    let shuttle_callback =
+        url("https://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic");
+    assert!(allowed(&shuttle_callback, CasService::Shuttle));
+    assert!(!allowed(&shuttle_callback, CasService::Classroom));
+    assert!(!allowed(&shuttle_callback, CasService::SmartClassrooms));
+    assert!(!allowed(&shuttle_callback, CasService::Library));
+    assert!(!allowed(&shuttle_callback, CasService::Ihome));
+    assert!(!allowed(
+        &url("http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin"),
+        CasService::Shuttle
+    ));
+    assert!(allowed(
+        &url("https://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage?shifts_date=2031-04-12"),
+        CasService::Shuttle
+    ));
 }
 
 #[test]
@@ -139,6 +158,13 @@ fn allowed_refuses_shaped_origins_and_lookalike_hosts() {
             "https://i.buaa.edu.cn./api/authLogin",
             "https://i.buaa.edu.cn.attacker.example/api/authLogin",
             "https://sub.i.buaa.edu.cn/api/authLogin",
+            "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin",
+            "http://zhihuixiaoche.buaa.edu.cn/",
+            "https://operator@zhihuixiaoche.buaa.edu.cn/wechat/CASLogin",
+            "https://zhihuixiaoche.buaa.edu.cn:4443/wechat/CASLogin",
+            "https://zhihuixiaoche.buaa.edu.cn./wechat/CASLogin",
+            "https://zhihuixiaoche.buaa.edu.cn.attacker.example/wechat/CASLogin",
+            "https://sub.zhihuixiaoche.buaa.edu.cn/wechat/CASLogin",
         ] {
             assert!(!allowed(&url(candidate), service), "{candidate}");
         }
@@ -204,6 +230,7 @@ fn smart_route_declares_no_auto_redirect_and_no_other_extra_pair() {
         CasService::Classroom,
         CasService::Library,
         CasService::Ihome,
+        CasService::Shuttle,
     ] {
         let value = pinned_service_value(service);
         assert!(!pinned_login_route(
@@ -475,6 +502,14 @@ fn non_library_profiles_never_release_the_library_credential() {
             CasService::Ihome,
             "https://i.buaa.edu.cn/api/authLogin?cas=ST-synthetic",
         ),
+        (
+            CasService::Shuttle,
+            "https://sso.buaa.edu.cn/login?cas=ST-synthetic",
+        ),
+        (
+            CasService::Shuttle,
+            "https://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?cas=ST-synthetic",
+        ),
     ] {
         assert!(matches!(credential(service, input), Ok(None)), "{input}");
     }
@@ -621,6 +656,7 @@ fn non_ihome_profiles_never_release_the_terminal_token() {
         CasService::Classroom,
         CasService::SmartClassrooms,
         CasService::Library,
+        CasService::Shuttle,
     ] {
         assert!(credential(service, terminal).is_err());
     }
@@ -685,6 +721,7 @@ fn ihome_plaintext_callback_upgrades_only_the_exact_reviewed_shape() {
         CasService::Classroom,
         CasService::SmartClassrooms,
         CasService::Library,
+        CasService::Shuttle,
     ] {
         assert!(
             upgraded_service_callback(
@@ -695,6 +732,83 @@ fn ihome_plaintext_callback_upgrades_only_the_exact_reviewed_shape() {
             "another service must never adopt the iHome callback"
         );
     }
+}
+
+#[test]
+fn shuttle_plaintext_callback_upgrades_only_the_exact_reviewed_shape() {
+    let upgraded = |input: &str| upgraded_service_callback(CasService::Shuttle, &url(input));
+
+    // The declared plaintext callback is upgraded to its HTTPS spelling
+    // with every other component preserved; the ticket travels encrypted.
+    let candidate =
+        upgraded("http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic")
+            .expect("the reviewed callback upgrades");
+    assert_eq!(
+        candidate.as_str(),
+        "https://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic"
+    );
+    assert_eq!(
+        upgraded("http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin")
+            .expect("upgrade without query")
+            .as_str(),
+        "https://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin"
+    );
+
+    // Every shaping refuses the upgrade and keeps the plaintext scheme, so
+    // the origin predicate refuses the follow before any request.
+    for input in [
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin/",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin/extra",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic#fragment",
+        "http://zhihuixiaoche.buaa.edu.cn:8080/wechat/CASLogin?ticket=ST-synthetic",
+        "http://operator@zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic",
+        "http://operator:secret@zhihuixiaoche.buaa.edu.cn/wechat/CASLogin",
+        "http://zhihuixiaoche.buaa.edu.cn./wechat/CASLogin",
+        "http://zhihuixiaoche.buaa.edu.cn.evil.example/wechat/CASLogin",
+        "http://sub.zhihuixiaoche.buaa.edu.cn/wechat/CASLogin",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage",
+        "http://zhihuixiaoche.buaa.edu.cn/",
+        "http://i.buaa.edu.cn/wechat/CASLogin",
+        "http://i.buaa.edu.cn/api/authLogin",
+        // Already-HTTPS and foreign-host URLs are never rewritten.
+        "https://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic",
+        "https://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin",
+        "http://app.buaa.edu.cn/wechat/CASLogin",
+        "http://booking.lib.buaa.edu.cn/wechat/CASLogin",
+    ] {
+        assert!(upgraded(input).is_none(), "{input}");
+    }
+    // No profile, including Shuttle itself, may adopt another party's
+    // callback or the wrong service's plaintext declaration.
+    for service in [
+        CasService::Classroom,
+        CasService::SmartClassrooms,
+        CasService::Library,
+        CasService::Ihome,
+    ] {
+        assert!(
+            upgraded_service_callback(
+                service,
+                &url("http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic")
+            )
+            .is_none(),
+            "another service must never adopt the shuttle callback"
+        );
+    }
+    assert!(
+        upgraded_service_callback(
+            CasService::Shuttle,
+            &url("http://i.buaa.edu.cn/api/authLogin?ticket=ST-synthetic")
+        )
+        .is_none(),
+        "the shuttle profile must never adopt the iHome callback"
+    );
+    // An upgrade never produces a plaintext or foreign spelling: no
+    // downgrade is possible through this admission path.
+    let rewritten = upgraded("http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-x")
+        .expect("reviewed shape upgrades");
+    assert_eq!(rewritten.scheme(), "https");
+    assert_eq!(rewritten.host_str(), Some(SHUTTLE_HOST));
 }
 
 // ---------------------------------------------------------------------------
@@ -805,6 +919,7 @@ fn test_pki() -> TestPki {
         .dns("app.buaa.edu.cn")
         .dns("booking.lib.buaa.edu.cn")
         .dns("i.buaa.edu.cn")
+        .dns("zhihuixiaoche.buaa.edu.cn")
         .build(&leaf.x509v3_context(Some(&ca), None))
         .expect("san");
     leaf.append_extension(san).expect("leaf san");
@@ -1087,6 +1202,7 @@ struct CasHarness {
     app: CasEndpoint,
     booking: CasEndpoint,
     ihome: CasEndpoint,
+    shuttle: CasEndpoint,
 }
 
 impl CasHarness {
@@ -1136,12 +1252,32 @@ impl CasHarness {
         booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
         ihome: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
     ) -> Self {
+        Self::with_shuttle_responders(sso, app, booking, ihome, |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        })
+    }
+
+    /// The full five-host stand-in including the shuttle endpoint, so a
+    /// shuttle flow can serve its upgraded CAS callback and its one
+    /// business read.
+    fn with_shuttle_responders(
+        sso: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        app: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        ihome: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        shuttle: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
         let pki = test_pki();
         let acceptor = tls_acceptor(&pki);
         let sso = CasEndpoint::start(Arc::clone(&acceptor), sso);
         let app = CasEndpoint::start(Arc::clone(&acceptor), app);
         let booking = CasEndpoint::start(Arc::clone(&acceptor), booking);
-        let ihome = CasEndpoint::start(acceptor, ihome);
+        let ihome = CasEndpoint::start(Arc::clone(&acceptor), ihome);
+        let shuttle = CasEndpoint::start(acceptor, shuttle);
         let client = strict_client(
             &pki,
             &[
@@ -1149,6 +1285,7 @@ impl CasHarness {
                 ("app.buaa.edu.cn", app.address),
                 ("booking.lib.buaa.edu.cn", booking.address),
                 ("i.buaa.edu.cn", ihome.address),
+                ("zhihuixiaoche.buaa.edu.cn", shuttle.address),
             ],
         );
         Self {
@@ -1157,6 +1294,7 @@ impl CasHarness {
             app,
             booking,
             ihome,
+            shuttle,
         }
     }
 }
@@ -1360,6 +1498,334 @@ fn library_flow_consumes_terminal_fragment_cas_without_requesting_it() {
         .cookie_header(&url("https://booking.lib.buaa.edu.cn/"))
         .expect("library scoped view");
     assert!(cookie.is_none());
+}
+
+/// The scoped session cookie the shuttle relying party issues for the one
+/// ticket-page read that follows the CAS handoff.
+const SHUTTLE_APP_COOKIE: &str = "shuttle_session=synthetic-shuttle-session";
+const SHUTTLE_LANDING_HTTP: &str = "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-synthetic-shuttle";
+
+/// Serve the reviewed shuttle landing: a nonempty HTML document on the
+/// relying-party host issuing one usable scoped cookie.
+fn shuttle_responder() -> impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static {
+    |_| {
+        http_response(
+            "200 OK",
+            &[
+                ("Content-Type", "text/html"),
+                (
+                    "Set-Cookie",
+                    "shuttle_session=synthetic-shuttle-session; Domain=zhihuixiaoche.buaa.edu.cn; Path=/; Secure; HttpOnly",
+                ),
+            ],
+            "<html><body>shuttle landing</body></html>",
+        )
+    }
+}
+
+#[test]
+fn shuttle_flow_upgrades_the_declared_callback_and_leaves_a_scoped_cookie() {
+    let harness = CasHarness::with_shuttle_responders(
+        sso_responder(CasService::Shuttle, SHUTTLE_LANDING_HTTP, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        shuttle_responder(),
+    );
+    let (_guard, governor) = service_test_governor("shuttle-flow");
+    let mut lease = governor
+        .try_acquire(RequestKind::Authentication)
+        .expect("authentication lease");
+    let credentials =
+        SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD).expect("synthetic credentials");
+    let result = authenticate_service(
+        &mut lease,
+        &harness.client,
+        CasService::Shuttle,
+        credentials,
+    );
+    finish_lease(lease, result.as_ref().err());
+    let mut session = result.expect("shuttle CAS flow");
+
+    assert_one_credential_post(&harness, CasService::Shuttle);
+
+    // The declared plaintext callback was upgraded before any request: the
+    // shuttle endpoint observed exactly one TLS request, never the http
+    // spelling, and its query carried the issued ticket.
+    let shuttle_requests = harness.shuttle.observed();
+    assert_eq!(shuttle_requests.len(), 1);
+    assert_eq!(shuttle_requests[0].method, "GET");
+    assert_eq!(
+        shuttle_requests[0].header("host"),
+        Some("zhihuixiaoche.buaa.edu.cn")
+    );
+    let callback_url = observed_url("zhihuixiaoche.buaa.edu.cn", &shuttle_requests[0]);
+    assert_eq!(callback_url.path(), "/wechat/CASLogin");
+    assert_eq!(
+        query_map(&callback_url).get("ticket").map(String::as_str),
+        Some("ST-synthetic-shuttle")
+    );
+    // The relying-party callback never sees the sign-on cookie: CASTGC is
+    // host-only for sso.buaa.edu.cn.
+    let shuttle_cookie = shuttle_requests[0].header("cookie").unwrap_or("");
+    assert!(!shuttle_cookie.contains("CASTGC"), "{shuttle_cookie}");
+
+    // No other relying party was contacted.
+    assert!(harness.app.observed().is_empty());
+    assert!(harness.booking.observed().is_empty());
+    assert!(harness.ihome.observed().is_empty());
+
+    // The handoff leaves one usable scoped cookie for the ticket page read;
+    // the sign-on credential never surfaces through the scoped view.
+    let probe = url("https://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage");
+    let (cookie, _expiry) = session.cookie_header(&probe).expect("scoped cookie view");
+    let cookie = cookie.expect("shuttle cookie present");
+    assert!(cookie.contains(SHUTTLE_APP_COOKIE), "{}", cookie.as_str());
+    assert!(!cookie.contains("CASTGC"), "{}", cookie.as_str());
+
+    // A cookie-session relying party has no terminal credential and its
+    // scoped view refuses foreign hosts.
+    assert!(session.take_service_credential().is_err());
+    assert!(
+        session
+            .cookie_header(&url("https://app.buaa.edu.cn/"))
+            .is_err()
+    );
+    assert!(
+        session
+            .cookie_header(&url("http://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage"))
+            .is_err(),
+        "the scoped cookie view never admits a plaintext URL"
+    );
+}
+
+#[test]
+fn shuttle_flow_refuses_a_plaintext_landing_that_was_not_upgraded() {
+    // A plaintext redirect whose shape is not the exact reviewed callback
+    // can never be upgraded; the origin predicate refuses the follow before
+    // any shuttle request is sent.
+    for landing in [
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin/",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage?ticket=ST-synthetic",
+        "http://zhihuixiaoche.buaa.edu.cn/",
+        "http://zhihuixiaoche.buaa.edu.cn.evil.example/wechat/CASLogin?ticket=ST-x",
+        "http://operator@zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-x",
+        "http://zhihuixiaoche.buaa.edu.cn:8080/wechat/CASLogin?ticket=ST-x",
+    ] {
+        let harness = CasHarness::with_shuttle_responders(
+            sso_responder(CasService::Shuttle, landing, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            shuttle_responder(),
+        );
+        let (_guard, governor) = service_test_governor("shuttle-downgrade");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+            .expect("synthetic credentials");
+        let result = authenticate_service(
+            &mut lease,
+            &harness.client,
+            CasService::Shuttle,
+            credentials,
+        );
+        finish_lease(lease, result.as_ref().err());
+        assert!(result.is_err(), "{landing}: a non-upgraded plaintext hop refused");
+        assert!(
+            harness.shuttle.observed().is_empty(),
+            "{landing}: no plaintext request was ever sent"
+        );
+        assert!(harness.app.observed().is_empty());
+        assert!(harness.booking.observed().is_empty());
+    }
+}
+
+#[test]
+fn shuttle_flow_requires_a_confirmed_html_landing_and_scoped_cookie() {
+    let no_cookies: &[&str] = &[];
+    for (name, status, content_type, body, cookies) in [
+        ("non-200", "302 Found", "text/html", "", no_cookies),
+        ("empty-body", "200 OK", "text/html", "   ", no_cookies),
+        ("non-html", "200 OK", "application/json", r#"{"ok":true}"#, no_cookies),
+        (
+            "no-cookie",
+            "200 OK",
+            "text/html",
+            "<html><body>shuttle landing</body></html>",
+            no_cookies,
+        ),
+    ] {
+        let cookies: Vec<String> = cookies.iter().map(|cookie| (*cookie).to_owned()).collect();
+        let headers_owned: Vec<(String, String)> =
+            vec![("Content-Type".to_string(), content_type.to_owned())]
+                .into_iter()
+                .chain(
+                    cookies
+                        .iter()
+                        .map(|cookie| ("Set-Cookie".to_string(), (*cookie).to_owned())),
+                )
+                .collect();
+        let body = body.to_owned();
+        let status = status.to_owned();
+        let harness = CasHarness::with_shuttle_responders(
+            sso_responder(CasService::Shuttle, SHUTTLE_LANDING_HTTP, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            move |_| {
+                let headers: Vec<(&str, &str)> = headers_owned
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .collect();
+                http_response(&status, &headers, &body)
+            },
+        );
+        let (_guard, governor) = service_test_governor("shuttle-landing");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+            .expect("synthetic credentials");
+        let result = authenticate_service(
+            &mut lease,
+            &harness.client,
+            CasService::Shuttle,
+            credentials,
+        );
+        finish_lease(lease, result.as_ref().err());
+        assert!(result.is_err(), "{name}: the handoff is not confirmed");
+    }
+
+    // A cookie that cannot scope to the ticket page read is as good as no
+    // cookie: a foreign domain or a path outside /wechat never reaches it.
+    for (name, cookie) in [
+        (
+            "foreign-domain",
+            "shuttle_session=synthetic-shuttle-session; Domain=app.buaa.edu.cn; Path=/; Secure; HttpOnly",
+        ),
+        (
+            "narrowed-path",
+            "shuttle_session=synthetic-shuttle-session; Path=/other; Secure; HttpOnly",
+        ),
+        (
+            "expired",
+            "shuttle_session=synthetic-shuttle-session; Path=/; Secure; HttpOnly; Max-Age=0",
+        ),
+    ] {
+        let cookie = cookie.to_owned();
+        let harness = CasHarness::with_shuttle_responders(
+            sso_responder(CasService::Shuttle, SHUTTLE_LANDING_HTTP, &[]),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+            move |_| {
+                http_response(
+                    "200 OK",
+                    &[
+                        ("Content-Type", "text/html"),
+                        ("Set-Cookie", cookie.as_str()),
+                    ],
+                    "<html><body>shuttle landing</body></html>",
+                )
+            },
+        );
+        let (_guard, governor) = service_test_governor("shuttle-cookie");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+            .expect("synthetic credentials");
+        let result = authenticate_service(
+            &mut lease,
+            &harness.client,
+            CasService::Shuttle,
+            credentials,
+        );
+        finish_lease(lease, result.as_ref().err());
+        assert!(result.is_err(), "{name}: no usable scoped cookie, no session");
+    }
+}
+
+#[test]
+fn shuttle_absorb_and_scoped_view_stay_on_the_reviewed_host() {
+    let mut session = ServiceSession::test_session_with_cookies(
+        CasService::Shuttle,
+        "https://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin?ticket=ST-x",
+        &["shuttle_session=synthetic-shuttle-session; Path=/; Secure; HttpOnly"],
+    );
+
+    // The scoped view serves the ticket page read and nothing else.
+    let probe = url("https://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage");
+    let (cookie, _expiry) = session.cookie_header(&probe).expect("scoped cookie");
+    assert_eq!(
+        cookie.expect("cookie present").as_str(),
+        SHUTTLE_APP_COOKIE
+    );
+    for host in [
+        "https://sso.buaa.edu.cn/login",
+        "https://app.buaa.edu.cn/",
+        "https://booking.lib.buaa.edu.cn/",
+        "https://i.buaa.edu.cn/api/authLogin",
+        "https://sub.zhihuixiaoche.buaa.edu.cn/",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage",
+    ] {
+        assert!(session.cookie_header(&url(host)).is_err(), "{host}");
+    }
+
+    // absorb_shuttle_headers admits one reviewed same-origin response and
+    // refuses every other spelling before mutating the jar.
+    let mut headers = HeaderMap::new();
+    headers.append(
+        SET_COOKIE,
+        HeaderValue::from_str(
+            "shuttle_read=synthetic-read-cookie; Path=/wechat; Secure; HttpOnly",
+        )
+        .expect("header value"),
+    );
+    session
+        .absorb_shuttle_headers(&probe, &headers)
+        .expect("same-origin shuttle headers admitted");
+    for candidate in [
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage",
+        "https://sso.buaa.edu.cn/login",
+        "https://app.buaa.edu.cn/",
+        "https://zhihuixiaoche.buaa.edu.cn./wechat/ticketInfoPage",
+        "https://sub.zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage",
+        "https://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage#fragment",
+    ] {
+        assert!(
+            session.absorb_shuttle_headers(&url(candidate), &headers).is_err(),
+            "{candidate}"
+        );
+    }
+
+    // The absorbed cookie reached the ticket page read; the jar also
+    // remembers every issued spelling for the echo screen.
+    let (cookie, _expiry) = session.cookie_header(&probe).expect("scoped cookie");
+    let cookie = cookie.expect("cookie present");
+    assert!(cookie.contains("shuttle_read=synthetic-read-cookie"));
+    assert!(session.contains_secret_bytes(b"synthetic-shuttle-session"));
+    assert!(session.contains_secret_bytes(b"synthetic-read-cookie"));
+
+    // A cookie-session relying party never exposes a terminal credential.
+    assert!(session.take_service_credential().is_err());
+
+    // Non-shuttle sessions refuse the shuttle absorber entirely.
+    for (service, origin) in [
+        (CasService::SmartClassrooms, "https://app.buaa.edu.cn/"),
+        (CasService::Library, "https://booking.lib.buaa.edu.cn/"),
+        (CasService::Gsmis, "https://gsmis.buaa.edu.cn/"),
+    ] {
+        let mut foreign = ServiceSession::test_session_with_cookies(service, origin, &[]);
+        assert!(
+            foreign
+                .absorb_shuttle_headers(&probe, &headers)
+                .is_err(),
+            "a non-shuttle session never admits shuttle headers"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2021,7 +2487,7 @@ fn smart_session_never_replays_or_downgrades_a_credential_preserving_redirect() 
                     library_read(),
                 ),
                 CasService::Classroom | CasService::Ihome | CasService::Byxt
-                | CasService::Gsmis | CasService::Boya => unreachable!(),
+                | CasService::Gsmis | CasService::Boya | CasService::Shuttle => unreachable!(),
             };
             let original = sso_responder(service, landing, &[]);
             let harness = CasHarness::with_responders(

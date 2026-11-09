@@ -2866,16 +2866,18 @@ enum RedirectIssue {
 const MAX_ISSUED_COOKIES: usize = 16;
 const MAX_ISSUED_COOKIE_BYTES: usize = 8 * 1024;
 
-struct IssuedCookies {
+pub(crate) struct IssuedCookies {
     values: Vec<Zeroizing<String>>,
+    declarations: usize,
     bytes: usize,
     complete: bool,
 }
 
 impl IssuedCookies {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             values: Vec::new(),
+            declarations: 0,
             bytes: 0,
             complete: true,
         }
@@ -2885,28 +2887,47 @@ impl IssuedCookies {
     /// echo in either spelling is caught. An undecodable or unnameable
     /// declaration marks the set incomplete: the guard then refuses rather
     /// than screening incompletely.
-    fn absorb(&mut self, header: Option<&str>) {
-        let Some(pair) = header.and_then(|header| header.split(';').next()).map(str::trim)
+    pub(crate) fn absorb(&mut self, header: Option<&str>) {
+        let Some(pair) = header
+            .and_then(|header| header.split(';').next())
+            .map(str::trim)
         else {
             self.complete = false;
             return;
         };
-        let Some((name, value)) = pair.split_once('=') else {
+        let Some((name, untrimmed_value)) = pair.split_once('=') else {
             self.complete = false;
             return;
         };
-        if name.is_empty() {
+        let name = name.trim();
+        let value = untrimmed_value.trim();
+        if !crate::recordings::session::valid_cookie_name(name)
+            || !crate::recordings::session::valid_cookie_value(value)
+        {
             self.complete = false;
             return;
         }
+        let unquoted = value
+            .strip_prefix('"')
+            .and_then(|inner| inner.strip_suffix('"'));
         // A revocation declaration carries no credential to screen.
-        if value.is_empty() {
+        if value.is_empty() || unquoted == Some("") {
             return;
         }
-        let pair = Zeroizing::new(pair.to_owned());
-        let value = Zeroizing::new(value.to_owned());
-        let added = pair.len() + value.len();
-        if self.values.len() >= MAX_ISSUED_COOKIES * 2
+        let normalized_pair = (pair.len() != name.len() + 1 + value.len())
+            .then(|| format!("{name}={value}"));
+        let unquoted_pair = unquoted.map(|value| format!("{name}={value}"));
+        let added = pair
+            .len()
+            .saturating_add(untrimmed_value.len())
+            .saturating_add(if untrimmed_value == value {
+                0
+            } else {
+                value.len()
+            })
+            .saturating_add(normalized_pair.as_ref().map_or(0, String::len))
+            .saturating_add(unquoted_pair.as_ref().map_or(0, String::len));
+        if self.declarations >= MAX_ISSUED_COOKIES
             || self.bytes.saturating_add(added) > MAX_ISSUED_COOKIE_BYTES
         {
             // Refuse instead of silently dropping a carrier.
@@ -2914,12 +2935,22 @@ impl IssuedCookies {
             return;
         }
         self.bytes += added;
-        self.values.push(pair);
-        self.values.push(value);
+        self.declarations += 1;
+        self.values.push(Zeroizing::new(pair.to_owned()));
+        self.values.push(Zeroizing::new(untrimmed_value.to_owned()));
+        if untrimmed_value != value {
+            self.values.push(Zeroizing::new(value.to_owned()));
+        }
+        if let Some(pair) = normalized_pair {
+            self.values.push(Zeroizing::new(pair));
+        }
+        if let Some(pair) = unquoted_pair {
+            self.values.push(Zeroizing::new(pair));
+        }
     }
 
     /// Once any declaration was lost the guard cannot prove its screen.
-    fn overflowed(&self) -> bool {
+    pub(crate) fn overflowed(&self) -> bool {
         !self.complete
     }
 
@@ -2927,44 +2958,221 @@ impl IssuedCookies {
     /// literal, JSON-escaped, base64 and percent/form views come from
     /// `carries_secret`; a decoded JSON document is searched string by
     /// string so an echo inside a structured body cannot hide.
-    fn echoed(&self, candidate: &[u8]) -> bool {
+    pub(crate) fn echoed(&self, candidate: &[u8]) -> bool {
         !self.complete
-            || self.values.iter().any(|value| {
-                carries_cookie_value(candidate, value)
-                    || json_carries_cookie_value(candidate, value)
-            })
+            || self
+                .values
+                .iter()
+                .any(|value| carries_cookie_value(candidate, value))
+            || json_carries_issued_cookie(candidate, &self.values)
+    }
+
+    /// Screen the actual structured projection as well as raw bytes. HTML
+    /// entity decoding and other parser projections can create a credential
+    /// spelling that was not literally present in the source bytes.
+    pub(crate) fn echoed_value(&self, candidate: &serde_json::Value) -> bool {
+        if !self.complete {
+            return true;
+        }
+        fn text_echoed(guard: &IssuedCookies, text: &str) -> bool {
+            if guard
+                .values
+                .iter()
+                .any(|value| carries_cookie_value(text.as_bytes(), value))
+            {
+                return true;
+            }
+            if !text.chars().any(char::is_whitespace) {
+                return false;
+            }
+            let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            guard
+                .values
+                .iter()
+                .any(|value| carries_cookie_value(compact.as_bytes(), value))
+        }
+        match candidate {
+            serde_json::Value::String(text) => text_echoed(self, text),
+            serde_json::Value::Number(number) => text_echoed(self, &number.to_string()),
+            serde_json::Value::Array(items) => items.iter().any(|item| self.echoed_value(item)),
+            serde_json::Value::Object(members) => members.iter().any(|(key, item)| {
+                text_echoed(self, key) || self.echoed_value(item)
+            }),
+            _ => false,
+        }
     }
 }
 
 /// Both the raw and unquoted spellings of an issued cookie value carry the
 /// credential. Neither the value nor a match is ever exposed.
 fn carries_cookie_value(bytes: &[u8], value: &str) -> bool {
-    carries_secret(bytes, value)
-        || value
-            .strip_prefix('"')
-            .and_then(|inner| inner.strip_suffix('"'))
-            .is_some_and(|unquoted| carries_secret(bytes, unquoted))
-}
-
-/// Search a decoded JSON document's strings for the cookie spelling without
-/// exposing either. Non-JSON bytes carry no decoded view.
-fn json_carries_cookie_value(candidate: &[u8], needle: &str) -> bool {
-    let Ok(document) = serde_json::from_slice::<serde_json::Value>(candidate) else {
-        return false;
+    let unquoted = value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'));
+    let matches = |candidate: &[u8]| {
+        carries_secret(candidate, value)
+            || unquoted.is_some_and(|value| carries_secret(candidate, value))
     };
-    fn carries(document: &serde_json::Value, needle: &str) -> bool {
-        match document {
-            serde_json::Value::String(text) => carries_secret(text.as_bytes(), needle),
-            serde_json::Value::Array(items) => {
-                items.iter().any(|item| carries(item, needle))
-            }
-            serde_json::Value::Object(members) => members.iter().any(|(key, item)| {
-                carries_secret(key.as_bytes(), needle) || carries(item, needle)
-            }),
-            _ => false,
+    if matches(bytes) {
+        return true;
+    }
+    if !bytes.windows(2).any(|pair| pair == b"\\/") {
+        return false;
+    }
+    // JSON may escape a literal solidus as `\/` even when the surrounding
+    // bytes are malformed or have a non-JSON prefix. Review that equivalent
+    // spelling without depending on a successful document parse.
+    let mut decoded = Zeroizing::new(Vec::with_capacity(bytes.len()));
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index..].starts_with(b"\\/") {
+            decoded.push(b'/');
+            index += 2;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
         }
     }
-    carries(&document, needle)
+    matches(&decoded)
+}
+
+struct CookieEchoSeed<'a> {
+    values: &'a [Zeroizing<String>],
+    echoed: &'a std::cell::Cell<bool>,
+}
+
+struct CookieEchoKeySeed<'a> {
+    values: &'a [Zeroizing<String>],
+    echoed: &'a std::cell::Cell<bool>,
+}
+
+struct CookieEchoVisitor<'a> {
+    values: &'a [Zeroizing<String>],
+    echoed: &'a std::cell::Cell<bool>,
+}
+
+impl CookieEchoVisitor<'_> {
+    fn check(&self, text: &str) {
+        if !self.echoed.get()
+            && self
+                .values
+                .iter()
+                .any(|value| carries_cookie_value(text.as_bytes(), value))
+        {
+            self.echoed.set(true);
+        }
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for CookieEchoVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<(), E> {
+        self.check(value);
+        Ok(())
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<(), E> {
+        self.check(&value);
+        Ok(())
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _value: bool) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, _value: i64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, _value: u64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _value: f64) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_seq<S: serde::de::SeqAccess<'de>>(self, mut seq: S) -> Result<(), S::Error> {
+        while seq
+            .next_element_seed(CookieEchoSeed {
+                values: self.values,
+                echoed: self.echoed,
+            })?
+            .is_some()
+        {}
+        Ok(())
+    }
+
+    fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<(), M::Error> {
+        while map
+            .next_key_seed(CookieEchoKeySeed {
+                values: self.values,
+                echoed: self.echoed,
+            })?
+            .is_some()
+        {
+            map.next_value_seed(CookieEchoSeed {
+                values: self.values,
+                echoed: self.echoed,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for CookieEchoSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_any(CookieEchoVisitor {
+            values: self.values,
+            echoed: self.echoed,
+        })
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for CookieEchoKeySeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_str(CookieEchoVisitor {
+            values: self.values,
+            echoed: self.echoed,
+        })
+    }
+}
+
+/// Stream every decoded JSON key/value without collapsing duplicate members.
+/// If a credential was observed before a later syntax error, the positive
+/// finding remains authoritative; no incomplete decoded view is invented.
+fn json_carries_issued_cookie(candidate: &[u8], values: &[Zeroizing<String>]) -> bool {
+    use serde::de::Deserializer as _;
+
+    if values.is_empty() {
+        return false;
+    }
+    let echoed = std::cell::Cell::new(false);
+    let mut deserializer = serde_json::Deserializer::from_slice(candidate);
+    let parsed = deserializer.deserialize_any(CookieEchoVisitor {
+        values,
+        echoed: &echoed,
+    });
+    let complete = parsed.is_ok() && deserializer.end().is_ok();
+    let json_shaped = candidate
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| matches!(byte, b'{' | b'[' | b'"'));
+    echoed.into_inner() || (!complete && json_shaped)
 }
 
 /// Decode one percent/form view into caller-owned storage without allocating.
@@ -5047,6 +5255,44 @@ mod tests {
         assert!(client.source.load(&url).unwrap().is_none());
         // No follow-up: the issued cookie is neither adopted nor retransmitted.
         assert_eq!(server.count(), 1);
+    }
+
+    #[test]
+    fn issued_cookie_guard_retains_the_untrimmed_value() {
+        let mut issued = IssuedCookies::new();
+        issued.absorb(Some("sid= abc; Path=/"));
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, " abc");
+        assert!(issued.echoed(encoded.as_bytes()));
+    }
+
+    #[test]
+    fn issued_cookie_guard_fails_closed_on_lossy_or_exhausted_history() {
+        let mut undecodable = IssuedCookies::new();
+        undecodable.absorb(None);
+        assert!(undecodable.overflowed());
+        assert!(undecodable.echoed(b""));
+
+        let mut count = IssuedCookies::new();
+        for index in 0..MAX_ISSUED_COOKIES {
+            count.absorb(Some(&format!("sid={index}; Path=/")));
+        }
+        assert!(!count.overflowed());
+        count.absorb(Some("sid=overflow; Path=/"));
+        assert!(count.overflowed());
+
+        let mut bytes = IssuedCookies::new();
+        bytes.absorb(Some(&format!(
+            "sid={}; Path=/",
+            "x".repeat(MAX_ISSUED_COOKIE_BYTES)
+        )));
+        assert!(bytes.overflowed());
+    }
+
+    #[test]
+    fn issued_cookie_guard_screens_numeric_projection() {
+        let mut issued = IssuedCookies::new();
+        issued.absorb(Some("sid=1000.0; Path=/"));
+        assert!(issued.echoed_value(&serde_json::json!(1000.0)));
     }
 
     #[test]

@@ -52,6 +52,12 @@ const IHOME_CAS_CALLBACK_PATH: &str = "/api/authLogin";
 /// The iHome terminal token is bound from a fragment on the reviewed web
 /// prefix, never from the query and never from another path.
 const IHOME_TERMINAL_PATH: &str = "/web/";
+/// The reviewed source declares the shuttle CAS callback as a plaintext
+/// HTTP URL; the one exact upgrade to HTTPS is admitted in
+/// `upgraded_service_callback`, so no plaintext request is ever sent.
+const SHUTTLE_CAS_SERVICE: &str = "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin";
+const SHUTTLE_HOST: &str = "zhihuixiaoche.buaa.edu.cn";
+const SHUTTLE_CAS_CALLBACK_PATH: &str = "/wechat/CASLogin";
 const MAX_TERMINAL_CREDENTIAL_BYTES: usize = 4096;
 
 /// Reviewed relying parties, not caller-supplied credential destinations.
@@ -65,6 +71,7 @@ pub(crate) enum CasService {
     Byxt,
     Gsmis,
     Boya,
+    Shuttle,
 }
 
 impl CasService {
@@ -77,6 +84,7 @@ impl CasService {
             Self::Byxt => BYXT_CAS_SERVICE,
             Self::Gsmis => GSMIS_CAS_SERVICE,
             Self::Boya => BYKC_CAS_SERVICE,
+            Self::Shuttle => SHUTTLE_CAS_SERVICE,
         }
     }
 }
@@ -3450,6 +3458,7 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::Byxt => matches!(host, "sso.buaa.edu.cn" | BYXT_HOST),
             CasService::Gsmis => matches!(host, "sso.buaa.edu.cn" | GSMIS_HOST),
             CasService::Boya => matches!(host, "sso.buaa.edu.cn" | BYKC_HOST),
+            CasService::Shuttle => matches!(host, "sso.buaa.edu.cn" | SHUTTLE_HOST),
         })
 }
 
@@ -3958,7 +3967,8 @@ fn terminal_service_credential(
         | CasService::SmartClassrooms
         | CasService::Byxt
         | CasService::Gsmis
-        | CasService::Boya => {
+        | CasService::Boya
+        | CasService::Shuttle => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
             }
@@ -3967,21 +3977,32 @@ fn terminal_service_credential(
     }
 }
 
-/// Admit exactly the reviewed plaintext CAS callback for the iHome profile:
-/// the declared host, the exact callback path, the default port and no
-/// userinfo or fragment, upgraded to the HTTPS spelling actually requested.
-/// Every other URL is returned unchanged so the ordinary origin predicate
-/// keeps refusing plaintext transports.
+/// Admit exactly the reviewed plaintext CAS callback for the iHome and
+/// shuttle profiles: the declared host, the exact callback path, the
+/// default port and no userinfo or fragment, upgraded to the HTTPS spelling
+/// actually requested. Every other URL is returned unchanged so the
+/// ordinary origin predicate keeps refusing plaintext transports.
 fn upgraded_service_callback(service: CasService, url: &Url) -> Option<Url> {
-    if service != CasService::Ihome
-        || url.scheme() != "http"
-        || url.host_str() != Some(IHOME_HOST)
+    let host = match service {
+        CasService::Ihome => IHOME_HOST,
+        CasService::Shuttle => SHUTTLE_HOST,
+        _ => return None,
+    };
+    if url.scheme() != "http"
+        || url.host_str() != Some(host)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
-        || url.path() != IHOME_CAS_CALLBACK_PATH
         || url.fragment().is_some()
     {
+        return None;
+    }
+    let expected_path = match service {
+        CasService::Ihome => IHOME_CAS_CALLBACK_PATH,
+        CasService::Shuttle => SHUTTLE_CAS_CALLBACK_PATH,
+        _ => return None,
+    };
+    if url.path() != expected_path {
         return None;
     }
     let mut upgraded = url.clone();
@@ -6257,6 +6278,7 @@ impl ServiceSession {
             CasService::Library => "booking.lib.buaa.edu.cn",
             CasService::Byxt => BYXT_HOST,
             CasService::Gsmis => GSMIS_HOST,
+            CasService::Shuttle => SHUTTLE_HOST,
             CasService::Classroom | CasService::Ihome | CasService::Boya => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
@@ -6312,6 +6334,23 @@ impl ServiceSession {
         if self.jar.service != CasService::Gsmis
             || !allowed(url, self.jar.service)
             || url.host_str() != Some(GSMIS_HOST)
+        {
+            return Err(invalid());
+        }
+        self.jar.absorb(url, headers)
+    }
+
+    /// Apply one reviewed same-origin shuttle response's cookie declarations
+    /// to the in-memory session before the following read. Replaced/expired
+    /// values remain in the invocation's echo guard; nothing is persisted.
+    pub(crate) fn absorb_shuttle_headers(
+        &mut self,
+        url: &Url,
+        headers: &HeaderMap,
+    ) -> Result<(), Error> {
+        if self.jar.service != CasService::Shuttle
+            || !allowed(url, self.jar.service)
+            || url.host_str() != Some(SHUTTLE_HOST)
         {
             return Err(invalid());
         }
@@ -6551,6 +6590,30 @@ pub(crate) fn authenticate_service(
             if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
                 return Err(admission_failed(
                     "The relying-party handoff supplied no usable scoped cookie; no retry was performed.",
+                ));
+            }
+        }
+        CasService::Shuttle => {
+            // The shuttle handoff proves itself by a reviewed HTML landing on
+            // the relying-party host plus one usable scoped cookie for the
+            // ticket page read that follows. The declared plaintext callback
+            // was upgraded to HTTPS before any request, so no downgrade is
+            // observable here.
+            if landed.status != 200
+                || landed.url.host_str() != Some(SHUTTLE_HOST)
+                || landed.body.trim().is_empty()
+                || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
+            {
+                return Err(admission_failed(
+                    "The shuttle handoff could not be confirmed; no retry was performed.",
+                ));
+            }
+            let probe =
+                Url::parse("https://zhihuixiaoche.buaa.edu.cn/wechat/ticketInfoPage")
+                    .map_err(|_| invalid())?;
+            if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
+                return Err(admission_failed(
+                    "The shuttle handoff supplied no usable scoped cookie; no retry was performed.",
                 ));
             }
         }
