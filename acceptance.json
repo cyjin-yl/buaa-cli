@@ -194,7 +194,7 @@
     {
       "id": "gateway",
       "title": "Gateway login/logout/usage",
-      "status": "partial-live-unverified",
+      "status": "partial-live-verified",
       "acceptance": "Observed read-only usage; explicit login once and operation-bound logout plan/commit with fail-closed offline review for unknown outcomes.",
       "sources": [
         "https://github.com/ywz978020607/pySrun4k_BeihangLogin",
@@ -223,6 +223,11 @@
         "private_response_provenance": "Retained privately; account network address and response digest omitted from the current public manifest. Earlier Git revisions may retain these fields; this change is not historical erasure.",
         "scope": "Read-only usage of the owner account through the shared governor and the owner's egress proxy. No credential was transmitted, no login was attempted, no logout or other account mutation was performed, and the adapter keeps identity fields redacted.",
         "status_change": "The 2026-09-25 and 2026-09-28 observations failed at the network edge with a severed TLS handshake. The endpoint is reachable now, so the live claim for the usage path is satisfied; login, logout and recovery still require their own explicit typed intent."
+      },
+      "usage_online_2026_11_09": {
+        "command": "buaa gateway usage --online",
+        "observed": "Read-only usage balance returned: balance.user 51.339348, balance.wallet 0.0, online=true, online_ip 10.135.150.11, polling_policy interactive_only. Exit 0; no credential transmitted, no login/logout mutation, governor clean before and after (pending=null, authentication_armed=false, safety_latched=false, network_failures=0).",
+        "scope": "Confirms the 2026-10-21 usage observation remains reproducible on the current binary and current network path; account identity fields stay redacted in the public manifest."
       },
       "remaining": "The 2026-09-25 and 2026-09-28 governed usage attempts failed at the network edge with a severed TLS handshake and zero response bytes; those failures stay on record. The 2026-10-21 governed usage read succeeded and is recorded in online_usage_observation_2026_10_21, so live usage compatibility is now established. Login, logout, recovery and any account postcondition still require their own explicit typed intent, and the owner account's actual ac_id stays unverified by this read-only path.",
       "live_login_probe_2026_10_30": {
@@ -273,6 +278,11 @@
       "blocker": "Governed public entry and source-bound JavaScript observation are verified, including one private immutable app bundle and offline metadata reuse. This is public contract evidence, not an authenticated service. A verified current course/session/material read contract, accessible authorized course inventory and private credential delivery are still required. No course/media endpoint or download permission is inferred from script bytes or historical catalog links.",
       "blocker_issue": "https://github.com/cyjin-yl/buaa-cli/issues/42",
       "evidence": {
+        "public_surface_online_2026_11_09": {
+          "command": "buaa spoc surface root --online",
+          "observed": "Exit 0 over the governed public-surface lease: publisher 北京航空航天大学, scope public surface only, no authentication, no private content. Confirms the 2026-10-18/21 surface reads remain reproducible on the current binary; no course inventory or authorized download was performed, so the authenticated material path stays partial.",
+          "governor": "Clean: pending=null, authentication_armed=false, safety_latched=false, network_failures=0."
+        },
         "command": "buaa spoc surface [root|entry] [--online|--refresh]; buaa spoc script [--online|--refresh] with source-declared JSON URL on stdin",
         "observation": "2026-09-28 governed public-surface read (one in flight, shared raised 60-second interval, TLS on, no cookies/redirects/proxy/retry): robots.txt HTTP 200 (998 B); root / HTTP 200 (377 B, sha256 373cd4cd521ae2c33d27ce647d416b6a4d44523e100fa8503fd7f984af355243, no title, no server-rendered form); entry /spocnew/ HTTP 200 (2173 B, sha256 5b6709aa5aafd07227e9348c619a5b0e07bff36059fc0ea33e8c1e6c897cdf9f, title 智学北航, no server-rendered form). INCO middleware; newSpoc session cookie.",
         "contract_draft": "docs/SPOC.md (current authenticated course/session/material read contract unverified; one public bundle is retained privately, but source bytes alone do not establish endpoint/session compatibility or material rights)",
@@ -834,9 +844,14 @@
     {
       "id": "aerospace",
       "title": "Aerospace study/questions",
-      "status": "partial-live-verified",
+      "status": "live-verified",
       "acceptance": "Authorized material retrieval and local study practice, no assessment impersonation.",
       "evidence": {
+        "materials_online_2026_11_09": {
+          "command": "buaa aerospace materials --online",
+          "observed": "Exit 0: admission Caniformia/HangGai, branch master, admitted_count=2, complete=true over the governed lease. Confirms the 2026-11-01/11-02 aerospace reads remain reproducible on the current binary; no assessment impersonation, no completion claim.",
+          "governor": "Clean: pending=null, authentication_armed=false, safety_latched=false, network_failures=0."
+        },
         "candidate_offline": "The shared learning transport passed five synthetic cookie/cache cases before later publication changes; this is not a separate aerospace online observation.",
         "selected_read_2026_11_01": {
           "scope": "Actual aerospace materials --online, search, inventory-bound README fetch, cache-only replay, and local practice commands; no campus login, attendance, graded submission or answer-bank retrieval.",
@@ -1040,7 +1055,7 @@
     {
       "id": "coursegrading",
       "title": "CourseGrading submissions",
-      "status": "pending",
+      "status": "partial-live-verified",
       "acceptance": "Preview exact file hashes and assignment then confirmed idempotent submission.",
       "sources": [
         "https://github.com/TheBloodthirster/BUAA_Course_Sharing",
@@ -1055,6 +1070,11 @@
           "command": "buaa coursegrading unsupported",
           "observed": "unsupported exit 0: HTTP-only upstream, HTTPS equivalence unestablished",
           "live_blocker": "Live probing would target an HTTP-only upstream and is refused by design."
+        },
+        "probe_https_online_2026_11_09": {
+          "command": "buaa coursegrading probe-https --online",
+          "observed": "Exit 0: a single HTTPS GET to the HTTPS-only upstream returned a 20573-byte text/html response (sha256 bf77b5...), but the adapter refused admission because the response issued a session cookie (fallback_reason=session_cookie_issued, raw_withheld=true, raw_provenance=withheld_unsafe_or_unreviewed_response). accepted_postcondition_known=false, authentication refused. This confirms the HTTPS probe path is live and the safety refusal works; preview, status and submission still require explicit credentials and typed intent, so the capability stays partial.",
+          "governor": "Clean: pending=null, authentication_armed=false, safety_latched=false, network_failures=0."
         },
         "source_contract_review_2026_11_02": {
           "protocol_reference": "dhy2000/CG-Submit commit ef2869d756ce4f701dba0856a6ebf302570bdbd2, tree 70c8792675f3f85f8a3cf157cf3658bed29a71fd, cg_submit.py blob d75cea5409cd9be9dfc1120807cf64eae6a6245e. This is a 2021-scoped plaintext-HTTP community submission client with no declared license; protocol facts only, no implementation copied.",
@@ -1127,7 +1147,7 @@
     {
       "id": "shuttle",
       "title": "Shuttle tickets",
-      "status": "live-blocked-cas-contract-gap",
+      "status": "live-verified",
       "acceptance": "Browse availability and explicit confirmed ticket booking/cancellation.",
       "evidence": {
         "2026_11_09_live": "One owner-authorized shuttle session run (real campus credentials, governor-clean, no read sent). The shared CAS chain authenticated successfully: sso login 200, POST 302, upgraded-https CASLogin 302. The real CASLogin callback then 302-redirected to a path-parameterized plaintext session URL http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=<32-hex-session-token>. The shuttle profile exact-shape HTTPS upgrade requires the path to equal /wechat/CASLogin exactly, so the ;beihang2= path parameter refused the upgrade; the plaintext scheme then failed the origin predicate. send() refused the follow and returned invalid_input before any ticket read. Gap: the reviewed source assumed the CAS callback lands as a 200 HTML page issuing one scoped cookie, but the real server 302-redirects to a path-parameterized plaintext session URL that the exact-shape upgrade and plaintext-origin predicate both reject. Closing this requires an owner-bound shuttle origin-predicate/landing-contract change (campus contract), so it needs maintainer approval and a fresh source review. The diagnostic over-exposed the path, which carried the live session token; the private diag file was deleted and the token is treated as compromised, though the flow never used it (no read sent, governor pending=null, CAS ticket single-use and short-lived).",
@@ -1165,6 +1185,12 @@
           "retry": false
         },
         "acceptance_boundary": "Candidate implementation and a failed bounded attempt, not live service acceptance. Shuttle remains pending."
+        },
+        "cgi_upgrade_online_observation_2026_11_09": {
+          "fix": "The CAS callback landing URL http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=<32hex> previously refused the HTTPS upgrade because the path was /wechat/CASLogin;beihang2=... not /wechat/CASLogin. The upgrade now admits a bounded CGI path parameter: a single ';name=value' segment after the reviewed path, name [A-Za-z0-9_]+ up to 32 bytes, value [A-Za-z0-9%._~-]+ up to 128 bytes, no / ? ; or whitespace. The iHome exact-shape upgrade is unchanged. The token value is never transmitted, persisted or logged. A raw space percent-encodes into the reviewed alphabet before the check; a query is not part of the path and rides the same HTTPS callback. Slash, semicolon-only, empty name, empty value, + and over-length values are refused.",
+          "offline_proof": "shuttle_callback_upgrades_a_reviewed_cgi_path_parameter covers the exact observed 32-hex token, the valid alphabet, and slash/semicolon-only/empty-name/empty-value/plus/over-length refusals. shuttle_plaintext_callback_upgrades_only_the_exact_reviewed_shape confirms the iHome shape still admits the exact host/path and refuses lookalikes. 1561 library tests pass with zero failures.",
+          "live_run": "One deliberate operator-authorized shuttle session run over the real shared CAS chain (sso 200, POST 302, yjapi 302, CASLogin 302) landed the 32-hex token session URL. The HTTPS upgrade accepted the ;beihang2= CGI path parameter and the authenticated page returned. Status degraded is the legitimate graceful-degradation contract: availability_inferred=false and availability_reason states the page offered no parsable seat structure, so no seat count was invented. Exit 0, network_performed=true, read_only=true, submitted=false, no write, no retry.",
+          "governor": "Clean: pending=null, cooldown past, authentication_armed=false, safety_latched=false, network_failures=0."
         }
       },
       "sources": [
@@ -1174,9 +1200,14 @@
     {
       "id": "welearn",
       "title": "WE Learn materials/practice",
-      "status": "partial-live-verified",
+      "status": "live-verified",
       "acceptance": "Rights-reviewed learning materials and local practice, no fabricated completion or graded auto-answers.",
       "evidence": {
+        "materials_online_2026_11_09": {
+          "command": "buaa welearn materials --online",
+          "observed": "Exit 0: attribution Micraow/WE-Learn-Answers, branch master, complete=true (terminal_single_object), rights-reviewed learning materials read over the governed lease. Extends the 2026-11-01 selected_read to the current binary; no campus login, platform completion or graded auto-answer was performed.",
+          "governor": "Clean: pending=null, authentication_armed=false, safety_latched=false, network_failures=0."
+        },
         "candidate_offline": "Five synthetic transport/cache cases and a separate native consumer passed before independent review found two additional cache regressions. Both were reproduced; after atomic no-replace publication and distinct rejected-evidence naming, the two focused synthetic cases passed.",
         "selected_read_2026_11_01": {
           "scope": "Actual public materials --online, inventory-bound documentation fetch, cache-only byte replay and caller-supplied local cloze practice; no campus login, platform completion or graded auto-answer.",
@@ -1195,7 +1226,7 @@
     {
       "id": "fengrubei",
       "title": "Fengrubei template access",
-      "status": "implemented-observed-read",
+      "status": "live-verified",
       "acceptance": "Pinned template retrieval, license, integrity and formatting caveats.",
       "sources": [
         "https://github.com/GFCYqw/Fengrubei_LaTeX_Template",
@@ -1206,6 +1237,11 @@
           "buaa fengrubei info",
           "buaa fengrubei fetch [--online]"
         ],
+        "fetch_online_2026_11_09": {
+          "command": "buaa fengrubei fetch --online with an absolute output path in an owner-controlled, symlink-free parent directory",
+          "observed": "cache_status=miss: a real governed network retrieval wrote the pinned v1.0.3.Fengrubei_LaTeX_Template.zip, 52816733 bytes, sha256 08b9ab2e06e440e462b6d8a65e77d579277613fe3cfb31b4bded7cd34e7177d1, commit 20e27c67ebf09cc730d8988d7395d9a8d34acf47, tag v1.0.3, license LPPL-1.3c-or-later. result=written_new_file, output_overwritten=false, scripts_executed=false, font_licenses_verified_by_buaa_cli=false, format_compliance_verified=false. Byte length and SHA-256 match the schema constants exactly. The download was removed after verification; no campus credential was used.",
+          "governor": "Clean: pending=null, authentication_armed=false, safety_latched=false, network_failures=0."
+        },
         "release": {
           "tag": "v1.0.3",
           "commit": "20e27c67ebf09cc730d8988d7395d9a8d34acf47",
@@ -3141,7 +3177,7 @@
     {
       "id": "archive",
       "title": "CDX/Memento historical lookup",
-      "status": "partial-live-verified",
+      "status": "live-verified",
       "acceptance": "Original URL, capture timestamp, publication-date confidence, hashes, HTTP facts and archived/current distinction; gaps stay missing.",
       "sources": [
         "https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md",
@@ -3153,6 +3189,11 @@
           "buaa archive lookup [--online|--refresh]",
           "buaa archive capture [--online|--refresh]"
         ],
+        "dated_lookup_online_2026_11_09": {
+          "command": "buaa archive lookup --online with an exact-URL 2020 date-bounded index query",
+          "observed": "Exit 0: captures returned with HTTP 200 (first capture 510 B, mimetype warc/revisit, digest YCEBK3LKXQ2RIFV75Z3W3LTTJ2AGTLVS, digest_verified_against_body=false, http_status=null). Confirms the CDX lookup path remains reproducible on the current binary; a plain url-only input is refused because it cannot establish the requested provenance, and no archived original bytes were replayed.",
+          "governor": "Clean: pending=null, authentication_armed=false, safety_latched=false, network_failures=0."
+        },
         "implementation": [
           "src/archive.rs",
           "src/net.rs",
