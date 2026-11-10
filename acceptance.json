@@ -888,7 +888,7 @@
       "acceptance": "List/tree/upload/download/move/copy/delete; byte integrity and paginated cursors; destructive writes plan/commit.",
       "evidence": {
         "source_research": "Pinned public AnyShare clients declare candidate OAuth and transfer requests but disagree on collision-policy values and do not establish the current BUAA deployment, pagination completeness or mutation postconditions.",
-        "remaining": "Normalized numeric credential echoes were reproduced and withheld in synthetic admission and operator-supplied CLI cases; scoped source review found no further issue. Directory listing and token exchange remain blocked without admitted contracts; authorized reads, transfer integrity and mutation postconditions remain unverified."
+        "remaining": "Normalized numeric credential echoes were reproduced and withheld in synthetic admission and operator-supplied CLI cases; scoped source review found no further issue. OAuth authorization is now admitted as a private random single-consumption binding (HMAC-SHA256 over host, CSRF, challenge and nonce) with a sealed in-memory token exchange sink whose token never reaches output, argv or log; the password-encryption exchange path, directory listing (attribute/order contract), transfer integrity and mutation postconditions remain unverified."
       },
       "sources": [
         "https://github.com/xdedss/dist_bhpan",
