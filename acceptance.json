@@ -4464,7 +4464,7 @@
       "status": "pending",
       "acceptance": "Play a source-bound authorized live stream with actual current audio/video and correct stop/reconnect semantics through a reviewed media path. Playlist/fragments/keys/range requests retain account-wide governance and secret handling; no implicit auth/transport retries or weakened request floors.",
       "sources": [],
-      "remaining": "No viable native live contract or controlled media scheduling/credential integration is implemented; direct uncontrolled player egress is not accepted."
+      "remaining": "The reviewed mpv/VLC player is now bound to the caller-supplied ongoing playlist URL through replay's exact argv construction and fork boundary; stop semantics are proven by a stop-flag child reaping test and the bounded-plan account-wide safety (duplicate fragments, whole-object ranges) is retained with a player binding. The governed live transport, host allowlist, decoder, physical audio/video output and reconnect still remain unimplemented and unverified, so direct uncontrolled player egress is still not accepted."
     },
     {
       "id": "recording-subtitle-service",
@@ -4477,7 +4477,7 @@
         "recordings-native-subtitles-online"
       ],
       "local_delivery": "Strict bounded SRT/WebVTT export and local player subtitle submission are implemented. Native JSON remains lossless; player export refuses text that the chosen formats cannot represent literally, unsupported controls and zero-duration cues. One authorized derived track has a separate mpv/X11 pixel/time observation and a full-window VLC/X11 glyph/clock observation; the paused VLC toggle control is inconclusive. These derived cues are not relabelled as native platform subtitles.",
-      "remaining": "Whole native-platform track/media binding, VLC rendered-cue synchronization, physical audio output and live subtitle updates remain unverified. Submitted player arguments alone are not proof of rendering."
+      "remaining": "A player-synchronized subtitle service (recordings subtitles serve) now admits a caller-supplied normalized track for an mpv/VLC player through replay's exact subtitle argv construction, with source/time provenance and the exact-integer-second-to-millisecond synchronization carried from import. Whole native-platform track/media binding, rendered-cue verification, physical audio output and live subtitle updates remain unverified; submitted player arguments alone are not proof of rendering."
     }
   ],
   "catalog_entries": [

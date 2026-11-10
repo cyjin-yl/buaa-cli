@@ -840,6 +840,12 @@ fn run() -> CliResult {
             input.zeroize();
             emit(&output.map_err(service_error)?)
         }
+        "recordings" if args.len() == 2 && args[1] == "live" => {
+            let mut input = read_input()?;
+            let output = buaa_cli::recordings::live::online(&input);
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
+        }
         "recordings"
             if args.len() == 4
                 && args[1] == "session"
@@ -894,6 +900,16 @@ fn run() -> CliResult {
         "recordings" if args.len() == 3 && args[1] == "subtitles" && args[2] == "export" => {
             let mut input = read_input()?;
             let output = buaa_cli::recordings::subtitles::export(&input);
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
+        }
+        "recordings"
+            if args.len() == 3
+                && args[1] == "subtitles"
+                && args[2] == "serve" =>
+        {
+            let mut input = read_input()?;
+            let output = buaa_cli::recordings::subtitles::serve_track(&input);
             input.zeroize();
             emit(&output.map_err(service_error)?)
         }
