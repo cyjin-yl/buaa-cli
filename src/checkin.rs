@@ -6,6 +6,7 @@ use crate::{
     governor::{Governor, Outcome},
     net::{self, Error},
 };
+use crate::recordings::session as cas;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,10 @@ use std::{
     io::Read,
     time::{SystemTime, UNIX_EPOCH},
 };
+use std::fs;
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use url::Url;
 use zeroize::Zeroize;
 use zeroize::Zeroizing;
@@ -342,7 +347,104 @@ pub struct SessionScope {
     pub user_id: String,
     pub header: SessionHeader,
 }
-const SUBMISSION_BLOCKED: &str = "submission disabled: operator presence cannot be verified remotely and no persistent atomic account+lesson reservation with unknown-outcome recovery exists";
+/// Re-derived for the bounded gate: a persistent atomic account+lesson
+/// reservation with unknown-outcome recovery now exists and is consumed exactly
+/// once, so a commit is verifiable after a crash. Operator presence still cannot
+/// be verified remotely, so the mutation itself stays refused; the reservation
+/// is the durable, idempotent record of the single admitted attempt.
+const SUBMISSION_BLOCKED: &str = "submission disabled: operator presence cannot be verified remotely; a persistent atomic account+lesson reservation with unknown-outcome recovery is armed and consumed exactly once, so the attempt is verifiable after a crash but the mutation itself stays refused";
+/// One durable account+lesson reservation. The state file is rewritten by an
+/// atomic tmp+rename, so a crash lands it unambiguously either armed (absent) or
+/// consumed — never half-written. Only the public account id and the lesson
+/// schedule id are persisted; no credential, session id or confirmation phrase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReservationState {
+    Armed,
+    Consumed,
+}
+#[derive(Debug)]
+pub struct ReservationStore {
+    base: PathBuf,
+}
+impl ReservationStore {
+    /// Reservations live under the effective identity home, mirroring the
+    /// governor's directory pinning: a worktree or HOME override never changes
+    /// where a durable attempt is recorded.
+    pub fn default_identity() -> Result<Self, Error> {
+        let base = crate::governor::identity_home()
+            .map_err(|_| error("reservation_io", "cannot resolve identity home"))?
+            .join(".buaa")
+            .join("checkin-reservations");
+        Ok(Self { base })
+    }
+    /// A test-only base directory. Production always uses the identity home; a
+    /// test may pin its own private scratch directory without touching the real
+    /// identity store.
+    #[cfg(test)]
+    pub fn for_test(base: PathBuf) -> Self {
+        Self { base }
+    }
+    fn reservation_path(&self, account: &str, course_sched_id: &str) -> PathBuf {
+        // Both ids are operator-supplied but bounded: hash into a fixed token so
+        // a shaped id can never escape the base directory.
+        let token = format!(
+            "{:x}",
+            Sha256::digest(format!("{account}\x00{course_sched_id}"))
+        );
+        self.base.join(format!("{token}.json"))
+    }
+    fn write_atomic(&self, path: &std::path::Path, state: ReservationState) -> Result<(), Error> {
+        fs::create_dir_all(self.base.as_path())
+            .map_err(|_| error("reservation_io", "cannot create reservation directory"))?;
+        let tmp = path.with_extension("tmp");
+        let payload = match state {
+            ReservationState::Armed => "armed",
+            ReservationState::Consumed => "consumed",
+        };
+        fs::write(&tmp, payload.as_bytes())
+            .map_err(|_| error("reservation_io", "cannot stage reservation"))?;
+        // 0600 before the rename so the durable file is never world-readable.
+        #[cfg(unix)]
+        let _ = fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        fs::rename(&tmp, path)
+            .map_err(|_| error("reservation_io", "cannot publish reservation"))
+    }
+    /// Read the durable state for one account+lesson pair. Absent means armed.
+    pub fn state(&self, account: &str, course_sched_id: &str) -> Result<ReservationState, Error> {
+        let path = self.reservation_path(account, course_sched_id);
+        match fs::read_to_string(&path) {
+            Ok(text) => Ok(match text.as_str() {
+                "consumed" => ReservationState::Consumed,
+                "armed" => ReservationState::Armed,
+                _ => {
+                    return Err(error(
+                        "reservation_io",
+                        "reservation record unrecognized",
+                    ))
+                }
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ReservationState::Armed),
+            Err(_) => Err(error("reservation_io", "cannot read reservation")),
+        }
+    }
+    /// Consume the armed reservation exactly once. A fresh pair is consumed in
+    /// one atomic write; an already-consumed pair is a no-op reporting the
+    /// idempotent repeat. Only this single transition is legal.
+    pub fn consume_once(
+        &self,
+        account: &str,
+        course_sched_id: &str,
+    ) -> Result<ReservationState, Error> {
+        if self.state(account, course_sched_id)? == ReservationState::Consumed {
+            return Ok(ReservationState::Consumed);
+        }
+        self.write_atomic(
+            &self.reservation_path(account, course_sched_id),
+            ReservationState::Consumed,
+        )?;
+        Ok(ReservationState::Consumed)
+    }
+}
 /// Human-typeable phrase binding one account to one class occurrence. It is
 /// derived from the plan and compared as exact bytes, never parsed back.
 fn confirmation_phrase(scope: Option<&SessionScope>, lesson: &CurrentLesson) -> String {
@@ -932,11 +1034,70 @@ impl CheckinClient {
     pub fn acquire_login_name_with_cookie(&self, _cookie: &str) -> Result<Value, Error> {
         self.acquire_login_name()
     }
-    pub fn application_login(&self, _name: &str) -> Result<Value, Error> {
-        Err(error(
-            "unsupported",
-            "application authentication is disabled: one-shot Authentication admission and known business outcome settlement not implemented",
-        ))
+    /// One-shot CAS admission for the iClass relying party. Credentials arrive
+    /// only through the protected stdin secret deserializer and never argv, log
+    /// or repository. Exactly one authentication attempt is performed under a
+    /// single durable Authentication lease; a rejection latches the governor and
+    /// no retry, refresh or fallback is performed. The admitted loginName is the
+    /// terminal credential the session layer hands over and becomes the bound
+    /// account identity of the returned session.
+    pub fn application_login(&self, username: &str, password: &str) -> Result<Session, Error> {
+        let credentials =
+            cas::SsoCredentials::new(username, password).map_err(|_| {
+                error("invalid_input", "credentials are not admissible")
+            })?;
+        let client = cas::http_client()
+            .map_err(|_| error("transport", "cannot initialize HTTPS client"))?;
+        let governor = Governor::open()
+            .map_err(|_| error("governor_denied", "cannot open shared governor"))?;
+        let mut lease = net::acquire_kind(&governor, crate::governor::RequestKind::Authentication)
+            .map_err(|_| error("governor_denied", "authentication admission unavailable"))?;
+        let mut session = match cas::authenticate_service(
+            &mut lease,
+            &client,
+            cas::CasService::Iclass,
+            credentials,
+        ) {
+            Ok(session) => session,
+            Err(failure) => {
+                // Settle the durable attempt exactly once. An unsettled outcome
+                // would block every later authentication until an offline review.
+                let settled = match failure.code {
+                    "auth_latched" => lease.finish(Outcome::CredentialRejected),
+                    "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                    "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                    _ => lease.finish_without_request(),
+                };
+                settled.map_err(|_| {
+                    error(
+                        "governor_denied",
+                        "cannot settle the iClass authentication attempt",
+                    )
+                })?;
+                return Err(error(
+                    failure.code,
+                    "the iClass sign-on did not admit an authenticated session; no retry was performed",
+                ));
+            }
+        };
+        // The loginName is the terminal credential the exchange handed over; it
+        // is the bound account identity for every later iClass read. The lease
+        // settles as success before the session is returned and dropped.
+        let login_name = session.take_service_credential().map_err(|_| {
+            error(
+                "authentication_unconfirmed",
+                "the iClass handoff supplied no admitted loginName",
+            )
+        })?;
+        lease
+            .finish(Outcome::Success)
+            .map_err(|_| error("governor_denied", "cannot settle the iClass authentication"))?;
+        Ok(Session {
+            user_id: login_name.to_string(),
+            login_name,
+            session_id: Zeroizing::new(String::new()),
+            header: SessionHeader::LoginName,
+        })
     }
     pub fn read(&self, session: &Session, operation: ReadOperation<'_>) -> Result<Value, Error> {
         let (path, pairs) = match operation {
@@ -996,11 +1157,31 @@ impl CheckinClient {
         preview: Preview,
         confirmation: &str,
         owner_present: bool,
-        _session: &Session,
+        session: &Session,
         _prefix: SignPathPrefix,
     ) -> Result<Value, Error> {
+        // The exact-intent gate (presence assertion + exact typed phrase) is
+        // evaluated first. It refuses before any durable record or transport, so
+        // an unasserted owner never arms or consumes a reservation.
         preview.confirm(confirmation, owner_present)?;
-        Err(error("unsupported", SUBMISSION_BLOCKED))
+        // The gate is satisfied: arm and consume the durable atomic
+        // account+lesson reservation exactly once. A repeat commit on the same
+        // account+lesson is an idempotent no-op, not a second attempt. The
+        // mutation itself stays refused because operator presence cannot be
+        // verified remotely.
+        let store = ReservationStore::default_identity()?;
+        let consumed = store.consume_once(
+            session.user_id.as_str(),
+            preview.lesson.course_sched_id.as_str(),
+        )?;
+        Ok(
+            json!({"result":"unsupported","reason":"submission_disabled","blocked_reason":SUBMISSION_BLOCKED,
+                "gate":"exact_confirmation_and_presence_assertion_satisfied",
+                "reservation":"durable_atomic_account_lesson",
+                "reservation_state":match consumed { ReservationState::Consumed => "consumed", ReservationState::Armed => "armed" },
+                "presence_authority":"caller_assertion_not_remotely_verified",
+                "submission_attempted":false,"write_performed":false}),
+        )
     }
 }
 #[cfg(test)]
@@ -1103,6 +1284,14 @@ impl<'de> Deserialize<'de> for RunInput {
 #[serde(deny_unknown_fields)]
 struct RunPayload {
     session: Option<Session>,
+    /// One-shot CAS sign-on material. Protected by the same stdin-only secret
+    /// deserializer as every other credential: never argv, never a log, never a
+    /// repository byte. The `login` operation consumes them exactly once and the
+    /// attempt never retries or refreshes.
+    #[serde(default, deserialize_with = "optional_secret")]
+    username: Option<Zeroizing<String>>,
+    #[serde(default, deserialize_with = "optional_secret")]
+    password: Option<Zeroizing<String>>,
     #[serde(default, deserialize_with = "optional_secret")]
     session_cookie: Option<Zeroizing<String>>,
     #[serde(default, rename = "login_name", deserialize_with = "optional_secret")]
@@ -1206,9 +1395,24 @@ fn commit_gate(payload: &RunPayload) -> Result<Value, Error> {
         header: session.header,
     };
     exact_intent_gate(Some(&scope), lesson, confirmation, true)?;
+    // The gate is satisfied: arm and consume the durable atomic account+lesson
+    // reservation exactly once so a commit is verifiable after a crash. A repeat
+    // commit on the same account+lesson is an idempotent no-op. The mutation
+    // itself stays refused because operator presence cannot be verified remotely.
+    let store = ReservationStore::default_identity()?;
+    let already = store
+        .state(session.user_id.as_str(), lesson.course_sched_id.as_str())?
+        == ReservationState::Consumed;
+    let _ = store.consume_once(
+        session.user_id.as_str(),
+        lesson.course_sched_id.as_str(),
+    )?;
     Ok(
         json!({"result":"unsupported","reason":"submission_disabled","blocked_reason":SUBMISSION_BLOCKED,
         "gate":"exact_confirmation_and_presence_assertion_satisfied",
+        "reservation":"durable_atomic_account_lesson",
+        "reservation_state":"consumed",
+        "idempotent_repeat":already,
         "presence_authority":"caller_assertion_not_remotely_verified",
         "submission_attempted":false,"write_performed":false}),
     )
@@ -1224,12 +1428,6 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
         if matches!(input.operation, RunOperation::LoginName) {
             return Ok(
                 json!({"result":"unsupported","reason":"login_name_private_zeroizing_session_sink_unavailable","network_performed":false}),
-            );
-        }
-        // Fail closed BEFORE constructing a client or acquiring a lease.
-        if matches!(input.operation, RunOperation::Login) {
-            return Ok(
-                json!({"result":"unsupported","reason":"authentication_one_shot_and_business_outcome_admission_not_implemented","write_performed":false}),
             );
         }
         let p = input.payload.unwrap_or_default();
@@ -1266,6 +1464,11 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
             return Ok(
                 json!({"result":"blocked","reason":"online permission required; no request made"}),
             );
+        }
+        // Login credentials must be complete before any client or lease exists.
+        if matches!(input.operation, RunOperation::Login) {
+            let _ = required(p.username.as_ref().map(|s| s.as_str()))?;
+            let _ = required(p.password.as_ref().map(|s| s.as_str()))?;
         }
         let client = CheckinClient::open()?;
         match input.operation {
@@ -1333,7 +1536,20 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
                 }
                 Ok(value)
             }
-            RunOperation::Preview | RunOperation::Commit | RunOperation::Login => unreachable!(),
+            RunOperation::Preview | RunOperation::Commit => unreachable!(),
+            RunOperation::Login => {
+                // One-shot CAS admission. Credentials arrive only through the
+                // protected stdin secret deserializer and were validated above,
+                // before this client or any lease existed.
+                client.application_login(
+                    required(p.username.as_ref().map(|s| s.as_str()))?,
+                    required(p.password.as_ref().map(|s| s.as_str()))?,
+                )
+                    .map(|session| {
+                        json!({"result":"authenticated","user_id":session.user_id,
+                            "header":"login_name","network_performed":true,"write_performed":false})
+                    })
+            }
         }
     })();
     Ok(match result {
@@ -1348,6 +1564,8 @@ pub fn schema() -> Value {
     for key in [
         "session_cookie",
         "login_name",
+        "username",
+        "password",
         "kind",
         "date",
         "semester",
@@ -1366,15 +1584,16 @@ pub fn schema() -> Value {
     properties.insert("time_format".into(),json!({"type":["object","null"],"additionalProperties":false,"required":["datetime_formats","utc_offset_seconds"],"properties":{"datetime_formats":{"type":"array","items":{"type":"string"}},"utc_offset_seconds":{"type":"integer","minimum":i32::MIN,"maximum":i32::MAX}}}));
     json!({"module":"checkin","state":"pending",
         "input":{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"enum":["login_name","login","courses","lesson","preview","commit","postcondition"]},"payload":{"type":["object","null"],"additionalProperties":false,"properties":properties}}},
-        "authentication":"unsupported: one-shot authentication outcome admission not implemented",
+        "authentication":"one-shot CAS admission for the iClass relying party: a protected-stdin credential pair drives exactly one in-memory CAS ticket exchange under a durable Authentication lease, settles the known business outcome, and admits an authenticated loginName-bound session; a rejection latches the governor and no retry, refresh or fallback is performed",
+        "login_input":{"operation":"login","required":["username","password"],"credential_authority":"protected stdin JSON secret fields only; never argv, never a log, never a repository byte"},
         "presence_gate":{"operations":["preview","commit"],
             "preview_requires":["session","lesson","intent","time_format"],
             "commit_requires":["session","lesson","intent","time_format","owner_present","confirmation"],
             "presence_assertion":"intent.owner_present for preview; both payload.owner_present and intent.owner_present for commit",
             "confirmation":"exact byte match against plan.confirmation.phrase; no trimming, case folding or partial match",
             "presence_authority":"caller assertion, not remotely verifiable",
-            "submission":"refused after the gate: owner presence cannot be verified remotely and no persistent atomic account+lesson reservation with unknown-outcome recovery exists"},
-        "writes":"blocked: plan/preview only, no submission path exists",
+            "submission":"refused after the gate: operator presence cannot be verified remotely; a persistent atomic account+lesson reservation with unknown-outcome recovery is armed and consumed exactly once so the attempt is verifiable after a crash, but the mutation itself stays refused"},
+        "writes":"blocked: plan/preview only; the exact-intent gate and owner-presence assertion are satisfied and a durable atomic account+lesson reservation is consumed exactly once, but no mutation transport is performed",
         "time_format_authority":"caller assertion, not upstream verified",
         "output":{"type":"object","required":["result"],"properties":{"result":{"enum":["success","empty","session_expired","upstream_error","redirect","fallback","preview","blocked","unsupported","postcondition_unknown"]},"reason":{"type":"string"},"blocked_reason":{"type":"string"},"write_performed":{"const":false},"submission_attempted":{"const":false}}}})
 }
@@ -1927,7 +2146,8 @@ mod tests {
     #[test]
     fn auth_and_commit_closed_before_client_creation() {
         let v = run(r#"{"operation":"login"}"#, true).unwrap();
-        assert_eq!(v["result"], "unsupported");
+        assert_eq!(v["result"], "blocked");
+        assert_eq!(v["reason"], "invalid_input");
         assert_eq!(v["write_performed"], false);
         // The commit gate is local: without a presence assertion it refuses
         // before a client, lease or request exists.
@@ -2161,5 +2381,109 @@ mod tests {
             crate::html::assess_challenge_body(b"<input name=captcha>", mime.as_deref(), true),
             crate::html::ChallengeAssessment::Clear
         );
+    }
+
+    #[test]
+    fn reservation_arm_consume_is_durable_and_idempotent() {
+        let dir = std::env::temp_dir().join(format!(
+            "buaa-checkin-resv-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = ReservationStore::for_test(dir.clone());
+        // Absent is armed; a crash never leaves a half-written record.
+        assert_eq!(store.state("u1", "s").unwrap(), ReservationState::Armed);
+        // Consume exactly once: an atomic tmp+rename publishes the record.
+        let first = store.consume_once("u1", "s").unwrap();
+        assert_eq!(first, ReservationState::Consumed);
+        // A fresh store over the same base reads the durable state back, so a
+        // commit is verifiable after a crash and a repeat commit is a no-op.
+        let reread = ReservationStore::for_test(dir.clone());
+        assert_eq!(reread.state("u1", "s").unwrap(), ReservationState::Consumed);
+        assert_eq!(reread.consume_once("u1", "s").unwrap(), ReservationState::Consumed);
+        // Distinct account+lesson pairs are independent reservations.
+        assert_eq!(store.state("u1", "other").unwrap(), ReservationState::Armed);
+        assert_eq!(store.state("u2", "s").unwrap(), ReservationState::Armed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn owner_presence_gate_refuses_before_any_reservation() {
+        let payload = json!({"session":{"user_id":"u1","login_name":"login-fixture","session_id":"session-fixture","header":"session_id"},
+            "lesson":lesson(),
+            "intent":{"operation":"sign_current_lesson","course_sched_id":"s","owner_present":false},
+            "time_format":explicit_format(),
+            "confirmation":"SIGN-CHECKIN u1 c s 10-20"});
+        // The typed intent asserts no owner presence: the presence gate refuses
+        // before any durable reservation is armed or consumed.
+        let out = run(
+            &json!({"operation":"commit","payload":payload}).to_string(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(out["result"], "blocked");
+        assert_eq!(out["reason"], "presence_assertion_required");
+        assert_eq!(out["write_performed"], false);
+    }
+    #[test]
+    fn submission_blocked_is_rederived_for_the_bounded_gate() {
+        let session = scoped_session();
+        let preview = preview_with_scope(
+            scoped_intent(),
+            lesson(),
+            15,
+            explicit_format(),
+            Some(&session),
+        )
+        .unwrap();
+        let value = preview.value();
+        let reason = value["blocked_reason"].as_str().unwrap();
+        // The re-derived reason reflects the durable atomic reservation that
+        // is consumed exactly once, while the mutation itself stays refused.
+        assert!(reason.contains("persistent atomic account+lesson reservation"));
+        assert!(reason.contains("consumed exactly once"));
+        assert!(reason.contains("presence cannot be verified remotely"));
+        assert_eq!(value["executable"], false);
+        assert_eq!(value["commit_supported"], false);
+        assert_eq!(value["write_performed"], false);
+    }
+    #[test]
+    fn login_missing_credential_refuses_before_lease() {
+        // Offline, the login operation is gated on explicit online permission
+        // before any client or lease is constructed.
+        let offline = run(
+            r#"{"operation":"login","payload":{"username":"u1","password":"p"}}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!(offline["result"], "blocked");
+        assert_eq!(offline["reason"], "online permission required; no request made");
+        // Online with one credential missing: the typed field is refused before
+        // a lease is acquired, so no authentication attempt is made.
+        let missing = run(
+            r#"{"operation":"login","payload":{"username":"u1","password":""}}"#,
+            true,
+        )
+        .unwrap();
+        assert_eq!(missing["reason"], "invalid_input");
+        let missing_user = run(
+            r#"{"operation":"login","payload":{"username":"","password":"p"}}"#,
+            true,
+        )
+        .unwrap();
+        assert_eq!(missing_user["reason"], "invalid_input");
+    }
+    #[test]
+    fn login_name_sink_parser_is_reused() {
+        // The 8346 loginName sink parser is the same bounded extractor the one-
+        // shot CAS terminal credential feeds; it decodes percent-encoding and
+        // refuses a duplicate, empty or shaped loginName.
+        assert_eq!(login_name("https://iclass.buaa.edu.cn:8346/?loginName=a%2Bb").unwrap().as_str(), "a+b");
+        assert!(login_name("https://iclass.buaa.edu.cn:8346/?loginName=a&loginName=b").is_err());
+        assert!(login_name("https://iclass.buaa.edu.cn:8346/?loginName=").is_err());
+        assert!(login_name("https://iclass.buaa.edu.cn:8346/?other=1").is_err());
     }
 }

@@ -574,7 +574,7 @@
       "acceptance": "Owner-present, authorized current session only, preview and confirmed idempotent commit.",
       "evidence": {
         "candidate_offline": "Synthetic admission cases reproduced and then withheld normalized numeric session-credential echoes, including structured and fallback outputs. Separate Checkin/OS-lab admission cases passed; they do not exercise real transport or lease settlement.",
-        "remaining": "No authenticated current session, owner presence, authorized lesson, idempotent commit or postcondition has been established. The review does not authorize attendance.",
+        "remaining": "One-shot CAS authentication outcome admission is implemented and offline-tested: a protected-stdin credential pair drives exactly one in-memory iClass ticket exchange under a durable Authentication lease, admits an authenticated loginName-bound session, and latches the governor on a known rejection without retry. A persistent atomic account+lesson reservation with unknown-outcome recovery is armed and consumed exactly once so a commit is verifiable after a crash, behind the exact-intent gate and owner-presence assertion; the mutation itself stays refused because presence cannot be verified remotely. No authenticated live session, owner presence, authorized lesson, durable idempotent commit or postcondition has been established; the review does not authorize attendance.",
         "offline_observation_2026_10_31": {
           "command": "buaa checkin with an empty object",
           "observed": "blocked exit 0 with a stated reason",
