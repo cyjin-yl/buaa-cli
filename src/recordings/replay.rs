@@ -19,7 +19,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -38,20 +38,20 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
-enum Player {
+pub(crate) enum Player {
     Mpv,
     Vlc,
 }
 
 impl Player {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Mpv => "mpv",
             Self::Vlc => "vlc",
         }
     }
 
-    fn executable(self) -> &'static str {
+    pub(crate) fn executable(self) -> &'static str {
         self.as_str()
     }
 }
@@ -90,27 +90,27 @@ struct SubtitleInput {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SubtitleFormat {
+pub(crate) enum SubtitleFormat {
     Srt,
     Vtt,
 }
 
 impl SubtitleFormat {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Srt => "srt",
             Self::Vtt => "vtt",
         }
     }
 
-    fn mpv_demuxer(self) -> &'static str {
+    pub(crate) fn mpv_demuxer(self) -> &'static str {
         match self {
             Self::Srt => "srt",
             Self::Vtt => "webvtt",
         }
     }
 
-    fn vlc_sub_type(self) -> &'static str {
+    pub(crate) fn vlc_sub_type(self) -> &'static str {
         match self {
             Self::Srt => "subrip",
             // VLC versions differ in whether `webvtt` is accepted by the
@@ -175,9 +175,10 @@ impl PreparedSubtitle {
     }
 }
 
-struct PlayerObservation {
-    status: ExitStatus,
-    stopped_by_bound: bool,
+pub(crate) struct PlayerObservation {
+    pub(crate) status: ExitStatus,
+    pub(crate) stopped_by_bound: bool,
+    pub(crate) stopped_by_stop: bool,
 }
 
 fn default_max_seconds() -> u64 {
@@ -408,7 +409,7 @@ fn digest_file(file: &mut File, max_bytes: u64) -> Result<FileIdentity, Error> {
     })
 }
 
-fn subtitle_format(path: &Path) -> Result<SubtitleFormat, Error> {
+pub(crate) fn subtitle_format(path: &Path) -> Result<SubtitleFormat, Error> {
     match path.extension().and_then(|value| value.to_str()) {
         Some(value) if value.eq_ignore_ascii_case("srt") => Ok(SubtitleFormat::Srt),
         Some(value) if value.eq_ignore_ascii_case("vtt") => Ok(SubtitleFormat::Vtt),
@@ -545,7 +546,7 @@ fn bind_media_receipt(request: &ReplayInput, media: &LocalFile) -> Result<&'stat
     Ok("local_receipt_match")
 }
 
-fn build_argv(
+pub(crate) fn build_argv(
     player: Player,
     media: &str,
     subtitle: Option<&str>,
@@ -633,6 +634,11 @@ fn descriptor_path(file: &File) -> String {
 }
 
 fn clear_close_on_exec(fd: RawFd) -> io::Result<()> {
+    // A negative fd is the sentinel callers use when they pass a URL rather
+    // than a proc-fd descriptor; there is no descriptor to clear then.
+    if fd < 0 {
+        return Ok(());
+    }
     // SAFETY: fcntl operates on the live descriptor supplied by this module.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if flags < 0 {
@@ -889,13 +895,27 @@ fn run_player(
 ) -> Result<PlayerObservation, Error> {
     let media_fd = media_file.as_raw_fd();
     let subtitle_fd = subtitle_file.map(|file| file.as_raw_fd());
-    let started = Instant::now();
     let mut command = Command::new(player.executable());
     command
         .args(argv)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    let child = spawn_sandboxed_player(&mut command, media_fd, subtitle_fd)?;
+    let no_stop = AtomicBool::new(false);
+    run_player_bounded(child, max_seconds, &no_stop)
+}
+
+/// Build the fork boundary for one player child and spawn it. Descriptor
+/// isolation and the seccomp install run after stdio setup and before exec, so
+/// they cannot affect this process or any other child. Callers that already
+/// hold an admitted media/subtitle descriptor bind the same reviewed player
+/// through this entry point.
+pub(crate) fn spawn_sandboxed_player(
+    command: &mut Command,
+    media_fd: RawFd,
+    subtitle_fd: Option<RawFd>,
+) -> Result<Child, Error> {
     let parent_fds = inherited_parent_fds(media_fd, subtitle_fd)?;
     // SAFETY: the closure performs only async-signal-safe fcntl operations
     // on descriptors duplicated for this child plus the child-only seccomp
@@ -914,7 +934,19 @@ fn run_player(
             Ok(())
         });
     }
-    let mut child = command.spawn().map_err(|_| unavailable())?;
+    command.spawn().map_err(|_| unavailable())
+}
+
+/// Bound a spawned player child to `max_seconds`: a clean early exit is
+/// returned as-is, a still-running child is stopped at the bound, and a
+/// caller-set stop flag stops the child immediately. The observation reports
+/// whether the bound or the stop flag stopped the process.
+pub(crate) fn run_player_bounded(
+    mut child: Child,
+    max_seconds: u64,
+    stop: &AtomicBool,
+) -> Result<PlayerObservation, Error> {
+    let started = Instant::now();
     let bound = Duration::from_secs(max_seconds);
     loop {
         match child.try_wait() {
@@ -922,6 +954,7 @@ fn run_player(
                 return Ok(PlayerObservation {
                     status,
                     stopped_by_bound: false,
+                    stopped_by_stop: stop.load(Ordering::Relaxed),
                 });
             }
             Ok(None) => {}
@@ -932,18 +965,27 @@ fn run_player(
                 return Err(unavailable());
             }
         }
+        if stop.load(Ordering::Relaxed) {
+            let status = stop_after_bound(&mut child)?;
+            return Ok(PlayerObservation {
+                status,
+                stopped_by_bound: false,
+                stopped_by_stop: true,
+            });
+        }
         if started.elapsed() >= bound {
             let status = stop_after_bound(&mut child)?;
             return Ok(PlayerObservation {
                 status,
                 stopped_by_bound: true,
+                stopped_by_stop: false,
             });
         }
         thread::sleep(Duration::from_millis(10));
     }
 }
 
-fn exit_status_json(status: &ExitStatus) -> Value {
+pub(crate) fn exit_status_json(status: &ExitStatus) -> Value {
     json!({
         "code": status.code(),
         "signal": status.signal(),

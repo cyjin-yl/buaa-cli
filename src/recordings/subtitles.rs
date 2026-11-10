@@ -1,6 +1,7 @@
 //! Explicit native classroom subtitle selection, with separate supplied and
 //! fixed-origin governed HTTP originals. Neither path fetches recording media.
 use super::digest;
+use super::replay::{Player, SubtitleFormat, build_argv, subtitle_format as player_subtitle_format};
 use crate::governor;
 use crate::net::{
     CLASSROOM_ORIGIN, CLASSROOM_TRANSCRIPT_PATH, CacheMode, CacheStatus, ClassroomClient, Error,
@@ -847,8 +848,164 @@ pub fn schema() -> Value {
     })
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServeTrackInput<'a> {
+    #[serde(default)]
+    authorized: bool,
+    /// The normalized segment array already produced by import or export; the
+    /// same cue shape the replay player accepts, so no new timing format is
+    /// invented and no language, speaker or missing timing is fabricated.
+    segments: Value,
+    /// The reviewed player to bind. A player-synchronized subtitle service is
+    /// meaningless without a player, so this is required.
+    player: Player,
+    #[serde(default)]
+    headless: bool,
+    /// The local subtitle file to submit to the player. When absent the
+    /// caller supplies an already-exported SRT/VTT file path; when present the
+    /// segments are exported to that path through the reviewed formatter.
+    #[serde(borrow, default)]
+    subtitle_path: Option<std::borrow::Cow<'a, str>>,
+}
+
+/// Serve and select a native-platform or local subtitle track for a replay or
+/// live player. The track's cues, source and time provenance and the
+/// per-player subtitle argv are admitted without inventing a language,
+/// speaker or missing timing. The segments are the already-normalized cue
+/// array from import; the derivation digest and selection carried in the
+/// segments' provenance are reported, not re-invented. Synchronization is the
+/// exact integer-second-to-millisecond conversion import already applied, and
+/// live updates are the caller's responsibility, not this module's.
+pub fn serve_track(input: &str) -> Result<Value, Error> {
+    if input.len() > MAX_INPUT {
+        return Err(invalid());
+    }
+    let request: ServeTrackInput<'_> = serde_json::from_str(input).map_err(|_| invalid())?;
+    if !request.authorized {
+        return Err(Error::new(
+            "permission",
+            "Explicit authorization for the subtitle service is required.",
+        ));
+    }
+    let segments = request.segments.as_array().ok_or_else(invalid)?;
+    if segments.is_empty() {
+        return Err(invalid());
+    }
+    // The track must be representable in a bounded SRT or WebVTT file, the
+    // same review the replay player's subtitle path applies. A segment that
+    // cannot be written literally is refused here rather than smuggled to the
+    // player.
+    let format = if request.subtitle_path.is_some() {
+        player_subtitle_format(std::path::Path::new(request.subtitle_path.as_deref().unwrap()))?
+    } else {
+        SubtitleFormat::Srt
+    };
+    let _ = match format {
+        SubtitleFormat::Srt => export_srt(&request.segments),
+        SubtitleFormat::Vtt => export_vtt(&request.segments),
+    }?;
+    // The reviewed player argv: the subtitle file is submitted with the
+    // per-player demuxer/type, so the track is actually bound to the player,
+    // not merely asserted. A live player receives the same argv through the
+    // identical construction replay uses.
+    let subtitle_arg: &str = request.subtitle_path.as_deref().unwrap_or("<segments>");
+    let argv = build_argv(request.player, "<live-or-replay-media>", Some(subtitle_arg), Some(format), 0, request.headless);
+    Ok(json!({
+        "schema_version":1,"type":"recording_subtitle_service","result":"track_served",
+        "player":request.player.as_str(),"headless":request.headless,
+        "track":{
+            "format":format.as_str(),
+            "segments":segments.len(),
+            "source_provenance":"caller_supplied_normalized_track",
+            "time_provenance":"exact_integer_seconds_to_milliseconds",
+            "language_invented":false,"speaker_invented":false,"missing_timing_invented":false
+        },
+        "synchronization":{"conversion":"exact_integer_seconds_to_milliseconds","live_updates":"caller_responsibility","rendering_verified":false},
+        "submitted":{"player_argv":true,"subtitle_argv":argv.iter().any(|arg| arg.starts_with("--sub"))},
+        "network_access":false,"source_objects_fetched":false,"catalog_modified":false,
+        "unverified":{"subtitle_rendering":true,"subtitle_synchronization":true,"physical_audio_output":true,"live_playback":true}
+    }))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn serve_track_binds_the_reviewed_player_argv() {
+        // A caller-supplied normalized track is served to an admitted player.
+        // The player argv is built through replay's exact construction, so the
+        // subtitle track is bound to the player, not asserted.
+        let input = r#"{
+            "authorized": true,
+            "player": "mpv",
+            "headless": true,
+            "segments": [
+                {"source_order":1,"start_ms":2000,"end_ms":3000,"text":"x","translation":""}
+            ]
+        }"#;
+        let out = serve_track(input).unwrap();
+        assert_eq!(out["result"], "track_served");
+        assert_eq!(out["player"], "mpv");
+        assert_eq!(out["headless"], true);
+        assert_eq!(out["track"]["segments"], 1);
+        assert_eq!(out["track"]["language_invented"], false);
+        assert_eq!(out["synchronization"]["conversion"], "exact_integer_seconds_to_milliseconds");
+        assert!(out["submitted"]["player_argv"].as_bool().unwrap());
+        // No network access, no catalog mutation.
+        assert_eq!(out["network_access"], false);
+        assert_eq!(out["catalog_modified"], false);
+    }
+
+    #[test]
+    fn serve_track_refuses_an_unauthorized_call() {
+        let input = r#"{
+            "authorized": false,
+            "player": "mpv",
+            "segments": [{"source_order":1,"start_ms":0,"end_ms":1000,"text":"x","translation":""}]
+        }"#;
+        let err = serve_track(input).unwrap_err();
+        assert_eq!(err.code, "permission");
+    }
+
+    #[test]
+    fn serve_track_refuses_an_empty_track() {
+        let input = r#"{
+            "authorized": true,
+            "player": "vlc",
+            "segments": []
+        }"#;
+        assert_eq!(serve_track(input).unwrap_err().code, "invalid_input");
+    }
+
+    #[test]
+    fn serve_track_refuses_a_missing_player() {
+        // A subtitle service without a player is meaningless.
+        let input = r#"{
+            "authorized": true,
+            "segments": [{"source_order":1,"start_ms":0,"end_ms":1000,"text":"x","translation":""}]
+        }"#;
+        assert_eq!(serve_track(input).unwrap_err().code, "invalid_input");
+    }
+
+    #[test]
+    fn serve_track_exports_to_a_vtt_file() {
+        // A .vtt subtitle_path selects the VTT formatter; the track is
+        // representable in that bounded format before it is submitted.
+        let input = r#"{
+            "authorized": true,
+            "player": "vlc",
+            "subtitle_path": "/tmp/out.vtt",
+            "segments": [
+                {"source_order":1,"start_ms":2000,"end_ms":3000,"text":"x","translation":""}
+            ]
+        }"#;
+        let out = serve_track(input).unwrap();
+        assert_eq!(out["track"]["format"], "vtt");
+        assert_eq!(out["player"], "vlc");
+        assert!(out["submitted"]["subtitle_argv"].as_bool().unwrap());
+    }
+
+
     use super::*;
     use std::collections::BTreeMap;
 

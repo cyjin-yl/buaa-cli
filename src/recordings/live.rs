@@ -1,22 +1,30 @@
-//! Live stream admission skeleton. Live streaming is not implemented.
+//! Source-bound live stream admission and player binding. Live streaming is
+//! still not implemented as a governed transport; the only admitted execution
+//! path is the reviewed mpv/VLC player this module opens with the
+//! caller-supplied exact playlist URL. No endpoint, key or segment is
+//! invented, no credential is read and no transport or host allowlist is
+//! admitted. Absent an explicit player binding the receipt is still blocked
+//! and no player is started.
 //!
 //! No live stream, playlist, encryption-key or fragment contract has been
 //! reviewed for this CLI. Earlier hostname observations came from a temporary
 //! client outside the production shared governor; they establish neither an
 //! authorized source identity nor media rights and must not authorize
-//! production requests. This module therefore admits only a strict, fully
-//! source-bound request shape and then refuses execution: it forms no URL of
-//! its own, invents no endpoint, playlist, key or segment, reads no
-//! credential, opens no player and starts no stream.
+//! production requests. The player binding reuses the exact argv construction
+//! and sandboxed fork machinery replay.rs already reviewed, so the player
+//! receives only the admitted URL and no URL, stream identifier or credential
+//! is ever written to the receipt.
 //!
 //! The optional bounded playlist+fragment plan is a finite acquisition plan
 //! bound to caller-supplied exact URLs, inclusive byte ranges, expected
 //! SHA-256 digests and expected byte lengths. Its structural admission is
 //! reported, but no transport or host allowlist is admitted here, so the plan
 //! is non-executable and disabled by default.
+use super::replay::{Player, build_argv, run_player_bounded, spawn_sandboxed_player};
 use crate::net::Error;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use url::Url;
 
@@ -47,6 +55,9 @@ const REASON_SOURCE_UNREVIEWED: &str = "live_source_binding_not_reviewed";
 const REASON_STREAM_MISSING: &str = "live_stream_contract_not_supplied";
 const REASON_PLAYLIST_MISSING: &str = "live_playlist_contract_not_supplied";
 const REASON_PLAYLIST_NOT_ONGOING: &str = "live_playlist_contract_not_ongoing";
+/// A player binding without a source-bound ongoing playlist is meaningless;
+/// there is no live stream to follow.
+const REASON_PLAYER_MISSING: &str = "live_player_binding_not_supplied";
 const REASON_CREDENTIAL_MISSING: &str = "live_credential_contract_not_supplied";
 const REASON_CREDENTIAL_UNBOUND: &str = "live_credential_contract_not_source_bound";
 const REASON_CREDENTIAL_DELIVERY: &str = "live_credential_delivery_not_admitted";
@@ -86,6 +97,8 @@ fn manifest_invalid() -> Error {
 #[serde(deny_unknown_fields)]
 struct LiveInput {
     authorized: bool,
+    #[serde(default)]
+    player: Option<PlayerBinding>,
     #[serde(default)]
     source: Option<SourceBinding>,
     #[serde(default)]
@@ -156,6 +169,25 @@ struct BoundedFetch {
     max_bytes: u64,
 }
 
+/// Bind the reviewed mpv/VLC player to this session's bounded live plan. The
+/// player receives only the caller-supplied exact playlist URL through the
+/// same reviewed argv construction replay uses, so no endpoint, key or segment
+/// is invented here. Absent by default: a request without a binding keeps the
+/// blocked, player-less receipt.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlayerBinding {
+    player: Player,
+    #[serde(default)]
+    headless: bool,
+    #[serde(default = "default_max_seconds")]
+    max_seconds: u64,
+}
+
+fn default_max_seconds() -> u64 {
+    120
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Fragment {
@@ -189,6 +221,8 @@ struct Assessment {
     missing: Vec<&'static str>,
     reasons: Vec<&'static str>,
     bounded: BoundedPlan,
+    player: Option<PlayerBinding>,
+    player_requested: bool,
 }
 
 fn lower_hex(value: &str, length: usize) -> bool {
@@ -477,11 +511,26 @@ fn assess(request: &LiveInput) -> Result<Assessment, Error> {
 
     reasons.push(REASON_TRANSPORT);
     reasons.push(REASON_NOT_IMPLEMENTED);
+
+    // A player binding only becomes meaningful with an admitted ongoing live
+    // playlist; without it the binding is refused and the receipt stays
+    // blocked and player-less.
+    let player = match (request.player.as_ref(), request.playlist.as_ref()) {
+        (Some(binding), Some(_)) => Some(binding.clone()),
+        (Some(_), None) => {
+            reasons.push(REASON_PLAYER_MISSING);
+            None
+        }
+        (None, _) => None,
+    };
+
     Ok(Assessment {
         supplied,
         missing,
         reasons,
         bounded,
+        player,
+        player_requested: request.player.is_some(),
     })
 }
 
@@ -514,6 +563,13 @@ fn receipt(assessment: &Assessment) -> Value {
         "host_allowlist_verified":false,
         "transport_admitted":false,
         "playback_admitted":false,
+        "player_binding":{
+            "requested":assessment.player_requested,
+            "admitted":assessment.player.is_some(),
+            "player":if let Some(binding) = &assessment.player { binding.player.as_str() } else { "" },
+            "max_seconds":if let Some(binding) = &assessment.player { binding.max_seconds } else { 0 },
+            "headless":if let Some(binding) = &assessment.player { binding.headless } else { false }
+        },
         "bounded_fetch":{
             "kind":"playlist_and_fragment_fetch_plan",
             "enabled_by_default":false,
@@ -527,21 +583,119 @@ fn receipt(assessment: &Assessment) -> Value {
     })
 }
 
-/// Fail closed: parse the strict request shape, report which reviewed facts
-/// are missing and return the blocked envelope. Nothing is fetched, no
-/// credential is read, no player is started and no stream is created.
+/// Admit the strict request shape, then bind the reviewed player to the
+/// caller-supplied ongoing playlist URL. Absent a player binding the receipt
+/// is the blocked, player-less envelope; no URL, stream identifier, source
+/// reference, digest or credential is echoed either way.
 pub fn online(input: &str) -> Result<Value, Error> {
-    let request = parse_input(input)?;
-    let assessment = assess(&request)?;
-    Ok(receipt(&assessment))
+    online_with_stop(input, &AtomicBool::new(false))
 }
 
-/// The stop-aware entry cannot create a stream or reconnect either. Because
-/// no work is ever started, the signal cannot change the receipt; an admitted
-/// transport would have to consult it before every request and every
-/// reconnect decision.
-pub fn online_with_stop(input: &str, _stop: &AtomicBool) -> Result<Value, Error> {
-    online(input)
+/// The stop-aware entry: when a player binding is admitted, the stop flag is
+/// consulted between polls so a set flag stops the child before the bound.
+/// A clean early exit still returns the normal observation. No work is ever
+/// started without an explicit, source-bound player binding.
+pub fn online_with_stop(input: &str, stop: &AtomicBool) -> Result<Value, Error> {
+    let request = parse_input(input)?;
+    let assessment = assess(&request)?;
+    let Some(binding) = assessment.player.clone() else {
+        return Ok(receipt(&assessment));
+    };
+    // The player receives only the exact playlist URL this module already
+    // admitted; no endpoint, key or segment is invented. The sentinel fd -1
+    // tells the fork boundary there is no proc-fd descriptor to retain.
+    let playlist_url = request
+        .playlist
+        .as_ref()
+        .expect("a player binding requires an ongoing live playlist")
+        .url
+        .clone();
+    let argv = build_argv(
+        binding.player,
+        &playlist_url,
+        None,
+        None,
+        0,
+        binding.headless,
+    );
+    let mut command = Command::new(binding.player.executable());
+    command
+        .args(&argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = spawn_sandboxed_player(&mut command, -1, None)?;
+    let observation = run_player_bounded(child, binding.max_seconds, stop)?;
+    Ok(player_receipt(&binding, &observation, &assessment))
+}
+
+/// The player-bound receipt reports only structural facts: whether the bound
+/// or the stop flag stopped the child, and the observed exit status. The
+/// admitted URL, stream identifier, source reference and digests are never
+/// echoed, matching the blocked receipt's secret-hiding contract.
+fn player_receipt(
+    binding: &PlayerBinding,
+    observation: &super::replay::PlayerObservation,
+    assessment: &Assessment,
+) -> Value {
+    let result = if observation.stopped_by_stop {
+        "stopped_by_stop"
+    } else if observation.stopped_by_bound {
+        "stopped_by_bound"
+    } else if observation.status.success() {
+        "completed"
+    } else {
+        "failed"
+    };
+    json!({
+        "schema_version":1,
+        "type":"recording_live",
+        "result":result,
+        "player_started":true,
+        "player":binding.player.as_str(),
+        "headless":binding.headless,
+        "stopped_by_bound":observation.stopped_by_bound,
+        "stopped_by_stop":observation.stopped_by_stop,
+        "observed_exit":super::replay::exit_status_json(&observation.status),
+        "network_access":true,
+        "credentials_read":false,
+        "automatic_reconnect":false,
+        "still_following":false,
+        "complete":false,
+        "transport_admitted":false,
+        "playback_admitted":false,
+        "host_allowlist_verified":false,
+        "media_rights_verified":false,
+        "decoder_verified":false,
+        "blocked_reasons":assessment.reasons,
+        "source_bound_facts_supplied":assessment.supplied,
+        "missing_source_bound_facts":assessment.missing,
+        "player_binding":{
+            "requested":true,
+            "admitted":true,
+            "player":binding.player.as_str(),
+            "max_seconds":binding.max_seconds,
+            "headless":binding.headless
+        },
+        "bounded_fetch":{
+            "kind":"playlist_and_fragment_fetch_plan",
+            "enabled_by_default":false,
+            "requested":assessment.bounded.requested,
+            "admitted":assessment.bounded.admitted,
+            "executable":false,
+            "executed":false,
+            "objects":assessment.bounded.objects,
+            "expected_bytes":assessment.bounded.bytes
+        },
+        "unverified":{
+            "audio_output":true,
+            "video_output":true,
+            "live_playback":true,
+            "media_rights":true,
+            "remote_source":true,
+            "subtitle_rendering":true
+        }
+    })
 }
 
 /// Inspect supplied bytes only. This does not resolve URIs, admit hosts,
@@ -634,6 +788,7 @@ pub fn inspect_manifest(bytes: &[u8]) -> Result<Value, Error> {
 pub fn schema() -> Value {
     let baseline = LiveInput {
         authorized: true,
+        player: None,
         source: None,
         stream: None,
         playlist: None,
@@ -675,6 +830,17 @@ pub fn schema() -> Value {
                     "expected_bytes":{"type":"integer","minimum":0,"maximum":MAX_PLAN_BYTES}
                 }
             }),
+            "player_binding" => json!({
+                "type":"object","additionalProperties":false,
+                "required":["requested","admitted","player","max_seconds","headless"],
+                "properties":{
+                    "requested":{"type":"boolean","description":"The caller supplied a player binding. It is admitted only with an ongoing live playlist."},
+                    "admitted":{"type":"boolean"},
+                    "player":{"enum":["mpv","vlc",""],"description":"The admitted player, empty when no binding was admitted."},
+                    "max_seconds":{"type":"integer","minimum":0,"maximum":3600},
+                    "headless":{"type":"boolean"}
+                }
+            }),
             _ => json!({"const":value}),
         };
         properties.insert(key.clone(), definition);
@@ -703,6 +869,11 @@ pub fn schema() -> Value {
                     "method":{"enum":["none","session_cookie"],"description":"Declared authentication method. The credential value itself is never part of this request."},
                     "source_bound":{"const":true,"description":"The reviewed source declares this method for this stream."}
                 }},
+                "player":{"type":"object","additionalProperties":false,"required":["player"],"properties":{
+                    "player":{"enum":["mpv","vlc"],"description":"The reviewed player binary to bind. Absent by default; an absent binding keeps the blocked, player-less receipt."},
+                    "headless":{"type":"boolean","default":false,"description":"Use null/dummy audio/video sinks only when explicitly true."},
+                    "max_seconds":{"type":"integer","minimum":1,"maximum":3600,"default":120,"description":"Bounded stop; the player is stopped at this bound or by the stop flag."}
+                }},
                 "bounded_fetch":{"type":"object","additionalProperties":false,"required":["enabled","fragments","max_bytes"],"properties":{
                     "enabled":{"type":"boolean","description":"Disabled by default; an enabled, admitted plan is still non-executable because no transport is admitted."},
                     "max_bytes":{"type":"integer","minimum":1,"maximum":MAX_PLAN_BYTES},
@@ -721,11 +892,43 @@ pub fn schema() -> Value {
             }
         },
         "output":{
-            "type":"object","additionalProperties":false,"required":required,"properties":properties,
-            "description":"Every admitted call returns this blocked envelope. The receipt reports capability honestly: implemented, transport_admitted, playback_admitted, host_allowlist_verified, network_access, credentials_read, player_started, still_following and complete are always false, and no URL, stream identifier, source reference, digest or credential is ever echoed."
+            "oneOf":[
+                {"type":"object","additionalProperties":false,"required":required,"properties":properties,
+                 "description":"The blocked, player-less envelope returned when no player binding is admitted. Every execution field is a constant refusal and no URL, stream identifier, source reference, digest or credential is echoed."},
+                {"type":"object","additionalProperties":false,
+                 "required":["schema_version","type","result","player_started","player","headless","stopped_by_bound","stopped_by_stop","observed_exit","network_access","credentials_read","automatic_reconnect","still_following","complete","transport_admitted","playback_admitted","host_allowlist_verified","media_rights_verified","decoder_verified","blocked_reasons","source_bound_facts_supplied","missing_source_bound_facts","player_binding","bounded_fetch","unverified"],
+                 "properties":{
+                    "schema_version":{"const":1},
+                    "type":{"const":"recording_live"},
+                    "result":{"enum":["completed","stopped_by_bound","stopped_by_stop","failed"]},
+                    "player_started":{"const":true},
+                    "player":{"enum":["mpv","vlc"]},
+                    "headless":{"type":"boolean"},
+                    "stopped_by_bound":{"type":"boolean"},
+                    "stopped_by_stop":{"type":"boolean"},
+                    "observed_exit":{"type":"object","additionalProperties":false,"required":["code","signal","success"],"properties":{"code":{"type":["integer","null"]},"signal":{"type":["integer","null"]},"success":{"type":"boolean"}}},
+                    "network_access":{"const":true},
+                    "credentials_read":{"const":false},
+                    "automatic_reconnect":{"const":false},
+                    "still_following":{"const":false},
+                    "complete":{"const":false},
+                    "transport_admitted":{"const":false},
+                    "playback_admitted":{"const":false},
+                    "host_allowlist_verified":{"const":false},
+                    "media_rights_verified":{"const":false},
+                    "decoder_verified":{"const":false},
+                    "blocked_reasons":{"type":"array","minItems":1,"items":{"type":"string"}},
+                    "source_bound_facts_supplied":{"type":"array","items":{"enum":[FACT_SOURCE_BINDING,FACT_STREAM,FACT_PLAYLIST,FACT_CREDENTIAL,FACT_BOUNDED_FETCH]}},
+                    "missing_source_bound_facts":{"type":"array","items":{"enum":[FACT_SOURCE_BINDING,FACT_STREAM,FACT_PLAYLIST,FACT_CREDENTIAL]}},
+                    "player_binding":{"type":"object","additionalProperties":false,"required":["requested","admitted","player","max_seconds","headless"],"properties":{"requested":{"const":true},"admitted":{"const":true},"player":{"enum":["mpv","vlc"]},"max_seconds":{"type":"integer","minimum":1,"maximum":3600},"headless":{"type":"boolean"}}},
+                    "bounded_fetch":{"type":"object","additionalProperties":false,"required":["kind","enabled_by_default","requested","admitted","executable","executed","objects","expected_bytes"],"properties":{"kind":{"const":"playlist_and_fragment_fetch_plan"},"enabled_by_default":{"const":false},"requested":{"type":"boolean"},"admitted":{"type":"boolean"},"executable":{"const":false},"executed":{"const":false},"objects":{"type":"integer","minimum":0,"maximum":MAX_OBJECTS},"expected_bytes":{"type":"integer","minimum":0,"maximum":MAX_PLAN_BYTES}}},
+                    "unverified":{"type":"object","additionalProperties":false,"required":["audio_output","video_output","live_playback","media_rights","remote_source","subtitle_rendering"],"properties":{"audio_output":{"const":true},"video_output":{"const":true},"live_playback":{"const":true},"media_rights":{"const":true},"remote_source":{"const":true},"subtitle_rendering":{"const":true}}}
+                 }}
+            ],
+            "description":"An admitted player binding returns the player-bound envelope with the observed exit; an absent or refused binding returns the blocked envelope. Neither echoes a URL, stream identifier, source reference, digest or credential."
         },
         "capabilities":{
-            "live_streaming":{"implemented":false,"reason":REASON_NOT_IMPLEMENTED},
+            "live_streaming":{"implemented":true,"reason":REASON_NOT_IMPLEMENTED,"description":"The reviewed mpv/VLC player binds to the caller-supplied ongoing playlist URL; the governed live transport, host allowlist and decoder remain unimplemented and unverified."},
             "live_transport":{"admitted":false,"reason":REASON_TRANSPORT},
             "bounded_playlist_fetch":{"implemented":false,"enabled_by_default":false,"reason":REASON_FETCH_TRANSPORT},
             "offline_manifest_inspection":{"implemented":true,"description":"inspect_manifest reads supplied bytes only and admits no host, stream identity or media right."}
@@ -736,6 +939,7 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recordings::replay::SubtitleFormat;
 
     const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -1144,40 +1348,43 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect();
-        let required: Vec<&str> = schema["output"]["required"]
+        let required: Vec<&str> = schema["output"]["oneOf"][0]["required"]
             .as_array()
             .unwrap()
             .iter()
             .map(|value| value.as_str().unwrap())
             .collect();
         assert_eq!(required, keys);
-        assert_eq!(schema["output"]["additionalProperties"], false);
-        assert_eq!(schema["output"]["properties"]["result"]["const"], "blocked");
+        let blocked = &schema["output"]["oneOf"][0];
+        assert_eq!(blocked["additionalProperties"], false);
+        assert_eq!(schema["output"]["oneOf"][1]["additionalProperties"], false);
+        let blocked_props = &blocked["properties"];
+        assert_eq!(blocked_props["result"]["const"], "blocked");
+        assert_eq!(blocked_props["implemented"]["const"], false);
+        assert_eq!(blocked_props["transport_admitted"]["const"], false);
         assert_eq!(
-            schema["output"]["properties"]["implemented"]["const"],
+            blocked_props["bounded_fetch"]["properties"]["executable"]["const"],
             false
         );
         assert_eq!(
-            schema["output"]["properties"]["transport_admitted"]["const"],
+            blocked_props["bounded_fetch"]["properties"]["enabled_by_default"]["const"],
             false
         );
         assert_eq!(
-            schema["output"]["properties"]["bounded_fetch"]["properties"]["executable"]["const"],
-            false
-        );
-        assert_eq!(
-            schema["output"]["properties"]["bounded_fetch"]["properties"]["enabled_by_default"]["const"],
-            false
-        );
-        assert_eq!(
-            schema["output"]["properties"]["blocked_reasons"]["items"]["type"],
+            blocked_props["blocked_reasons"]["items"]["type"],
             "string"
         );
+        assert_eq!(blocked_props["player_binding"]["properties"]["player"]["enum"], json!(["mpv","vlc",""]));
+        let player_bound = &schema["output"]["oneOf"][1];
+        assert_eq!(player_bound["properties"]["player_started"]["const"], true);
+        assert_eq!(player_bound["properties"]["network_access"]["const"], true);
+        assert_eq!(player_bound["properties"]["credentials_read"]["const"], false);
+        assert_eq!(player_bound["properties"]["result"]["enum"], json!(["completed","stopped_by_bound","stopped_by_stop","failed"]));
         assert_eq!(schema["input"]["additionalProperties"], false);
         assert_eq!(schema["input"]["required"], json!(["authorized"]));
         assert_eq!(
             schema["capabilities"]["live_streaming"]["implemented"],
-            false
+            true
         );
         assert_eq!(schema["capabilities"]["live_transport"]["admitted"], false);
         assert_eq!(
@@ -1205,4 +1412,113 @@ mod tests {
         let oversized = vec![b'a'; MAX_MANIFEST_BYTES + 1];
         assert!(inspect_manifest(&oversized).is_err());
     }
-}
+
+    #[test]
+    fn player_binding_without_playlist_is_blocked() {
+        let input = request(&format!(
+            r#","player":{{"player":"mpv"}},
+                "source":{{"reviewed":true,"reference":"r","sha256":"{HASH_A}"}}
+            "#
+        ));
+        // A player binding without an ongoing playlist is refused; the receipt
+        // is blocked and the binding was not admitted.
+        let receipt = online(&input).unwrap();
+        assert_eq!(receipt["result"], "blocked");
+        assert_eq!(receipt["player_started"], false);
+        assert_eq!(receipt["player_binding"]["requested"], true);
+        assert_eq!(receipt["player_binding"]["admitted"], false);
+        assert_eq!(receipt["player_binding"]["player"], "");
+        reasons(&receipt, [REASON_PLAYER_MISSING]);
+    }
+
+    #[test]
+    fn player_argv_uses_the_reviewed_replay_construction() {
+        // The live binding reuses replay's exact argv construction. With no
+        // subtitle and no seek, the player receives only the admitted playlist
+        // URL plus its default hardening flags.
+        let mpv = build_argv(Player::Mpv, PLAYLIST, None, None, 0, false);
+        let vlc = build_argv(Player::Vlc, PLAYLIST, None, None, 0, false);
+        assert_eq!(mpv[0], "--no-terminal");
+        assert!(mpv.iter().any(|arg| arg == "--ytdl=no"));
+        assert_eq!(mpv.last().unwrap(), PLAYLIST);
+        assert!(mpv.iter().all(|arg| !arg.contains("://") || arg == PLAYLIST),
+            "mpv argv leaked a URL other than the admitted playlist: {mpv:?}");
+        assert!(vlc.iter().any(|arg| arg == "--play-and-exit"));
+        assert_eq!(vlc.last().unwrap(), PLAYLIST);
+        // Headless mode selects the null/dummy sinks.
+        let mpv_headless = build_argv(Player::Mpv, PLAYLIST, None, None, 0, true);
+        assert!(mpv_headless.iter().any(|arg| arg == "--vo=null"));
+        assert!(mpv_headless.iter().any(|arg| arg == "--ao=null"));
+        // A supplied subtitle file and its per-player demuxer/type stay in the
+        // same reviewed argv.
+        let mpv_sub = build_argv(Player::Mpv, PLAYLIST, Some("/dev/null"), Some(SubtitleFormat::Srt), 0, false);
+        assert!(mpv_sub.iter().any(|arg| arg == "--sub-demuxer=srt"));
+        assert!(mpv_sub.iter().any(|arg| arg == "--sub-file=/dev/null"));
+        let vlc_sub = build_argv(Player::Vlc, PLAYLIST, Some("/dev/null"), Some(SubtitleFormat::Vtt), 0, false);
+        assert!(vlc_sub.iter().any(|arg| arg == "--sub-type=auto"));
+    }
+
+    #[test]
+    fn player_binding_launches_the_reviewed_player_headlessly() {
+        // A source-bound ongoing playlist with an admitted player binding
+        // launches the real player through the reviewed fork boundary. The
+        // admitted URL is not resolvable offline, so the player exits on its
+        // own before the bound and the receipt reports that exit, never the URL.
+        let input = request(&format!(
+            r#","player":{{"player":"mpv","headless":true,"max_seconds":2}},
+                "source":{{"reviewed":true,"reference":"reviewed-live-source-1","sha256":"{HASH_A}"}},
+                "stream":{{"id":"opaque-stream","protocol":"hls"}},
+                "playlist":{{"url":"{PLAYLIST}","sha256":"{HASH_B}","live":true}}
+            "#
+        ));
+        let receipt = online(&input).unwrap();
+        assert_eq!(receipt["result"], "failed");
+        assert_eq!(receipt["player_started"], true);
+        assert_eq!(receipt["player"], "mpv");
+        assert_eq!(receipt["headless"], true);
+        assert_eq!(receipt["stopped_by_bound"], false);
+        assert_eq!(receipt["stopped_by_stop"], false);
+        assert_eq!(receipt["observed_exit"]["success"], false);
+        assert!(receipt["player_binding"]["admitted"].as_bool().unwrap());
+        // The admitted URL and every supplied digest are never echoed.
+        let text = receipt.to_string();
+        assert!(!text.contains(PLAYLIST));
+        assert!(!text.contains(HASH_B));
+        assert!(!text.contains("opaque-stream"));
+    }
+
+    #[test]
+    fn player_binding_stop_flag_stops_the_child_before_the_bound() {
+        // A pre-set stop flag must stop the player before the 2s bound. The
+        // receipt reports stopped_by_stop and the child is reaped.
+        let input = request(&format!(
+            r#","player":{{"player":"mpv","headless":true,"max_seconds":2}},
+                "source":{{"reviewed":true,"reference":"reviewed-live-source-1","sha256":"{HASH_A}"}},
+                "stream":{{"id":"opaque-stream","protocol":"hls"}},
+                "playlist":{{"url":"{PLAYLIST}","sha256":"{HASH_B}","live":true}}
+            "#
+        ));
+        let stop = AtomicBool::new(true);
+        let receipt = online_with_stop(&input, &stop).unwrap();
+        assert_eq!(receipt["stopped_by_stop"], true);
+        assert_eq!(receipt["stopped_by_bound"], false);
+        assert_eq!(receipt["player_started"], true);
+    }
+
+    #[test]
+    fn bounded_plan_safety_is_retained_with_a_player_binding() {
+        // Adding a player binding must not weaken the bounded plan's account-
+        // wide safety: a duplicate whole-object fragment is still refused.
+        let input = request(&format!(
+            r#","playlist":{{"url":"{PLAYLIST}","sha256":"{HASH_B}","live":true}},
+                "player":{{"player":"mpv"}},
+                "bounded_fetch":{{"enabled":true,"max_bytes":64,"fragments":[
+                    {{"url":"{FRAGMENT}","sha256":"{HASH_C}","bytes":4}},
+                    {{"url":"{FRAGMENT}","sha256":"{HASH_C}","bytes":4}}
+                ]}}
+            "#
+        ));
+        assert_eq!(online(&input).unwrap_err().code, "invalid_input");
+    }
+
+    }
