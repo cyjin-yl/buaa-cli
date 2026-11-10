@@ -58,6 +58,8 @@ const IHOME_TERMINAL_PATH: &str = "/web/";
 const SHUTTLE_CAS_SERVICE: &str = "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin";
 const SHUTTLE_HOST: &str = "zhihuixiaoche.buaa.edu.cn";
 const SHUTTLE_CAS_CALLBACK_PATH: &str = "/wechat/CASLogin";
+const EVALUATION_HOST: &str = "spoc.buaa.edu.cn";
+const EVALUATION_CAS_SERVICE: &str = "https://spoc.buaa.edu.cn/pjxt/cas";
 const MAX_TERMINAL_CREDENTIAL_BYTES: usize = 4096;
 
 /// Reviewed relying parties, not caller-supplied credential destinations.
@@ -72,6 +74,7 @@ pub(crate) enum CasService {
     Gsmis,
     Boya,
     Shuttle,
+    Evaluation,
 }
 
 impl CasService {
@@ -85,6 +88,7 @@ impl CasService {
             Self::Gsmis => GSMIS_CAS_SERVICE,
             Self::Boya => BYKC_CAS_SERVICE,
             Self::Shuttle => SHUTTLE_CAS_SERVICE,
+            Self::Evaluation => EVALUATION_CAS_SERVICE,
         }
     }
 }
@@ -3459,6 +3463,7 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::Gsmis => matches!(host, "sso.buaa.edu.cn" | GSMIS_HOST),
             CasService::Boya => matches!(host, "sso.buaa.edu.cn" | BYKC_HOST),
             CasService::Shuttle => matches!(host, "sso.buaa.edu.cn" | SHUTTLE_HOST),
+            CasService::Evaluation => matches!(host, "sso.buaa.edu.cn" | EVALUATION_HOST),
         })
 }
 
@@ -3968,7 +3973,8 @@ fn terminal_service_credential(
         | CasService::Byxt
         | CasService::Gsmis
         | CasService::Boya
-        | CasService::Shuttle => {
+        | CasService::Shuttle
+        | CasService::Evaluation => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
             }
@@ -6323,6 +6329,7 @@ impl ServiceSession {
             CasService::Byxt => BYXT_HOST,
             CasService::Gsmis => GSMIS_HOST,
             CasService::Shuttle => SHUTTLE_HOST,
+            CasService::Evaluation => EVALUATION_HOST,
             CasService::Classroom | CasService::Ihome | CasService::Boya => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
@@ -6658,6 +6665,31 @@ pub(crate) fn authenticate_service(
             if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
                 return Err(admission_failed(
                     "The shuttle handoff supplied no usable scoped cookie; no retry was performed.",
+                ));
+            }
+        }
+        CasService::Evaluation => {
+            // The SPOC evaluation handoff proves itself by a reviewed HTML
+            // landing on the relying-party host plus one usable scoped cookie
+            // for the bounded read that follows. The pjxt cas endpoint is the
+            // declared service over HTTPS, so no plaintext upgrade or CGI path
+            // parameter is involved.
+            if landed.status != 200
+                || landed.url.host_str() != Some(EVALUATION_HOST)
+                || landed.body.trim().is_empty()
+                || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
+            {
+                return Err(admission_failed(
+                    "The SPOC evaluation handoff could not be confirmed; no retry was performed.",
+                ));
+            }
+            let probe = Url::parse(
+                "https://spoc.buaa.edu.cn/pjxt/personnelEvaluation/listObtainPersonnelEvaluationTasks",
+            )
+            .map_err(|_| invalid())?;
+            if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
+                return Err(admission_failed(
+                    "The SPOC evaluation handoff supplied no usable scoped cookie; no retry was performed.",
                 ));
             }
         }
