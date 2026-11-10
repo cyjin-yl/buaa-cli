@@ -934,6 +934,26 @@ fn run() -> CliResult {
         "os-lab" => run_os_lab(&args[1..]),
         "coursegrading" => run_coursegrading(&args[1..]),
         "enrol" => run_json_module(&args[1..], buaa_cli::enrol::run),
+        "evaluation" if args.get(1).map(String::as_str) == Some("session") => {
+            let online = online_flag(&args[2..])?;
+            let input = Zeroizing::new(read_input()?);
+            let output = buaa_cli::evaluation::session(&input, online).map_err(|error| {
+                let message = match &error {
+                    buaa_cli::evaluation::Error::Invalid(reason) => reason.to_string(),
+                    buaa_cli::evaluation::Error::Unsupported(reason) => reason.to_string(),
+                    buaa_cli::evaluation::Error::Local(reason) => reason.clone(),
+                    buaa_cli::evaluation::Error::Remote(evidence) => {
+                        format!("remote response not admitted: {}", evidence.fallback_reason)
+                    }
+                };
+                match &error {
+                    buaa_cli::evaluation::Error::Invalid(_) => ("invalid_input", 2, message),
+                    buaa_cli::evaluation::Error::Unsupported(_) => ("unsupported", 3, message),
+                    _ => ("unavailable", 7, message),
+                }
+            })?;
+            emit(&output)
+        }
         "evaluation" => {
             let online = online_flag(&args[1..])?;
             let input = Zeroizing::new(read_input()?);

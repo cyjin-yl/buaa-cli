@@ -433,7 +433,7 @@
       "acceptance": "Owner-authored answers with preview, typed confirmation and idempotency.",
       "evidence": {
         "candidate_offline": "A synthetic admission test reproduced a numeric submitted-cookie echo in a task total; the repaired path passed the same test with an ordinary control and a normalized numeric course-field case.",
-        "remaining": "Mixed-separator credentials passed focused synthetic post-fix cases; the pre-fix variant was source-traced but its run was blocked by the heavy-work slot. A trusted current session, task contract, owner-authored mutation workflow and authorized postcondition remain unverified.",
+        "remaining": "The session-read path (tasks/questionnaires/courses with a protected-stdin session cookie) and the owner-authored answer preview/typed-confirmation/idempotency gate are implemented and offline-proven; the CAS session path drives the shared one-shot CAS chain and settles the known business outcome through the module's byte-level read admission. A trusted live session, current task binding, owner-authored mutation and authorized postcondition remain unverified against the live SPOC evaluation origin.",
         "offline_observation_2026_10_31": {
           "command": "buaa evaluation with an empty object",
           "observed": "returned a typed status object with exit 0; no request performed",
@@ -443,6 +443,11 @@
           "change": "Questionnaire and intent definitions are inline in the input variants, so the published input does not depend on its embedding location.",
           "proof": "The actual native schema was validated with a standard Draft 2020-12 validator. Both the standalone input and a reference to it from an enclosing document accepted four valid topics/prepare/submit/legacy instances and rejected seven malformed questionnaire, intent, answer and unknown-field instances.",
           "scope": "Offline schema interoperability only; no campus evaluation was read or submitted."
+        },
+        "session_read_path_2026_11_10": {
+          "change": "Added a CAS session path (buaa evaluation session --online) that drives the shared one-shot CAS chain (SsoCredentials + authenticate_service) for the SPOC evaluation relying party, then settles the known business outcome: one bounded authenticated read (tasks/questionnaires/courses) through the module's existing byte-level admission. Credentials travel only through protected stdin; nothing is persisted, retransmitted or adopted. The owner-authored answer preview, typed confirmation and idempotency gate are unchanged and offline-tested.",
+          "proof": "Offline tests prove: (1) session-read parse for tasks/questionnaires/courses through the existing safe_response contract; (2) the CAS session gate refuses a missing authorization, a mismatched intent, an invalid operation, and an offline session before any lease or transport; (3) empty and control-bearing credentials are refused by the shared CAS validator before any lease is opened; (4) a positional or unknown-field session command is refused as an invalid command. No campus evaluation was read or submitted.",
+          "scope": "Offline session-read path and owner-answer gate; live CAS handoff and live authenticated read remain unverified against the SPOC evaluation origin."
         }
       },
       "sources": [
