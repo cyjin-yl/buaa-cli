@@ -4002,12 +4002,56 @@ fn upgraded_service_callback(service: CasService, url: &Url) -> Option<Url> {
         CasService::Shuttle => SHUTTLE_CAS_CALLBACK_PATH,
         _ => return None,
     };
-    if url.path() != expected_path {
+    let path = url.path();
+    if path != expected_path
+        && !(service == CasService::Shuttle
+            && path.starts_with(expected_path)
+            && shuttle_callback_cgi(&path[expected_path.len()..]))
+    {
         return None;
     }
     let mut upgraded = url.clone();
     upgraded.set_scheme("https").ok()?;
     Some(upgraded)
+}
+
+/// One reviewed CGI parameter list after the shuttle callback path: a
+/// leading `;`, then `name=value` pairs separated by `;`. Names are
+/// nonempty bounded `[A-Za-z0-9_]`; values are nonempty bounded
+/// `[A-Za-z0-9%._~-]` — no `/`, no `?`, no `;`, no whitespace — so the
+/// suffix cannot smuggle a nested path, a second query, or another
+/// parameter beyond the reviewed alphabet. Anything else refuses the
+/// upgrade and keeps the plaintext scheme.
+fn shuttle_callback_cgi(suffix: &str) -> bool {
+    const MAX_NAME: usize = 32;
+    const MAX_VALUE: usize = 128;
+    let rest = match suffix.strip_prefix(';') {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let mut seen = false;
+    for pair in rest.split(';').filter(|pair| !pair.is_empty()) {
+        seen = true;
+        let (name, value) = match pair.split_once('=') {
+            Some((name, value)) => (name, value),
+            None => return false,
+        };
+        if name.is_empty() || name.len() > MAX_NAME {
+            return false;
+        }
+        if !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+            return false;
+        }
+        if value.is_empty() || value.len() > MAX_VALUE {
+            return false;
+        }
+        if !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || b"%._~-".contains(&byte)
+        }) {
+            return false;
+        }
+    }
+    seen
 }
 
 /// The library CAS credential binds only on the library's HTTPS origin.

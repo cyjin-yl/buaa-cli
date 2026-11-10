@@ -811,6 +811,68 @@ fn shuttle_plaintext_callback_upgrades_only_the_exact_reviewed_shape() {
     assert_eq!(rewritten.host_str(), Some(SHUTTLE_HOST));
 }
 
+#[test]
+fn shuttle_callback_upgrades_a_reviewed_cgi_path_parameter() {
+    let upgraded = |input: &str| upgraded_service_callback(CasService::Shuttle, &url(input));
+
+    // The real relying party 302-redirects to a path-parameterized session
+    // URL on the same origin after the ticket exchange. The reviewed
+    // alphabet admits that exact shape; the query travels unchanged.
+    for input in [
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=512933F8BF72FB05CB18B0EC32E4A291",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc%20def",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc;x=1",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc-dash",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc.dot",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc_under",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc~tilde",
+        // A query is not part of the path: it rides the same origin and
+        // same callback path over HTTPS, exactly like the ticket exchange.
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc?a=b",
+        // A raw space is percent-encoded into the path before the check, so
+        // it reads as the reviewed `%` alphabet and upgrades unchanged.
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=ab c",
+    ] {
+        let candidate = upgraded(input).expect("reviewed CGI shape upgrades");
+        assert_eq!(candidate.scheme(), "https", "{input}");
+        assert_eq!(candidate.host_str(), Some(SHUTTLE_HOST), "{input}");
+    }
+
+    // Every CGI shape outside the reviewed alphabet keeps the plaintext
+    // scheme and is refused by the origin predicate before any request:
+    // nested path segments, a second query, whitespace, an empty pair, a
+    // missing or oversized name/value, and a bare semicolon.
+    for input in [
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=/x",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;=abc",
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=",
+        &format!(
+            "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2={}",
+            "a".repeat(129)
+        ),
+        &format!(
+            "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;{}=1",
+            "b".repeat(33)
+        ),
+        "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=abc+plus",
+    ] {
+        assert!(upgraded(input).is_none(), "{input}");
+    }
+
+    // The iHome profile never adopts the shuttle CGI shape; its callback
+    // stays exact-shape even when a parameter is present.
+    assert!(
+        upgraded_service_callback(
+            CasService::Ihome,
+            &url("http://i.buaa.edu.cn/api/authLogin;beihang2=abc")
+        )
+        .is_none(),
+        "iHome must stay exact-shape"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Strict-TLS local CAS flows. An ephemeral CA signs one leaf covering the
 // three synthetic relying-party SANs; the client pins only that CA and
