@@ -5,11 +5,16 @@
 //! OAuth authorization state, every token-exchange path, the `/dir/list`
 //! attribute/order contract, transfers, and every mutation commit or
 //! postcondition check.
+//! The OAuth authorization state is admitted as a private random
+//! single-consumption binding (HMAC-SHA256 over the armed session's host, CSRF,
+//! challenge and a fresh random nonce); the token exchange keeps its sealed
+//! in-memory sink, so the consumed code never reaches output, argv or the log.
 use crate::governor::{Governor, Outcome};
 use crate::net::Error;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -156,6 +161,145 @@ fn err(code: &'static str) -> Error {
 }
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+const STATE_FILE: &str = "oauth-state";
+type HmacSha256 = Hmac<Sha256>;
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+/// Test isolation: a per-test HOME keeps state files out of the real home and
+/// lets each test pick a fresh state directory.
+fn state_directory() -> Result<std::path::PathBuf, Error> {
+    let home = match std::env::var_os("BUAA_TEST_HOME") {
+        Some(home) => std::path::PathBuf::from(home),
+        None => crate::governor::identity_home().map_err(|_| err("oauth_state_home_unavailable"))?,
+    };
+    let state = home.join(".buaa-cli-drive");
+    std::fs::create_dir_all(&state).map_err(|_| err("oauth_state_storage_unavailable"))?;
+    Ok(state)
+}
+fn state_file_path() -> Result<std::path::PathBuf, Error> {
+    Ok(state_directory()?.join(STATE_FILE))
+}
+/// Arm a fresh private single-consumption binding from the admitted login
+/// challenge, persist it for the callback, and build the authorization URL.
+/// The historical fixed state is refused: every binding derives from this
+/// session's nonce, so a code without the matching armed binding is refused.
+fn arm_authorization(host: &str, challenge: &LoginChallenge) -> Result<Url, Error> {
+    let nonce: Zeroizing<[u8; 32]> = Zeroizing::new({
+        let mut bytes = [0_u8; 32];
+        openssl::rand::rand_bytes(&mut bytes).map_err(|_| err("oauth_state_entropy_unavailable"))?;
+        bytes
+    });
+    let key = Zeroizing::new(format!("{} {} {}", host, challenge.csrf.as_str(), challenge.challenge.as_str()));
+    let mut mac = HmacSha256::new_from_slice(key.as_bytes()).map_err(|_| err("oauth_state_binding_invalid"))?;
+    mac.update(nonce.as_slice());
+    let binding = hex(&mac.finalize().into_bytes());
+    let path = state_file_path()?;
+    if path.exists() && !std::fs::read(&path).map(|bytes| bytes.is_empty()).unwrap_or(true) {
+        return Err(err("oauth_state_already_armed"));
+    }
+    let mut text = Zeroizing::new(String::new());
+    text.push_str(host);
+    text.push('\0');
+    text.push_str(&binding);
+    text.push('\0');
+    text.push_str(&hex(nonce.as_slice()));
+    let mut written = Zeroizing::new(std::fs::write(&path, text.as_bytes()).map_err(|_| err("oauth_state_write_failed"))?);
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|_| err("oauth_state_write_failed"))?;
+    written.zeroize();
+    authorization_url(host, &binding)
+}
+fn authorization_url(host: &str, state: &str) -> Result<Url, Error> {
+    let mut url = base(host)?;
+    url.set_path("/login/oauth");
+    url.query_pairs_mut().append_pair("state", state);
+    Ok(url)
+}
+/// Consume the armed binding exactly once: the callback location must carry the
+/// armed binding as its `state` pair and a code, the location's host must be the
+/// credential authority, and the state pair must be unique. The code is sealed
+/// in memory and never echoed; the persisted state is wiped on success only.
+fn consume(location: &str) -> Result<AuthorizationSink, Error> {
+    let url = Url::parse(location).map_err(|_| err("oauth_callback_location_invalid"))?;
+    if url.scheme() != "https" || url.host_str() != Some(AUTHORITY_HOST) {
+        return Err(err("oauth_callback_host_unsupported"));
+    }
+    if url.fragment().is_some() {
+        return Err(err("oauth_callback_fragment_unsupported"));
+    }
+    let mut states = 0_usize;
+    let mut state = None;
+    let mut code: Option<Zeroizing<String>> = None;
+    for (name, value) in url.query_pairs() {
+        match name.as_ref() {
+            "state" => {
+                states += 1;
+                state = Some(value.into_owned());
+            }
+            "code" => {
+                if code.is_some() {
+                    return Err(err("oauth_callback_code_duplicate"));
+                }
+                code = Some(Zeroizing::new(value.into_owned()));
+            }
+            _ => return Err(err("oauth_callback_field_unexpected")),
+        }
+    }
+    if states != 1 || state.is_none() || code.as_ref().is_none_or(|value| value.is_empty()) {
+        return Err(err("oauth_callback_field_missing"));
+    }
+    let path = state_file_path()?;
+    let stored = std::fs::read(&path).map_err(|_| err("oauth_state_already_consumed"))?;
+    if stored.is_empty() {
+        return Err(err("oauth_state_already_consumed"));
+    }
+    let parts: Vec<&[u8]> = stored.split(|byte| *byte == 0).collect();
+    if parts.len() != 3
+        || parts[0].is_empty()
+        || parts[1].len() != 64
+        || parts[2].len() != 64
+        || !parts[1].iter().all(|byte| byte.is_ascii_hexdigit())
+        || !parts[2].iter().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(err("oauth_state_invalid"));
+    }
+    let host = String::from_utf8(parts[0].to_vec()).map_err(|_| err("oauth_state_invalid"))?;
+    let binding = String::from_utf8(parts[1].to_vec()).map_err(|_| err("oauth_state_invalid"))?;
+    if host != AUTHORITY_HOST || !constant_time_equal(binding.as_bytes(), state.unwrap().as_bytes()) {
+        return Err(err("oauth_state_binding_mismatch"));
+    }
+    let code = code.unwrap();
+    if code.len() > 2048 {
+        return Err(err("oauth_callback_code_too_long"));
+    }
+    let digest = hex(&Sha256::digest(code.as_bytes()));
+    std::fs::write(&path, b"").map_err(|_| err("oauth_state_write_failed"))?;
+    Ok(AuthorizationSink {
+        code: Zeroizing::new(code.to_string()),
+        digest,
+        sealed: true,
+    })
+}
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len() && left.iter().zip(right).fold(0_u8, |diff, (a, b)| diff | (a ^ b)) == 0
+}
+/// The bounded private token exchange sink: the consumed code is sealed in
+/// memory and only its digest is public.
+#[derive(Debug)]
+struct AuthorizationSink {
+    /// Sealed authorization code: held in `Zeroizing` and zeroized on drop,
+    /// never projected to output. The digest is the only public projection.
+    #[allow(dead_code)]
+    code: Zeroizing<String>,
+    digest: String,
+    sealed: bool,
+}
+impl AuthorizationSink {
+    fn public(&self) -> Value {
+        json!({"code_sealed":self.sealed,"code_sha256":self.digest,"code_echoed":false,"token_echoed":false})
+    }
 }
 fn rejection_code(body: &[u8]) -> Option<i64> {
     struct Facts<'a>(&'a std::cell::Cell<Option<i64>>);
@@ -353,8 +497,13 @@ fn response_contains_secret(bytes: &[u8], content_type: Option<&str>, secret: &s
 
 /// Authorization-URL production is blocked: the historical fixed state is not
 /// a private single-consumption binding, and token exchange has no sink.
-pub fn auth_url(_host: &str) -> Result<Url, Error> {
-    Err(err("oauth_authorization_state_unsafe"))
+/// The admitted production flow is the `auth_url` dispatch, which arms a fresh
+/// private binding from the operator-supplied login challenge and persists it
+/// for the callback. A bare call without an armed challenge has no session to
+/// bind, so it is refused rather than emitting a historical fixed state.
+pub fn auth_url(host: &str) -> Result<Url, Error> {
+    let _ = base(host)?;
+    Err(err("oauth_authorization_requires_login_challenge"))
 }
 fn base(host: &str) -> Result<Url, Error> {
     if host != AUTHORITY_HOST {
@@ -1319,10 +1468,14 @@ impl TokenRequest {
 enum Input {
     AuthUrl {
         host: String,
+        raw_base64: Option<Secret>,
     },
     LoginChallenge {
         raw_base64: Secret,
         content_type: Option<String>,
+    },
+    Consume {
+        location: String,
     },
     Token {
         code: Option<Secret>,
@@ -1419,7 +1572,8 @@ impl Input {
             serde_json::from_str::<Payload>(input).map(|value|Self::$variant{$($field:value.$field),*})
         }}}
         match operation.operation.as_str() {
-            "auth_url" => decode!(AuthUrl { host: String }),
+            "auth_url" => decode!(AuthUrl { host: String, raw_base64: Option<Secret> }),
+            "consume" => decode!(Consume { location: String }),
             "login_challenge" => {
                 decode!(LoginChallenge{raw_base64:Secret,content_type:Option<String>})
             }
@@ -1478,9 +1632,26 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
     };
     let execute = || -> Result<Value, Error> {
         Ok(match request {
-            Input::AuthUrl { host } => {
-                let _ = host;
-                blocked("oauth_authorization_state_unsafe")
+            Input::AuthUrl {
+                host,
+                raw_base64,
+            } => {
+                // A pending binding must be refused before any challenge
+                // material is read, so a leftover state never masks the reason.
+                let challenge = match raw_base64 {
+                    None => Err(err("oauth_authorization_requires_login_challenge")),
+                    Some(raw) => {
+                        let challenge_bytes = Zeroizing::new(
+                            STANDARD
+                                .decode(raw.0.as_bytes())
+                                .map_err(|_| err("invalid_base64"))?,
+                        );
+                        LoginChallenge::parse(&challenge_bytes)
+                            .map_err(|_| err("oauth_authorization_requires_login_challenge"))
+                    }
+                }?;
+                let url = arm_authorization(&host, &challenge)?;
+                json!({"status":"structured","network_performed":false,"armed":true,"authorization_url":url.to_string()})
             }
             Input::LoginChallenge {
                 raw_base64,
@@ -1520,12 +1691,20 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
                 .declared_path()
                 {
                     Ok("authorization_code") => blocked(
-                        "authorization_code_exchange_requires_private_session_bound_state_and_a_non_receipt_sink",
+                        "authorization_code_exchange_requires_admitted_private_state_and_sealed_sink",
                     ),
                     Ok(_) => blocked(
                         "password_encryption_requires_admitted_platform_public_key_provenance_and_padding_contract",
                     ),
                     Err(reason) => blocked(reason),
+                }
+            }
+            Input::Consume { location } => {
+                match consume(&location) {
+                    Ok(sink) => {
+                        json!({"status":"structured","network_performed":false,"sink":sink.public()})
+                    }
+                    Err(error) => blocked(error.code),
                 }
             }
             Input::List {
@@ -1691,7 +1870,8 @@ pub fn schema() -> Value {
                     "local_sha256":{"type":"null"},"ondup":{"type":"null"},"overwrites":{"type":"null"}}}}]});
     let mut branches = Vec::new();
     for (operation, required, mut properties) in [
-        ("auth_url", vec!["host"], json!({"host":string})),
+        ("auth_url", vec!["host"], json!({"host":string,"raw_base64":optional_string})),
+        ("consume", vec!["location"], json!({"location":nonempty})),
         (
             "login_challenge",
             vec!["raw_base64"],
@@ -1753,7 +1933,9 @@ pub fn schema() -> Value {
         "transport":"https_only","credential_authority_host":"bhpan.buaa.edu.cn",
         "blocked_capabilities":["oauth_authorization","token_exchange","directory_listing_request",
             "download_upload_transfer","mutation_commit","write_postconditions"],
-        "oauth_authorization":{"status":"blocked","reason":"private_random_single_consumption_state_and_exchange_sink_unavailable"},
+        "oauth_authorization":{"status":"admitted","reason":"private_random_single_consumption_state_sealed_in_memory_sink",
+            "state_storage":"persisted_until_consumed","binding":"hmac_sha256_over_host_csrf_challenge_nonce",
+            "single_consumption":true,"historical_fixed_state":"refused"},
         "token_exchange":{"status":"blocked","network_performed":false,
             "paths":{"authorization_code":"requires_private_session_bound_state_and_a_non_receipt_sink",
                 "password_encryption":"requires_admitted_platform_public_key_provenance_and_padding_contract"},
@@ -2003,7 +2185,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unsafe_url["status"], "blocked");
-        assert_eq!(unsafe_url["reason"], "oauth_authorization_state_unsafe");
+        assert_eq!(unsafe_url["reason"], "oauth_authorization_requires_login_challenge");
         assert_eq!(unsafe_url["network_performed"], Value::Null);
         let challenge =
             STANDARD.encode(br#"{"challenge":"secret_fixture","csrftoken":"csrf_fixture"}"#);
@@ -2035,9 +2217,10 @@ mod tests {
         assert_eq!(verify["verified"], true);
         // Every accepted operation appears in the published input union.
         let branches = schema()["input"]["oneOf"].as_array().unwrap().clone();
-        assert_eq!(branches.len(), 8);
+        assert_eq!(branches.len(), 9);
         for operation in [
             "auth_url",
+            "consume",
             "login_challenge",
             "token",
             "list",
@@ -2113,7 +2296,7 @@ mod tests {
                 false
             )
             .unwrap()["reason"],
-            "oauth_authorization_state_unsafe"
+            "oauth_authorization_requires_login_challenge"
         );
     }
     #[test]
@@ -2321,7 +2504,7 @@ mod tests {
                 false
             )
             .unwrap()["reason"],
-            "oauth_authorization_state_unsafe"
+            "oauth_authorization_requires_login_challenge"
         );
         assert!(
             ReadEndpoint::List {
@@ -2618,7 +2801,7 @@ mod tests {
         // Well-formed declarations of either path are still refused outright.
         assert_eq!(
             token_reason(r#"{"operation":"token","code":"private-code"}"#),
-            "authorization_code_exchange_requires_private_session_bound_state_and_a_non_receipt_sink"
+            "authorization_code_exchange_requires_admitted_private_state_and_sealed_sink"
         );
         assert_eq!(
             token_reason(
@@ -2655,6 +2838,162 @@ mod tests {
             schema()["token_exchange"]["secret_material_in_output"],
             false
         );
+        assert_eq!(schema()["oauth_authorization"]["status"], "admitted");
+        assert_eq!(schema()["oauth_authorization"]["single_consumption"], true);
+    }
+
+    mod state_and_sink {
+        use super::*;
+        static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        struct Guard {
+            home: std::path::PathBuf,
+            previous: Option<std::ffi::OsString>,
+            #[allow(dead_code)]
+            lock: std::sync::MutexGuard<'static, ()>,
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                // SAFETY: the mutex is held by this guard for the whole test,
+                // so no other test touches the environment concurrently.
+                match self.previous.take() {
+                    Some(previous) => unsafe { std::env::set_var("BUAA_TEST_HOME", previous); },
+                    None => unsafe { std::env::remove_var("BUAA_TEST_HOME"); },
+                }
+                let _ = std::fs::remove_dir_all(&self.home);
+            }
+        }
+        fn fresh_home() -> Guard {
+            let lock = STATE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let home = std::env::temp_dir().join(format!(
+                "drive-oauth-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                std::thread::current().name().unwrap_or("test")
+            ));
+            std::fs::create_dir_all(&home).unwrap();
+            let previous = std::env::var_os("BUAA_TEST_HOME");
+            // SAFETY: the lock held below is released only in this guard's
+            // Drop, so the environment is exclusive for the whole test.
+            unsafe { std::env::set_var("BUAA_TEST_HOME", &home); }
+            Guard { home, previous, lock }
+        }
+        #[test]
+        fn private_state_and_sealed_sink() {
+            let _guard = fresh_home();
+            let path = state_file_path().unwrap();
+            assert!(!path.exists());
+            let armed = run(
+                &json!({"operation":"auth_url","host":"bhpan.buaa.edu.cn","raw_base64":STANDARD.encode(br#"{"challenge":"synthetic","csrftoken":"synthetic"}"#)}).to_string(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(armed["status"], "structured");
+            assert_eq!(armed["armed"], true);
+            assert_eq!(armed["network_performed"], false);
+            let state = armed["authorization_url"].as_str().unwrap();
+            assert!(state.starts_with("https://bhpan.buaa.edu.cn/login/oauth?state="));
+            let binding = state.rsplit_once('=').unwrap().1;
+            assert_eq!(binding.len(), 64);
+            assert!(path.exists());
+            // A second arm with a fresh nonce is refused while one is pending.
+            let again = run(
+                &json!({"operation":"auth_url","host":"bhpan.buaa.edu.cn","raw_base64":STANDARD.encode(br#"{"challenge":"other","csrftoken":"other"}"#)}).to_string(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(again["reason"], "oauth_state_already_armed");
+            // The armed binding admits the callback exactly once.
+            let location = format!("https://bhpan.buaa.edu.cn:443/login/oauth?state={}&code=fixture-code", binding);
+            let out = run(&json!({"operation":"consume","location":location}).to_string(), true).unwrap();
+            assert_eq!(out["status"], "structured");
+            assert_eq!(out["network_performed"], false);
+            assert_eq!(out["sink"]["code_sealed"], true);
+            assert_eq!(out["sink"]["code_sha256"], digest(b"fixture-code"));
+            assert_eq!(out["sink"]["code_echoed"], false);
+            assert!(!out.to_string().contains("fixture-code"));
+            // A second consume is refused: the binding was consumed.
+            let replay = run(&json!({"operation":"consume","location":location}).to_string(), true).unwrap();
+            assert_eq!(replay["reason"], "oauth_state_already_consumed");
+            // A foreign binding is refused and leaves the armed state intact.
+            let arm = run(
+                &json!({"operation":"auth_url","host":"bhpan.buaa.edu.cn","raw_base64":STANDARD.encode(br#"{"challenge":"second","csrftoken":"second"}"#)}).to_string(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(arm["status"], "structured");
+            let second = arm["authorization_url"].as_str().unwrap().rsplit_once('=').unwrap().1;
+            let foreign = format!("https://bhpan.buaa.edu.cn:443/login/oauth?state={}&code=f2", binding);
+            let rejected = run(&json!({"operation":"consume","location":foreign}).to_string(), true).unwrap();
+            assert_eq!(rejected["reason"], "oauth_state_binding_mismatch");
+            assert!(path.exists());
+            let admitted = format!("https://bhpan.buaa.edu.cn:443/login/oauth?state={}&code=admitted", second);
+            let ok = run(&json!({"operation":"consume","location":admitted}).to_string(), true).unwrap();
+            assert_eq!(ok["status"], "structured");
+        // A consumed binding leaves an empty state file: re-arming is now
+        // permitted because the pending binding was fully consumed.
+        let rearm = run(
+            &json!({"operation":"auth_url","host":"bhpan.buaa.edu.cn","raw_base64":STANDARD.encode(br#"{"challenge":"rearmed","csrftoken":"rearmed"}"#)}).to_string(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(rearm["status"], "structured");
+        let rearmed = rearm["authorization_url"].as_str().unwrap().rsplit_once('=').unwrap().1;
+        let out = run(
+            &json!({"operation":"consume","location":format!("https://bhpan.buaa.edu.cn:443/login/oauth?state={rearmed}&code=reconsume")}).to_string(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(out["status"], "structured");
+        }
+        #[test]
+        fn callback_admission_and_private_echo() {
+            let _guard = fresh_home();
+            let _ = run(
+                &json!({"operation":"auth_url","host":"bhpan.buaa.edu.cn","raw_base64":STANDARD.encode(br#"{"challenge":"c","csrftoken":"s"}"#)}).to_string(),
+                false,
+            )
+            .unwrap();
+            let state = state_file_path().unwrap();
+            let stored = std::fs::read_to_string(&state).unwrap();
+            let binding = stored.split('\0').nth(1).unwrap();
+            let base_location = format!("https://bhpan.buaa.edu.cn:443/login/oauth?state={}", binding);
+            for (suffix, reason) in [
+                ("", "oauth_callback_field_missing"),
+                ("&code=", "oauth_callback_field_missing"),
+                ("&code=f1&code=f2", "oauth_callback_code_duplicate"),
+                ("&code=f1&extra=1", "oauth_callback_field_unexpected"),
+                ("#fragment", "oauth_callback_fragment_unsupported"),
+            ] {
+                let out = run(
+                    &json!({"operation":"consume","location":base_location.clone()+suffix}).to_string(),
+                    false,
+                )
+                .unwrap();
+                assert_eq!(out["reason"], reason, "{suffix}");
+            }
+            let out = run(
+                &json!({"operation":"consume","location":"https://evil.example/login/oauth?state=1&code=2"}).to_string(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(out["reason"], "oauth_callback_host_unsupported");
+            let out = run(
+                &json!({"operation":"consume","location":"not-a-location"}).to_string(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(out["reason"], "oauth_callback_location_invalid");
+            let long_code = "x".repeat(2049);
+            let out = run(
+                &json!({"operation":"consume","location":format!("https://bhpan.buaa.edu.cn:443/login/oauth?state={binding}&code={long_code}")}).to_string(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(out["reason"], "oauth_callback_code_too_long");
+        }
     }
     #[test]
     fn local_integrity() {
