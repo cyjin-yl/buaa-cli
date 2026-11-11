@@ -1,3 +1,13 @@
+## 1.0.1 — 2026-11-11
+
+- recording: governed live transport with a caller-supplied `governed_transport` contract, reviewed host allowlist and bounded re-reads; digest-bound playlist admission before the reviewed decoder
+- recording: replay/live playback and native subtitle delivery with platform-native local subtitle JSON normalization
+- coursegrading: confirmed idempotent submission contract — re-read of the on-disk source, digest-drift refusal, multipart build from a second validated read, and caller-ledger idempotency with explicit reconfirmation; zero remote requests
+- os-lab: explicit authorized SSH/git workflow operation — a caller-claimed authorization scope over the seven reviewed boundaries returns an ordered decision table with `verified` always false offline
+- enrol: confirmed idempotent commit operation — the typed intent is re-validated, the preview digest re-derived offline, and the idempotency key admitted through the caller-owned ledger; `remote_request=false` and the enrollment postcondition stay unknown
+- verification: the operator-supplied campus credential was verified live through one deliberate CAS authentication with a bounded classrooms read (`result=ok`, no write performed)
+- release: package 1.0.1 with the confirmed-offline mutation contracts and live credential evidence
+
 ## 0.2.0 — 2026-11-07
 
 - session: preserve `service` query parameter through relative form action resolution (RFC 3986 drops it; CAS needs it to issue tickets)
