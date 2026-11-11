@@ -416,7 +416,12 @@
           "receipt": "local://buaa-enrol-dual-app-proof-20261102.json",
           "not_proven": "No authenticated yjsxk deployment read, current account identity, list completeness, selection phase, withdrawal inference or authoritative postcondition. No campus login, password probe or fallback was performed."
         },
-        "remaining": "The bounded yjsxk reader and the legacy local previews have offline proof only. No production authenticated transport, authenticated account, current selected-course contract or authorized mutation was verified. Writes remain blocked."
+        "remaining": "The bounded yjsxk reader and the legacy local previews have offline proof only. No production authenticated transport, authenticated account, current selected-course contract or authorized mutation was verified. Writes remain blocked.",
+        "commit_contract_offline_2026_11_02": {
+          "command": "buaa enrol --offline (stdin: operation=commit, typed intent, confirmation digest, previous_ledger)",
+          "observed": "Offline confirmed idempotent commit contract implemented and proven: 38 enrol library tests pass, including confirmed_commit_admits_a_matching_digest (re-derives the digest from the caller's own typed intent, admits the idempotency key through the caller-owned ledger, receipt reports remote_request=false, commit_success=null, enrol_postcondition_known=false), confirmed_commit_refuses_a_digest_drift, confirmed_commit_duplicate_requires_reconfirmation, and commit_command_dispatch_is_offline_and_schema_declares_it (the offline dispatch path needs no session; the schema declares the commit operation, the ledger input and the commit_admitted result). The contract re-validates the typed intent, refuses a digest drift before any ledger write, and admits a duplicate key only with explicit reconfirmation. No remote request is sent and no enrollment verdict is produced, so a local admission is never a remote enrollment.",
+          "remaining": "The bounded offline commit contract is implemented. The remaining live gap is a production authenticated IEAS transport (the integration must call run_with_enrol with explicit stdin session material), an authenticated account, the current selected-course contract and an authoritative enrollment postcondition. Writes remain blocked against any live source until those are established."
+        }
       },
       "sources": [
         "https://github.com/Colorfulshadow/buaa_course_enrollment",
@@ -764,6 +769,11 @@
           "command": "buaa electricity with an empty object",
           "observed": "invalid_input exit 2: typed resolve/balance input required",
           "live_blocker": "Live balance reads need an authorized meter selection and a verified service contract."
+        },
+        "offline_observation_contract_2026_11_02": {
+          "command": "buaa electricity (offline) with explicit meter binding, threshold and interval",
+          "observed": "The offline observation contract is complete: observe_threshold persists the caller-supplied balance, its threshold, the observation timestamps and the digest of the caller key in the private directory (0700/0600) under a per-key local lock, and returns the threshold transition. A background observation inside the 900-second polling floor is refused before any state change. The meter binding is mandatory and an account identity is never inferred into one. No remote request is made and no raw directory body is published; the per-key window is a local cache for one caller key, not the shared account governor.",
+          "live_blocker": "The unauthenticated upstream directory exposes other people's card and meter data, so no remote request is made and no raw directory body is published. The live meter balance read remains blocked by the directory-privacy design boundary: an independently authorized scoped meter source, or a reviewed privacy-safe probe contract, is required before any remote implementation can be enabled."
         }
       },
       "sources": [

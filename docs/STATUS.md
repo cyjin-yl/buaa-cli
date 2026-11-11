@@ -3545,3 +3545,49 @@ session, the reviewed historical helper protocol or a native SMUX transport,
 host-key verification, SSH authentication, repository authorization and the
 exact Git operation permission. None of those is an offline workflow
 invocation's job to establish.
+
+## 2026-11-02: enrol confirmed idempotent commit contract
+
+The enrol surface now admits a `commit` operation that closes the "idempotent
+commit" half of its acceptance text. The caller declares an offline confirmed
+commit by supplying its own typed intent, the confirmed preview digest, an
+optional base, a session reference (an opaque caller identifier, never a
+credential), a durable idempotency ledger and a reconfirmation flag. The
+contract re-validates the typed intent, re-derives the immutable preview digest
+from that intent with no network request, and refuses a digest drift before any
+ledger write. It then admits the derived idempotency key through the caller's
+own durable ledger; a duplicate key is refused without explicit reconfirmation.
+
+The contract is deliberately offline. No remote request is sent and no
+enrollment verdict is produced: the receipt reports `remote_request: false`,
+`commit_success: null` and `enrol_postcondition_known: false`, so a local
+admission is never a remote enrollment. The `commit` operation is routed through
+the IEAS dispatch even when an online session is present, so a confirmed commit
+never requires the production transport. The schema declares the `commit`
+operation, the `previous_ledger` input and the `commit_admitted` result.
+
+Offline proof: 38 enrol library cases pass, including a digest-match admission
+that admits the ledger-derived key, a digest-drift refusal, a
+duplicate-without-reconfirm refusal, and the offline dispatch path that needs no
+session. The remaining live gap is still a production authenticated IEAS
+transport, an authenticated account, the current selected-course contract and an
+authoritative enrollment postcondition. Writes remain blocked against any live
+source until those are established.
+
+## 2026-11-02: electricity offline observation contract and live blocker
+
+The electricity offline observation contract is complete. `observe_threshold`
+persists the caller-supplied balance, its threshold, the observation timestamps
+and the digest of the caller key in the private directory (0700/0600) under a
+per-key local lock, and returns the threshold transition. A background
+observation inside the 900-second polling floor is refused before any state
+change. The meter binding is mandatory and an account identity is never inferred
+into one. No remote request is made and no raw directory body is published; the
+per-key window is a local cache for one caller key, not the shared account
+governor.
+
+The live meter balance read remains blocked by the directory-privacy design
+boundary: the unauthenticated upstream directory exposes other people's card and
+meter data, so no remote request is made and no raw directory body is published.
+An independently authorized scoped meter source, or a reviewed privacy-safe probe
+contract, is required before any remote implementation can be enabled.
