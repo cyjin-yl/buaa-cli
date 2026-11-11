@@ -3591,3 +3591,18 @@ boundary: the unauthenticated upstream directory exposes other people's card and
 meter data, so no remote request is made and no raw directory body is published.
 An independently authorized scoped meter source, or a reviewed privacy-safe probe
 contract, is required before any remote implementation can be enabled.
+
+## 2026-11-11: live campus credential verification
+
+A single deliberate operator authentication attempt confirmed the operator
+supplied campus credential is live. The smart classrooms session path
+authenticated through the shared CAS flow and performed one bounded read on the
+trusted origin, returning a 21627-byte schedule receipt with `result=ok`,
+`write_operations_performed=false` and `source=network`. No write operation was
+performed and no credential was refreshed or persisted.
+
+This evidence tightens the live state of the pending slices: an authenticated
+account exists, so the remaining live gaps are application-specific (IEAS
+binding, jumpserver, scoped meter directory) rather than a dead credential. A
+future live read under one of those applications requires a new deliberate
+operator resume; this attempt did not authorize any mutation.

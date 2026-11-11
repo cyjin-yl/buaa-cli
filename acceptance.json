@@ -5385,5 +5385,12 @@
         "fengrubei"
       ]
     }
-  ]
+  ],
+  "live_evidence": {
+    "credentials": {
+      "command": "buaa smart session --online (stdin: one authorized CAS authentication + classrooms read)",
+      "observed": "The operator-supplied campus credential authenticated once through the shared CAS flow (sso 200, service ticket redeemed, one classrooms read on the trusted origin) and returned a 21627-byte schedule receipt with result=ok, write_operations_performed=false and source=network. This proves the SSO credential is live as of this date; it is a single deliberate operator authentication attempt, not an automatic refresh.",
+      "implication": "The live gaps of the pending/blocked slices remain application-specific (IEAS binding, jumpserver, scoped meter directory), not a dead credential: an authenticated account exists and can be reused under a new deliberate operator resume."
+    }
+  }
 }
