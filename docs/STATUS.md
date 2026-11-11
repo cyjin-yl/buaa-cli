@@ -3511,3 +3511,37 @@ the `submit` operation and its `submission_admitted` output alternative. The
 remaining live gap is still a current TLS-validated authenticated session path,
 the assignment/problem identity contract, the secure submission method/fields
 and an authoritative accepted-submission postcondition distinct from HTTP 200.
+
+## 2026-11-02: os-lab explicit authorized SSH/git workflow
+
+The OS-lab surface now admits a `workflow` operation that satisfies the
+acceptance clause "explicit authorized SSH/git workflow". The caller declares
+which of the seven reviewed authorization boundaries it claims authorization
+for, as a distinct array of step identifiers 1..7; the operation returns an
+ordered seven-step decision table. Each step carries `claimed` (the caller's
+assertion), `authorized` (that claim carried through) and `verified` (always
+`false` offline, because no offline invocation can verify a remote
+permission), plus a fixed rationale. `status` distinguishes `no_claims`,
+`fully_claimed_unverified` and `partially_claimed_unverified`.
+
+The seven boundary strings are shared with the plan's `required_parameters`
+list, so a workflow decision table and a plan cannot drift apart. The
+operation is offline-pure: `executed`, `network_access`, `requests_performed`,
+`writes_performed` and `submission_supported` are all false, and a submission
+member name is refused with the stated reason before any value is read. The
+schema input `oneOf` now declares `read`, `plan` and `workflow`; the
+`workflow` input requires `host` = the OS-lab origin and an
+`authorization_scope` array of unique integers 1..7, and the `workflow`
+output requires the decision table, the claim scope, the confirmation-scope
+note and the zero-IO contract fields.
+
+Offline proof: 28 OS-lab library cases pass, including a partial-scope
+decision table that marks exactly the claimed steps, a full-scope
+`fully_claimed_unverified` receipt, an empty-scope `no_claims` receipt, the
+invalid-scope and submission-member refusals, and the assertion that the
+workflow's `required_parameters` equals the plan's. The remaining live gap is
+the verified jump contract itself: a real JumpServer/Koko authenticated
+session, the reviewed historical helper protocol or a native SMUX transport,
+host-key verification, SSH authentication, repository authorization and the
+exact Git operation permission. None of those is an offline workflow
+invocation's job to establish.

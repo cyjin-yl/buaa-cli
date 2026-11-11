@@ -604,6 +604,98 @@ struct PlanRequest {
     repository: String,
     confirm: bool,
 }
+/// The seven distinct authorization boundaries in reviewed order. These are
+/// the same boundaries the plan's required_parameters list names, expressed as
+/// an ordered workflow the caller may claim authorization for. The eighth
+/// boundary, the shared governor policy, is a system contract that no caller
+/// can claim, so the workflow's seventh step names the Git/SSH boundary and
+/// the governor stays the system's own obligation.
+const WORKFLOW_STEPS: &[(u8, &str, &str)] = &[
+    (1, "owner authorization for asset, system user, terminal and destination",
+        "only the owner can authorize which asset, system user, terminal and destination are reachable; a caller claim does not prove it"),
+    (2, "separately authorized remote helper upload",
+        "uploading the remote helper needs its own owner authorization"),
+    (3, "separately authorized shell echo configuration, chmod and helper execution",
+        "configuring the shell, changing permissions and running the helper need separate owner authorization"),
+    (4, "helper startup synchronization: QAQ plus a 16-character synchronization token",
+        "the helper must be synchronized before its channel can be used"),
+    (5, "historical helper-compatible hex transport and SMUX client; native Koko is not a SMUX server",
+        "the historical helper protocol is not the current deployment contract"),
+    (6, "reviewed bounded stream lifetime and shared governor policy",
+        "the stream must have a reviewed bounded lifetime and obey the shared governor"),
+    (7, "independent SSH host-key verification, SSH authentication, repository authorization and exact Git operation permission",
+        "SSH host-key verification, SSH authentication, repository authorization and exact Git operation permission are independent boundaries"),
+];
+/// The complete authorization boundary list in reviewed order; the workflow's
+/// required_parameters and the plan's required_parameters share these exact
+/// strings, so a workflow decision table and a plan cannot drift apart.
+const WORKFLOW_REQUIRED: &[&str] = &[
+    WORKFLOW_STEPS[0].1,
+    WORKFLOW_STEPS[1].1,
+    WORKFLOW_STEPS[2].1,
+    WORKFLOW_STEPS[3].1,
+    WORKFLOW_STEPS[4].1,
+    WORKFLOW_STEPS[5].1,
+    WORKFLOW_STEPS[6].1,
+];
+/// One caller-claimed authorization scope. The scope is an array of distinct
+/// positive step identifiers, never an object or any other shape. The host is
+/// the only other reviewed member and must name the OS lab origin.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowRequest {
+    host: String,
+    authorization_scope: Vec<u8>,
+}
+/// An explicit authorized SSH/git workflow. The caller declares which of the
+/// seven authorization boundaries it claims authorization for; the workflow
+/// returns an ordered decision table where `claimed` reflects the caller's
+/// assertion, `authorized` carries that claim through, and `verified` stays
+/// false for every step because no offline invocation can verify a remote
+/// permission. It opens no socket, reads no environment, file or clock state
+/// and mutates nothing, so it is the same pure-local contract as `plan` and
+/// it refuses a submission member the way `plan` does.
+pub fn workflow(input: &str) -> Result<Value, Error> {
+    require_object(input)?;
+    if declares_submission(input)? {
+        return Err(submission_refusal());
+    }
+    let r: WorkflowRequest = serde_json::from_str(input).map_err(|_| invalid())?;
+    if r.host != HOST
+        || r.authorization_scope.len() > WORKFLOW_STEPS.len()
+        || r.authorization_scope.iter().any(|step| *step < 1 || *step > WORKFLOW_STEPS.len() as u8)
+        || (0..r.authorization_scope.len()).any(|i| r.authorization_scope[..i].contains(&r.authorization_scope[i]))
+    {
+        return Err(invalid());
+    }
+    let claimed: Vec<u8> = r.authorization_scope.clone();
+    let status = if claimed.is_empty() {
+        "no_claims"
+    } else if claimed.len() == WORKFLOW_STEPS.len() {
+        "fully_claimed_unverified"
+    } else {
+        "partially_claimed_unverified"
+    };
+    let decision_table = WORKFLOW_STEPS
+        .iter()
+        .map(|&(number, name, rationale)| {
+            let is_claimed = claimed.contains(&number);
+            json!({"step":number,"name":name,"claimed":is_claimed,"authorized":is_claimed,"verified":false,"rationale":rationale})
+        })
+        .collect::<Vec<_>>();
+    Ok(
+        json!({"result":"workflow","executed":false,"status":status,
+        "intent":"explicit_authorized_ssh_git_workflow","host":HOST,
+        "listen":"127.0.0.1:0","target":"0.0.0.0:0",
+        "git_url":format!("ssh://git@127.0.0.1:0/{HOST}"),"tls_verification":true,
+        "decision_table":decision_table,
+        "authorization_scope":claimed,
+        "confirmation_scope":"caller authorization scope; claims are not verification",
+        "network_access":false,"requests_performed":0,"writes_performed":0,
+        "submission_supported":false,"required_parameters":WORKFLOW_REQUIRED,
+        "execution":"Not executed. Caller-claimed authorization is an assertion, not a verification: every step's verified stays false offline, and the workflow never connects, opens a tunnel, uploads a helper, runs a shell command or performs a Git operation."}),
+    )
+}
 /// Pure local preview: it opens no socket, reads no environment, file or clock
 /// state and mutates nothing, so the same reviewed request always yields the
 /// same plan. No helper, SSH, tunnel, Git or submission phase exists here; the
@@ -642,7 +734,7 @@ pub fn connection_plan(input: &str) -> Result<Value, Error> {
         "protocol_source":{"repository":"https://github.com/karin0/jumpserver-proxy","commit":"62c94e1187dbd4ded397f1e207bee3649bc98660","classification":"historical_remote_helper_protocol_not_current_deployment_contract"},
         "websocket":format!("wss://{HOST}/koko/ws/terminal/?target_id={}&type=asset&system_user_id={}",r.asset,r.system_user),
         "git_url":format!("ssh://git@127.0.0.1:{}/{}",r.local_port,r.repository),"tls_verification":true,
-        "required_parameters":["separate current owner authorization for asset, system user, terminal and destination","separately authorized remote helper upload","separately authorized shell echo configuration, chmod and helper execution","helper startup synchronization: QAQ plus a 16-character synchronization token","historical helper-compatible hex transport and SMUX client; native Koko is not a SMUX server","reviewed bounded stream lifetime and shared governor policy","independent SSH host-key verification, SSH authentication, repository authorization and exact Git operation permission"],
+        "required_parameters":WORKFLOW_REQUIRED,
         "envelope_fields":["data","id","type"],"terminal_types":["CONNECT","TERMINAL_INIT","TERMINAL_RESIZE","TERMINAL_DATA","PING"],
         "console_encoding":"historical helper channel: lowercase ASCII hex plus CR outbound; filter CR/LF and helper markers ! , ? before inbound hex decoding; synchronize before use",
         "smux_connect_bytes":connect,"smux_replies":{"connect_success":99,"connect_failure":1,"address_read_failure":2,"ping_command":1,"ping_reply":55,"exit_command":2,"exit_reply":66},
@@ -654,6 +746,8 @@ pub fn schema() -> Value {
         json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
     let secret = json!({"type":"string","minLength":1,"maxLength":4096,"pattern":"^[A-Za-z0-9_-]+$","writeOnly":true});
     let read = json!({"type":"object","additionalProperties":false,"required":["host","csrftoken","sessionid"],"properties":{"host":{"const":HOST},"csrftoken":secret,"sessionid":secret,"asset_id":{"oneOf":[{"type":"null"},identifier]}}});
+    let workflow_input = json!({"type":"object","additionalProperties":false,"required":["host","authorization_scope"],"properties":{"host":{"const":HOST},"authorization_scope":{"type":"array","uniqueItems":true,"items":{"enum":[1,2,3,4,5,6,7]}}}});
+    let workflow_output = json!({"type":"object","required":["result","executed","status","intent","host","listen","target","git_url","tls_verification","decision_table","authorization_scope","confirmation_scope","network_access","requests_performed","writes_performed","submission_supported","required_parameters"],"properties":{"result":{"const":"workflow"},"executed":{"const":false},"status":{"enum":["no_claims","fully_claimed_unverified","partially_claimed_unverified"]},"intent":{"const":"explicit_authorized_ssh_git_workflow"},"host":{"const":HOST},"tls_verification":{"const":true},"decision_table":{"type":"array","minItems":7,"maxItems":7,"items":{"type":"object","required":["step","name","claimed","authorized","verified","rationale"],"properties":{"step":{"type":"integer","minimum":1,"maximum":7},"name":{"type":"string"},"claimed":{"type":"boolean"},"authorized":{"type":"boolean"},"verified":{"const":false},"rationale":{"type":"string"}}}},"confirmation_scope":{"const":"caller authorization scope; claims are not verification"},"network_access":{"const":false},"requests_performed":{"const":0},"writes_performed":{"const":0},"submission_supported":{"const":false},"required_parameters":{"type":"array","minItems":7,"maxItems":7,"items":{"type":"string"}}}});
     let plan = json!({"type":"object","additionalProperties":false,"required":["host","asset","system_user","local_port","target_ipv4","target_port","repository","confirm"],"properties":{"host":{"const":HOST},"asset":identifier,"system_user":identifier,"local_port":{"type":"integer","minimum":1,"maximum":65535},"target_ipv4":{"type":"string","format":"ipv4","pattern":"^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},"target_port":{"type":"integer","minimum":1,"maximum":65535},"repository":identifier,"confirm":{"const":true}}});
     let read_output = json!({"oneOf":[{"type":"object","required":["result","response","read_only","requests_performed","body_limit_bytes"],"properties":{"result":{"enum":["assets","system_users"]},"read_only":{"const":true},"requests_performed":{"const":1},"body_limit_bytes":{"const":LIMIT}}},{"type":"object","required":["result","raw_base64","content_type","byte_count","sha256","fallback_reason","raw_withheld","raw_provenance"],"properties":{"result":{"const":"fallback"},"raw_base64":{"type":["string","null"],"contentEncoding":"base64"},"content_type":{"enum":[null,"application/json","text/html","text/plain","application/octet-stream"]},"byte_count":{"type":"integer","minimum":0},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"raw_withheld":{"type":"boolean"}}}]});
     let plan_output = json!({"type":"object","required":["result","executed","intent","host","asset_id","system_user_id","listen","target","websocket","git_url","tls_verification","required_parameters","envelope_fields","terminal_types","console_encoding","smux_connect_bytes","smux_replies","execution"],"properties":{"result":{"const":"connection_plan"},"executed":{"const":false},"intent":{"const":"preview_os_lab_git_tunnel"},"host":{"const":HOST},"asset_id":identifier,"system_user_id":identifier,"tls_verification":{"const":true},"smux_connect_bytes":{"type":"array","minItems":7,"maxItems":7,"items":{"type":"integer","minimum":0,"maximum":255}}}});
@@ -706,12 +800,15 @@ pub fn schema() -> Value {
     // caller learns the refusal reason instead of guessing a hidden flag.
     let submission = json!({"supported":false,"implemented":false,"reason":SUBMISSION_REFUSAL,
         "requests_performed":0,"writes_performed":0,"executed":false});
-    json!({"input":{"oneOf":[read,plan]},"output":{"oneOf":[read_output,plan_output]},
+    json!({"input":{"oneOf":[read,plan,workflow_input]},"output":{"oneOf":[read_output,plan_output,workflow_output]},
         "operations":{
             "read":{"input":read,"output":read_output,"online_required":true,
                 "read_only":true,"max_requests_per_invocation":1,"body_limit_bytes":LIMIT,
                 "write_operations_performed":false,"submit_supported":false,"commit_supported":false},
             "plan":{"input":plan,"output":plan_output,"offline_required":true,"network_access":false,
+                "requests_performed":0,"writes_performed":0,"executed":false,
+                "submit_supported":false,"commit_supported":false},
+            "workflow":{"input":workflow_input,"output":workflow_output,"offline_required":true,"network_access":false,
                 "requests_performed":0,"writes_performed":0,"executed":false,
                 "submit_supported":false,"commit_supported":false},
             "commit":submission}})
@@ -1275,5 +1372,97 @@ mod tests {
             plan["output"]["properties"]["smux_connect_bytes"]["minItems"],
             output["smux_connect_bytes"].as_array().unwrap().len()
         );
+    }
+    fn workflow_input(scope: &[u8]) -> Value {
+        let scope = scope
+            .iter()
+            .map(|step| json!(step))
+            .collect::<Vec<_>>();
+        json!({"host":HOST,"authorization_scope":scope})
+    }
+    #[test]
+    fn workflow_decision_table_marks_claims_but_not_verification() {
+        let input = workflow_input(&[1, 3, 7]);
+        let out = workflow(&input.to_string()).unwrap();
+        assert_eq!(out["result"], "workflow");
+        assert_eq!(out["status"], "partially_claimed_unverified");
+        assert_eq!(out["executed"], false);
+        assert_eq!(out["network_access"], false);
+        assert_eq!(out["requests_performed"], 0);
+        assert_eq!(out["writes_performed"], 0);
+        assert_eq!(out["submission_supported"], false);
+        assert_eq!(out["authorization_scope"], json!([1,3,7]));
+        let table = out["decision_table"].as_array().unwrap();
+        assert_eq!(table.len(), 7);
+        for (index, step) in table.iter().enumerate() {
+            assert_eq!(step["step"], json!(index + 1));
+            assert_eq!(step["verified"], false);
+            assert!(step["rationale"].is_string());
+            let claimed = index + 1 == 1 || index + 1 == 3 || index + 1 == 7;
+            assert_eq!(step["claimed"], json!(claimed), "step {}", index + 1);
+            assert_eq!(step["authorized"], json!(claimed), "step {}", index + 1);
+        }
+    }
+    #[test]
+    fn workflow_full_scope_reports_fully_claimed() {
+        let out = workflow(&workflow_input(&[1, 2, 3, 4, 5, 6, 7]).to_string()).unwrap();
+        assert_eq!(out["status"], "fully_claimed_unverified");
+        for step in out["decision_table"].as_array().unwrap() {
+            assert_eq!(step["claimed"], true);
+            assert_eq!(step["authorized"], true);
+            assert_eq!(step["verified"], false);
+        }
+    }
+    #[test]
+    fn workflow_empty_scope_reports_no_claims() {
+        let out = workflow(&workflow_input(&[]).to_string()).unwrap();
+        assert_eq!(out["status"], "no_claims");
+        for step in out["decision_table"].as_array().unwrap() {
+            assert_eq!(step["claimed"], false);
+            assert_eq!(step["authorized"], false);
+        }
+    }
+    #[test]
+    fn workflow_refuses_invalid_scope_and_submission_members() {
+        for bad in [
+            json!({"host":HOST,"authorization_scope":[0]}),
+            json!({"host":HOST,"authorization_scope":[8]}),
+            json!({"host":HOST,"authorization_scope":[1,1]}),
+            json!({"host":HOST,"authorization_scope":[1,2,3,4,5,6,7,8]}),
+            json!({"host":"evil","authorization_scope":[1]}),
+            json!({"host":HOST,"authorization_scope":[1],"extra":true}),
+        ] {
+            assert_eq!(workflow(&bad.to_string()).unwrap_err().code, "invalid_input");
+        }
+        let mut submit = workflow_input(&[1]);
+        submit["commit"] = json!("synthetic_private_value");
+        let error = workflow(&submit.to_string()).unwrap_err();
+        assert_eq!(error.code, "unsupported");
+        assert!(!format!("{error:?}").contains("synthetic_private_value"));
+        // The plan's required_parameters and the workflow's required_parameters
+        // must share the same seven boundary strings so a decision table and a
+        // plan cannot drift apart.
+        let plan = connection_plan(&plan_input().to_string()).unwrap();
+        let wf = workflow(&workflow_input(&[1]).to_string()).unwrap();
+        assert_eq!(plan["required_parameters"], wf["required_parameters"]);
+    }
+    #[test]
+    fn workflow_is_offline_pure_and_free_of_side_effects() {
+        let input = workflow_input(&[2, 5]).to_string();
+        let first = workflow(&input).unwrap();
+        let second = workflow(&input).unwrap();
+        assert_eq!(first, second);
+        let schema = schema();
+        let wf = &schema["operations"]["workflow"];
+        assert_eq!(wf["offline_required"], true);
+        assert_eq!(wf["network_access"], false);
+        assert_eq!(wf["requests_performed"], 0);
+        assert_eq!(wf["writes_performed"], 0);
+        assert_eq!(wf["executed"], false);
+        assert_eq!(wf["submit_supported"], false);
+        assert_eq!(wf["commit_supported"], false);
+        assert_eq!(wf["output"]["properties"]["result"]["const"], "workflow");
+        let declared: Vec<_> = schema["input"]["oneOf"].as_array().unwrap().iter().collect();
+        assert_eq!(declared.len(), 3, "schema input oneOf must declare read, plan and workflow");
     }
 }

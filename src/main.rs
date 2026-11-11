@@ -591,8 +591,10 @@ fn json_text(value: &Value, key: &str) -> String {
 
 fn run_os_lab(args: &[String]) -> CliResult {
     let operation = match args.first().map(String::as_str) {
-        Some(operation @ ("read" | "plan")) => operation,
-        _ => return Err(("unsupported", 3, "expected os-lab read or plan".into())),
+        Some(operation @ ("read" | "plan" | "workflow")) => operation,
+        _ => return Err(
+            ("unsupported", 3, "expected os-lab read, plan or workflow".into()),
+        ),
     };
     let online = online_flag(&args[1..])?;
     if operation == "read" && !online {
@@ -602,7 +604,11 @@ fn run_os_lab(args: &[String]) -> CliResult {
     let output = if operation == "read" {
         buaa_cli::os_lab::read_stdin(&input, online)
     } else {
-        buaa_cli::os_lab::connection_plan(input.as_str())
+        if operation == "workflow" {
+            buaa_cli::os_lab::workflow(input.as_str())
+        } else {
+            buaa_cli::os_lab::connection_plan(input.as_str())
+        }
     }
     .map_err(service_error)?;
     emit(&output)

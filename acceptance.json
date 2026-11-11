@@ -1063,7 +1063,15 @@
         "https://github.com/dhy2000/TimeInput",
         "https://github.com/TrickEye/can_I_Graduate",
         "https://trickeye.github.io/can_I_Graduate/"
-      ]
+      ],
+      "evidence": {
+        "workflow_contract_offline_2026_11_02": {
+          "command": "buaa os-lab workflow --offline (stdin: host + authorization_scope)",
+          "observed": "Offline explicit authorized SSH/git workflow implemented and proven: the workflow operation takes a caller-claimed authorization scope (distinct step identifiers 1..7) and returns an ordered seven-step decision table. Each step carries claimed (the caller's assertion), authorized (the claim carried through), verified (always false offline, since no invocation can verify a remote permission) and a fixed rationale. Status distinguishes no_claims / fully_claimed_unverified / partially_claimed_unverified. The seven boundary strings are shared with the plan's required_parameters so a decision table and a plan cannot drift apart. The operation is offline-pure: executed=false, network_access=false, requests_performed=0, writes_performed=0, submission_supported=false, and submission member names are refused with the stated reason before any value is read.",
+          "schema": "input oneOf now declares read, plan and workflow; workflow input requires host=buaaos.studio and an authorization_scope array of unique integers 1..7; output requires result=workflow, status, host, tls_verification, decision_table (7 items), authorization_scope, confirmation_scope, network_access, requests_performed, writes_performed and submission_supported."
+        },
+        "remaining": "The offline explicit authorized SSH/git workflow contract is implemented. The remaining live gap is the verified jump contract itself: a real JumpServer/Koko authenticated session, the reviewed historical helper protocol or native SMUX transport, host-key verification, SSH authentication, repository authorization and the exact Git operation permission, none of which an offline workflow invocation can verify."
+      }
     },
     {
       "id": "coursegrading",
