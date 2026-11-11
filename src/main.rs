@@ -617,6 +617,20 @@ struct CoursegradingStatusInput {
     content_type: Option<Zeroizing<String>>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoursegradingSubmitInput {
+    course_id: String,
+    assignment_id: String,
+    problem_id: String,
+    local_file: String,
+    confirmed_sha256: String,
+    #[serde(default)]
+    reconfirm: bool,
+    #[serde(default)]
+    previous_ledger: Vec<String>,
+}
+
 fn zeroizing_string<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Zeroizing<String>, D::Error> {
@@ -632,12 +646,14 @@ fn optional_zeroizing_string<'de, D: serde::Deserializer<'de>>(
 
 fn run_coursegrading(args: &[String]) -> CliResult {
     let operation = match args.first().map(String::as_str) {
-        Some(operation @ ("unsupported" | "probe-https" | "preview" | "status")) => operation,
+        Some(operation @ ("unsupported" | "probe-https" | "preview" | "status" | "submit")) => {
+            operation
+        }
         _ => {
             return Err((
                 "unsupported",
                 3,
-                "expected coursegrading unsupported, probe-https, preview or status".into(),
+                "expected coursegrading unsupported, probe-https, preview, status or submit".into(),
             ));
         }
     };
@@ -667,6 +683,34 @@ fn run_coursegrading(args: &[String]) -> CliResult {
             .map_err(service_error)?;
             serde_json::to_value(preview)
                 .map_err(|_| ("unavailable", 7, "preview serialization failed".into()))?
+        }
+        "submit" => {
+            let input = Zeroizing::new(read_input()?);
+            if !input.trim_start_matches([' ', '\t', '\r', '\n']).starts_with('{') {
+                return Err((
+                    "invalid_input",
+                    2,
+                    "coursegrading submit requires a JSON object".into(),
+                ));
+            }
+            let value: CoursegradingSubmitInput =
+                serde_json::from_str(input.as_str()).map_err(|_| {
+                    (
+                        "invalid_input",
+                        2,
+                        "invalid coursegrading submit input".into(),
+                    )
+                })?;
+            buaa_cli::coursegrading::submit_confirmed(&buaa_cli::coursegrading::SubmitRequest {
+                course_id: value.course_id,
+                assignment_id: value.assignment_id,
+                problem_id: value.problem_id,
+                local_file: value.local_file,
+                confirmed_sha256: value.confirmed_sha256,
+                reconfirm: value.reconfirm,
+                previous_ledger: value.previous_ledger,
+            })
+            .map_err(service_error)?
         }
         _ => {
             let input = Zeroizing::new(read_input()?);

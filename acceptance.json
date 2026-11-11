@@ -608,7 +608,15 @@
           "pages_fetched": 7,
           "declared_total_pages": 7,
           "declared_total_elements": 137,
-          "page_counts": [20, 20, 20, 20, 20, 20, 17],
+          "page_counts": [
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            17
+          ],
           "stdout_sha256": "480e8fc7ebc8840f8a39c605eaafc0bc3ff7e3e5c964674213dbf2195cffc2e7",
           "scope": "The native CLI completed the source-declared seven-page traversal with no missing/duplicate/non-integer course IDs. No retry or mutation occurred. This proves the bounded read and current pagination, not owner-present enrol/drop/check-in mutations or postconditions."
         },
@@ -1085,8 +1093,13 @@
           "protocol_reference": "dhy2000/CG-Submit commit ef2869d756ce4f701dba0856a6ebf302570bdbd2, tree 70c8792675f3f85f8a3cf157cf3658bed29a71fd, cg_submit.py blob d75cea5409cd9be9dfc1120807cf64eae6a6245e. This is a 2021-scoped plaintext-HTTP community submission client with no declared license; protocol facts only, no implementation copied.",
           "historical_https_limit": "Public archives establish historical HTTPS login-page availability, not a current authenticated submission contract. The archived SSO service target is HTTP and the login captcha shape varies between captures. Empty assignment-archive results do not establish that no current secure route exists.",
           "remaining": "Need a current TLS-validated authenticated session path, assignment/problem identity contract, secure submission method/fields and an authoritative accepted-submission postcondition distinct from HTTP 200. No current judge probe, authentication or submission was performed. Connection failures previously observed for other campus hosts are not evidence of judge availability."
+        },
+        "submit_contract_offline_2026_11_02": {
+          "command": "buaa coursegrading submit --offline (stdin: coursegrading submit_request)",
+          "observed": "Offline confirmed-submission contract implemented and proven: 24 coursegrading library tests pass, including confirmed_submission_admits_an_immutably_matching_preview (multipart body decoded back and re-checked, boundary=buaa-<digest>, idempotency key equals the ledger derivation), confirmed_submission_refuses_a_digest_drift, confirmed_submission_duplicate_requires_reconfirmation and schema_declares_the_submit_operation_and_output. The receipt keeps remote_request=false, submission_success=null, submission_verdict_known=false and accepted_postcondition_known=false, so the contract proves local admission and idempotency only, never a remote acceptance. The full offline gate passes every library and integration target."
         }
-      }
+      },
+      "remaining": "The confirmed idempotent submission contract is now implemented and offline-proven: the submit operation re-reads the on-disk source through the same strict file policy as preview, refuses the read when its digest no longer matches the caller-confirmed preview digest, builds the confirmed multipart payload from a second validated read, and admits it through the caller-owned idempotency ledger with explicit reconfirmation for duplicates. No remote request is sent and no submission verdict is produced: remote_request stays false, submission_success stays null, and the accepted-submission postcondition stays unknown, so a local admission is never a remote acceptance. The remaining live gap is a current TLS-validated authenticated session path, the assignment/problem identity contract, the secure submission method/fields and an authoritative accepted-submission postcondition distinct from HTTP 200."
     },
     {
       "id": "timed-input",
@@ -1163,33 +1176,33 @@
           "observed": "invalid_input exit 2: typed request required",
           "live_blocker": "No authorized live shuttle page read in this run."
         },
-      "online_observation_2026_11_08": {
-        "scope": "Two deliberate credential-free reads of the same fixed HTTPS ticketInfoPage date/numeric candidate, with no redirect, cookie transmission, authentication, booking, payment, cancellation or automatic retry.",
-        "initial_result": "HTTP 200 was refused solely because the response issued a session cookie; no body was admitted.",
-        "post_repair_result": "The client admitted a safe 92-byte text/html original. Its exact upstream response explicitly reported missing authentication; this is not a timetable or availability success.",
-        "original_sha256": "b09d9f605e392cddd32c20098f7da0e5d962934870f879d35a6a208ab3285839",
-        "repairs": "Issued cookies now join a bounded invocation-only zeroizing guard without adoption, persistence or retransmission. Screening covers raw bytes, streaming decoded JSON without duplicate-member collapse, retained metadata and the final structured projection, including untrimmed and quoted carriers. The exact missing-authentication response is classified as authentication_required and the online lease settles as credential rejection.",
-        "native_replay": "The final actual CLI replayed the retained original offline with status=blocked, authentication_required=true, read_only=true, submitted=false and exact raw-body round trip. Actual schema exposes the new marker and retains online_verified=false.",
-        "regressions": "The ordinary-cookie and missing-authentication regressions failed before repair. Independent review identified HTML-decoded output, quoted bare JSON values, duplicate JSON members and untrimmed-value retention defects; all four failed before their corrections and passed afterward. Follow-up review identified whitespace-compacted split-node output and normalized cookie-pair omissions; those plus malformed declarations, truncated JSON-shaped input and numeric projections failed before correction and passed afterward. A final raw escaped-solidus view covers malformed or non-JSON-prefixed text without relying on successful JSON parsing. Count/byte/undecodable-header exhaustion and missing-authentication near-miss cases are also covered.",
-        "final_tests": "1433 library tests passed with three existing ignored workers; 116 integration tests passed. Actual locked offline build and final retained-source/schema smoke passed.",
-        "independent_review": "Four review rounds covered all reported raw/decoded/projection and classification paths. Every finding had failing-before/passing-after consumer evidence; the final re-review reported no findings.",
-        "quality_gate_limits": "The current all-tree formatter and strict-Clippy checks fail on unrelated unchanged baseline code; neither is claimed green.",
-        "acceptance_boundary": "Anonymous missing-authentication evidence only. No authenticated schedule, seat availability, HTTPS CAS acceptance or mutation postcondition was observed."
-      },
-      "native_session_candidate_2026_11_08": {
-        "command": "buaa shuttle session --online",
-        "implementation": "Object-only zeroizing protected-stdin credentials, exact LOGIN <username> shuttle intent, one Authentication lease spanning generic CAS and one fixed ticketInfoPage GET. The reference-declared HTTP /wechat/CASLogin callback is upgraded only at the exact host/path before any request. No plaintext, persistence, refresh, retry, mutation, captcha or payment. Read responses retain the anonymous path's raw/decoded/entity/compact/projection credential screening.",
-        "offline_proof": "Strict-TLS synthetic CAS success, exact upgrade/lookalike refusal, scoped-cookie and absorption boundaries, typed input and schema-limit tests. Independent review reported no findings. Final all-target tests: 1444 library passed with three existing ignored workers plus 116 integration passed. Actual help/schema/disabled/offline-refusal smoke passed.",
-        "live_attempt": {
-          "attempts": 1,
-          "result": "invalid_input",
-          "stdout_bytes": 0,
-          "credential_echo": false,
-          "governor": "A contemporaneous HTTP observation was recorded, with no pending outcome and no network-failure increment. The generic error did not retain the stage.",
-          "not_established": "Credential submission, ticket redemption, session establishment, authenticated page content, timetable and availability are not established.",
-          "retry": false
+        "online_observation_2026_11_08": {
+          "scope": "Two deliberate credential-free reads of the same fixed HTTPS ticketInfoPage date/numeric candidate, with no redirect, cookie transmission, authentication, booking, payment, cancellation or automatic retry.",
+          "initial_result": "HTTP 200 was refused solely because the response issued a session cookie; no body was admitted.",
+          "post_repair_result": "The client admitted a safe 92-byte text/html original. Its exact upstream response explicitly reported missing authentication; this is not a timetable or availability success.",
+          "original_sha256": "b09d9f605e392cddd32c20098f7da0e5d962934870f879d35a6a208ab3285839",
+          "repairs": "Issued cookies now join a bounded invocation-only zeroizing guard without adoption, persistence or retransmission. Screening covers raw bytes, streaming decoded JSON without duplicate-member collapse, retained metadata and the final structured projection, including untrimmed and quoted carriers. The exact missing-authentication response is classified as authentication_required and the online lease settles as credential rejection.",
+          "native_replay": "The final actual CLI replayed the retained original offline with status=blocked, authentication_required=true, read_only=true, submitted=false and exact raw-body round trip. Actual schema exposes the new marker and retains online_verified=false.",
+          "regressions": "The ordinary-cookie and missing-authentication regressions failed before repair. Independent review identified HTML-decoded output, quoted bare JSON values, duplicate JSON members and untrimmed-value retention defects; all four failed before their corrections and passed afterward. Follow-up review identified whitespace-compacted split-node output and normalized cookie-pair omissions; those plus malformed declarations, truncated JSON-shaped input and numeric projections failed before correction and passed afterward. A final raw escaped-solidus view covers malformed or non-JSON-prefixed text without relying on successful JSON parsing. Count/byte/undecodable-header exhaustion and missing-authentication near-miss cases are also covered.",
+          "final_tests": "1433 library tests passed with three existing ignored workers; 116 integration tests passed. Actual locked offline build and final retained-source/schema smoke passed.",
+          "independent_review": "Four review rounds covered all reported raw/decoded/projection and classification paths. Every finding had failing-before/passing-after consumer evidence; the final re-review reported no findings.",
+          "quality_gate_limits": "The current all-tree formatter and strict-Clippy checks fail on unrelated unchanged baseline code; neither is claimed green.",
+          "acceptance_boundary": "Anonymous missing-authentication evidence only. No authenticated schedule, seat availability, HTTPS CAS acceptance or mutation postcondition was observed."
         },
-        "acceptance_boundary": "Candidate implementation and a failed bounded attempt, not live service acceptance. Shuttle remains pending."
+        "native_session_candidate_2026_11_08": {
+          "command": "buaa shuttle session --online",
+          "implementation": "Object-only zeroizing protected-stdin credentials, exact LOGIN <username> shuttle intent, one Authentication lease spanning generic CAS and one fixed ticketInfoPage GET. The reference-declared HTTP /wechat/CASLogin callback is upgraded only at the exact host/path before any request. No plaintext, persistence, refresh, retry, mutation, captcha or payment. Read responses retain the anonymous path's raw/decoded/entity/compact/projection credential screening.",
+          "offline_proof": "Strict-TLS synthetic CAS success, exact upgrade/lookalike refusal, scoped-cookie and absorption boundaries, typed input and schema-limit tests. Independent review reported no findings. Final all-target tests: 1444 library passed with three existing ignored workers plus 116 integration passed. Actual help/schema/disabled/offline-refusal smoke passed.",
+          "live_attempt": {
+            "attempts": 1,
+            "result": "invalid_input",
+            "stdout_bytes": 0,
+            "credential_echo": false,
+            "governor": "A contemporaneous HTTP observation was recorded, with no pending outcome and no network-failure increment. The generic error did not retain the stage.",
+            "not_established": "Credential submission, ticket redemption, session establishment, authenticated page content, timetable and availability are not established.",
+            "retry": false
+          },
+          "acceptance_boundary": "Candidate implementation and a failed bounded attempt, not live service acceptance. Shuttle remains pending."
         },
         "cgi_upgrade_online_observation_2026_11_09": {
           "fix": "The CAS callback landing URL http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin;beihang2=<32hex> previously refused the HTTPS upgrade because the path was /wechat/CASLogin;beihang2=... not /wechat/CASLogin. The upgrade now admits bounded CGI path parameters: one or more ';name=value' segments after the reviewed path, each name [A-Za-z0-9_]+ up to 32 bytes, each value [A-Za-z0-9%._~-]+ up to 128 bytes, no / ? ; or whitespace. The iHome exact-shape upgrade is unchanged. The token value travels only to the reviewed host over the upgraded HTTPS request (it is the server's own session token); it is never sent to any other destination and is never persisted or logged. A raw space percent-encodes into the reviewed alphabet before the check; a query is not part of the path and rides the same HTTPS callback. Slash, semicolon-only, empty name, empty value, + and over-length values are refused.",

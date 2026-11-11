@@ -3485,3 +3485,29 @@ tests (3 existing ignored) and every integration target, with the receipt's
 secret-hiding contract retained. Physical audio/video output, media rights,
 and a live campus read under the real governor remain unverified, so direct
 uncontrolled player egress is still not accepted.
+
+## 2026-11-02: coursegrading confirmed idempotent submission contract
+
+The coursegrading surface now admits a `submit` operation that closes the
+"confirmed idempotent submission" half of its acceptance text. The operation
+re-reads the on-disk source through the same strict file policy as `preview`
+(descriptor-relative traversal, no symlinks, owner-only parent and file), and
+refuses the read with `digest_mismatch` when its digest no longer matches the
+caller-confirmed preview digest. A second, independently opened read builds the
+confirmed multipart payload so an in-place inode mutation between the two reads
+is caught. The submission is then admitted through the caller-owned durable
+idempotency ledger: a duplicate key is refused without explicit `reconfirm`.
+
+The contract is deliberately offline. No remote request is sent and no
+submission verdict is produced: the receipt reports `remote_request: false`,
+`submission_success: null`, `submission_verdict_known: false` and
+`accepted_postcondition_known: false`, so a local admission is never a remote
+acceptance. The judge/queue status classification axis stays unbound to a
+verdict. This is proven offline: 24 coursegrading library cases pass, including
+a digest-match admission that decodes the multipart body back and re-checks the
+`buaa-<digest>` boundary and the ledger-derived idempotency key, a digest-drift
+refusal, a duplicate-without-reconfirm refusal, and the schema declaration of
+the `submit` operation and its `submission_admitted` output alternative. The
+remaining live gap is still a current TLS-validated authenticated session path,
+the assignment/problem identity contract, the secure submission method/fields
+and an authoritative accepted-submission postcondition distinct from HTTP 200.

@@ -30,6 +30,7 @@ const STATUS_OBSERVATION: &str =
 const PROBE_OBSERVATION: &str = "one HTTPS GET to the judge login candidate; an unauthenticated response establishes no submission contract";
 const PROBE_UNAVAILABLE_OBSERVATION: &str =
     "one HTTPS GET attempted; no response obtained (unavailable or TLS validation failed)";
+const SUBMIT_OBSERVATION: &str = "the on-disk source was re-read and still matches the confirmed preview digest; the multipart payload is built and the idempotency key admitted through the caller-owned ledger, with no remote request and no submission verdict";
 const JUDGE_CODE_REASON: &str = "judge status code table is not source-established; queued, running, judge-side error and rejection are indistinguishable here and none of them is a submission verdict";
 const FALLBACK_CODE_REASON: &str = "response was not admitted as a judging-status body, so no judge or queue code was classified and none can read as a submission verdict";
 
@@ -530,6 +531,86 @@ pub fn admit_submission(
     }
     Ok(key)
 }
+
+/// Caller-owned stdin for a confirmed submission. Every member is a plain
+/// identifier, digest or ledger entry: no password, cookie or session
+/// material enters this document. The ledger is the caller's own durable idempotency
+/// record, keyed by the same id+digest derivation `admit_submission` uses.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitRequest {
+    pub course_id: String,
+    pub assignment_id: String,
+    pub problem_id: String,
+    pub local_file: String,
+    pub confirmed_sha256: String,
+    #[serde(default)]
+    pub reconfirm: bool,
+    #[serde(default)]
+    pub previous_ledger: Vec<String>,
+}
+
+/// The confirmed, idempotent, offline submission contract. It re-reads the on-disk
+/// source and confirms the immutable preview digest still holds, builds the
+/// confirmed multipart payload from that same byte stream, and admits it through
+/// the caller-owned idempotency ledger. No remote request is sent and no
+/// submission verdict is produced: `submission_success` stays null and the
+/// verdict stays unknown, so a local admission is never a remote acceptance. A
+/// digest drift between the confirmed preview and the disk is refused before any
+/// multipart part is built.
+pub fn submit_confirmed(req: &SubmitRequest) -> Result<Value, Error> {
+    let preview = preview(
+        &req.course_id,
+        &req.assignment_id,
+        &req.problem_id,
+        Path::new(&req.local_file),
+    )?;
+    if preview.sha256 != req.confirmed_sha256 {
+        return Err(Error::new(
+            "digest_mismatch",
+            "the on-disk source no longer matches the confirmed preview digest",
+        ));
+    }
+    let ledger: BTreeSet<String> = req.previous_ledger.iter().cloned().collect();
+    let key = admit_submission(&preview, &ledger, req.reconfirm)?;
+    // Re-read through open_source so the confirmed multipart part is built from a
+    // freshly validated descriptor, not the preview's already-consumed read. A
+    // second read catching an in-place mutation is the safety property the
+    // single preview read alone cannot state.
+    let mut file = open_source(Path::new(&req.local_file))?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(16 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| invalid())?;
+    if bytes.len() as u64 != preview.byte_count || hash(&bytes) != preview.sha256 {
+        return Err(Error::new(
+            "digest_mismatch",
+            "the on-disk source no longer matches the confirmed preview digest",
+        ));
+    }
+    let (content_type, body) = multipart_part(&preview, bytes, &req.confirmed_sha256)?;
+    Ok(json!({
+        "result": "submission_admitted",
+        "idempotency_key": key,
+        "reconfirmed": req.reconfirm,
+        "course_id": preview.course_id,
+        "assignment_id": preview.assignment_id,
+        "problem_id": preview.problem_id,
+        "confirmed_sha256": preview.sha256,
+        "byte_count": preview.byte_count,
+        "multipart": {
+            "content_type": content_type,
+            "body_bytes": body.len(),
+            "body_base64": STANDARD.encode(body)
+        },
+        "remote_request": false,
+        "submission_success": null,
+        "submission_verdict_known": false,
+        "accepted_postcondition_known": false,
+        "evidence_basis": EvidenceBasis::canonical(SUBMIT_OBSERVATION, 0).to_json()
+    }))
+}
 /// Offline parsing only. HTTP 200 is never considered submission success.
 /// The judge `ret` code is classified on its own axis: it is an upstream status
 /// observation with unverified semantics, so queued, running, judge-side error
@@ -574,13 +655,15 @@ pub fn schema() -> Value {
     // additionalProperties:false; `status` stdin is a strict typed object.
     let preview_request = json!({"type":"object","description":"Operation stdin actually read by the CLI: course_id, assignment_id, problem_id and local_file are read individually. A missing or non-string member becomes an empty string and then fails identity/path validation; unknown members are ignored; a repeated member keeps its last value; no explicit object-root check is made, so an array root simply yields no values and is refused. intent, byte_count and sha256 are produced by the receipt and are not read here.","required":["course_id","assignment_id","problem_id","local_file"],"properties":{"course_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"assignment_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"problem_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"local_file":{"type":"string","minLength":1,"description":"Caller-owned regular file, not a symlink, in a caller-owned non-group/world-writable directory."}}});
     let status_request = json!({"type":"object","additionalProperties":false,"description":"Operation stdin parsed as a strict typed object: a leading '{' is required, unknown or duplicate members and trailing documents are rejected with invalid_input (exit 2).","required":["body_base64"],"properties":{"body_base64":{"type":"string","description":"Standard base64 of the response body; decoded before offline parsing."},"content_type":{"type":["string","null"],"description":"Optional caller-declared media type used for body admission; echoed only when it normalizes to a known safe type."}}});
+    let submit_request = json!({"type":"object","additionalProperties":false,"description":"Operation stdin parsed as a strict typed object: a leading '{' is required, unknown or duplicate members and trailing documents are rejected with invalid_input (exit 2). course_id, assignment_id, problem_id and local_file are the immutable preview identity; confirmed_sha256 must equal the preview digest of the on-disk source or the read is refused; previous_ledger is the caller's durable idempotency record and reconfirm admits a duplicate.","required":["course_id","assignment_id","problem_id","local_file","confirmed_sha256"],"properties":{"course_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"assignment_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"problem_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"local_file":{"type":"string"},"confirmed_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"reconfirm":{"type":"boolean"},"previous_ledger":{"type":"array","items":{"type":"string","pattern":"^[a-f0-9]{64}$"}}}});
     let operations = json!({
      "unsupported":{"stdin_request":"none","network_access":false,"outputs":["unsupported"]},
      "probe-https":{"stdin_request":"none","requires":["--online"],"network_access":"single HTTPS GET: https_only, redirects refused, retry disabled, no credentials and no cookie jar","outputs":["blocked","unsupported"]},
      "preview":{"stdin_request":"preview_request","network_access":false,"output_document":"preview","outputs":["preview"]},
-     "status":{"stdin_request":"status_request","network_access":false,"outputs":["judging_status","fallback"]}
+     "status":{"stdin_request":"status_request","network_access":false,"outputs":["judging_status","fallback"]},
+     "submit":{"stdin_request":"submit_request","network_access":false,"outputs":["submission_admitted"]}
     });
-    json!({"operations":operations,"preview":preview,"preview_request":preview_request,"status_request":status_request,"output":{"oneOf":[preview,{"type":"object","required":["result","reason","accepted_postcondition_known","evidence_basis"],"properties":{"result":{"enum":["unsupported","blocked"]},"accepted_postcondition_known":{"const":false},"evidence_basis":basis}},{"type":"object","required":["result","finished","judgement_error_classification","result_html","html_trust","submission_success","submission_verdict_known","accepted_postcondition_known","evidence_basis"],"properties":{"result":{"const":"judging_status"},"finished":{"type":"boolean","description":"Mirrors only ret == \"1\" under the unverified pinned shape; never an accepted-submission verdict."},"judgement_error_classification":judgement_error,"html_trust":{"const":"untrusted_data"},"submission_success":{"type":"null"},"submission_verdict_known":{"const":false},"accepted_postcondition_known":{"const":false},"evidence_basis":basis}},{"type":"object","required":["result","evidence","judgement_error_classification","submission_success","submission_verdict_known","accepted_postcondition_known","evidence_basis"],"properties":{"result":{"const":"fallback"},"judgement_error_classification":fallback_classification,"submission_success":{"type":"null"},"submission_verdict_known":{"const":false},"accepted_postcondition_known":{"const":false},"evidence_basis":basis}}]},"authentication":"refused","submission":"refused","accepted_postcondition_known":false,"unknown":["HTTPS application equivalence","course enumeration","assignment HTML fields","judge/queue status code table","accepted-submission postcondition","operation stdin read semantics outside the admission contract"],"writes_enabled":false})
+    json!({"operations":operations,"preview":preview,"preview_request":preview_request,"status_request":status_request,"submit_request":submit_request,"output":{"oneOf":[preview,{"type":"object","required":["result","reason","accepted_postcondition_known","evidence_basis"],"properties":{"result":{"enum":["unsupported","blocked"]},"accepted_postcondition_known":{"const":false},"evidence_basis":basis}},{"type":"object","required":["result","finished","judgement_error_classification","result_html","html_trust","submission_success","submission_verdict_known","accepted_postcondition_known","evidence_basis"],"properties":{"result":{"const":"judging_status"},"finished":{"type":"boolean","description":"Mirrors only ret == \"1\" under the unverified pinned shape; never an accepted-submission verdict."},"judgement_error_classification":judgement_error,"html_trust":{"const":"untrusted_data"},"submission_success":{"type":"null"},"submission_verdict_known":{"const":false},"accepted_postcondition_known":{"const":false},"evidence_basis":basis}},{"type":"object","required":["result","evidence","judgement_error_classification","submission_success","submission_verdict_known","accepted_postcondition_known","evidence_basis"],"properties":{"result":{"const":"fallback"},"judgement_error_classification":fallback_classification,"submission_success":{"type":"null"},"submission_verdict_known":{"const":false},"accepted_postcondition_known":{"const":false},"evidence_basis":basis}},{"type":"object","required":["result","idempotency_key","reconfirmed","course_id","assignment_id","problem_id","confirmed_sha256","byte_count","multipart","remote_request","submission_success","submission_verdict_known","accepted_postcondition_known","evidence_basis"],"properties":{"result":{"const":"submission_admitted"},"idempotency_key":{"type":"string","pattern":"^[a-f0-9]{64}$"},"reconfirmed":{"type":"boolean"},"course_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"assignment_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"problem_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"confirmed_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"byte_count":{"type":"integer","minimum":0,"maximum":16777216},"multipart":{"type":"object","required":["content_type","body_bytes","body_base64"],"properties":{"content_type":{"type":"string","pattern":"^multipart/form-data; boundary=buaa-[a-f0-9]{64}$"},"body_bytes":{"type":"integer","minimum":0},"body_base64":{"type":"string","contentEncoding":"base64"}}},"remote_request":{"const":false},"submission_success":{"type":"null"},"submission_verdict_known":{"const":false},"accepted_postcondition_known":{"const":false},"evidence_basis":basis}}]},"authentication":"refused","submission":"refused","accepted_postcondition_known":false,"unknown":["HTTPS application equivalence","course enumeration","assignment HTML fields","judge/queue status code table","accepted-submission postcondition","operation stdin read semantics outside the admission contract"],"writes_enabled":false})
 }
 #[cfg(test)]
 mod tests {
@@ -1060,5 +1143,145 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert!(preview("c", "a", "p", &file).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    fn submit_source() -> (std::path::PathBuf, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "buaa-grading-submit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = dir.join("source");
+        std::fs::write(&file, b"abc").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        (file, hash(b"abc"))
+    }
+    #[test]
+    fn confirmed_submission_admits_an_immutably_matching_preview() {
+        let (file, digest) = submit_source();
+        let req = SubmitRequest {
+            course_id: "c".into(),
+            assignment_id: "a".into(),
+            problem_id: "p".into(),
+            local_file: file.to_str().unwrap().into(),
+            confirmed_sha256: digest.clone(),
+            reconfirm: false,
+            previous_ledger: vec![],
+        };
+        let result = submit_confirmed(&req).unwrap();
+        assert_eq!(result["result"], "submission_admitted");
+        assert_eq!(result["confirmed_sha256"], digest);
+        assert_eq!(result["byte_count"], 3);
+        assert_eq!(result["reconfirmed"], false);
+        assert_eq!(result["remote_request"], false);
+        // A local admission never becomes a remote verdict.
+        assert_eq!(result["submission_success"], Value::Null);
+        assert_eq!(result["submission_verdict_known"], false);
+        assert_eq!(result["accepted_postcondition_known"], false);
+        assert_eq!(result["evidence_basis"]["requests_performed"], 0);
+        assert_eq!(result["evidence_basis"]["submission"], "refused");
+        assert_eq!(result["evidence_basis"]["accepted_postcondition"], "not_established");
+        // The multipart body is built from the confirmed bytes; the boundary is
+        // the preview digest and the content type names it.
+        assert_eq!(
+            result["multipart"]["content_type"],
+            format!("multipart/form-data; boundary=buaa-{digest}")
+        );
+        let body = STANDARD.decode(result["multipart"]["body_base64"].as_str().unwrap()).unwrap();
+        let text = String::from_utf8(body.clone()).unwrap();
+        assert!(text.contains("name=\"file\""));
+        assert!(text.contains("abc"));
+        assert_eq!(result["multipart"]["body_bytes"], body.len());
+        // The idempotency key matches the ledger derivation.
+        let key = hash(
+            &serde_json::to_vec(&("c", "a", "p", digest)).unwrap(),
+        );
+        assert_eq!(result["idempotency_key"], key);
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+    #[test]
+    fn confirmed_submission_refuses_a_digest_drift() {
+        let (file, _digest) = submit_source();
+        let req = SubmitRequest {
+            course_id: "c".into(),
+            assignment_id: "a".into(),
+            problem_id: "p".into(),
+            local_file: file.to_str().unwrap().into(),
+            // The on-disk bytes hash to something else; the confirmed digest
+            // must equal the preview digest or the read is refused.
+            confirmed_sha256: format!("{:0>64}", 0),
+            reconfirm: false,
+            previous_ledger: vec![],
+        };
+        assert_eq!(submit_confirmed(&req).unwrap_err().code, "digest_mismatch");
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+    #[test]
+    fn confirmed_submission_duplicate_requires_reconfirmation() {
+        let (file, digest) = submit_source();
+        let key = hash(&serde_json::to_vec(&("c", "a", "p", digest.clone())).unwrap());
+        let req = SubmitRequest {
+            course_id: "c".into(),
+            assignment_id: "a".into(),
+            problem_id: "p".into(),
+            local_file: file.to_str().unwrap().into(),
+            confirmed_sha256: digest,
+            reconfirm: false,
+            previous_ledger: vec![key.clone()],
+        };
+        assert_eq!(
+            submit_confirmed(&req).unwrap_err().code,
+            "duplicate_submission"
+        );
+        let req = SubmitRequest { reconfirm: true, ..req };
+        assert_eq!(submit_confirmed(&req).unwrap()["reconfirmed"], true);
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+    #[test]
+    fn schema_declares_the_submit_operation_and_output() {
+        let schema = schema();
+        assert_eq!(
+            schema["operations"]["submit"]["stdin_request"],
+            "submit_request"
+        );
+        assert_eq!(
+            schema["operations"]["submit"]["network_access"],
+            false
+        );
+        assert_eq!(
+            schema["operations"]["submit"]["outputs"],
+            json!(["submission_admitted"])
+        );
+        assert_eq!(schema["submit_request"]["additionalProperties"], false);
+        assert_eq!(
+            schema["submit_request"]["required"],
+            json!(["course_id", "assignment_id", "problem_id", "local_file", "confirmed_sha256"])
+        );
+        // Every output alternative still declares the unknown postcondition and
+        // the basis; the new submission_admitted branch keeps both const.
+        for alternative in schema["output"]["oneOf"].as_array().unwrap() {
+            let required = alternative["required"].as_array().unwrap();
+            for field in ["accepted_postcondition_known", "evidence_basis"] {
+                assert!(
+                    required.iter().any(|value| value.as_str() == Some(field)),
+                    "missing {field}"
+                );
+            }
+        }
+        let admitted = schema["output"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["properties"]["result"] == json!({"const":"submission_admitted"}))
+            .expect("submission_admitted alternative present");
+        assert_eq!(admitted["properties"]["remote_request"], json!({"const":false}));
+        assert_eq!(admitted["properties"]["submission_success"], json!({"type":"null"}));
+        assert_eq!(admitted["properties"]["submission_verdict_known"], json!({"const":false}));
+        assert_eq!(admitted["properties"]["accepted_postcondition_known"], json!({"const":false}));
     }
 }
