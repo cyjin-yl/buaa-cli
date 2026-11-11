@@ -3451,3 +3451,37 @@ Draft pull requests 163 and 164 remain open on the primary as the stack's
 review record. The daily synchronization that carries branches to the
 public GitHub downstream is a separate downstream action and is not
 claimed here.
+
+## 2026-11-11: governed live transport, host allowlist and bounded reconnect
+
+The recording live surface now admits a governed live transport. A
+caller-supplied `governed_transport` contract (enabled by default false,
+`re_read_attempts` default 1, capped at 32) together with a reviewed
+`host_allowlist` turns on one shared-governor-lease playlist read. The read
+is paced against the shared request gap via `reserve_followup`, performs at
+most the caller-bound re-reads, and never invents an automatic transport
+retry: a cooldown or an exhausted attempt count ends the loop. Each admitted
+body must match the caller-supplied playlist digest before the reviewed
+`inspect_manifest` decoder inspects it; a digest mismatch is not an admitted
+read and re-reads within the bound. A host that is not a member of the
+reviewed allowlist is refused before any request is formed.
+
+The receipt (`transport_observed`) reports only structural facts: the
+transport admission, the host-allowlist membership and the decoder verdict
+mirrored from the reviewed manifest inspection. The admitted URL, stream
+identifier, source reference and every supplied digest are never echoed;
+physical audio/video output, live playback and media rights remain
+`unverified`. The schema now admits the `governed_transport` and
+`host_allowlist` inputs and the `transport_observed` output branch, and
+`capabilities.live_transport.admitted` is `true` with the not-enabled reason
+staying the disabled-by-default description.
+
+All four behaviors are proven offline against a loopback playlist with an
+isolated test governor: an admitted ongoing media playlist (ongoing, decoder
+verified, two segments), a digest-mismatch refusal ending `unavailable`, a
+pre-dispatch host-allowlist refusal that observed zero connections, and the
+bounded re-read loop. The offline gate on this worktree passes 1467 library
+tests (3 existing ignored) and every integration target, with the receipt's
+secret-hiding contract retained. Physical audio/video output, media rights,
+and a live campus read under the real governor remain unverified, so direct
+uncontrolled player egress is still not accepted.

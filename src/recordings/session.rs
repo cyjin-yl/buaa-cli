@@ -3463,7 +3463,7 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
         && (url.port().is_none()
             || (service == CasService::Iclass
                 && url.host_str() == Some(ICLASS_HOST)
-                && url.port() == Some(8347)))
+                && (url.port() == Some(8347) || url.port() == Some(8346))))
         && url.host_str().is_some_and(|host| match service {
             CasService::Classroom => ALLOWED_HOSTS.contains(&host),
             CasService::SmartClassrooms => matches!(host, "sso.buaa.edu.cn" | "app.buaa.edu.cn"),
