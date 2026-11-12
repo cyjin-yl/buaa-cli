@@ -591,8 +591,10 @@ fn json_text(value: &Value, key: &str) -> String {
 
 fn run_os_lab(args: &[String]) -> CliResult {
     let operation = match args.first().map(String::as_str) {
-        Some(operation @ ("read" | "plan")) => operation,
-        _ => return Err(("unsupported", 3, "expected os-lab read or plan".into())),
+        Some(operation @ ("read" | "plan" | "workflow")) => operation,
+        _ => return Err(
+            ("unsupported", 3, "expected os-lab read, plan or workflow".into()),
+        ),
     };
     let online = online_flag(&args[1..])?;
     if operation == "read" && !online {
@@ -602,7 +604,11 @@ fn run_os_lab(args: &[String]) -> CliResult {
     let output = if operation == "read" {
         buaa_cli::os_lab::read_stdin(&input, online)
     } else {
-        buaa_cli::os_lab::connection_plan(input.as_str())
+        if operation == "workflow" {
+            buaa_cli::os_lab::workflow(input.as_str())
+        } else {
+            buaa_cli::os_lab::connection_plan(input.as_str())
+        }
     }
     .map_err(service_error)?;
     emit(&output)
@@ -615,6 +621,20 @@ struct CoursegradingStatusInput {
     body_base64: Zeroizing<String>,
     #[serde(default, deserialize_with = "optional_zeroizing_string")]
     content_type: Option<Zeroizing<String>>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoursegradingSubmitInput {
+    course_id: String,
+    assignment_id: String,
+    problem_id: String,
+    local_file: String,
+    confirmed_sha256: String,
+    #[serde(default)]
+    reconfirm: bool,
+    #[serde(default)]
+    previous_ledger: Vec<String>,
 }
 
 fn zeroizing_string<'de, D: serde::Deserializer<'de>>(
@@ -632,12 +652,14 @@ fn optional_zeroizing_string<'de, D: serde::Deserializer<'de>>(
 
 fn run_coursegrading(args: &[String]) -> CliResult {
     let operation = match args.first().map(String::as_str) {
-        Some(operation @ ("unsupported" | "probe-https" | "preview" | "status")) => operation,
+        Some(operation @ ("unsupported" | "probe-https" | "preview" | "status" | "submit")) => {
+            operation
+        }
         _ => {
             return Err((
                 "unsupported",
                 3,
-                "expected coursegrading unsupported, probe-https, preview or status".into(),
+                "expected coursegrading unsupported, probe-https, preview, status or submit".into(),
             ));
         }
     };
@@ -667,6 +689,34 @@ fn run_coursegrading(args: &[String]) -> CliResult {
             .map_err(service_error)?;
             serde_json::to_value(preview)
                 .map_err(|_| ("unavailable", 7, "preview serialization failed".into()))?
+        }
+        "submit" => {
+            let input = Zeroizing::new(read_input()?);
+            if !input.trim_start_matches([' ', '\t', '\r', '\n']).starts_with('{') {
+                return Err((
+                    "invalid_input",
+                    2,
+                    "coursegrading submit requires a JSON object".into(),
+                ));
+            }
+            let value: CoursegradingSubmitInput =
+                serde_json::from_str(input.as_str()).map_err(|_| {
+                    (
+                        "invalid_input",
+                        2,
+                        "invalid coursegrading submit input".into(),
+                    )
+                })?;
+            buaa_cli::coursegrading::submit_confirmed(&buaa_cli::coursegrading::SubmitRequest {
+                course_id: value.course_id,
+                assignment_id: value.assignment_id,
+                problem_id: value.problem_id,
+                local_file: value.local_file,
+                confirmed_sha256: value.confirmed_sha256,
+                reconfirm: value.reconfirm,
+                previous_ledger: value.previous_ledger,
+            })
+            .map_err(service_error)?
         }
         _ => {
             let input = Zeroizing::new(read_input()?);
@@ -840,6 +890,12 @@ fn run() -> CliResult {
             input.zeroize();
             emit(&output.map_err(service_error)?)
         }
+        "recordings" if args.len() == 2 && args[1] == "live" => {
+            let mut input = read_input()?;
+            let output = buaa_cli::recordings::live::online(&input);
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
+        }
         "recordings"
             if args.len() == 4
                 && args[1] == "session"
@@ -898,6 +954,16 @@ fn run() -> CliResult {
             emit(&output.map_err(service_error)?)
         }
         "recordings"
+            if args.len() == 3
+                && args[1] == "subtitles"
+                && args[2] == "serve" =>
+        {
+            let mut input = read_input()?;
+            let output = buaa_cli::recordings::subtitles::serve_track(&input);
+            input.zeroize();
+            emit(&output.map_err(service_error)?)
+        }
+        "recordings"
             if args.get(1).map(String::as_str) == Some("subtitles")
                 && (args.len() == 2
                     || (args.len() == 3
@@ -934,6 +1000,26 @@ fn run() -> CliResult {
         "os-lab" => run_os_lab(&args[1..]),
         "coursegrading" => run_coursegrading(&args[1..]),
         "enrol" => run_json_module(&args[1..], buaa_cli::enrol::run),
+        "evaluation" if args.get(1).map(String::as_str) == Some("session") => {
+            let online = online_flag(&args[2..])?;
+            let input = Zeroizing::new(read_input()?);
+            let output = buaa_cli::evaluation::session(&input, online).map_err(|error| {
+                let message = match &error {
+                    buaa_cli::evaluation::Error::Invalid(reason) => reason.to_string(),
+                    buaa_cli::evaluation::Error::Unsupported(reason) => reason.to_string(),
+                    buaa_cli::evaluation::Error::Local(reason) => reason.clone(),
+                    buaa_cli::evaluation::Error::Remote(evidence) => {
+                        format!("remote response not admitted: {}", evidence.fallback_reason)
+                    }
+                };
+                match &error {
+                    buaa_cli::evaluation::Error::Invalid(_) => ("invalid_input", 2, message),
+                    buaa_cli::evaluation::Error::Unsupported(_) => ("unsupported", 3, message),
+                    _ => ("unavailable", 7, message),
+                }
+            })?;
+            emit(&output)
+        }
         "evaluation" => {
             let online = online_flag(&args[1..])?;
             let input = Zeroizing::new(read_input()?);

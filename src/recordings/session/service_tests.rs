@@ -2549,7 +2549,9 @@ fn smart_session_never_replays_or_downgrades_a_credential_preserving_redirect() 
                     library_read(),
                 ),
                 CasService::Classroom | CasService::Ihome | CasService::Byxt
-                | CasService::Gsmis | CasService::Boya | CasService::Shuttle => unreachable!(),
+                | CasService::Gsmis | CasService::Boya | CasService::Shuttle
+| CasService::Evaluation
+                | CasService::Iclass => unreachable!(),
             };
             let original = sso_responder(service, landing, &[]);
             let harness = CasHarness::with_responders(

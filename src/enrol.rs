@@ -10,7 +10,7 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -690,6 +690,145 @@ fn make_preview(intent: Intent, token: Option<&str>, session: &str, base: &Url) 
     })
 }
 
+/// Evidence basis for a confirmed offline commit: the caller-confirmed
+/// preview digest was re-derived from the typed intent, the idempotency key
+/// was admitted through the caller-owned ledger, and no remote request or
+/// selected-state read was performed.
+const ENROL_COMMIT_OBSERVATION: &str = "the typed intent was re-validated, the confirmed preview digest was re-derived and matched, and the idempotency key was admitted through the caller-owned ledger; no remote request was sent and no enrollment postcondition was observed";
+/// Caller-owned stdin for a confirmed enrol commit. Every member is a plain
+/// typed identifier, digest or ledger entry: no cookie or session material
+/// enters this document except the optional `session_ref`, which is a
+/// caller-supplied identifier the caller already holds and which is never a
+/// session credential. The ledger is the caller's own durable idempotency
+/// record, keyed by the same intent+digest derivation `admit_enrol` uses.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrolCommitRequest {
+    pub intent: Intent,
+    pub confirmed_digest: String,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default, deserialize_with = "optional_session_cookie")]
+    pub session_ref: Option<Zeroizing<String>>,
+    #[serde(default)]
+    pub reconfirm: bool,
+    #[serde(default)]
+    pub previous_ledger: Vec<String>,
+}
+/// Derive the immutable preview digest for a caller-supplied intent without a
+/// network request. This recomputes the exact same digest an online
+/// `preview` would produce for the same intent, session reference and base,
+/// so a confirmed commit re-derives the digest it is confirming. The session
+/// reference is the caller's own opaque identity; it is not a credential.
+fn confirmed_enrol_digest(intent: &Intent, token: Option<&str>, session_ref: &str, base: &Url) -> Result<String> {
+    if session_ref.is_empty() {
+        return Err("explicit session reference required".into());
+    }
+    intent.validate()?;
+    let mut fields: BTreeMap<String, String> = BTreeMap::from([
+        ("rwh".into(), intent.rwh.clone()),
+        ("pageXnxq".into(), intent.page_xnxq.clone()),
+        ("pageXklb".into(), "xslbxk".into()),
+        ("pageKcmc".into(), String::new()),
+    ]);
+    match intent.action {
+        Action::Enrol => {
+            let token = required_token(token)?;
+            fields.insert("token".into(), token.into());
+            fields.insert("pageXklb".into(), intent.category.fields().1.into());
+            fields.insert("pageYcctkc".into(), "1".into());
+            for key in ["pageKkxiaoqu", "pageKkyx", "pageKclb"] {
+                fields.insert(key.into(), String::new());
+            }
+        }
+        Action::Withdraw => {
+            for key in ["pageNj", "pageYxdm", "pageZydm", "pageBs"] {
+                fields.insert(key.into(), String::new());
+            }
+        }
+    }
+    let encoded = serde_json::to_vec(
+        &json!({"intent":intent,"fields":fields,"session":session_ref,"base":base.as_str()}),
+    )
+    .map_err(|_| "cannot encode commit preview")?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+/// Local duplicate admission for a caller-owned durable idempotency ledger.
+/// The caller must persist the returned key atomically before any future
+/// enabled enrol POST, including uncertain outcomes. No network write is
+/// currently enabled by this module.
+fn admit_enrol(
+    intent: &Intent,
+    confirmed_digest: &str,
+    previous: &BTreeSet<String>,
+    reconfirm: bool,
+) -> Result<String> {
+    intent.validate()?;
+    let key = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&json!([
+                intent.term.as_str(),
+                intent.course_id.as_str(),
+                intent.serial.as_str(),
+                serde_json::to_string(&intent.action).unwrap(),
+                serde_json::to_string(&intent.category).unwrap(),
+                confirmed_digest,
+            ]))
+            .map_err(|_| "cannot serialize intent")?
+        )
+    );
+    if previous.contains(&key) && !reconfirm {
+        return Err("duplicate_enrol_commit: explicit reconfirmation required for duplicate commit".into());
+    }
+    Ok(key)
+}
+/// The confirmed, idempotent, offline enrol commit contract. It re-derives the
+/// immutable preview digest from the caller's own typed intent, refuses a
+/// digest drift against the caller-confirmed digest, and admits the derived
+/// idempotency key through the caller-owned ledger. No remote request is sent
+/// and no enrollment verdict is produced: `remote_request` stays false,
+/// `commit_success` stays null and the postcondition stays unknown, so a
+/// local admission is never a remote enrollment. The standard IEAS base is
+/// used when the caller supplies none, so the derivation binds to the same
+/// origin an online preview would use.
+pub fn commit_confirmed(req: &EnrolCommitRequest) -> Result<Value> {
+    let base = match req.base.as_deref() {
+        Some(b) => Url::parse(b).map_err(|_| "invalid base" as &'static str)?,
+        None => Url::parse("https://jwxt.buaa.edu.cn:8080/ieas2.1/")
+            .map_err(|_| "cannot parse standard base" as &'static str)?,
+    };
+    let session_ref = match req.session_ref.as_deref() {
+        Some(s) => s.as_str(),
+        None => "",
+    };
+    let digest =
+        confirmed_enrol_digest(&req.intent, req.token.as_deref(), session_ref, &base)?;
+    if digest != req.confirmed_digest {
+        return Err("digest_mismatch: the typed intent no longer matches the confirmed preview digest".into());
+    }
+    let ledger: BTreeSet<String> = req.previous_ledger.iter().cloned().collect();
+    let key = admit_enrol(&req.intent, &req.confirmed_digest, &ledger, req.reconfirm)?;
+    Ok(json!({
+        "result": "enrol_commit_admitted",
+        "idempotency_key": key,
+        "reconfirmed": req.reconfirm,
+        "confirmed_digest": req.confirmed_digest,
+        "term": req.intent.term,
+        "page_xnxq": req.intent.page_xnxq,
+        "course_id": req.intent.course_id,
+        "serial": req.intent.serial,
+        "action": req.intent.action,
+        "category": req.intent.category,
+        "remote_request": false,
+        "commit_success": null,
+        "enrol_postcondition_known": false,
+        "evidence_basis": ENROL_COMMIT_OBSERVATION
+    }))
+}
+
 struct Command {
     operation: String,
     application: Application,
@@ -708,6 +847,9 @@ struct Command {
     category: Option<Category>,
     html_base64: Option<String>,
     content_type: Option<String>,
+    // Caller's durable idempotency ledger; plain key strings, never a session
+    // credential. Used only by the offline commit contract.
+    previous_ledger: Vec<String>,
 }
 impl<'de> Deserialize<'de> for Command {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -731,6 +873,8 @@ impl<'de> Deserialize<'de> for Command {
             category: Option<Category>,
             html_base64: Option<String>,
             content_type: Option<String>,
+            #[serde(default)]
+            previous_ledger: Vec<String>,
         }
         let raw: Raw = deserialize_object(deserializer)?;
         Ok(Self {
@@ -749,6 +893,7 @@ impl<'de> Deserialize<'de> for Command {
             category: raw.category,
             html_base64: raw.html_base64,
             content_type: raw.content_type,
+            previous_ledger: raw.previous_ledger,
         })
     }
 }
@@ -902,6 +1047,30 @@ fn dispatch_ieas(c: Command, online: bool) -> Value {
             Ok(p) => json!({"result":"preview","preview":p.value(),"online_verified":false}),
             Err(e) => blocked(&e),
         },
+        "commit" => {
+            let intent = match c.intent.clone() {
+                Some(intent) => intent,
+                None => return blocked("typed intent required"),
+            };
+            let confirmed_digest = match c.confirmation.clone() {
+                Some(d) if !d.is_empty() => d,
+                _ => return blocked("confirmed preview digest required"),
+            };
+            let session_ref = c.session_ref.clone().unwrap_or_default();
+            let req = EnrolCommitRequest {
+                intent,
+                confirmed_digest,
+                token: c.token.clone(),
+                base: c.base.clone(),
+                session_ref: Some(Zeroizing::new(session_ref)),
+                reconfirm: c.reconfirmation.is_some(),
+                previous_ledger: c.previous_ledger.clone(),
+            };
+            match commit_confirmed(&req) {
+                Ok(v) => v,
+                Err(e) => blocked(&e),
+            }
+        }
         "list" if c.html_base64.is_some() => {
             match STANDARD.decode(c.html_base64.as_deref().unwrap_or("")) {
                 Ok(bytes) if bytes.len() <= LIMIT => {
@@ -950,6 +1119,12 @@ pub fn run_with_enrol<S: Session>(
     {
         return Ok(dispatch_ieas(c, online));
     }
+    if c.operation == "commit" {
+        // A confirmed idempotent commit is an offline caller-owned contract:
+        // it re-derives the digest and admits the ledger key without a session,
+        // so it never requires the production transport.
+        return Ok(dispatch_ieas(c, online));
+    }
     if c.session_ref.as_deref() != Some(enrol.session.reference()) {
         return Ok(blocked("explicit session reference mismatch"));
     }
@@ -987,7 +1162,7 @@ pub fn schema() -> Value {
         "x-runtime-invariants":["adjacent academic years","page_xnxq equals term year and season","rwh equals term-course_id-serial"]});
     let yjsxk = yjsxk::schema();
     json!({"module":"enrol","status":"ieas_online_unbound_yjsxk_selected_read","transport":"IEAS retains its explicit-session secure-origin blocker. yjsxk selected is one fixed strict-TLS existing-session GET with no proxy, redirect, retry, login, fallback or cookie adoption; unknown response privacy or structure refuses projection.",
-        "operations":["list","preview","submit","verify","drop_preview","drop","export","selected"],
+        "operations":["list","preview","submit","verify","drop_preview","drop","export","selected","commit"],
         "input":{"type":"object","additionalProperties":false,"required":["operation"],"properties":{
             "operation":{"type":"string"},"application":{"enum":["ieas","yjsxk"],"default":"ieas"},
             "authorized":{"type":["boolean","null"]},"xnxqdm":{"type":["string","null"],"pattern":"^[0-9]{5}$"},
@@ -995,7 +1170,8 @@ pub fn schema() -> Value {
             "base":{"type":["string","null"]},"session_ref":{"type":["string","null"]},"session_cookie":{"type":["string","null"],"writeOnly":true},
             "token":{"type":["string","null"]},"confirmation":{"type":["string","null"]},"reconfirmation":{"type":["string","null"]},
             "page_xnxq":{"type":["string","null"]},"category":{"enum":["professional","core_general","general","sports",null]},
-            "html_base64":{"type":["string","null"]},"content_type":{"type":["string","null"]}},
+            "html_base64":{"type":["string","null"]},"content_type":{"type":["string","null"]},
+            "previous_ledger":{"type":"array","items":{"type":"string"}}},
             "x-runtime-invariants":["application defaults to ieas; authorized/xnxqdm are rejected for ieas","yjsxk requires operation=selected, authorized=true, exact five-digit xnxqdm and protected-stdin session_cookie","yjsxk rejects IEAS intent/base/session_ref/token/confirmation/reconfirmation/page_xnxq/category/html_base64/content_type before I/O","object root only; duplicate/unknown fields and trailing documents rejected"]},
         "intent":intent,
         "ieas_term_identity":{"local_preview_page_xnxq_example":"20261","historical_source_pageXnxq_example":"2026-20271","deployment_verified":false,"semantic_change_applied":false},
@@ -1007,7 +1183,7 @@ pub fn schema() -> Value {
             {"type":"object","required":["kind","application_bound","reason","origin"],"properties":{"kind":{"const":"https_candidate"},"application_bound":{"type":"boolean"},"reason":{"type":"string"},"origin":{"type":"string"}}},
             {"type":"object","required":["kind","token","courses"],"properties":{"kind":{"const":"course_list"},"token":{"type":"string"},"courses":{"type":"array","items":{"type":"object","required":["rwh","text"],"properties":{"rwh":{"type":"string"},"text":{"type":"string"}}}}}},
             yjsxk["output"].clone()
-        ]},"command_output":{"type":"object","required":["result"],"properties":{"result":{"enum":["blocked","unsupported","preview","parsed","completed"]},"reason":{"type":"string"},"data":{"type":"object"},"preview":{"type":"object"},"online_verified":{"type":"boolean"}}}})
+        ]},"command_output":{"type":"object","required":["result"],"properties":{"result":{"enum":["blocked","unsupported","preview","parsed","completed","commit_admitted"]},"reason":{"type":"string"},"data":{"type":"object"},"preview":{"type":"object"},"online_verified":{"type":"boolean"},"commit_receipt":{"type":"object"}}}})
 }
 
 #[cfg(test)]
@@ -1878,5 +2054,129 @@ mod tests {
         ));
         assert!(required_token(None).is_err());
         assert!(required_token(Some("")).is_err());
+    }
+    fn valid_enrol_intent() -> Intent {
+        Intent {
+            term: "2026-2027-1".into(),
+            page_xnxq: "20261".into(),
+            course_id: "CS101".into(),
+            serial: "3".into(),
+            rwh: "2026-2027-1-CS101-3".into(),
+            action: Action::Enrol,
+            category: Category::Professional,
+        }
+    }
+    fn digest_of(intent: &Intent, token: Option<&str>, session_ref: &str, base: &Url) -> String {
+        confirmed_enrol_digest(intent, token, session_ref, base).unwrap()
+    }
+    #[test]
+    fn confirmed_commit_admits_a_matching_digest() {
+        let base = Url::parse("https://jwxt.buaa.edu.cn:8080/ieas2.1/").unwrap();
+        let intent = valid_enrol_intent();
+        let digest = digest_of(&intent, Some("tok"), "synthetic-session", &base);
+        let req = EnrolCommitRequest {
+            intent: intent.clone(),
+            confirmed_digest: digest.clone(),
+            token: Some("tok".into()),
+            base: None,
+            session_ref: Some(Zeroizing::new("synthetic-session".into())),
+            reconfirm: false,
+            previous_ledger: vec![],
+        };
+        let out = commit_confirmed(&req).unwrap();
+        assert_eq!(out["result"], "enrol_commit_admitted");
+        assert_eq!(out["remote_request"], false);
+        assert!(out["commit_success"].is_null());
+        assert_eq!(out["enrol_postcondition_known"], false);
+        assert_eq!(out["confirmed_digest"], digest);
+        let key = out["idempotency_key"].as_str().unwrap();
+        assert_eq!(key.len(), 64);
+    }
+    #[test]
+    fn confirmed_commit_refuses_a_digest_drift() {
+        let base = Url::parse("https://jwxt.buaa.edu.cn:8080/ieas2.1/").unwrap();
+        let intent = valid_enrol_intent();
+        let digest = digest_of(&intent, Some("tok"), "synthetic-session", &base);
+        let req = EnrolCommitRequest {
+            intent: intent.clone(),
+            confirmed_digest: "0".repeat(64),
+            token: Some("tok".into()),
+            base: None,
+            session_ref: Some(Zeroizing::new("synthetic-session".into())),
+            reconfirm: false,
+            previous_ledger: vec![],
+        };
+        let err = commit_confirmed(&req).unwrap_err();
+        assert!(err.starts_with("digest_mismatch"));
+        // A drift never produces a key, so it cannot collide with the ledger.
+        let _ = digest;
+    }
+    #[test]
+    fn confirmed_commit_duplicate_requires_reconfirmation() {
+        let base = Url::parse("https://jwxt.buaa.edu.cn:8080/ieas2.1/").unwrap();
+        let intent = valid_enrol_intent();
+        let digest = digest_of(&intent, Some("tok"), "synthetic-session", &base);
+        // First commit derives the key and admits it.
+        let first = EnrolCommitRequest {
+            intent: intent.clone(),
+            confirmed_digest: digest.clone(),
+            token: Some("tok".into()),
+            base: None,
+            session_ref: Some(Zeroizing::new("synthetic-session".into())),
+            reconfirm: false,
+            previous_ledger: vec![],
+        };
+        let key = commit_confirmed(&first).unwrap()["idempotency_key"].as_str().unwrap().to_owned();
+        // A repeat with the key in the ledger refuses without reconfirmation.
+        let repeat = EnrolCommitRequest {
+            intent: intent.clone(),
+            confirmed_digest: digest.clone(),
+            token: Some("tok".into()),
+            base: None,
+            session_ref: Some(Zeroizing::new("synthetic-session".into())),
+            reconfirm: false,
+            previous_ledger: vec![key.clone()],
+        };
+        assert!(commit_confirmed(&repeat).unwrap_err().starts_with("duplicate_enrol_commit"));
+        // The same repeat with reconfirmation admitted reuses the same key.
+        let reconfirmed = EnrolCommitRequest {
+            intent: intent.clone(),
+            confirmed_digest: digest,
+            token: Some("tok".into()),
+            base: None,
+            session_ref: Some(Zeroizing::new("synthetic-session".into())),
+            reconfirm: true,
+            previous_ledger: vec![key.clone()],
+        };
+        let out = commit_confirmed(&reconfirmed).unwrap();
+        assert_eq!(out["idempotency_key"], key);
+        assert_eq!(out["reconfirmed"], true);
+    }
+    #[test]
+    fn commit_command_dispatch_is_offline_and_schema_declares_it() {
+        // An offline commit through the CLI dispatch path needs no session.
+        let intent = json!({"term":"2026-2027-1","page_xnxq":"20261","course_id":"CS101","serial":"3","rwh":"2026-2027-1-CS101-3","action":"enrol","category":"professional"});
+        let base = Url::parse("https://jwxt.buaa.edu.cn:8080/ieas2.1/").unwrap();
+        let intent_typed = Intent {
+            term: "2026-2027-1".into(),
+            page_xnxq: "20261".into(),
+            course_id: "CS101".into(),
+            serial: "3".into(),
+            rwh: "2026-2027-1-CS101-3".into(),
+            action: Action::Enrol,
+            category: Category::Professional,
+        };
+        let digest = digest_of(&intent_typed, Some("tok"), "synthetic-session", &base);
+        let command_json = json!({"operation":"commit","intent":intent,"confirmation":digest,"token":"tok","session_ref":"synthetic-session","previous_ledger":[]});
+        let out = dispatch_ieas(command(&command_json.to_string()).unwrap(), false);
+        assert_eq!(out["result"], "enrol_commit_admitted");
+        assert_eq!(out["remote_request"], false);
+        // The schema declares the commit operation, the ledger input and the
+        // admitted result.
+        let schema = schema();
+        assert!(schema["operations"].as_array().unwrap().iter().any(|o| o == "commit"));
+        assert_eq!(schema["input"]["properties"]["previous_ledger"]["type"], "array");
+        assert!(schema["command_output"]["properties"]["result"]["enum"].as_array().unwrap().iter().any(|r| r == "commit_admitted"));
+        let _ = base;
     }
 }

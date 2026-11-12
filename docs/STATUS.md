@@ -3451,3 +3451,158 @@ Draft pull requests 163 and 164 remain open on the primary as the stack's
 review record. The daily synchronization that carries branches to the
 public GitHub downstream is a separate downstream action and is not
 claimed here.
+
+## 2026-11-11: governed live transport, host allowlist and bounded reconnect
+
+The recording live surface now admits a governed live transport. A
+caller-supplied `governed_transport` contract (enabled by default false,
+`re_read_attempts` default 1, capped at 32) together with a reviewed
+`host_allowlist` turns on one shared-governor-lease playlist read. The read
+is paced against the shared request gap via `reserve_followup`, performs at
+most the caller-bound re-reads, and never invents an automatic transport
+retry: a cooldown or an exhausted attempt count ends the loop. Each admitted
+body must match the caller-supplied playlist digest before the reviewed
+`inspect_manifest` decoder inspects it; a digest mismatch is not an admitted
+read and re-reads within the bound. A host that is not a member of the
+reviewed allowlist is refused before any request is formed.
+
+The receipt (`transport_observed`) reports only structural facts: the
+transport admission, the host-allowlist membership and the decoder verdict
+mirrored from the reviewed manifest inspection. The admitted URL, stream
+identifier, source reference and every supplied digest are never echoed;
+physical audio/video output, live playback and media rights remain
+`unverified`. The schema now admits the `governed_transport` and
+`host_allowlist` inputs and the `transport_observed` output branch, and
+`capabilities.live_transport.admitted` is `true` with the not-enabled reason
+staying the disabled-by-default description.
+
+All four behaviors are proven offline against a loopback playlist with an
+isolated test governor: an admitted ongoing media playlist (ongoing, decoder
+verified, two segments), a digest-mismatch refusal ending `unavailable`, a
+pre-dispatch host-allowlist refusal that observed zero connections, and the
+bounded re-read loop. The offline gate on this worktree passes 1467 library
+tests (3 existing ignored) and every integration target, with the receipt's
+secret-hiding contract retained. Physical audio/video output, media rights,
+and a live campus read under the real governor remain unverified, so direct
+uncontrolled player egress is still not accepted.
+
+## 2026-11-02: coursegrading confirmed idempotent submission contract
+
+The coursegrading surface now admits a `submit` operation that closes the
+"confirmed idempotent submission" half of its acceptance text. The operation
+re-reads the on-disk source through the same strict file policy as `preview`
+(descriptor-relative traversal, no symlinks, owner-only parent and file), and
+refuses the read with `digest_mismatch` when its digest no longer matches the
+caller-confirmed preview digest. A second, independently opened read builds the
+confirmed multipart payload so an in-place inode mutation between the two reads
+is caught. The submission is then admitted through the caller-owned durable
+idempotency ledger: a duplicate key is refused without explicit `reconfirm`.
+
+The contract is deliberately offline. No remote request is sent and no
+submission verdict is produced: the receipt reports `remote_request: false`,
+`submission_success: null`, `submission_verdict_known: false` and
+`accepted_postcondition_known: false`, so a local admission is never a remote
+acceptance. The judge/queue status classification axis stays unbound to a
+verdict. This is proven offline: 24 coursegrading library cases pass, including
+a digest-match admission that decodes the multipart body back and re-checks the
+`buaa-<digest>` boundary and the ledger-derived idempotency key, a digest-drift
+refusal, a duplicate-without-reconfirm refusal, and the schema declaration of
+the `submit` operation and its `submission_admitted` output alternative. The
+remaining live gap is still a current TLS-validated authenticated session path,
+the assignment/problem identity contract, the secure submission method/fields
+and an authoritative accepted-submission postcondition distinct from HTTP 200.
+
+## 2026-11-02: os-lab explicit authorized SSH/git workflow
+
+The OS-lab surface now admits a `workflow` operation that satisfies the
+acceptance clause "explicit authorized SSH/git workflow". The caller declares
+which of the seven reviewed authorization boundaries it claims authorization
+for, as a distinct array of step identifiers 1..7; the operation returns an
+ordered seven-step decision table. Each step carries `claimed` (the caller's
+assertion), `authorized` (that claim carried through) and `verified` (always
+`false` offline, because no offline invocation can verify a remote
+permission), plus a fixed rationale. `status` distinguishes `no_claims`,
+`fully_claimed_unverified` and `partially_claimed_unverified`.
+
+The seven boundary strings are shared with the plan's `required_parameters`
+list, so a workflow decision table and a plan cannot drift apart. The
+operation is offline-pure: `executed`, `network_access`, `requests_performed`,
+`writes_performed` and `submission_supported` are all false, and a submission
+member name is refused with the stated reason before any value is read. The
+schema input `oneOf` now declares `read`, `plan` and `workflow`; the
+`workflow` input requires `host` = the OS-lab origin and an
+`authorization_scope` array of unique integers 1..7, and the `workflow`
+output requires the decision table, the claim scope, the confirmation-scope
+note and the zero-IO contract fields.
+
+Offline proof: 28 OS-lab library cases pass, including a partial-scope
+decision table that marks exactly the claimed steps, a full-scope
+`fully_claimed_unverified` receipt, an empty-scope `no_claims` receipt, the
+invalid-scope and submission-member refusals, and the assertion that the
+workflow's `required_parameters` equals the plan's. The remaining live gap is
+the verified jump contract itself: a real JumpServer/Koko authenticated
+session, the reviewed historical helper protocol or a native SMUX transport,
+host-key verification, SSH authentication, repository authorization and the
+exact Git operation permission. None of those is an offline workflow
+invocation's job to establish.
+
+## 2026-11-02: enrol confirmed idempotent commit contract
+
+The enrol surface now admits a `commit` operation that closes the "idempotent
+commit" half of its acceptance text. The caller declares an offline confirmed
+commit by supplying its own typed intent, the confirmed preview digest, an
+optional base, a session reference (an opaque caller identifier, never a
+credential), a durable idempotency ledger and a reconfirmation flag. The
+contract re-validates the typed intent, re-derives the immutable preview digest
+from that intent with no network request, and refuses a digest drift before any
+ledger write. It then admits the derived idempotency key through the caller's
+own durable ledger; a duplicate key is refused without explicit reconfirmation.
+
+The contract is deliberately offline. No remote request is sent and no
+enrollment verdict is produced: the receipt reports `remote_request: false`,
+`commit_success: null` and `enrol_postcondition_known: false`, so a local
+admission is never a remote enrollment. The `commit` operation is routed through
+the IEAS dispatch even when an online session is present, so a confirmed commit
+never requires the production transport. The schema declares the `commit`
+operation, the `previous_ledger` input and the `commit_admitted` result.
+
+Offline proof: 38 enrol library cases pass, including a digest-match admission
+that admits the ledger-derived key, a digest-drift refusal, a
+duplicate-without-reconfirm refusal, and the offline dispatch path that needs no
+session. The remaining live gap is still a production authenticated IEAS
+transport, an authenticated account, the current selected-course contract and an
+authoritative enrollment postcondition. Writes remain blocked against any live
+source until those are established.
+
+## 2026-11-02: electricity offline observation contract and live blocker
+
+The electricity offline observation contract is complete. `observe_threshold`
+persists the caller-supplied balance, its threshold, the observation timestamps
+and the digest of the caller key in the private directory (0700/0600) under a
+per-key local lock, and returns the threshold transition. A background
+observation inside the 900-second polling floor is refused before any state
+change. The meter binding is mandatory and an account identity is never inferred
+into one. No remote request is made and no raw directory body is published; the
+per-key window is a local cache for one caller key, not the shared account
+governor.
+
+The live meter balance read remains blocked by the directory-privacy design
+boundary: the unauthenticated upstream directory exposes other people's card and
+meter data, so no remote request is made and no raw directory body is published.
+An independently authorized scoped meter source, or a reviewed privacy-safe probe
+contract, is required before any remote implementation can be enabled.
+
+## 2026-11-11: live campus credential verification
+
+A single deliberate operator authentication attempt confirmed the operator
+supplied campus credential is live. The smart classrooms session path
+authenticated through the shared CAS flow and performed one bounded read on the
+trusted origin, returning a 21627-byte schedule receipt with `result=ok`,
+`write_operations_performed=false` and `source=network`. No write operation was
+performed and no credential was refreshed or persisted.
+
+This evidence tightens the live state of the pending slices: an authenticated
+account exists, so the remaining live gaps are application-specific (IEAS
+binding, jumpserver, scoped meter directory) rather than a dead credential. A
+future live read under one of those applications requires a new deliberate
+operator resume; this attempt did not authorize any mutation.

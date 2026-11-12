@@ -1,6 +1,6 @@
 [package]
 name = "buaa-cli"
-version = "0.2.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.89"
 description = "Agent-native BUAA tools with fail-closed account safety"

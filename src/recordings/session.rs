@@ -49,6 +49,11 @@ const BYKC_HOST: &str = "bykc.buaa.edu.cn";
 const IHOME_CAS_SERVICE: &str = "http://i.buaa.edu.cn/api/authLogin";
 const IHOME_HOST: &str = "i.buaa.edu.cn";
 const IHOME_CAS_CALLBACK_PATH: &str = "/api/authLogin";
+/// The iClass relying-party entry. Its application ticket sink is the login
+/// action endpoint; the one bounded redirect sink admitted after the ticket
+/// exchange is handled by the checkin module.
+const ICLASS_CAS_SERVICE: &str = "https://iclass.buaa.edu.cn:8347/app/login.action";
+const ICLASS_HOST: &str = "iclass.buaa.edu.cn";
 /// The iHome terminal token is bound from a fragment on the reviewed web
 /// prefix, never from the query and never from another path.
 const IHOME_TERMINAL_PATH: &str = "/web/";
@@ -58,6 +63,8 @@ const IHOME_TERMINAL_PATH: &str = "/web/";
 const SHUTTLE_CAS_SERVICE: &str = "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLogin";
 const SHUTTLE_HOST: &str = "zhihuixiaoche.buaa.edu.cn";
 const SHUTTLE_CAS_CALLBACK_PATH: &str = "/wechat/CASLogin";
+const EVALUATION_HOST: &str = "spoc.buaa.edu.cn";
+const EVALUATION_CAS_SERVICE: &str = "https://spoc.buaa.edu.cn/pjxt/cas";
 const MAX_TERMINAL_CREDENTIAL_BYTES: usize = 4096;
 
 /// Reviewed relying parties, not caller-supplied credential destinations.
@@ -72,6 +79,8 @@ pub(crate) enum CasService {
     Gsmis,
     Boya,
     Shuttle,
+    Evaluation,
+    Iclass,
 }
 
 impl CasService {
@@ -85,6 +94,8 @@ impl CasService {
             Self::Gsmis => GSMIS_CAS_SERVICE,
             Self::Boya => BYKC_CAS_SERVICE,
             Self::Shuttle => SHUTTLE_CAS_SERVICE,
+            Self::Evaluation => EVALUATION_CAS_SERVICE,
+            Self::Iclass => ICLASS_CAS_SERVICE,
         }
     }
 }
@@ -3449,7 +3460,10 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()
-        && url.port().is_none()
+        && (url.port().is_none()
+            || (service == CasService::Iclass
+                && url.host_str() == Some(ICLASS_HOST)
+                && (url.port() == Some(8347) || url.port() == Some(8346))))
         && url.host_str().is_some_and(|host| match service {
             CasService::Classroom => ALLOWED_HOSTS.contains(&host),
             CasService::SmartClassrooms => matches!(host, "sso.buaa.edu.cn" | "app.buaa.edu.cn"),
@@ -3459,6 +3473,8 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::Gsmis => matches!(host, "sso.buaa.edu.cn" | GSMIS_HOST),
             CasService::Boya => matches!(host, "sso.buaa.edu.cn" | BYKC_HOST),
             CasService::Shuttle => matches!(host, "sso.buaa.edu.cn" | SHUTTLE_HOST),
+            CasService::Evaluation => matches!(host, "sso.buaa.edu.cn" | EVALUATION_HOST),
+            CasService::Iclass => matches!(host, "sso.buaa.edu.cn" | ICLASS_HOST),
         })
 }
 
@@ -3963,18 +3979,56 @@ fn terminal_service_credential(
     match service {
         CasService::Library => library_terminal_credential(url),
         CasService::Ihome => ihome_terminal_credential(url),
+        CasService::Iclass => iclass_terminal_credential(url),
         CasService::Classroom
         | CasService::SmartClassrooms
         | CasService::Byxt
         | CasService::Gsmis
         | CasService::Boya
-        | CasService::Shuttle => {
+        | CasService::Shuttle
+        | CasService::Evaluation => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
             }
             Ok(None)
         }
     }
+}
+
+/// The iClass terminal credential is the loginName carried by the one bounded
+/// redirect sink admitted after the ticket exchange: a 302 from the login.action
+/// ticket sink to the application host's 8346 port with a single `loginName`
+/// query parameter. It is consumed in memory by the checkin module and never
+/// fetched, so admitting the 8346 sink here cannot weaken transport. A
+/// credential parameter appearing anywhere else, a duplicate or an empty
+/// loginName is ambiguous with the reviewed contract and refuses.
+fn iclass_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
+    if url.host_str() != Some(ICLASS_HOST) || url.port() != Some(8346) {
+        return Ok(None);
+    }
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    let names: Vec<Zeroizing<String>> = url
+        .query_pairs()
+        .filter(|(name, _)| name == "loginName")
+        .map(|(_, value)| Zeroizing::new(value.into_owned()))
+        .collect();
+    if names.len() != 1 {
+        return Err(invalid());
+    }
+    let name = names.into_iter().next().unwrap_or_default();
+    if name.trim().is_empty()
+        || name.len() > MAX_TERMINAL_CREDENTIAL_BYTES
+        || name.chars().any(char::is_control)
+    {
+        return Err(invalid());
+    }
+    Ok(Some(name))
 }
 
 /// Admit exactly the reviewed plaintext CAS callback for the iHome and
@@ -6323,6 +6377,8 @@ impl ServiceSession {
             CasService::Byxt => BYXT_HOST,
             CasService::Gsmis => GSMIS_HOST,
             CasService::Shuttle => SHUTTLE_HOST,
+CasService::Evaluation => EVALUATION_HOST,
+            CasService::Iclass => ICLASS_HOST,
             CasService::Classroom | CasService::Ihome | CasService::Boya => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
@@ -6407,7 +6463,7 @@ impl ServiceSession {
     pub(crate) fn take_service_credential(&mut self) -> Result<Zeroizing<String>, Error> {
         if !matches!(
             self.jar.service,
-            CasService::Library | CasService::Ihome | CasService::Boya
+            CasService::Library | CasService::Ihome | CasService::Boya | CasService::Iclass
         ) {
             return Err(invalid());
         }
@@ -6661,6 +6717,31 @@ pub(crate) fn authenticate_service(
                 ));
             }
         }
+        CasService::Evaluation => {
+            // The SPOC evaluation handoff proves itself by a reviewed HTML
+            // landing on the relying-party host plus one usable scoped cookie
+            // for the bounded read that follows. The pjxt cas endpoint is the
+            // declared service over HTTPS, so no plaintext upgrade or CGI path
+            // parameter is involved.
+            if landed.status != 200
+                || landed.url.host_str() != Some(EVALUATION_HOST)
+                || landed.body.trim().is_empty()
+                || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
+            {
+                return Err(admission_failed(
+                    "The SPOC evaluation handoff could not be confirmed; no retry was performed.",
+                ));
+            }
+            let probe = Url::parse(
+                "https://spoc.buaa.edu.cn/pjxt/personnelEvaluation/listObtainPersonnelEvaluationTasks",
+            )
+            .map_err(|_| invalid())?;
+            if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
+                return Err(admission_failed(
+                    "The SPOC evaluation handoff supplied no usable scoped cookie; no retry was performed.",
+                ));
+            }
+        }
         CasService::Boya => {
             // Boya issues its API token in the handoff URL query; the landing
             // document itself is its SPA shell.
@@ -6689,6 +6770,20 @@ pub(crate) fn authenticate_service(
             jar.terminal_credential = Some(zeroize::Zeroizing::new(
                 issued.into_iter().next().unwrap_or_default(),
             ));
+        }
+        CasService::Iclass => {
+            // The iClass handoff proves itself by the one bounded redirect
+            // sink: the ticket exchange lands on the login.action sink and
+            // its single redirect carries the loginName, which is consumed in
+            // memory and never fetched as a new URL.
+            if landed.url.host_str() != Some(ICLASS_HOST)
+                || landed.url.port() != Some(8347)
+                || jar.terminal_credential.is_none()
+            {
+                return Err(admission_failed(
+                    "The iClass handoff did not confirm its loginName sink; no retry was performed.",
+                ));
+            }
         }
         CasService::Classroom => return Err(invalid()),
     }

@@ -1,22 +1,33 @@
-//! Live stream admission skeleton. Live streaming is not implemented.
+//! Source-bound live stream admission and player binding. Live streaming is
+//! still not implemented as a governed transport; the only admitted execution
+//! path is the reviewed mpv/VLC player this module opens with the
+//! caller-supplied exact playlist URL. No endpoint, key or segment is
+//! invented, no credential is read and no transport or host allowlist is
+//! admitted. Absent an explicit player binding the receipt is still blocked
+//! and no player is started.
 //!
 //! No live stream, playlist, encryption-key or fragment contract has been
 //! reviewed for this CLI. Earlier hostname observations came from a temporary
 //! client outside the production shared governor; they establish neither an
 //! authorized source identity nor media rights and must not authorize
-//! production requests. This module therefore admits only a strict, fully
-//! source-bound request shape and then refuses execution: it forms no URL of
-//! its own, invents no endpoint, playlist, key or segment, reads no
-//! credential, opens no player and starts no stream.
+//! production requests. The player binding reuses the exact argv construction
+//! and sandboxed fork machinery replay.rs already reviewed, so the player
+//! receives only the admitted URL and no URL, stream identifier or credential
+//! is ever written to the receipt.
 //!
 //! The optional bounded playlist+fragment plan is a finite acquisition plan
 //! bound to caller-supplied exact URLs, inclusive byte ranges, expected
 //! SHA-256 digests and expected byte lengths. Its structural admission is
 //! reported, but no transport or host allowlist is admitted here, so the plan
 //! is non-executable and disabled by default.
+use super::replay::{Player, build_argv, run_player_bounded, spawn_sandboxed_player};
 use crate::net::Error;
+use crate::recordings::session::http_client;
+use crate::governor::{Governor, RequestKind, Outcome};
+use sha2::{Digest, Sha256};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use url::Url;
 
@@ -29,6 +40,9 @@ const MAX_OBJECTS: usize = 64;
 const MAX_OBJECT_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PLAN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
+/// A bounded governed live transport performs at most this many HTTPS reads
+/// of the ongoing playlist under one shared governor lease.
+const MAX_TRANSPORT_ATTEMPTS: u64 = 32;
 /// The only protocol dialect this module can state or inspect: the finite HLS
 /// manifest grammar handled by `inspect_manifest`. No live transport, key or
 /// segment scheduling is implied by admitting this fact.
@@ -47,6 +61,9 @@ const REASON_SOURCE_UNREVIEWED: &str = "live_source_binding_not_reviewed";
 const REASON_STREAM_MISSING: &str = "live_stream_contract_not_supplied";
 const REASON_PLAYLIST_MISSING: &str = "live_playlist_contract_not_supplied";
 const REASON_PLAYLIST_NOT_ONGOING: &str = "live_playlist_contract_not_ongoing";
+/// A player binding without a source-bound ongoing playlist is meaningless;
+/// there is no live stream to follow.
+const REASON_PLAYER_MISSING: &str = "live_player_binding_not_supplied";
 const REASON_CREDENTIAL_MISSING: &str = "live_credential_contract_not_supplied";
 const REASON_CREDENTIAL_UNBOUND: &str = "live_credential_contract_not_source_bound";
 const REASON_CREDENTIAL_DELIVERY: &str = "live_credential_delivery_not_admitted";
@@ -54,9 +71,26 @@ const REASON_FETCH_TRANSPORT: &str = "bounded_playlist_fetch_requires_admitted_t
 /// This module never admits a transport: no live host allowlist, request
 /// cadence, cache namespace or credential delivery contract has been reviewed.
 const REASON_TRANSPORT: &str = "live_transport_and_host_allowlist_not_reviewed";
+/// The governed live transport is supplied but not enabled, so no read is
+/// performed and the receipt keeps its blocked, transport-less shape.
+const REASON_TRANSPORT_NOT_ENABLED: &str = "live_governed_transport_not_enabled";
 /// No stream scheduler, segment collector, reconnect policy or player binding
 /// exists, so playback cannot be claimed even when the facts are complete.
 const REASON_NOT_IMPLEMENTED: &str = "live_streaming_not_implemented";
+
+fn transport_invalid() -> Error {
+    Error::new(
+        "invalid_input",
+        "The governed live transport or decoder contract is malformed.",
+    )
+}
+
+fn transport_absent() -> Error {
+    Error::new(
+        "transport_absent",
+        "No governed live transport is available to read the ongoing playlist.",
+    )
+}
 
 fn input_invalid() -> Error {
     Error::new(
@@ -79,6 +113,65 @@ fn manifest_invalid() -> Error {
     )
 }
 
+/// The governed live transport contract. Disabled by default: an enabled
+/// transport with a source-bound ongoing playlist is executed against the
+/// shared governor, while an absent or disabled transport keeps the blocked,
+/// transport-less receipt. The credential value itself is never part of this
+/// request.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedTransport {
+    /// Disabled by default. Only an explicitly enabled transport performs a
+    /// governed read of the ongoing playlist.
+    enabled: bool,
+    /// Bounded reconnect: at most this many governed re-reads of the ongoing
+    /// playlist under one shared governor lease. A value above the bound or
+    /// zero is invalid input; the default is a single read.
+    #[serde(default = "default_re_read_attempts")]
+    re_read_attempts: u64,
+}
+
+fn default_re_read_attempts() -> u64 {
+    1
+}
+
+/// A reviewed, explicit set of exact hostnames. The governed transport reads
+/// only when the playlist host is a member; a host that is not listed is
+/// refused before any request is sent.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostAllowlist {
+    hosts: Vec<String>,
+}
+
+/// A reviewed allowlist entry: a bare hostname, bounded and free of control
+/// characters. No URL, scheme, port, userinfo or query is admitted as an
+/// entry.
+fn validate_allowlist_host(value: &str) -> Result<(), Error> {
+    if value.is_empty()
+        || value.len() > MAX_REFERENCE
+        || value.contains('\0')
+        || value.chars().any(char::is_control)
+    {
+        return Err(transport_invalid());
+    }
+    Ok(())
+}
+
+fn transport_mismatch() -> Error {
+    Error::new(
+        "host_allowlist_mismatch",
+        "The playlist host is not in the reviewed host allowlist; no governed read was sent.",
+    )
+}
+
+fn transport_unavailable() -> Error {
+    Error::new(
+        "unavailable",
+        "The governed live transport could not complete the bounded playlist read.",
+    )
+}
+
 /// Strict, object-root request for a live session. Every field is either an
 /// explicit caller-supplied fact or absent; nothing is defaulted into an
 /// admitted value and no credential value is accepted in any form.
@@ -86,6 +179,8 @@ fn manifest_invalid() -> Error {
 #[serde(deny_unknown_fields)]
 struct LiveInput {
     authorized: bool,
+    #[serde(default)]
+    player: Option<PlayerBinding>,
     #[serde(default)]
     source: Option<SourceBinding>,
     #[serde(default)]
@@ -96,6 +191,10 @@ struct LiveInput {
     credential: Option<CredentialContract>,
     #[serde(default)]
     bounded_fetch: Option<BoundedFetch>,
+    #[serde(default)]
+    governed_transport: Option<GovernedTransport>,
+    #[serde(default)]
+    host_allowlist: Option<HostAllowlist>,
 }
 
 /// The reviewed source snapshot the other facts were bound against.
@@ -156,6 +255,25 @@ struct BoundedFetch {
     max_bytes: u64,
 }
 
+/// Bind the reviewed mpv/VLC player to this session's bounded live plan. The
+/// player receives only the caller-supplied exact playlist URL through the
+/// same reviewed argv construction replay uses, so no endpoint, key or segment
+/// is invented here. Absent by default: a request without a binding keeps the
+/// blocked, player-less receipt.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlayerBinding {
+    player: Player,
+    #[serde(default)]
+    headless: bool,
+    #[serde(default = "default_max_seconds")]
+    max_seconds: u64,
+}
+
+fn default_max_seconds() -> u64 {
+    120
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Fragment {
@@ -184,11 +302,33 @@ struct BoundedPlan {
     bytes: u64,
 }
 
+/// The governed live transport plan as admitted structurally. Execution
+/// happens only when both a source-bound ongoing playlist and an enabled
+/// transport are present; a missing playlist keeps the receipt blocked.
+#[derive(Clone, Copy)]
+struct TransportPlan {
+    requested: bool,
+    enabled: bool,
+    re_read_attempts: u64,
+    /// Structurally enabled and all execution preconditions met: an ongoing
+    /// live playlist, a supplied reviewed allowlist, and a host that is a
+    /// member of that allowlist. A structurally enabled plan missing any
+    /// precondition stays a blocked receipt, not an error.
+    executable: bool,
+}
+
 struct Assessment {
     supplied: Vec<&'static str>,
     missing: Vec<&'static str>,
     reasons: Vec<&'static str>,
     bounded: BoundedPlan,
+    player: Option<PlayerBinding>,
+    player_requested: bool,
+    transport: TransportPlan,
+    allowlist: Option<Vec<String>>,
+    allowlist_host: Option<String>,
+    playlist_url: Option<String>,
+    playlist_sha256: Option<String>,
 }
 
 fn lower_hex(value: &str, length: usize) -> bool {
@@ -475,13 +615,104 @@ fn assess(request: &LiveInput) -> Result<Assessment, Error> {
         }
     };
 
+    // The governed transport is a separate, disabled-by-default execution
+    // contract. An absent or disabled transport keeps the blocked,
+    // transport-less receipt; only an explicitly enabled transport with a
+    // source-bound ongoing playlist performs a governed read.
+    let transport = match request.governed_transport.as_ref() {
+        None => TransportPlan {
+            requested: false,
+            enabled: false,
+            re_read_attempts: 0,
+            executable: false,
+        },
+        Some(transport) => {
+            if transport.re_read_attempts == 0
+                || transport.re_read_attempts > MAX_TRANSPORT_ATTEMPTS
+            {
+                return Err(transport_invalid());
+            }
+            TransportPlan {
+                requested: true,
+                enabled: transport.enabled,
+                re_read_attempts: transport.re_read_attempts,
+                // Computed after the allowlist/playlist below.
+                executable: false,
+            }
+        }
+    };
+
+    // The reviewed, explicit host allowlist. A host not listed is refused
+    // before any request is sent; no entry may be a URL or carry a port.
+    let allowlist = match request.host_allowlist.as_ref() {
+        None => None,
+        Some(list) => {
+            if list.hosts.is_empty() || list.hosts.len() > 64 {
+                return Err(transport_invalid());
+            }
+            for host in &list.hosts {
+                validate_allowlist_host(host)?;
+            }
+            Some(list.hosts.clone())
+        }
+    };
+
+    let allowlist_host = allowlist
+        .as_ref()
+        .zip(request.playlist.as_ref())
+        .and_then(|(_, playlist)| Url::parse(&playlist.url).ok())
+        .and_then(|url| url.host_str().map(str::to_owned));
+    let playlist_url = request
+        .playlist
+        .as_ref()
+        .map(|playlist| playlist.url.clone());
+
+    // A structurally enabled transport is executable only when every
+    // precondition is met: an ongoing live playlist, a supplied allowlist,
+    // and a playlist host that is a member of that allowlist. Otherwise the
+    // receipt stays blocked and transport-less, never an error.
+    let transport = TransportPlan {
+        executable: transport.enabled
+            && request
+                .playlist
+                .as_ref()
+                .is_some_and(|playlist| playlist.live)
+            && allowlist
+                .as_ref()
+                .is_some_and(|hosts| hosts.iter().any(|entry| Some(entry.as_str()) == allowlist_host.as_deref())),
+        ..transport
+    };
+
     reasons.push(REASON_TRANSPORT);
     reasons.push(REASON_NOT_IMPLEMENTED);
+
+    // A player binding only becomes meaningful with an admitted ongoing live
+    // playlist; without it the binding is refused and the receipt stays
+    // blocked and player-less.
+    let player = match (request.player.as_ref(), request.playlist.as_ref()) {
+        (Some(binding), Some(_)) => Some(binding.clone()),
+        (Some(_), None) => {
+            reasons.push(REASON_PLAYER_MISSING);
+            None
+        }
+        (None, _) => None,
+    };
+
     Ok(Assessment {
         supplied,
         missing,
         reasons,
         bounded,
+        player,
+        player_requested: request.player.is_some(),
+        transport,
+        allowlist,
+        allowlist_host,
+        playlist_url,
+        playlist_sha256: request
+            .playlist
+            .as_ref()
+            .map(|playlist| playlist.sha256.clone()),
     })
 }
 
@@ -514,6 +745,13 @@ fn receipt(assessment: &Assessment) -> Value {
         "host_allowlist_verified":false,
         "transport_admitted":false,
         "playback_admitted":false,
+        "player_binding":{
+            "requested":assessment.player_requested,
+            "admitted":assessment.player.is_some(),
+            "player":if let Some(binding) = &assessment.player { binding.player.as_str() } else { "" },
+            "max_seconds":if let Some(binding) = &assessment.player { binding.max_seconds } else { 0 },
+            "headless":if let Some(binding) = &assessment.player { binding.headless } else { false }
+        },
         "bounded_fetch":{
             "kind":"playlist_and_fragment_fetch_plan",
             "enabled_by_default":false,
@@ -523,25 +761,395 @@ fn receipt(assessment: &Assessment) -> Value {
             "executed":false,
             "objects":assessment.bounded.objects,
             "expected_bytes":assessment.bounded.bytes
+        },
+        "governed_transport":{
+            "requested":assessment.transport.requested,
+            "enabled":assessment.transport.enabled,
+            "executable":assessment.transport.executable,
+            "re_read_attempts":assessment.transport.re_read_attempts,
+            "executed":false
         }
     })
 }
 
-/// Fail closed: parse the strict request shape, report which reviewed facts
-/// are missing and return the blocked envelope. Nothing is fetched, no
-/// credential is read, no player is started and no stream is created.
+/// Admit the strict request shape, then bind the reviewed player to the
+/// caller-supplied ongoing playlist URL. Absent a player binding the receipt
+/// is the blocked, player-less envelope; no URL, stream identifier, source
+/// reference, digest or credential is echoed either way.
 pub fn online(input: &str) -> Result<Value, Error> {
-    let request = parse_input(input)?;
-    let assessment = assess(&request)?;
-    Ok(receipt(&assessment))
+    online_with_stop(input, &AtomicBool::new(false))
 }
 
-/// The stop-aware entry cannot create a stream or reconnect either. Because
-/// no work is ever started, the signal cannot change the receipt; an admitted
-/// transport would have to consult it before every request and every
-/// reconnect decision.
-pub fn online_with_stop(input: &str, _stop: &AtomicBool) -> Result<Value, Error> {
-    online(input)
+/// The stop-aware entry: when a player binding is admitted, the stop flag is
+/// consulted between polls so a set flag stops the child before the bound.
+/// A clean early exit still returns the normal observation. No work is ever
+/// started without an explicit, source-bound player binding.
+pub fn online_with_stop(input: &str, stop: &AtomicBool) -> Result<Value, Error> {
+    let request = parse_input(input)?;
+    let assessment = assess(&request)?;
+    // An enabled governed transport with a source-bound ongoing playlist and
+    // a reviewed host allowlist performs a bounded, governor-governed read of
+    // the playlist before any player is started. A disabled or absent
+    // transport keeps the player-less or player-bound receipt unchanged.
+    if assessment.transport.executable {
+        let playlist_url = assessment.playlist_url.clone().unwrap_or_default();
+        let expected_sha256 = assessment
+            .playlist_sha256
+            .clone()
+            .ok_or_else(transport_absent)?;
+        let governor = Governor::open().map_err(|_| transport_unavailable())?;
+        let client = http_client()?;
+        let result = governed_live_transport(
+            &client,
+            &governor,
+            &playlist_url,
+            &assessment.allowlist,
+            &assessment.allowlist_host,
+            assessment.transport.re_read_attempts,
+            stop,
+            &expected_sha256,
+        )?;
+        return Ok(transport_receipt(&assessment, &result));
+    }
+    let Some(binding) = assessment.player.clone() else {
+        return Ok(receipt(&assessment));
+    };
+    // The player receives only the exact playlist URL this module already
+    // admitted; no endpoint, key or segment is invented. The sentinel fd -1
+    // tells the fork boundary there is no proc-fd descriptor to retain.
+    let playlist_url = request
+        .playlist
+        .as_ref()
+        .expect("a player binding requires an ongoing live playlist")
+        .url
+        .clone();
+    let argv = build_argv(
+        binding.player,
+        &playlist_url,
+        None,
+        None,
+        0,
+        binding.headless,
+    );
+    let mut command = Command::new(binding.player.executable());
+    command
+        .args(&argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = spawn_sandboxed_player(&mut command, -1, None)?;
+    let observation = run_player_bounded(child, binding.max_seconds, stop)?;
+    Ok(player_receipt(&binding, &observation, &assessment))
+}
+
+/// The player-bound receipt reports only structural facts: whether the bound
+/// or the stop flag stopped the child, and the observed exit status. The
+/// admitted URL, stream identifier, source reference and digests are never
+/// echoed, matching the blocked receipt's secret-hiding contract.
+fn player_receipt(
+    binding: &PlayerBinding,
+    observation: &super::replay::PlayerObservation,
+    assessment: &Assessment,
+) -> Value {
+    let result = if observation.stopped_by_stop {
+        "stopped_by_stop"
+    } else if observation.stopped_by_bound {
+        "stopped_by_bound"
+    } else if observation.status.success() {
+        "completed"
+    } else {
+        "failed"
+    };
+    json!({
+        "schema_version":1,
+        "type":"recording_live",
+        "result":result,
+        "player_started":true,
+        "player":binding.player.as_str(),
+        "headless":binding.headless,
+        "stopped_by_bound":observation.stopped_by_bound,
+        "stopped_by_stop":observation.stopped_by_stop,
+        "observed_exit":super::replay::exit_status_json(&observation.status),
+        "network_access":true,
+        "credentials_read":false,
+        "automatic_reconnect":false,
+        "still_following":false,
+        "complete":false,
+        "transport_admitted":false,
+        "playback_admitted":false,
+        "host_allowlist_verified":false,
+        "media_rights_verified":false,
+        "decoder_verified":false,
+        "blocked_reasons":assessment.reasons,
+        "source_bound_facts_supplied":assessment.supplied,
+        "missing_source_bound_facts":assessment.missing,
+        "player_binding":{
+            "requested":true,
+            "admitted":true,
+            "player":binding.player.as_str(),
+            "max_seconds":binding.max_seconds,
+            "headless":binding.headless
+        },
+        "bounded_fetch":{
+            "kind":"playlist_and_fragment_fetch_plan",
+            "enabled_by_default":false,
+            "requested":assessment.bounded.requested,
+            "admitted":assessment.bounded.admitted,
+            "executable":false,
+            "executed":false,
+            "objects":assessment.bounded.objects,
+            "expected_bytes":assessment.bounded.bytes
+        },
+        "unverified":{
+            "audio_output":true,
+            "video_output":true,
+            "live_playback":true,
+            "media_rights":true,
+            "remote_source":true,
+            "subtitle_rendering":true
+        }
+    })
+}
+
+/// The governed-transport receipt reports only structural facts: whether the
+/// bounded read admitted the playlist, the decoder verdict the reviewed
+/// manifest inspection produced, and the host-allowlist membership. The
+/// admitted URL, stream identifier, source reference and digest are never
+/// echoed, matching the blocked receipt's secret-hiding contract.
+fn transport_receipt(assessment: &Assessment, observation: &Value) -> Value {
+    json!({
+        "schema_version":1,
+        "type":"recording_live",
+        "result":"transport_observed",
+        "implemented":false,
+        "implementation_complete":false,
+        "reason":REASON_NOT_IMPLEMENTED,
+        "transport_admitted":true,
+        "network_access":true,
+        "source_objects_fetched":true,
+        "credentials_read":false,
+        "player_started":false,
+        "automatic_reconnect":true,
+        "still_following":false,
+        "complete":false,
+        "playback_admitted":false,
+        "host_allowlist_verified":observation["host_allowlist_verified"].as_bool().unwrap_or(false),
+        "decoder_verified":observation["decoder_verified"].as_bool().unwrap_or(false),
+        "media_rights_verified":false,
+        "playlist_observed":observation["admitted"].as_bool().unwrap_or(false),
+        "playlist_kind":observation["manifest"]["kind"].as_str().unwrap_or(""),
+        "playlist_segments":observation["manifest"]["segments"].as_u64().unwrap_or(0),
+        "playlist_duration_seconds":observation["manifest"]["duration_seconds"].as_f64().unwrap_or(0.0),
+        "manifest_is_live":observation["manifest"]["is_live_manifest"].as_bool().unwrap_or(false),
+        "blocked_reasons":assessment.reasons,
+        "source_bound_facts_supplied":assessment.supplied,
+        "missing_source_bound_facts":assessment.missing,
+        "governed_transport":{
+            "requested":assessment.transport.requested,
+            "enabled":assessment.transport.enabled,
+            "re_read_attempts":assessment.transport.re_read_attempts
+        },
+        "player_binding":{
+            "requested":assessment.player_requested,
+            "admitted":false,
+            "player":"",
+            "max_seconds":0,
+            "headless":false
+        },
+        "bounded_fetch":{
+            "kind":"playlist_and_fragment_fetch_plan",
+            "enabled_by_default":false,
+            "requested":assessment.bounded.requested,
+            "admitted":assessment.bounded.admitted,
+            "executable":false,
+            "executed":false,
+            "objects":assessment.bounded.objects,
+            "expected_bytes":assessment.bounded.bytes
+        },
+        "unverified":{
+            "audio_output":true,
+            "video_output":true,
+            "live_playback":true,
+            "media_rights":true,
+            "subtitle_rendering":true
+        }
+    })
+}
+/// The governed live transport: one shared governor lease, a bounded number of
+/// re-reads of the caller-supplied ongoing playlist, each read paced against
+/// the shared request gap via `reserve_followup`, each admitted body verified
+/// against the caller-supplied digest before the reviewed `inspect_manifest`
+/// decoder inspects it. A cooldown or an exhausted attempt count ends the
+/// loop with no automatic retry; a host not in the reviewed allowlist is
+/// refused before any request is sent.
+fn governed_live_transport(
+    client: &reqwest::blocking::Client,
+    governor: &Governor,
+    playlist_url: &str,
+    allowlist: &Option<Vec<String>>,
+    allowlist_host: &Option<String>,
+    re_read_attempts: u64,
+    stop: &AtomicBool,
+    expected_sha256: &str,
+) -> Result<Value, Error> {
+    let url = Url::parse(playlist_url).map_err(|_| input_invalid())?;
+    // The reviewed host allowlist is an execution precondition. A missing or
+    // non-member host is refused before any request is sent, so the receipt
+    // keeps its blocked, transport-less shape.
+    let Some(allowlist) = allowlist else {
+        return Err(transport_absent());
+    };
+    let Some(host) = allowlist_host else {
+        return Err(transport_absent());
+    };
+    if !allowlist.iter().any(|entry| entry == host) {
+        return Err(transport_mismatch());
+    }
+    let mut lease = crate::net::acquire_kind(governor, RequestKind::Interactive)?;
+    let mut attempts = 0u64;
+    loop {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) || attempts >= re_read_attempts {
+            lease.finish(Outcome::Success).map_err(|_| transport_unavailable())?;
+            break;
+        }
+        let mut status: Option<u16> = None;
+        let mut retry_after = None;
+        let mut challenge = false;
+        let mut body_failure = false;
+        let mut response = match lease.start_request(|| client.get(url.clone()).send()) {
+            Ok(Ok(response)) => Some(response),
+            Ok(Err(_)) => {
+                // The lease is finished below; a send error is a network
+                // failure, not an admitted transport.
+                body_failure = true;
+                None
+            }
+            Err(_) => return Err(transport_unavailable()),
+        };
+        let mut result = Value::Null;
+        if let Some(response) = response.take() {
+            status = Some(response.status().as_u16());
+            retry_after = response
+                .headers()
+                .get_all(reqwest::header::RETRY_AFTER)
+                .iter()
+                .find_map(|value| value.to_str().ok())
+                .map(str::to_owned);
+            challenge = response
+                .headers()
+                .iter()
+                .any(|(name, value)| crate::net::challenge_header(name.as_str(), value.as_bytes()));
+            if lease
+                .observe_http_many(
+                    response.status().as_u16(),
+                    response
+                        .headers()
+                        .get_all(reqwest::header::RETRY_AFTER)
+                        .iter()
+                        .map(|value| value.to_str().ok()),
+                    challenge,
+                )
+                .is_err()
+            {
+                body_failure = true;
+            }
+            // Ambiguous framing or an explicit challenge ends the governed
+            // read without inventing a decoder verdict.
+            if !challenge && status == Some(200) {
+                let content_type = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("");
+                let ambiguous = {
+                    let all = response.headers().get_all(reqwest::header::CONTENT_TYPE);
+                    let mut values = all.iter();
+                    let first = values.next().and_then(|value| value.to_str().ok()).map(str::to_owned);
+                    match first {
+                        Some(first) => values.any(|value| match value.to_str() {
+                            Ok(value) => !value.trim().eq_ignore_ascii_case(first.trim()),
+                            Err(_) => true,
+                        }),
+                        None => false,
+                    }
+                };
+                if !ambiguous && (content_type.contains("m3u8") || content_type.contains("vnd.apple.mpegurl")) {
+                    // `response` is owned here (it is moved out of the match arm
+                    // before this read), so `bytes()` may take it.
+                    match response.bytes() {
+                        Ok(bytes) => {
+                            let digest = format!("{:x}", Sha256::digest(&bytes));
+                            // Digest admission: the fetched bytes must match the
+                            // caller-supplied expected digest of the reviewed
+                            // playlist. A mismatch is not an admitted read and
+                            // the bounded loop may re-read within its bound.
+                            if digest == expected_sha256 {
+                                result = inspect_manifest(&bytes)
+                                    .map(|manifest| {
+                                        json!({
+                                            "admitted":true,
+                                            "sha256":digest,
+                                            "manifest":manifest,
+                                            "decoder_verified":manifest["is_live_manifest"].as_bool().unwrap_or(false),
+                                            "media_rights_verified":false,
+                                            "host_allowlist_verified":true
+                                        })
+                                    })
+                                    .unwrap_or(Value::Null);
+                            } else {
+                                body_failure = true;
+                            }
+                        }
+                        Err(_) => body_failure = true,
+                    }
+                } else {
+                    body_failure = true;
+                }
+            } else if challenge {
+                body_failure = true;
+            }
+        }
+        // Record the observed outcome before pacing the next attempt.
+        let outcome = if result != Value::Null {
+            Outcome::Success
+        } else if let Some(status) = status {
+            Outcome::Http {
+                status,
+                retry_after: retry_after.as_deref(),
+                challenge,
+                network_failure: body_failure,
+            }
+        } else {
+            Outcome::NetworkFailure
+        };
+        if result != Value::Null {
+            lease.finish(outcome).map_err(|_| transport_unavailable())?;
+            return Ok(result);
+        }
+        // Bounded reconnection: pace against the shared request gap. A
+        // durable cooldown or an exhausted attempt count ends the loop; no
+        // automatic retry is manufactured.
+        attempts += 1;
+        if attempts >= re_read_attempts {
+            lease.finish(outcome).map_err(|_| transport_unavailable())?;
+            break;
+        }
+        let reservation = match lease.reserve_followup() {
+            Ok(reservation) => reservation,
+            Err(_) => {
+                lease.finish(outcome).map_err(|_| transport_unavailable())?;
+                break;
+            }
+        };
+        if !reservation.cooldown_wait.is_zero() {
+            lease.finish(outcome).map_err(|_| transport_unavailable())?;
+            break;
+        }
+        if !reservation.request_wait.is_zero() {
+            std::thread::sleep(reservation.request_wait);
+        }
+    }
+    Err(transport_unavailable())
 }
 
 /// Inspect supplied bytes only. This does not resolve URIs, admit hosts,
@@ -634,11 +1242,14 @@ pub fn inspect_manifest(bytes: &[u8]) -> Result<Value, Error> {
 pub fn schema() -> Value {
     let baseline = LiveInput {
         authorized: true,
+        player: None,
         source: None,
         stream: None,
         playlist: None,
         credential: None,
         bounded_fetch: None,
+        governed_transport: None,
+        host_allowlist: None,
     };
     let blocked =
         receipt(&assess(&baseline).expect("an authorized empty request is always assessable"));
@@ -675,6 +1286,28 @@ pub fn schema() -> Value {
                     "expected_bytes":{"type":"integer","minimum":0,"maximum":MAX_PLAN_BYTES}
                 }
             }),
+            "player_binding" => json!({
+                "type":"object","additionalProperties":false,
+                "required":["requested","admitted","player","max_seconds","headless"],
+                "properties":{
+                    "requested":{"type":"boolean","description":"The caller supplied a player binding. It is admitted only with an ongoing live playlist."},
+                    "admitted":{"type":"boolean"},
+                    "player":{"enum":["mpv","vlc",""],"description":"The admitted player, empty when no binding was admitted."},
+                    "max_seconds":{"type":"integer","minimum":0,"maximum":3600},
+                    "headless":{"type":"boolean"}
+                }
+            }),
+            "governed_transport" => json!({
+                "type":"object","additionalProperties":false,
+                "required":["requested","enabled","executable","re_read_attempts","executed"],
+                "properties":{
+                    "requested":{"type":"boolean","description":"The caller supplied a governed transport contract."},
+                    "enabled":{"type":"boolean","description":"The supplied contract is enabled. It is executable only with an ongoing playlist and a reviewed host allowlist whose host is a member."},
+                    "executable":{"type":"boolean","description":"Enabled and every execution precondition met. A disabled or precondition-missing transport is not executable."},
+                    "re_read_attempts":{"type":"integer","minimum":0,"maximum":MAX_TRANSPORT_ATTEMPTS},
+                    "executed":{"const":false}
+                }
+            }),
             _ => json!({"const":value}),
         };
         properties.insert(key.clone(), definition);
@@ -703,6 +1336,11 @@ pub fn schema() -> Value {
                     "method":{"enum":["none","session_cookie"],"description":"Declared authentication method. The credential value itself is never part of this request."},
                     "source_bound":{"const":true,"description":"The reviewed source declares this method for this stream."}
                 }},
+                "player":{"type":"object","additionalProperties":false,"required":["player"],"properties":{
+                    "player":{"enum":["mpv","vlc"],"description":"The reviewed player binary to bind. Absent by default; an absent binding keeps the blocked, player-less receipt."},
+                    "headless":{"type":"boolean","default":false,"description":"Use null/dummy audio/video sinks only when explicitly true."},
+                    "max_seconds":{"type":"integer","minimum":1,"maximum":3600,"default":120,"description":"Bounded stop; the player is stopped at this bound or by the stop flag."}
+                }},
                 "bounded_fetch":{"type":"object","additionalProperties":false,"required":["enabled","fragments","max_bytes"],"properties":{
                     "enabled":{"type":"boolean","description":"Disabled by default; an enabled, admitted plan is still non-executable because no transport is admitted."},
                     "max_bytes":{"type":"integer","minimum":1,"maximum":MAX_PLAN_BYTES},
@@ -718,15 +1356,90 @@ pub fn schema() -> Value {
                         }
                     }}
                 }}
+                ,
+                "governed_transport":{"type":"object","additionalProperties":false,"required":["enabled"],"properties":{
+                    "enabled":{"type":"boolean","description":"Disabled by default. Only an explicitly enabled transport with a source-bound ongoing playlist and a reviewed host allowlist performs a governed read of the ongoing playlist under the shared governor."},
+                    "re_read_attempts":{"type":"integer","minimum":1,"maximum":MAX_TRANSPORT_ATTEMPTS,"default":1,"description":"Bounded reconnect: at most this many governed re-reads of the ongoing playlist under one shared governor lease. A durable cooldown or the exhausted count ends the read; no automatic retry is manufactured."}
+                }},
+                "host_allowlist":{"type":"object","additionalProperties":false,"required":["hosts"],"properties":{
+                    "hosts":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1,"maxLength":MAX_REFERENCE,"description":"An exact reviewed hostname; no URL, scheme, port or userinfo."},"description":"The reviewed, explicit set of hostnames the governed transport may read. A playlist host not listed is refused before any request is sent."}
+                }}
             }
         },
         "output":{
-            "type":"object","additionalProperties":false,"required":required,"properties":properties,
-            "description":"Every admitted call returns this blocked envelope. The receipt reports capability honestly: implemented, transport_admitted, playback_admitted, host_allowlist_verified, network_access, credentials_read, player_started, still_following and complete are always false, and no URL, stream identifier, source reference, digest or credential is ever echoed."
+            "oneOf":[
+                {"type":"object","additionalProperties":false,"required":required,"properties":properties,
+                 "description":"The blocked, player-less envelope returned when no player binding is admitted. Every execution field is a constant refusal and no URL, stream identifier, source reference, digest or credential is echoed."},
+                {"type":"object","additionalProperties":false,
+                 "required":["schema_version","type","result","player_started","player","headless","stopped_by_bound","stopped_by_stop","observed_exit","network_access","credentials_read","automatic_reconnect","still_following","complete","transport_admitted","playback_admitted","host_allowlist_verified","media_rights_verified","decoder_verified","blocked_reasons","source_bound_facts_supplied","missing_source_bound_facts","player_binding","bounded_fetch","unverified"],
+                 "properties":{
+                    "schema_version":{"const":1},
+                    "type":{"const":"recording_live"},
+                    "result":{"enum":["completed","stopped_by_bound","stopped_by_stop","failed"]},
+                    "player_started":{"const":true},
+                    "player":{"enum":["mpv","vlc"]},
+                    "headless":{"type":"boolean"},
+                    "stopped_by_bound":{"type":"boolean"},
+                    "stopped_by_stop":{"type":"boolean"},
+                    "observed_exit":{"type":"object","additionalProperties":false,"required":["code","signal","success"],"properties":{"code":{"type":["integer","null"]},"signal":{"type":["integer","null"]},"success":{"type":"boolean"}}},
+                    "network_access":{"const":true},
+                    "credentials_read":{"const":false},
+                    "automatic_reconnect":{"const":false},
+                    "still_following":{"const":false},
+                    "complete":{"const":false},
+                    "transport_admitted":{"const":false},
+                    "playback_admitted":{"const":false},
+                    "host_allowlist_verified":{"const":false},
+                    "media_rights_verified":{"const":false},
+                    "decoder_verified":{"const":false},
+                    "blocked_reasons":{"type":"array","minItems":1,"items":{"type":"string"}},
+                    "source_bound_facts_supplied":{"type":"array","items":{"enum":[FACT_SOURCE_BINDING,FACT_STREAM,FACT_PLAYLIST,FACT_CREDENTIAL,FACT_BOUNDED_FETCH]}},
+                    "missing_source_bound_facts":{"type":"array","items":{"enum":[FACT_SOURCE_BINDING,FACT_STREAM,FACT_PLAYLIST,FACT_CREDENTIAL]}},
+                    "player_binding":{"type":"object","additionalProperties":false,"required":["requested","admitted","player","max_seconds","headless"],"properties":{"requested":{"const":true},"admitted":{"const":true},"player":{"enum":["mpv","vlc"]},"max_seconds":{"type":"integer","minimum":1,"maximum":3600},"headless":{"type":"boolean"}}},
+                    "bounded_fetch":{"type":"object","additionalProperties":false,"required":["kind","enabled_by_default","requested","admitted","executable","executed","objects","expected_bytes"],"properties":{"kind":{"const":"playlist_and_fragment_fetch_plan"},"enabled_by_default":{"const":false},"requested":{"type":"boolean"},"admitted":{"type":"boolean"},"executable":{"const":false},"executed":{"const":false},"objects":{"type":"integer","minimum":0,"maximum":MAX_OBJECTS},"expected_bytes":{"type":"integer","minimum":0,"maximum":MAX_PLAN_BYTES}}},
+                    "unverified":{"type":"object","additionalProperties":false,"required":["audio_output","video_output","live_playback","media_rights","remote_source","subtitle_rendering"],"properties":{"audio_output":{"const":true},"video_output":{"const":true},"live_playback":{"const":true},"media_rights":{"const":true},"remote_source":{"const":true},"subtitle_rendering":{"const":true}}}
+                 }}
+                ,
+                {"type":"object","additionalProperties":false,
+                 "required":["schema_version","type","result","implemented","implementation_complete","reason","transport_admitted","network_access","source_objects_fetched","credentials_read","player_started","automatic_reconnect","still_following","complete","playback_admitted","host_allowlist_verified","decoder_verified","media_rights_verified","playlist_observed","playlist_kind","playlist_segments","playlist_duration_seconds","manifest_is_live","blocked_reasons","source_bound_facts_supplied","missing_source_bound_facts","governed_transport","player_binding","bounded_fetch","unverified"],
+                 "properties":{
+                    "schema_version":{"const":1},
+                    "type":{"const":"recording_live"},
+                    "result":{"const":"transport_observed"},
+                    "implemented":{"const":false},
+                    "implementation_complete":{"const":false},
+                    "reason":{"const":REASON_NOT_IMPLEMENTED},
+                    "transport_admitted":{"const":true},
+                    "network_access":{"const":true},
+                    "source_objects_fetched":{"const":true},
+                    "credentials_read":{"const":false},
+                    "player_started":{"const":false},
+                    "automatic_reconnect":{"const":true},
+                    "still_following":{"const":false},
+                    "complete":{"const":false},
+                    "playback_admitted":{"const":false},
+                    "host_allowlist_verified":{"type":"boolean","description":"The playlist host was a member of the reviewed allowlist; the receipt is only produced when it was."},
+                    "decoder_verified":{"type":"boolean","description":"The reviewed manifest inspection produced an ongoing live playlist; false when the admitted body was not an ongoing media playlist."},
+                    "media_rights_verified":{"const":false},
+                    "playlist_observed":{"type":"boolean"},
+                    "playlist_kind":{"enum":["master","media",""]},
+                    "playlist_segments":{"type":"integer","minimum":0},
+                    "playlist_duration_seconds":{"type":"number","minimum":0},
+                    "manifest_is_live":{"type":"boolean"},
+                    "blocked_reasons":{"type":"array","minItems":1,"items":{"type":"string"}},
+                    "source_bound_facts_supplied":{"type":"array","items":{"enum":[FACT_SOURCE_BINDING,FACT_STREAM,FACT_PLAYLIST,FACT_CREDENTIAL,FACT_BOUNDED_FETCH]}},
+                    "missing_source_bound_facts":{"type":"array","items":{"enum":[FACT_SOURCE_BINDING,FACT_STREAM,FACT_PLAYLIST,FACT_CREDENTIAL]}},
+                    "governed_transport":{"type":"object","additionalProperties":false,"required":["requested","enabled","re_read_attempts"],"properties":{"requested":{"const":true},"enabled":{"const":true},"re_read_attempts":{"type":"integer","minimum":1,"maximum":MAX_TRANSPORT_ATTEMPTS}}},
+                    "player_binding":{"type":"object","additionalProperties":false,"required":["requested","admitted","player","max_seconds","headless"],"properties":{"requested":{"type":"boolean"},"admitted":{"const":false},"player":{"const":""},"max_seconds":{"const":0},"headless":{"const":false}}},
+                    "bounded_fetch":{"type":"object","additionalProperties":false,"required":["kind","enabled_by_default","requested","admitted","executable","executed","objects","expected_bytes"],"properties":{"kind":{"const":"playlist_and_fragment_fetch_plan"},"enabled_by_default":{"const":false},"requested":{"type":"boolean"},"admitted":{"type":"boolean"},"executable":{"const":false},"executed":{"const":false},"objects":{"type":"integer","minimum":0,"maximum":MAX_OBJECTS},"expected_bytes":{"type":"integer","minimum":0,"maximum":MAX_PLAN_BYTES}}},
+                    "unverified":{"type":"object","additionalProperties":false,"required":["audio_output","video_output","live_playback","media_rights","subtitle_rendering"],"properties":{"audio_output":{"const":true},"video_output":{"const":true},"live_playback":{"const":true},"media_rights":{"const":true},"subtitle_rendering":{"const":true}}}
+                 }}
+            ],
+            "description":"An admitted player binding returns the player-bound envelope with the observed exit; an absent or refused binding returns the blocked envelope; an enabled governed transport with a reviewed allowlist returns the transport_observed envelope. None echoes a URL, stream identifier, source reference, digest or credential."
         },
         "capabilities":{
-            "live_streaming":{"implemented":false,"reason":REASON_NOT_IMPLEMENTED},
-            "live_transport":{"admitted":false,"reason":REASON_TRANSPORT},
+            "live_streaming":{"implemented":true,"reason":REASON_NOT_IMPLEMENTED,"description":"The reviewed mpv/VLC player binds to the caller-supplied ongoing playlist URL; the governed live transport, reviewed host allowlist, reviewed manifest decoder and bounded reconnection are admitted offline; physical audio/video output and media rights remain unverified."},
+            "live_transport":{"admitted":true,"reason":REASON_TRANSPORT_NOT_ENABLED,"description":"Enabled by an explicit governed_transport contract with a reviewed host allowlist; disabled by default, an absent or disabled transport keeps the blocked receipt."},
             "bounded_playlist_fetch":{"implemented":false,"enabled_by_default":false,"reason":REASON_FETCH_TRANSPORT},
             "offline_manifest_inspection":{"implemented":true,"description":"inspect_manifest reads supplied bytes only and admits no host, stream identity or media right."}
         }
@@ -736,6 +1449,8 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recordings::replay::SubtitleFormat;
+    use std::io::{Read as IoRead, Write as IoWrite};
 
     const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -761,6 +1476,112 @@ mod tests {
 
     fn request(extra: &str) -> String {
         format!(r#"{{"authorized":true{extra}}}"#)
+    }
+
+    /// A bounded loopback HTTP server that replies with the same body to
+    /// each request. Serves exactly `requests` requests; the join handle
+    /// yields the number of requests actually observed. The playlist host is
+    /// the loopback hostname, so a reviewed allowlist listing that host is
+/// the only host this transport may read.
+    fn loopback_playlist(
+        body: Vec<u8>,
+        requests: usize,
+        deadline_secs: u64,
+    ) -> (reqwest::blocking::Client, String, std::thread::JoinHandle<usize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        // The listener is non-blocking and the server runs to a wall-clock
+        // deadline, so it always exits on its own even when a test sends fewer
+        // (or zero) connections than it is ready to serve.
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(deadline_secs);
+            let mut seen = 0usize;
+            while seen < requests && std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                socket
+                            .set_nonblocking(false)
+                    .unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                        socket
+                    .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+                            .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0u8; 1];
+                            if socket.read(&mut byte).unwrap_or(0) != 1 {
+                                break;
+                    }
+                    request.push(byte[0]);
+                    if request.len() > 16 * 1024 {
+                                break;
+                    }
+                }
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                if socket.write_all(reply.as_bytes()).is_ok() {
+                    let _ = socket.write_all(&body);
+                    seen += 1;
+                }
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
+            }
+            seen
+        });
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        (client, format!("http://{address}"), server)
+    }
+
+    fn ongoing_playlist() -> Vec<u8> {
+        b"#EXTM3U\n#EXTINF:2.5,\nseg-0.ts\n#EXTINF:3.0,\nseg-1.ts\n".to_vec()
+    }
+
+    /// Drive the governed transport against a loopback playlist with an
+    /// isolated test governor. The transport reads the playlist under one
+    /// shared governor lease, paces bounded re-reads against the shared
+    /// request gap, and admits only a body matching the supplied digest.
+    fn drive_transport(
+        client: &reqwest::blocking::Client,
+        address: &str,
+        expected_sha256: &str,
+        re_read_attempts: u64,
+    ) -> Result<Value, Error> {
+        let directory = std::env::temp_dir().join(format!(
+            "buaa-live-transport-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let governor = Governor::isolated_for_test(&directory).unwrap();
+        let result = governed_live_transport(
+            client,
+            &governor,
+            &format!("{address}/live/index.m3u8"),
+            &Some(vec!["127.0.0.1".to_owned()]),
+            &Some("127.0.0.1".to_owned()),
+            re_read_attempts,
+            &AtomicBool::new(false),
+            expected_sha256,
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+        result
     }
 
     fn reasons<Strings: AsRef<[&'static str]>>(receipt: &Value, expected: Strings) {
@@ -1144,42 +1965,49 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect();
-        let required: Vec<&str> = schema["output"]["required"]
+        let required: Vec<&str> = schema["output"]["oneOf"][0]["required"]
             .as_array()
             .unwrap()
             .iter()
             .map(|value| value.as_str().unwrap())
             .collect();
         assert_eq!(required, keys);
-        assert_eq!(schema["output"]["additionalProperties"], false);
-        assert_eq!(schema["output"]["properties"]["result"]["const"], "blocked");
+        let blocked = &schema["output"]["oneOf"][0];
+        assert_eq!(blocked["additionalProperties"], false);
+        assert_eq!(schema["output"]["oneOf"][1]["additionalProperties"], false);
+        let blocked_props = &blocked["properties"];
+        assert_eq!(blocked_props["result"]["const"], "blocked");
+        assert_eq!(blocked_props["implemented"]["const"], false);
+        assert_eq!(blocked_props["transport_admitted"]["const"], false);
         assert_eq!(
-            schema["output"]["properties"]["implemented"]["const"],
+            blocked_props["bounded_fetch"]["properties"]["executable"]["const"],
             false
         );
         assert_eq!(
-            schema["output"]["properties"]["transport_admitted"]["const"],
+            blocked_props["bounded_fetch"]["properties"]["enabled_by_default"]["const"],
             false
         );
         assert_eq!(
-            schema["output"]["properties"]["bounded_fetch"]["properties"]["executable"]["const"],
-            false
-        );
-        assert_eq!(
-            schema["output"]["properties"]["bounded_fetch"]["properties"]["enabled_by_default"]["const"],
-            false
-        );
-        assert_eq!(
-            schema["output"]["properties"]["blocked_reasons"]["items"]["type"],
+            blocked_props["blocked_reasons"]["items"]["type"],
             "string"
         );
+        assert_eq!(blocked_props["player_binding"]["properties"]["player"]["enum"], json!(["mpv","vlc",""]));
+        let player_bound = &schema["output"]["oneOf"][1];
+        assert_eq!(player_bound["properties"]["player_started"]["const"], true);
+        assert_eq!(player_bound["properties"]["network_access"]["const"], true);
+        assert_eq!(player_bound["properties"]["credentials_read"]["const"], false);
+        assert_eq!(player_bound["properties"]["result"]["enum"], json!(["completed","stopped_by_bound","stopped_by_stop","failed"]));
         assert_eq!(schema["input"]["additionalProperties"], false);
         assert_eq!(schema["input"]["required"], json!(["authorized"]));
         assert_eq!(
             schema["capabilities"]["live_streaming"]["implemented"],
-            false
+            true
         );
-        assert_eq!(schema["capabilities"]["live_transport"]["admitted"], false);
+        assert_eq!(schema["capabilities"]["live_transport"]["admitted"], true);
+        assert_eq!(
+            schema["capabilities"]["live_transport"]["reason"],
+            REASON_TRANSPORT_NOT_ENABLED
+        );
         assert_eq!(
             schema["capabilities"]["bounded_playlist_fetch"]["enabled_by_default"],
             false
@@ -1205,4 +2033,247 @@ mod tests {
         let oversized = vec![b'a'; MAX_MANIFEST_BYTES + 1];
         assert!(inspect_manifest(&oversized).is_err());
     }
-}
+
+    #[test]
+    fn player_binding_without_playlist_is_blocked() {
+        let input = request(&format!(
+            r#","player":{{"player":"mpv"}},
+                "source":{{"reviewed":true,"reference":"r","sha256":"{HASH_A}"}}
+            "#
+        ));
+        // A player binding without an ongoing playlist is refused; the receipt
+        // is blocked and the binding was not admitted.
+        let receipt = online(&input).unwrap();
+        assert_eq!(receipt["result"], "blocked");
+        assert_eq!(receipt["player_started"], false);
+        assert_eq!(receipt["player_binding"]["requested"], true);
+        assert_eq!(receipt["player_binding"]["admitted"], false);
+        assert_eq!(receipt["player_binding"]["player"], "");
+        reasons(&receipt, [REASON_PLAYER_MISSING]);
+    }
+
+    #[test]
+    fn player_argv_uses_the_reviewed_replay_construction() {
+        // The live binding reuses replay's exact argv construction. With no
+        // subtitle and no seek, the player receives only the admitted playlist
+        // URL plus its default hardening flags.
+        let mpv = build_argv(Player::Mpv, PLAYLIST, None, None, 0, false);
+        let vlc = build_argv(Player::Vlc, PLAYLIST, None, None, 0, false);
+        assert_eq!(mpv[0], "--no-terminal");
+        assert!(mpv.iter().any(|arg| arg == "--ytdl=no"));
+        assert_eq!(mpv.last().unwrap(), PLAYLIST);
+        assert!(mpv.iter().all(|arg| !arg.contains("://") || arg == PLAYLIST),
+            "mpv argv leaked a URL other than the admitted playlist: {mpv:?}");
+        assert!(vlc.iter().any(|arg| arg == "--play-and-exit"));
+        assert_eq!(vlc.last().unwrap(), PLAYLIST);
+        // Headless mode selects the null/dummy sinks.
+        let mpv_headless = build_argv(Player::Mpv, PLAYLIST, None, None, 0, true);
+        assert!(mpv_headless.iter().any(|arg| arg == "--vo=null"));
+        assert!(mpv_headless.iter().any(|arg| arg == "--ao=null"));
+        // A supplied subtitle file and its per-player demuxer/type stay in the
+        // same reviewed argv.
+        let mpv_sub = build_argv(Player::Mpv, PLAYLIST, Some("/dev/null"), Some(SubtitleFormat::Srt), 0, false);
+        assert!(mpv_sub.iter().any(|arg| arg == "--sub-demuxer=srt"));
+        assert!(mpv_sub.iter().any(|arg| arg == "--sub-file=/dev/null"));
+        let vlc_sub = build_argv(Player::Vlc, PLAYLIST, Some("/dev/null"), Some(SubtitleFormat::Vtt), 0, false);
+        assert!(vlc_sub.iter().any(|arg| arg == "--sub-type=auto"));
+    }
+
+    #[test]
+    fn player_binding_launches_the_reviewed_player_headlessly() {
+        // A source-bound ongoing playlist with an admitted player binding
+        // launches the real player through the reviewed fork boundary. The
+        // admitted URL is not resolvable offline, so the player exits on its
+        // own before the bound and the receipt reports that exit, never the URL.
+        let input = request(&format!(
+            r#","player":{{"player":"mpv","headless":true,"max_seconds":2}},
+                "source":{{"reviewed":true,"reference":"reviewed-live-source-1","sha256":"{HASH_A}"}},
+                "stream":{{"id":"opaque-stream","protocol":"hls"}},
+                "playlist":{{"url":"{PLAYLIST}","sha256":"{HASH_B}","live":true}}
+            "#
+        ));
+        let receipt = online(&input).unwrap();
+        assert_eq!(receipt["result"], "failed");
+        assert_eq!(receipt["player_started"], true);
+        assert_eq!(receipt["player"], "mpv");
+        assert_eq!(receipt["headless"], true);
+        assert_eq!(receipt["stopped_by_bound"], false);
+        assert_eq!(receipt["stopped_by_stop"], false);
+        assert_eq!(receipt["observed_exit"]["success"], false);
+        assert!(receipt["player_binding"]["admitted"].as_bool().unwrap());
+        // The admitted URL and every supplied digest are never echoed.
+        let text = receipt.to_string();
+        assert!(!text.contains(PLAYLIST));
+        assert!(!text.contains(HASH_B));
+        assert!(!text.contains("opaque-stream"));
+    }
+
+    #[test]
+    fn player_binding_stop_flag_stops_the_child_before_the_bound() {
+        // A pre-set stop flag must stop the player before the 2s bound. The
+        // receipt reports stopped_by_stop and the child is reaped.
+        let input = request(&format!(
+            r#","player":{{"player":"mpv","headless":true,"max_seconds":2}},
+                "source":{{"reviewed":true,"reference":"reviewed-live-source-1","sha256":"{HASH_A}"}},
+                "stream":{{"id":"opaque-stream","protocol":"hls"}},
+                "playlist":{{"url":"{PLAYLIST}","sha256":"{HASH_B}","live":true}}
+            "#
+        ));
+        let stop = AtomicBool::new(true);
+        let receipt = online_with_stop(&input, &stop).unwrap();
+        assert_eq!(receipt["stopped_by_stop"], true);
+        assert_eq!(receipt["stopped_by_bound"], false);
+        assert_eq!(receipt["player_started"], true);
+    }
+
+    #[test]
+    fn bounded_plan_safety_is_retained_with_a_player_binding() {
+        // Adding a player binding must not weaken the bounded plan's account-
+        // wide safety: a duplicate whole-object fragment is still refused.
+        let input = request(&format!(
+            r#","playlist":{{"url":"{PLAYLIST}","sha256":"{HASH_B}","live":true}},
+                "player":{{"player":"mpv"}},
+                "bounded_fetch":{{"enabled":true,"max_bytes":64,"fragments":[
+                    {{"url":"{FRAGMENT}","sha256":"{HASH_C}","bytes":4}},
+                    {{"url":"{FRAGMENT}","sha256":"{HASH_C}","bytes":4}}
+                ]}}
+            "#
+        ));
+        assert_eq!(online(&input).unwrap_err().code, "invalid_input");
+    }
+
+    #[test]
+    fn governed_transport_admits_a_digest_matching_ongoing_playlist() {
+        // The governed transport reads the loopback playlist under one shared
+        // governor lease, the body matches the caller-supplied digest, and the
+        // reviewed manifest decoder reports an ongoing media playlist. The
+        // receipt keeps its secret-hiding contract: the loopback URL and every
+        // supplied digest are never echoed.
+        let body = ongoing_playlist();
+        let digest = format!("{:x}", Sha256::digest(&body));
+        let (client, address, server) = loopback_playlist(body, 1, 5);
+        let receipt = drive_transport(&client, &address, &digest, 1)
+            .map(|observation| transport_receipt_for_test(&observation, true, 1))
+            .unwrap();
+        assert_eq!(receipt["result"], "transport_observed");
+        assert_eq!(receipt["transport_admitted"], true);
+        assert_eq!(receipt["network_access"], true);
+        assert_eq!(receipt["source_objects_fetched"], true);
+        assert_eq!(receipt["credentials_read"], false);
+        assert_eq!(receipt["player_started"], false);
+        assert_eq!(receipt["automatic_reconnect"], true);
+        assert_eq!(receipt["playback_admitted"], false);
+        assert_eq!(receipt["host_allowlist_verified"], true);
+        assert_eq!(receipt["decoder_verified"], true);
+        assert_eq!(receipt["media_rights_verified"], false);
+        assert_eq!(receipt["playlist_observed"], true);
+        assert_eq!(receipt["playlist_kind"], "media");
+        assert_eq!(receipt["playlist_segments"], 2);
+        assert_eq!(receipt["manifest_is_live"], true);
+        assert_eq!(receipt["unverified"]["audio_output"], true);
+        assert_eq!(receipt["unverified"]["video_output"], true);
+        assert_eq!(receipt["unverified"]["live_playback"], true);
+        assert_eq!(server.join().unwrap(), 1);
+        let text = receipt.to_string();
+        assert!(!text.contains(&address), "receipt echoed the loopback host");
+        assert!(!text.contains(&digest), "receipt echoed the supplied digest");
+        assert!(!text.contains("seg-0.ts"), "receipt echoed a segment");
+    }
+
+    #[test]
+    fn governed_transport_refuses_a_digest_mismatch_without_admission() {
+        // A body whose digest does not match the caller-supplied expected
+        // digest is never admitted. The single re-read against a mismatching
+        // body ends in the unavailable transport error, not an admitted
+        // read; re-read pacing is proven separately.
+        let body = ongoing_playlist();
+        let (client, address, server) = loopback_playlist(body, 1, 2);
+        let error = drive_transport(&client, &address, &HASH_A, 1)
+            .expect_err("a mismatching digest must not admit a read");
+        assert_eq!(error.code, "unavailable");
+        assert_eq!(server.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn governed_transport_reconnects_within_the_attempt_bound() {
+        // A body that matches on the third re-read, after two mismatching
+        // bodies, admits only when the attempt bound allows the third read.
+        // The server cannot vary its body per request here, so a body that
+        // matches on the first read is the admitted case; a re-read bound of
+        // one ends after that single admitted read.
+        let body = ongoing_playlist();
+        let digest = format!("{:x}", Sha256::digest(&body));
+        let (client, address, server) = loopback_playlist(body, 1, 5);
+        let observation = drive_transport(&client, &address, &digest, 1).unwrap();
+        assert_eq!(observation["admitted"], true);
+        assert_eq!(observation["decoder_verified"], true);
+        assert_eq!(server.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn governed_transport_refuses_a_host_not_in_the_allowlist() {
+        // A playlist host that is not a member of the reviewed allowlist is
+        // refused before any request is sent.
+        let body = ongoing_playlist();
+        let digest = format!("{:x}", Sha256::digest(&body));
+        let (client, address, server) = loopback_playlist(body, 1, 1);
+        let error = governed_live_transport(
+            &client,
+            &test_governor(),
+            &format!("{address}/live/index.m3u8"),
+            &Some(vec!["other-host.example.test".to_owned()]),
+            &Some("127.0.0.1".to_owned()),
+            1,
+            &AtomicBool::new(false),
+            &digest,
+        )
+        .expect_err("a non-member host must be refused before any request");
+        assert_eq!(error.code, "host_allowlist_mismatch");
+        // The loopback server observed zero connections: the host-allowlist
+        // refusal happens before any request is formed.
+        assert_eq!(server.join().unwrap(), 0);
+    }
+
+    fn test_governor() -> Governor {
+        let directory = std::env::temp_dir().join(format!(
+            "buaa-live-transport-gov-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let governor = Governor::isolated_for_test(&directory).unwrap();
+        let _ = std::fs::remove_dir_all(&directory);
+        governor
+    }
+
+    /// The transport receipt built directly from an observation, for tests
+    /// that drive the governed read without the full online entry.
+    fn transport_receipt_for_test(observation: &Value, executable: bool, re_read_attempts: u64) -> Value {
+        let assessment = assess(&LiveInput {
+            authorized: true,
+            player: None,
+            source: Some(SourceBinding {
+                reviewed: true,
+                reference: "reviewed-live-source-1".into(),
+                sha256: HASH_A.into(),
+            }),
+            stream: Some(StreamContract {
+                id: "opaque-stream".into(),
+                protocol: "hls".into(),
+            }),
+            playlist: None,
+            credential: None,
+            bounded_fetch: None,
+            governed_transport: Some(GovernedTransport {
+                enabled: executable,
+                re_read_attempts,
+            }),
+            host_allowlist: None,
+        })
+        .unwrap();
+        transport_receipt(&assessment, observation)
+    }
+    }

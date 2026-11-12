@@ -5,6 +5,7 @@
 //! caller-supplied session; submission and pattern mutation stay refused.
 use crate::governor::{FollowupError, Governor, Outcome, RequestKind};
 use crate::html::{ChallengeAssessment, assess_challenge_body};
+use crate::recordings::session as cas;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1440,6 +1441,125 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
         Err(error) => report(error),
     })
 }
+
+/// Strict evaluation session read: one in-memory CAS login to the SPOC
+/// evaluation origin, then exactly one bounded authenticated read. The
+/// credentials travel only through the CAS exchange and the read screen;
+/// nothing is persisted, retransmitted or adopted.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionInput {
+    #[serde(default)]
+    authorized: bool,
+    username: String,
+    password: String,
+    intent: String,
+    operation: String,
+    student: String,
+}
+/// Drive the shared one-shot CAS chain for the SPOC evaluation relying party,
+/// then settle the known business outcome: one bounded authenticated read that
+/// reuses this module's existing byte-level admission through `Client`. The
+/// redirect hops are paced only on server-directed continuations (the shared
+/// CAS chain books the slot without sleeping), so the ST ticket exchange never
+/// races the shared request gap. No request is sent without explicit online
+/// permission; a refused handoff settles the durable attempt for review.
+pub fn session(input: &str, online: bool) -> Result<Value, Error> {
+    if input.len() > MAX_BODY as usize {
+        return Err(Error::Invalid("input exceeds limit"));
+    }
+    let request: SessionInput = serde_json::from_str(input)
+        .map_err(|_| Error::Invalid("invalid evaluation session command"))?;
+    if !request.authorized {
+        return Err(Error::Invalid(
+            "explicit authorization for one evaluation authentication attempt is required",
+        ));
+    }
+    if request.intent != format!("LOGIN {} evaluation", request.username) {
+        return Err(Error::Invalid("authentication intent does not match"));
+    }
+    if !matches!(
+        request.operation.as_str(),
+        "tasks" | "questionnaires" | "courses"
+    ) {
+        return Err(Error::Invalid("invalid session read operation"));
+    }
+    if !online {
+        return Err(Error::Invalid(
+            "session requires explicit online permission; no request was made",
+        ));
+    }
+    let username = Zeroizing::new(request.username);
+    let password = Zeroizing::new(request.password);
+    let credentials = cas::SsoCredentials::new(username.as_str(), password.as_str())
+        .map_err(|_| Error::Invalid("credentials are not admissible"))?;
+    let client = cas::http_client().map_err(|_| Error::Invalid("client initialization"))?;
+    let governor = Governor::open().map_err(Error::Local)?;
+    let mut lease = crate::net::acquire_kind(&governor, RequestKind::Authentication)
+        .map_err(|e| Error::Local(e.message.to_string()))?;
+    let authenticated = cas::authenticate_service(
+        &mut lease,
+        &client,
+        cas::CasService::Evaluation,
+        credentials,
+    );
+    let mut session = match authenticated {
+        Ok(session) => session,
+        Err(failure) => {
+            // Settle the durable attempt: an unsettled outcome blocks every
+            // later authentication until an offline operator review.
+            let settled = match failure.code {
+                "auth_latched" => lease.finish(Outcome::CredentialRejected),
+                "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ => lease.finish_without_request(),
+            };
+            settled.map_err(Error::Local)?;
+            return Err(Error::Local(format!(
+                "CAS handoff refused: {} ({}); no read was sent",
+                failure.code, failure.message
+            )));
+        }
+    };
+    // Target origin for the read; the scoped cookie is screened for exactly
+    // this host before it can be adopted.
+    let endpoint = match request.operation.as_str() {
+        "tasks" => "personnelEvaluation/listObtainPersonnelEvaluationTasks",
+        "questionnaires" => "evaluationMethodSix/getQuestionnaireListToTask",
+        "courses" => "evaluationMethodSix/getRequiredReviewsData",
+        _ => unreachable!("operation validated above"),
+    };
+    let target = Url::parse(BASE)
+        .and_then(|u| u.join(endpoint))
+        .map_err(|_| Error::Invalid("invalid endpoint"))?;
+    let (cookie, _expiry) = session
+        .cookie_header_for_transmission(&target)
+        .map_err(|_| Error::Invalid("session cookie unusable for the evaluation origin"))?;
+    let cookie = cookie.ok_or(Error::Invalid(
+        "the CAS handoff supplied no usable scoped cookie; no read was sent",
+    ))?;
+    let cookie = Zeroizing::new(
+        cookie
+            .to_str()
+            .map_err(|_| Error::Invalid("invalid session cookie"))?
+            .to_owned(),
+    );
+    // The CAS exchange completed and produced a usable scoped cookie; settle
+    // the authentication attempt as a successful bounded login. The read that
+    // follows acquires its own interactive lease through `Client`.
+    lease
+        .finish(Outcome::Success)
+        .map_err(Error::Local)?;
+    // Reuse the module's proven read admission, not a second copy of it.
+    let reader = Client::with_secret(cookie)?;
+    let value = match request.operation.as_str() {
+        "tasks" => reader.tasks(&request.student, 1)?,
+        "questionnaires" => reader.questionnaires(&request.student)?,
+        "courses" => reader.courses(&request.student)?,
+        _ => unreachable!("operation validated above"),
+    };
+    Ok(json!({"status":"ok","session_acceptance":"authenticated","source":"authenticated_session","read":request.operation,"result":value}))
+}
 pub fn schema() -> Value {
     let mut contract = typed_schema();
     let questionnaire = json!({"type":"object","required":["wjid","wjmc","rwmc"],"properties":{"wjid":{"type":"string"},"wjmc":{"type":"string"},"rwmc":{"type":"string"},"msid":{"type":["string","null"]}}});
@@ -2552,5 +2672,60 @@ mod tests {
                 "page"
             ])
         );
+    }
+    #[test]
+    fn session_gate_is_honest_before_any_transport() {
+        // A missing authorization refuses before any lease or network exists.
+        let output = run_session(
+            r#"{"username":"owner","password":"owner-password","intent":"LOGIN owner evaluation","operation":"tasks","student":"owner"}"#,
+        );
+        assert!(matches!(output, Err(Error::Invalid("explicit authorization for one evaluation authentication attempt is required"))));
+        // The intent must bind the username to the evaluation relying party.
+        let output = run_session(
+            r#"{"authorized":true,"username":"owner","password":"owner-password","intent":"LOGIN owner boya","operation":"tasks","student":"owner"}"#,
+        );
+        assert!(matches!(output, Err(Error::Invalid("authentication intent does not match"))));
+        // Only the bounded read operations are admissible; a mutation or an
+        // unknown operation is refused before any request is made.
+        for operation in ["submit", "status", ""] {
+            let command = format!(
+                r#"{{"authorized":true,"username":"owner","password":"owner-password","intent":"LOGIN owner evaluation","operation":"{}","student":"owner"}}"#,
+                operation
+            );
+            let output = run_session(&command);
+            assert!(matches!(output, Err(Error::Invalid("invalid session read operation"))));
+        }
+        // Without explicit online permission the session is refused and no
+        // request is sent, even when the credential is admissible.
+        let output = run_session(
+            r#"{"authorized":true,"username":"owner","password":"owner-password","intent":"LOGIN owner evaluation","operation":"tasks","student":"owner"}"#,
+        );
+        assert!(matches!(output, Err(Error::Invalid("session requires explicit online permission; no request was made"))));
+        // Empty credentials are refused by the shared CAS validator before any
+        // lease is opened; the online path still runs the check offline.
+        let output = run_session_online(
+            r#"{"authorized":true,"username":"owner","password":"","intent":"LOGIN owner evaluation","operation":"tasks","student":"owner"}"#,
+        );
+        assert!(matches!(output, Err(Error::Invalid("credentials are not admissible"))));
+        // A control-bearing credential (a literal tab inside a valid JSON
+        // string) is likewise refused before any lease is opened.
+        let output = run_session_online(
+            r#"{"authorized":true,"username":"owner","password":"bad\tsecret","intent":"LOGIN owner evaluation","operation":"tasks","student":"owner"}"#,
+        );
+        assert!(matches!(output, Err(Error::Invalid("credentials are not admissible"))));
+        // A positional or unknown-field session command is refused as an
+        // invalid command, not dispatched as a partially parsed request.
+        let output = run_session(r#"["owner","owner-password"]"#);
+        assert!(matches!(output, Err(Error::Invalid("invalid evaluation session command"))));
+        let output = run_session(
+            r#"{"authorized":true,"username":"owner","password":"owner-password","intent":"LOGIN owner evaluation","operation":"tasks","student":"owner","unexpected":true}"#,
+        );
+        assert!(matches!(output, Err(Error::Invalid("invalid evaluation session command"))));
+    }
+    fn run_session(input: &str) -> Result<Value, Error> {
+        session(input, false)
+    }
+    fn run_session_online(input: &str) -> Result<Value, Error> {
+        session(input, true)
     }
 }
