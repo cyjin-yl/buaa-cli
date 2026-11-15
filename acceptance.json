@@ -453,6 +453,12 @@
           "change": "Added a CAS session path (buaa evaluation session --online) that drives the shared one-shot CAS chain (SsoCredentials + authenticate_service) for the SPOC evaluation relying party, then settles the known business outcome: one bounded authenticated read (tasks/questionnaires/courses) through the module's existing byte-level admission. Credentials travel only through protected stdin; nothing is persisted, retransmitted or adopted. The owner-authored answer preview, typed confirmation and idempotency gate are unchanged and offline-tested.",
           "proof": "Offline tests prove: (1) session-read parse for tasks/questionnaires/courses through the existing safe_response contract; (2) the CAS session gate refuses a missing authorization, a mismatched intent, an invalid operation, and an offline session before any lease or transport; (3) empty and control-bearing credentials are refused by the shared CAS validator before any lease is opened; (4) a positional or unknown-field session command is refused as an invalid command. No campus evaluation was read or submitted.",
           "scope": "Offline session-read path and owner-answer gate; live CAS handoff and live authenticated read remain unverified against the SPOC evaluation origin."
+        },
+        "submit_confirmed_contract_2026_11_15": {
+          "change": "Added the `submit_confirmed` operation: the typed intent and operator-supplied topic declaration are re-validated, the immutable preview digest is re-derived offline with the same formula `prepare` uses, a digest drift against the caller-confirmed digest is refused, and the derived idempotency key is admitted through the caller-owned durable ledger, where a duplicate is refused without explicit reconfirmation. The operation accepts no session cookie and performs zero network requests.",
+          "proof": "Four focused offline tests: digest-match admission (offline and --online parse identically; neither touches the network), digest-drift refusal, duplicate-requires-reconfirmation, and schema declaration (no session_cookie member, 64-hex digest, string-array ledger, receipt constants).",
+          "receipt": "The receipt reports remote_request=false, submission_success=null and evaluation_postcondition_known=false, so a local idempotency admission is never claimed as remote acceptance; the remote submit stays blocked by MUTATION_BLOCKED.",
+          "scope": "Offline contract only; no campus evaluation was read or submitted."
         }
       },
       "sources": [

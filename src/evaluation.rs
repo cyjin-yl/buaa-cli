@@ -600,6 +600,11 @@ fn response_content_type(headers: &reqwest::header::HeaderMap) -> Option<&str> {
     Some(first)
 }
 const MUTATION_BLOCKED: &str = "evaluation mutation blocked before network: trusted read-only endpoint evidence is absent, and the mutation workflow lacks account/target-bound immutable plan/commit authorization, source-authorized durable atomic idempotency, and an authorized postcondition; a caller-injected SubmissionLedger is not source authorization";
+/// Evidence basis for a confirmed offline submission: the confirmed preview
+/// digest was re-derived from the typed intent and the operator-supplied topic
+/// declaration, the derived idempotency key was admitted through the
+/// caller-owned ledger, and no remote request was sent.
+const SUBMIT_CONFIRMED_OBSERVATION: &str = "the typed intent was re-validated, the confirmed preview digest was re-derived and matched, and the idempotency key was admitted through the caller-owned ledger; no remote request was sent and no evaluation postcondition was observed";
 pub fn legacy() -> Error {
     Error::Unsupported("legacy JWXT evaluation requires plaintext HTTP; HTTPS downgrade forbidden")
 }
@@ -1214,6 +1219,18 @@ enum Command {
         #[serde(default, deserialize_with = "optional_cookie")]
         session_cookie: Option<Zeroizing<String>>,
     },
+    /// Confirmed, idempotent, strictly offline submission admission. The
+    /// caller supplies the exact preview digest it confirmed, plus its own
+    /// durable idempotency ledger contents. Nothing is sent to the origin.
+    SubmitConfirmed {
+        intent: Intent,
+        topics: Value,
+        confirmed_digest: String,
+        #[serde(default)]
+        reconfirm: bool,
+        #[serde(default)]
+        previous_ledger: Vec<String>,
+    },
     Verify {
         course: Value,
         #[serde(default, deserialize_with = "optional_cookie")]
@@ -1401,6 +1418,46 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
                 }
                 let _ = (reconfirmation, session_cookie);
                 Ok(blocked(MUTATION_BLOCKED))
+            }
+            Command::SubmitConfirmed {
+                intent,
+                topics,
+                confirmed_digest,
+                reconfirm,
+                previous_ledger,
+            } => {
+                let pattern = Pattern {
+                    rwid: intent.rwid.clone(),
+                    wjid: intent.wjid.clone(),
+                };
+                // The digest is re-derived from the caller's own material with
+                // zero network requests, so the confirmation is self-consistent
+                // with the online preview formula rather than trusted.
+                let preview = prepare(intent, &topics, &pattern)?;
+                if preview.digest() != confirmed_digest {
+                    return Err(Error::Invalid(
+                        "digest_mismatch: the typed intent no longer matches the confirmed preview digest",
+                    ));
+                }
+                let key = preview.idempotency_key().to_owned();
+                if previous_ledger.contains(&key) && !reconfirm {
+                    return Err(Error::Invalid(
+                        "duplicate_evaluation_submit: explicit reconfirmation required for duplicate submission",
+                    ));
+                }
+                Ok(json!({
+                    "result": "evaluation_submit_admitted",
+                    "idempotency_key": key,
+                    "rwid": preview.intent().rwid.clone(),
+                    "wjid": preview.intent().wjid.clone(),
+                    "reconfirmed": reconfirm,
+                    "confirmed_digest": confirmed_digest,
+                    "preview_digest": preview.digest(),
+                    "remote_request": false,
+                    "submission_success": null,
+                    "evaluation_postcondition_known": false,
+                    "evidence_basis": SUBMIT_CONFIRMED_OBSERVATION
+                }))
             }
             Command::Verify {
                 course,
@@ -1602,6 +1659,22 @@ pub fn schema() -> Value {
                 ("reconfirmation", json!({"type":"boolean"})),
             ],
         ),
+        (
+            "submit_confirmed",
+            vec![
+                ("intent", contract["intent"].clone()),
+                ("topics", json!({})),
+                (
+                    "confirmed_digest",
+                    json!({"type":"string","minLength":64,"maxLength":64,"pattern":"^[0-9a-f]{64}$"}),
+                ),
+                ("reconfirm", json!({"type":"boolean"})),
+                (
+                    "previous_ledger",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+            ],
+        ),
         ("verify", vec![("course", json!({}))]),
         ("status", vec![]),
         ("legacy", vec![]),
@@ -1614,7 +1687,7 @@ pub fn schema() -> Value {
             required.push(name);
             properties.insert(name.into(), definition);
         }
-        if !matches!(operation, "prepare" | "legacy") {
+        if !matches!(operation, "prepare" | "submit_confirmed" | "legacy") {
             properties.insert("session_cookie".into(), json!({"type":["string","null"]}));
         }
         // Status is the authenticated read path: the session is mandatory and
@@ -1633,7 +1706,7 @@ pub fn schema() -> Value {
     }
     contract["dispatcher_verify_output"] = json!({"type":"object","additionalProperties":false,"required":["status","completed","verification","postcondition_matches","source","reason"],"properties":{"status":{"const":"ok"},"completed":{"const":false},"verification":{"const":false},"postcondition_matches":{"type":"boolean"},"source":{"enum":["operator_supplied","online_unbound"]},"reason":{"type":"string"}}});
     contract["dispatcher_status_output"] = json!({"type":"object","additionalProperties":false,"required":["status","tasks","total","submission_supported","session_acceptance","page"],"properties":{"status":{"const":"ok"},"tasks":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["rwid","rwmc"],"properties":{"rwid":{"type":"string"},"rwmc":{"type":"string"}}}},"total":{"type":"integer","minimum":0},"submission_supported":{"const":false},"session_acceptance":{"const":"unknown"},"page":{"type":"object","additionalProperties":false,"required":["number","size"],"properties":{"number":{"const":STATUS_PAGE},"size":{"const":STATUS_PAGE_SIZE}}}}});
-    json!({"input":{"oneOf":variants},"output":{"oneOf":[{"type":"object","required":["status","reason"],"properties":{"status":{"enum":["blocked","unsupported"]},"reason":{"type":"string"},"evidence":contract["evidence"]}},{"type":"object","required":["status"],"properties":{"status":{"const":"ok"}},"description":"operation-specific tasks/total (submission_supported:false), questionnaires, courses, topics, submission_body/preview_digest/idempotency_key, completed, or the bounded status task discovery"},contract["dispatcher_status_output"]]},"typed_api":contract})
+    json!({"input":{"oneOf":variants},"output":{"oneOf":[{"type":"object","required":["status","reason"],"properties":{"status":{"enum":["blocked","unsupported"]},"reason":{"type":"string"},"evidence":contract["evidence"]}},{"type":"object","required":["status"],"properties":{"status":{"const":"ok"}},"description":"operation-specific tasks/total (submission_supported:false), questionnaires, courses, topics, submission_body/preview_digest/idempotency_key, completed, or the bounded status task discovery"},contract["dispatcher_status_output"],contract["submit_confirmed_output"]]},"typed_api":contract})
 }
 fn typed_schema() -> Value {
     json!({
@@ -1646,6 +1719,8 @@ fn typed_schema() -> Value {
         "initialization":{"authenticated_session_acceptance":"unknown","http_success_is_authentication_proof":false},
         "clean_authenticated_response_projection":"recognized endpoints expose only parser-supported result/task/course/acknowledgement fields; sensitive or otherwise unreviewed responses are withheld without a CAPTCHA claim",
         "submission":{"status":"blocked","reason":MUTATION_BLOCKED,"owner_answers_only":true,"score_source":"explicit owner metadata","confirmation":"exact immutable preview digest is necessary but insufficient"},
+        "submit_confirmed":{"status":"offline_admitted","remote_request":false,"submission_success":null,"evaluation_postcondition_known":false,"reason":"a local idempotency admission is not a source-authorized mutation; the remote submit stays blocked"},
+        "submit_confirmed_output":{"type":"object","additionalProperties":false,"required":["result","idempotency_key","rwid","wjid","reconfirmed","confirmed_digest","preview_digest","remote_request","submission_success","evaluation_postcondition_known","evidence_basis"],"properties":{"result":{"const":"evaluation_submit_admitted"},"idempotency_key":{"type":"string","description":"derived from rwid, wjid and the canonicalized answers; persist atomically before any future submission"},"rwid":{"type":"string"},"wjid":{"type":"string"},"reconfirmed":{"type":"boolean"},"confirmed_digest":{"type":"string"},"preview_digest":{"type":"string"},"remote_request":{"const":false},"submission_success":{"type":"null"},"evaluation_postcondition_known":{"const":false},"evidence_basis":{"type":"string"}}},
         "submit_output":{"type":"object","required":["status","reason"],"properties":{"status":{"const":"blocked"},"reason":{"const":MUTATION_BLOCKED}}},
         "postcondition_output":{"type":"boolean","description":"unbound observation only, not authorized mutation completion"},
         "errors":["invalid","local","remote_evidence","unsupported"],
@@ -2532,6 +2607,101 @@ mod tests {
         assert!(l.claim(preview.digest(), false).is_ok());
         assert!(l.claim(preview.digest(), false).is_err());
         assert!(l.claim(preview.digest(), true).is_ok());
+    }
+    #[test]
+    fn confirmed_submit_admits_matching_digest() {
+        let (intent, topics, pattern) = fixture();
+        let preview = prepare(intent.clone(), &topics, &pattern).unwrap();
+        let command = json!({
+            "operation":"submit_confirmed",
+            "intent":intent,
+            "topics":topics,
+            "confirmed_digest":preview.digest(),
+            "reconfirm":false,
+            "previous_ledger":[]
+        });
+        for online in [false, true] {
+            let out = run(&command.to_string(), online).unwrap();
+            assert_eq!(out["result"], "evaluation_submit_admitted");
+            assert_eq!(out["idempotency_key"], preview.idempotency_key());
+            assert_eq!(out["preview_digest"], preview.digest());
+            assert_eq!(out["rwid"], "r");
+            assert_eq!(out["wjid"], "w");
+            assert_eq!(out["remote_request"], false);
+            assert_eq!(out["submission_success"], Value::Null);
+            assert_eq!(out["evaluation_postcondition_known"], false);
+            assert_eq!(out["reconfirmed"], false);
+        }
+    }
+    #[test]
+    fn confirmed_submit_refuses_digest_drift() {
+        let (intent, topics, _pattern) = fixture();
+        let command = json!({
+            "operation":"submit_confirmed",
+            "intent":intent,
+            "topics":topics,
+            "confirmed_digest":"0".repeat(64),
+            "reconfirm":false,
+            "previous_ledger":[]
+        });
+        let out = run(&command.to_string(), false).unwrap();
+        assert_eq!(out["status"], "blocked");
+        assert!(out["reason"].as_str().unwrap().contains("digest_mismatch"));
+    }
+    #[test]
+    fn confirmed_submit_duplicate_requires_reconfirm() {
+        let (intent, topics, pattern) = fixture();
+        let preview = prepare(intent.clone(), &topics, &pattern).unwrap();
+        let ledger = vec![preview.idempotency_key().to_owned()];
+        let duplicate = json!({
+            "operation":"submit_confirmed",
+            "intent":intent,
+            "topics":topics,
+            "confirmed_digest":preview.digest(),
+            "reconfirm":false,
+            "previous_ledger":ledger
+        });
+        let refused = run(&duplicate.to_string(), false).unwrap();
+        assert_eq!(refused["status"], "blocked");
+        assert!(
+            refused["reason"]
+                .as_str()
+                .unwrap()
+                .contains("duplicate_evaluation_submit")
+        );
+        let reconfirmed = json!({
+            "operation":"submit_confirmed",
+            "intent":intent,
+            "topics":topics,
+            "confirmed_digest":preview.digest(),
+            "reconfirm":true,
+            "previous_ledger":[preview.idempotency_key()]
+        });
+        let out = run(&reconfirmed.to_string(), false).unwrap();
+        assert_eq!(out["result"], "evaluation_submit_admitted");
+        assert_eq!(out["reconfirmed"], true);
+    }
+    #[test]
+    fn schema_declares_submit_confirmed() {
+        let contract = schema();
+        let variants = contract["input"]["oneOf"].as_array().unwrap();
+        let variant = variants
+            .iter()
+            .find(|v| v["properties"]["operation"]["const"] == "submit_confirmed")
+            .expect("submit_confirmed variant");
+        assert_eq!(variant["properties"]["confirmed_digest"]["minLength"], 64);
+        assert_eq!(
+            variant["properties"]["previous_ledger"],
+            json!({"type":"array","items":{"type":"string"}})
+        );
+        assert!(variant["properties"].get("session_cookie").is_none());
+        let output = &contract["typed_api"]["submit_confirmed_output"];
+        assert_eq!(output["properties"]["remote_request"]["const"], false);
+        assert_eq!(output["properties"]["submission_success"]["type"], "null");
+        let branches = contract["output"]["oneOf"].as_array().unwrap();
+        assert!(branches.iter().any(|branch| {
+            branch["properties"]["result"]["const"] == "evaluation_submit_admitted"
+        }));
     }
     #[test]
     fn legacy_and_fallback() {
