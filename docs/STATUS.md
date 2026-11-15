@@ -3606,3 +3606,21 @@ account exists, so the remaining live gaps are application-specific (IEAS
 binding, jumpserver, scoped meter directory) rather than a dead credential. A
 future live read under one of those applications requires a new deliberate
 operator resume; this attempt did not authorize any mutation.
+
+## 2026-11-15: evaluation offline confirmed-submission contract
+
+The `evaluation` module now exposes `submit_confirmed`. The typed intent and
+the operator-supplied topic declaration are re-validated, the immutable preview
+digest is re-derived offline with the same formula the online `prepare` uses, a
+digest drift against the caller-confirmed digest is refused, and the derived
+idempotency key — bound to the preview identity and the confirmed digest —
+is admitted through the caller-owned durable ledger, where a duplicate is
+refused without explicit reconfirmation. The operation accepts no
+session cookie and performs no network request.
+
+The receipt reports `remote_request=false`, `submission_success=null` and
+`evaluation_postcondition_known=false`, so a local idempotency admission is
+never presented as a remote submission. The online `submit` operation remains
+blocked by `MUTATION_BLOCKED`: no source-authorized account/target-bound
+plan/commit exists. Live evaluation reads and any owner-authored submission
+remain unverified against the SPOC evaluation origin.
