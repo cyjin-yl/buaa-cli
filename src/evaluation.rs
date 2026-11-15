@@ -605,6 +605,13 @@ const MUTATION_BLOCKED: &str = "evaluation mutation blocked before network: trus
 /// declaration, the derived idempotency key was admitted through the
 /// caller-owned ledger, and no remote request was sent.
 const SUBMIT_CONFIRMED_OBSERVATION: &str = "the typed intent was re-validated, the confirmed preview digest was re-derived and matched, and the idempotency key was admitted through the caller-owned ledger; no remote request was sent and no evaluation postcondition was observed";
+/// Ledger key for a confirmed submission. It binds the preview identity (rwid,
+/// wjid and the canonicalized answers) to the exact confirmed digest, so a
+/// metadata-only change cannot reuse a key the caller already admitted. Both
+/// inputs are hex or plain identifiers, so the separator is unambiguous.
+fn confirmed_submit_key(idempotency_key: &str, confirmed_digest: &str) -> String {
+    digest(format!("{idempotency_key}:{confirmed_digest}").as_bytes())
+}
 pub fn legacy() -> Error {
     Error::Unsupported("legacy JWXT evaluation requires plaintext HTTP; HTTPS downgrade forbidden")
 }
@@ -1439,7 +1446,7 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
                         "digest_mismatch: the typed intent no longer matches the confirmed preview digest",
                     ));
                 }
-                let key = preview.idempotency_key().to_owned();
+                let key = confirmed_submit_key(preview.idempotency_key(), &confirmed_digest);
                 if previous_ledger.contains(&key) && !reconfirm {
                     return Err(Error::Invalid(
                         "duplicate_evaluation_submit: explicit reconfirmation required for duplicate submission",
@@ -1453,6 +1460,7 @@ pub fn run(input: &str, online: bool) -> Result<Value, Error> {
                     "reconfirmed": reconfirm,
                     "confirmed_digest": confirmed_digest,
                     "preview_digest": preview.digest(),
+                    "preview_idempotency_key": preview.idempotency_key(),
                     "remote_request": false,
                     "submission_success": null,
                     "evaluation_postcondition_known": false,
@@ -1720,7 +1728,7 @@ fn typed_schema() -> Value {
         "clean_authenticated_response_projection":"recognized endpoints expose only parser-supported result/task/course/acknowledgement fields; sensitive or otherwise unreviewed responses are withheld without a CAPTCHA claim",
         "submission":{"status":"blocked","reason":MUTATION_BLOCKED,"owner_answers_only":true,"score_source":"explicit owner metadata","confirmation":"exact immutable preview digest is necessary but insufficient"},
         "submit_confirmed":{"status":"offline_admitted","remote_request":false,"submission_success":null,"evaluation_postcondition_known":false,"reason":"a local idempotency admission is not a source-authorized mutation; the remote submit stays blocked"},
-        "submit_confirmed_output":{"type":"object","additionalProperties":false,"required":["result","idempotency_key","rwid","wjid","reconfirmed","confirmed_digest","preview_digest","remote_request","submission_success","evaluation_postcondition_known","evidence_basis"],"properties":{"result":{"const":"evaluation_submit_admitted"},"idempotency_key":{"type":"string","description":"derived from rwid, wjid and the canonicalized answers; persist atomically before any future submission"},"rwid":{"type":"string"},"wjid":{"type":"string"},"reconfirmed":{"type":"boolean"},"confirmed_digest":{"type":"string"},"preview_digest":{"type":"string"},"remote_request":{"const":false},"submission_success":{"type":"null"},"evaluation_postcondition_known":{"const":false},"evidence_basis":{"type":"string"}}},
+        "submit_confirmed_output":{"type":"object","additionalProperties":false,"required":["result","idempotency_key","preview_idempotency_key","rwid","wjid","reconfirmed","confirmed_digest","preview_digest","remote_request","submission_success","evaluation_postcondition_known","evidence_basis"],"properties":{"result":{"const":"evaluation_submit_admitted"},"idempotency_key":{"type":"string","description":"derived from the preview identity (rwid, wjid, canonicalized answers) and the confirmed digest; persist atomically before any future submission"},"preview_idempotency_key":{"type":"string","description":"the preview-derived key reported by `prepare`; informational, not the ledger key"},"rwid":{"type":"string"},"wjid":{"type":"string"},"reconfirmed":{"type":"boolean"},"confirmed_digest":{"type":"string"},"preview_digest":{"type":"string"},"remote_request":{"const":false},"submission_success":{"type":"null"},"evaluation_postcondition_known":{"const":false},"evidence_basis":{"type":"string"}}},
         "submit_output":{"type":"object","required":["status","reason"],"properties":{"status":{"const":"blocked"},"reason":{"const":MUTATION_BLOCKED}}},
         "postcondition_output":{"type":"boolean","description":"unbound observation only, not authorized mutation completion"},
         "errors":["invalid","local","remote_evidence","unsupported"],
@@ -2623,7 +2631,12 @@ mod tests {
         for online in [false, true] {
             let out = run(&command.to_string(), online).unwrap();
             assert_eq!(out["result"], "evaluation_submit_admitted");
-            assert_eq!(out["idempotency_key"], preview.idempotency_key());
+            assert_eq!(
+                out["idempotency_key"],
+                confirmed_submit_key(preview.idempotency_key(), preview.digest())
+            );
+            assert_eq!(out["preview_idempotency_key"], preview.idempotency_key());
+            assert_ne!(out["idempotency_key"], preview.idempotency_key());
             assert_eq!(out["preview_digest"], preview.digest());
             assert_eq!(out["rwid"], "r");
             assert_eq!(out["wjid"], "w");
@@ -2652,7 +2665,8 @@ mod tests {
     fn confirmed_submit_duplicate_requires_reconfirm() {
         let (intent, topics, pattern) = fixture();
         let preview = prepare(intent.clone(), &topics, &pattern).unwrap();
-        let ledger = vec![preview.idempotency_key().to_owned()];
+        let key = confirmed_submit_key(preview.idempotency_key(), preview.digest());
+        let ledger = vec![key.clone()];
         let duplicate = json!({
             "operation":"submit_confirmed",
             "intent":intent,
@@ -2675,7 +2689,7 @@ mod tests {
             "topics":topics,
             "confirmed_digest":preview.digest(),
             "reconfirm":true,
-            "previous_ledger":[preview.idempotency_key()]
+            "previous_ledger":[key]
         });
         let out = run(&reconfirmed.to_string(), false).unwrap();
         assert_eq!(out["result"], "evaluation_submit_admitted");

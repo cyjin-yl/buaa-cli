@@ -30,8 +30,9 @@
 - evaluation: add `submit_confirmed`, an offline confirmed-submission contract
   that re-validates the typed intent, re-derives the immutable preview digest
   (same formula as `prepare`), refuses digest drift, and admits the derived
-  idempotency key through the caller-owned durable ledger, where a duplicate
-  needs explicit reconfirmation. It accepts no session cookie, sends no request
+  idempotency key (bound to the preview identity and the confirmed digest)
+  through the caller-owned durable ledger, where a duplicate needs explicit
+  reconfirmation. It accepts no session cookie, sends no request
   and reports `remote_request=false`, `submission_success=null` and
   `evaluation_postcondition_known=false`; the online submit stays blocked.
 - shuttle: add an explicit `shuttle session --online` native candidate with

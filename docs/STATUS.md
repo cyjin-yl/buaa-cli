@@ -3613,8 +3613,9 @@ The `evaluation` module now exposes `submit_confirmed`. The typed intent and
 the operator-supplied topic declaration are re-validated, the immutable preview
 digest is re-derived offline with the same formula the online `prepare` uses, a
 digest drift against the caller-confirmed digest is refused, and the derived
-idempotency key is admitted through the caller-owned durable ledger, where a
-duplicate is refused without explicit reconfirmation. The operation accepts no
+idempotency key — bound to the preview identity and the confirmed digest —
+is admitted through the caller-owned durable ledger, where a duplicate is
+refused without explicit reconfirmation. The operation accepts no
 session cookie and performs no network request.
 
 The receipt reports `remote_request=false`, `submission_success=null` and
