@@ -3727,6 +3727,8 @@ CAS service as `https://bhpan.buaa.edu.cn/oauth2/signin` with
 entry is therefore `/anyshare/oauth2/login`, not the module's `/login/oauth`
 (which answers 404). The exchange does not complete for this account, so no
 authenticated drive session was established and no drive read or write was
-performed. Whether the callback failure is account-specific or a standing
-deployment defect is not established.
+performed. The Hydra consent step auto-approves (302, no interactive consent page), so
+the failure is in the callback code exchange, not a missing user approval.
+Whether the callback failure is account-specific or a standing deployment
+defect is not established.
 
