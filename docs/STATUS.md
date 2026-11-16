@@ -3711,3 +3711,22 @@ The learning-material modules (`welearn`, `aerospace`, `departments`) contact no
 campus host: they read immutable public GitHub objects, all of which answer
 unauthenticated.
 
+## 2026-11-16: AnyShare OAuth flow observed end-to-end (callback fails)
+
+One owner-authorized CAS authentication through the deployment's own OAuth
+flow (credentials through protected stdin only, never printed or stored). The
+SPA entry `/anyshare/oauth2/login` redirects through `/oauth2/auth` and
+`/oauth2/signin` (an Ory Hydra consent UI) to the CAS sign-on. After the
+credential is accepted, the flow returns to `/anyshare/oauth2/login/callback`
+carrying `code`, `scope` and `state`, but the callback answers HTTP 400 with an
+iframe error shell and the SPA re-runs the flow in a loop.
+
+The deployment's auth config (`/api/eacp/v1/auth1/login-configs`) declares the
+CAS service as `https://bhpan.buaa.edu.cn/oauth2/signin` with
+`casValidateUrl https://sso.buaa.edu.cn/serviceValidate`. The correct OAuth
+entry is therefore `/anyshare/oauth2/login`, not the module's `/login/oauth`
+(which answers 404). The exchange does not complete for this account, so no
+authenticated drive session was established and no drive read or write was
+performed. Whether the callback failure is account-specific or a standing
+deployment defect is not established.
+

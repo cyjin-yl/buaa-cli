@@ -926,6 +926,11 @@
       "status": "pending",
       "acceptance": "List/tree/upload/download/move/copy/delete; byte integrity and paginated cursors; destructive writes plan/commit.",
       "evidence": {
+        "live_oauth_flow_observation_2026_11_16": {
+          "change": "One owner-authorized CAS authentication through the deployment's own OAuth flow (credentials through protected stdin only): the SPA entry /anyshare/oauth2/login redirects through /oauth2/auth and /oauth2/signin (an Ory Hydra consent UI) to the CAS sign-on; after the credential is accepted the flow returns to /anyshare/oauth2/login/callback with code, scope and state query parameters, but the callback answers HTTP 400 and the SPA re-runs the flow in a loop. The deployment's auth config (/api/eacp/v1/auth1/login-configs) declares the CAS service as https://bhpan.buaa.edu.cn/oauth2/signin with casValidateUrl https://sso.buaa.edu.cn/serviceValidate.",
+          "proof": "Native browser observation of the full redirect chain and the callback response: status 400, an iframe error shell, and the repeated /anyshare/oauth2/login -> /oauth2/auth -> /oauth2/signin -> /oauth2/consent -> /oauth2/auth -> callback cycle. No drive read or write was performed and no token was retained.",
+          "scope": "The OAuth callback fails server-side for this account; the correct OAuth path is /anyshare/oauth2/login (not the module's /login/oauth), but the exchange does not complete, so no authenticated drive session was established and the module's authorization_url remains unverified end-to-end."
+        },
         "live_deployment_observation_2026_11_16": {
           "change": "Unauthenticated probes of the AnyShare deployment (owner-authorized read observation, no credential): the host redirects to the /anyshare/ SPA base path and is a registered CAS service, but the OAuth path the module builds (/login/oauth) answers HTTP 404 with an empty nginx body, while /anyshare/login/oauth only returns the SPA shell. The deployed API base is therefore not the one the module assumes.",
           "proof": "Native browser observation of https://bhpan.buaa.edu.cn/login/oauth?state=probe returned 404; https://bhpan.buaa.edu.cn/anyshare/login/oauth?state=probe returned the SPA shell. No OAuth authorization was attempted and no credential was sent.",
