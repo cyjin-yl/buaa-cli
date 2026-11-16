@@ -4001,7 +4001,10 @@ fn terminal_service_credential(
 /// query parameter. It is consumed in memory by the checkin module and never
 /// fetched, so admitting the 8346 sink here cannot weaken transport. A
 /// credential parameter appearing anywhere else, a duplicate or an empty
-/// loginName is ambiguous with the reviewed contract and refuses.
+/// loginName is ambiguous with the reviewed contract and refuses. A relying
+/// party that redirects without the reviewed handoff failed its own side of
+/// the contract, so that case is reported as a handoff contract mismatch and
+/// never as a caller input error.
 fn iclass_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
     if url.host_str() != Some(ICLASS_HOST) || url.port() != Some(8346) {
         return Ok(None);
@@ -4019,16 +4022,47 @@ fn iclass_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Er
         .map(|(_, value)| Zeroizing::new(value.into_owned()))
         .collect();
     if names.len() != 1 {
-        return Err(invalid());
+        return Err(Error::new(
+            "handoff_contract_mismatch",
+            "The iClass relying party did not supply the reviewed single loginName handoff.",
+        ));
     }
     let name = names.into_iter().next().unwrap_or_default();
-    if name.trim().is_empty()
-        || name.len() > MAX_TERMINAL_CREDENTIAL_BYTES
-        || name.chars().any(char::is_control)
-    {
+    if name.trim().is_empty() {
+        return Err(Error::new(
+            "handoff_contract_mismatch",
+            "The iClass relying party supplied an empty loginName handoff.",
+        ));
+    }
+    if name.len() > MAX_TERMINAL_CREDENTIAL_BYTES || name.chars().any(char::is_control) {
         return Err(invalid());
     }
     Ok(Some(name))
+}
+
+/// How a relying party answered the ticket exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandoffOutcome {
+    /// The relying party answered with a server error. The sign-on service had
+    /// already accepted the credential, so this is neither a rejected
+    /// credential nor an unconfirmed handoff.
+    ServerError,
+    /// The handoff is judged by the service-specific proof.
+    Unconfirmed,
+}
+
+/// Classify the relying party's own answer to the ticket exchange. Only an
+/// HTTP 500 from the relying party's own origin is treated as a server-side
+/// failure: the observed campus outage answers the ticket sink with that
+/// status and its own error envelope, and no other status is claimed without
+/// evidence. A 500 from the sign-on service itself is not a relying-party
+/// failure and says nothing about the credential.
+fn classify_relying_party_handoff(host: &str, status: u16) -> HandoffOutcome {
+    if host != "sso.buaa.edu.cn" && status == 500 {
+        HandoffOutcome::ServerError
+    } else {
+        HandoffOutcome::Unconfirmed
+    }
 }
 
 /// Admit exactly the reviewed plaintext CAS callback for the iHome and
@@ -6617,6 +6651,23 @@ pub(crate) fn authenticate_service(
     // challenge control, an unreviewed challenge/interaction, or a password
     // form means the sign-on did not complete, whatever relying party the
     // credential was aimed at.
+    // A relying party that answers the ticket exchange with a server error
+    // failed on its own side: the sign-on service had already accepted the
+    // credential. Report that as its own outcome so the operator is not told
+    // the credential was refused and no retry is offered.
+    // The landing must actually be the relying party's own origin. A 500 from
+    // the sign-on service itself is not a relying-party failure and says
+    // nothing about the credential, so it stays unconfirmed.
+    if landed
+        .url
+        .host_str()
+        .is_some_and(|host| classify_relying_party_handoff(host, landed.status) == HandoffOutcome::ServerError)
+    {
+        return Err(Error::new(
+            "relying_party_error",
+            "The relying party failed the ticket exchange with an HTTP 500 server error; the credential was not rejected.",
+        ));
+    }
     if landed.status == 200 {
         match landing_verdict(&landed) {
             LandingVerdict::Clear => {}
@@ -11693,5 +11744,67 @@ mod tests {
         ] {
             assert!(!bytes.contains(marker), "receipt leaked {marker}");
         }
+    }
+
+    #[test]
+    fn relying_party_server_error_is_classified_apart() {
+        // The observed campus outage answers the ticket sink with HTTP 500
+        // and its own error envelope. That is the relying party failing, not
+        // a rejected credential and not an unconfirmed handoff.
+        assert_eq!(
+            classify_relying_party_handoff("spoc.buaa.edu.cn", 500),
+            HandoffOutcome::ServerError
+        );
+        for status in [200, 302, 401, 403, 429, 502, 503] {
+            assert_eq!(
+                classify_relying_party_handoff("spoc.buaa.edu.cn", status),
+                HandoffOutcome::Unconfirmed,
+                "status {status} must not be claimed as a server-side failure"
+            );
+        }
+        // A 500 answered by the sign-on service itself is not a relying-party
+        // failure: no ticket exchange reached a relying party, and the
+        // credential verdict was never given.
+        assert_eq!(
+            classify_relying_party_handoff("sso.buaa.edu.cn", 500),
+            HandoffOutcome::Unconfirmed
+        );
+    }
+
+    #[test]
+    fn iclass_handoff_without_login_name_is_a_contract_mismatch() {
+        // The campus CAS sink for iClass redirected to the application port
+        // without the reviewed loginName parameter. That is the relying party
+        // breaking the reviewed contract, never a caller input error.
+        let without = iclass_terminal_credential(
+            &Url::parse("https://iclass.buaa.edu.cn:8346/").expect("url"),
+        )
+        .expect_err("a redirect without loginName must not be admitted");
+        assert_eq!(without.code, "handoff_contract_mismatch");
+
+        let duplicate = iclass_terminal_credential(
+            &Url::parse("https://iclass.buaa.edu.cn:8346/?loginName=a&loginName=b").expect("url"),
+        )
+        .expect_err("an ambiguous loginName must not be admitted");
+        assert_eq!(duplicate.code, "handoff_contract_mismatch");
+
+        let empty = iclass_terminal_credential(
+            &Url::parse("https://iclass.buaa.edu.cn:8346/?loginName=").expect("url"),
+        )
+        .expect_err("an empty loginName must not be admitted");
+        assert_eq!(empty.code, "handoff_contract_mismatch");
+
+        let admitted = iclass_terminal_credential(
+            &Url::parse("https://iclass.buaa.edu.cn:8346/?loginName=a%2Bb").expect("url"),
+        )
+        .expect("a single loginName is admitted");
+        assert_eq!(admitted.expect("credential").as_str(), "a+b");
+
+        // A credential that is present but malformed stays an input refusal.
+        let control = iclass_terminal_credential(
+            &Url::parse("https://iclass.buaa.edu.cn:8346/?loginName=a%0Ab").expect("url"),
+        )
+        .expect_err("a control-bearing loginName must not be admitted");
+        assert_eq!(control.code, "invalid_input");
     }
 }

@@ -1525,6 +1525,13 @@ fn settle_camoufox(
             challenge,
             network_failure: true,
         }),
+        "relying_party_error" => lease.finish(Outcome::Http {
+            status: 500,
+            retry_after: None,
+            challenge: false,
+            network_failure: false,
+        }),
+        "handoff_contract_mismatch" => lease.finish_without_request(),
         "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
         _ if status.is_some() => lease.finish(Outcome::Http {
             status: status.unwrap_or(500),
@@ -2454,6 +2461,13 @@ pub(crate) fn session_with_network(
             let settled = match failure.code {
                 "auth_latched" => lease.finish(Outcome::CredentialRejected),
                 "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "relying_party_error" => lease.finish(Outcome::Http {
+                    status: 500,
+                    retry_after: None,
+                    challenge: false,
+                    network_failure: false,
+                }),
+                "handoff_contract_mismatch" => lease.finish_without_request(),
                 "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
                 _ if initialization_observed.is_some() => {
                     let (status, retry_after, challenge) = initialization_observed

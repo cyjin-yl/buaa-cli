@@ -3624,3 +3624,50 @@ never presented as a remote submission. The online `submit` operation remains
 blocked by `MUTATION_BLOCKED`: no source-authorized account/target-bound
 plan/commit exists. Live evaluation reads and any owner-authored submission
 remain unverified against the SPOC evaluation origin.
+
+## 2026-11-15: SPOC evaluation relying-party ticket exchange fails server-side
+
+A single deliberate operator authentication attempt reached the SPOC
+evaluation relying party. The shared CAS sign-on succeeded and issued the
+`CASTGC` and `PJXTINCO` cookies, so the credential was accepted. The
+relying party's own ticket endpoint `https://spoc.buaa.edu.cn/pjxt/cas` then
+answered HTTP 500 with the application's own JSON envelope
+`{"code":200,...,"content":{"status":500,"error":"Internal Server Error","path":"/pjxt/cas"}}`.
+Re-navigating to `https://spoc.buaa.edu.cn/pjxt/` showed the unauthenticated
+landing page, so no evaluation application session was established. A direct
+GET of `/pjxt/cas` without a ticket answers 302 to the SSO login, so the 500 is
+reached only with a valid ticket.
+
+The failure therefore belongs to the relying party and not to the credential:
+the sign-on service had already accepted the credential before the relying
+party failed its own side of the exchange. The shared session layer reports
+this outcome as `relying_party_error` and settles the durable lease as an
+observed HTTP 500, not as a rejected credential, so no retry or credential
+fallback is offered. Whether the 500 is a transient outage or a standing
+misconfiguration of the relying party is not established, and no live
+evaluation read, task binding, owner-authored answer, submission or
+postcondition has been observed against the SPOC evaluation origin.
+
+## 2026-11-15: iClass relying party breaks the terminal-credential handoff
+
+A single deliberate operator authentication attempt reached the iClass
+relying party. The shared CAS sign-on succeeded and issued the `CASTGC` and
+`JSESSIONID` cookies, but the CAS sink redirected to
+`https://iclass.buaa.edu.cn:8346/` (302) without the `loginName` query
+parameter that the check-in module's terminal-credential contract requires.
+With the session cookie the application admits
+`course/get_base_school_year.action`, which returns 22 semesters, while the
+user-bound reads `course/get_stu_course_sched.action` and
+`choosecourse/get_myall_course.action` answer 200 with an empty body.
+
+A redirect to the application port without exactly one non-empty `loginName`
+is the relying party departing from the reviewed handoff, so the shared
+session layer reports it as `handoff_contract_mismatch` and settles the
+durable lease without counting a further request, because no application
+request follows the failed handoff, instead of an invalid input that would
+have blamed the caller for a server-side departure. A `loginName` that is
+present but oversized or control-bearing remains an input refusal. No
+authenticated session bound to a login identity was obtained, so owner
+presence, an authorized lesson, a durable idempotent commit and its
+postcondition remain unverified, and whether the empty user-bound bodies
+mean a missing binding or an absent dataset is not established.
