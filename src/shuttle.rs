@@ -1391,6 +1391,13 @@ pub(crate) fn session_with_network(
             let settled = match failure.code {
                 "auth_latched" => lease.finish(Outcome::CredentialRejected),
                 "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "relying_party_error" => lease.finish(Outcome::Http {
+                    status: 500,
+                    retry_after: None,
+                    challenge: false,
+                    network_failure: false,
+                }),
+                "handoff_contract_mismatch" => lease.finish_without_request(),
                 "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
                 _ => lease.finish_without_request(),
             };
@@ -1477,6 +1484,13 @@ pub(crate) fn session_with_network(
         drop(response);
         let settled = match failure.code {
             "governor_error" | "governor_denied" | "governor_unavailable" => return Err(failure),
+            "relying_party_error" => lease.finish(Outcome::Http {
+                status: 500,
+                retry_after: None,
+                challenge: false,
+                network_failure: false,
+            }),
+            "handoff_contract_mismatch" => lease.finish_without_request(),
             "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
             _ => lease.finish_without_request(),
         };

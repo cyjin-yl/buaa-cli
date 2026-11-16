@@ -27,6 +27,13 @@
 
 ## Unreleased
 
+- session: classify a relying party's own HTTP 500 at the ticket exchange as
+  `relying_party_error` (settled as the observed status, never a credential
+  rejection), and an iClass redirect to the application port without the
+  reviewed single `loginName` handoff as `handoff_contract_mismatch` instead
+  of blaming the caller with `invalid_input`. A 500 from the sign-on service
+  itself stays unconfirmed; oversized or control-bearing handoff values stay
+  input refusals.
 - evaluation: add `submit_confirmed`, an offline confirmed-submission contract
   that re-validates the typed intent, re-derives the immutable preview digest
   (same formula as `prepare`), refuses digest drift, and admits the derived

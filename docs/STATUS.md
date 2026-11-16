@@ -3624,3 +3624,111 @@ never presented as a remote submission. The online `submit` operation remains
 blocked by `MUTATION_BLOCKED`: no source-authorized account/target-bound
 plan/commit exists. Live evaluation reads and any owner-authored submission
 remain unverified against the SPOC evaluation origin.
+
+## 2026-11-15: SPOC evaluation relying-party ticket exchange fails server-side
+
+A single deliberate operator authentication attempt reached the SPOC
+evaluation relying party. The shared CAS sign-on succeeded and issued the
+`CASTGC` and `PJXTINCO` cookies, so the credential was accepted. The
+relying party's own ticket endpoint `https://spoc.buaa.edu.cn/pjxt/cas` then
+answered HTTP 500 with the application's own JSON envelope
+`{"code":200,...,"content":{"status":500,"error":"Internal Server Error","path":"/pjxt/cas"}}`.
+Re-navigating to `https://spoc.buaa.edu.cn/pjxt/` showed the unauthenticated
+landing page, so no evaluation application session was established. A direct
+GET of `/pjxt/cas` without a ticket answers 302 to the SSO login, so the 500 is
+reached only with a valid ticket.
+
+The failure therefore belongs to the relying party and not to the credential:
+the sign-on service had already accepted the credential before the relying
+party failed its own side of the exchange. The shared session layer reports
+this outcome as `relying_party_error` and settles the durable lease as an
+observed HTTP 500, not as a rejected credential, so no retry or credential
+fallback is offered. Whether the 500 is a transient outage or a standing
+misconfiguration of the relying party is not established, and no live
+evaluation read, task binding, owner-authored answer, submission or
+postcondition has been observed against the SPOC evaluation origin.
+
+## 2026-11-15: iClass relying party breaks the terminal-credential handoff
+
+A single deliberate operator authentication attempt reached the iClass
+relying party. The shared CAS sign-on succeeded and issued the `CASTGC` and
+`JSESSIONID` cookies, but the CAS sink redirected to
+`https://iclass.buaa.edu.cn:8346/` (302) without the `loginName` query
+parameter that the check-in module's terminal-credential contract requires.
+With the session cookie the application admits
+`course/get_base_school_year.action`, which returns 22 semesters, while the
+user-bound reads `course/get_stu_course_sched.action` and
+`choosecourse/get_myall_course.action` answer 200 with an empty body.
+
+A redirect to the application port without exactly one non-empty `loginName`
+is the relying party departing from the reviewed handoff, so the shared
+session layer reports it as `handoff_contract_mismatch` and settles the
+durable lease without counting a further request, because no application
+request follows the failed handoff, instead of an invalid input that would
+have blamed the caller for a server-side departure. A `loginName` that is
+present but oversized or control-bearing remains an input refusal. No
+authenticated session bound to a login identity was obtained, so owner
+presence, an authorized lesson, a durable idempotent commit and its
+postcondition remain unverified, and whether the empty user-bound bodies
+mean a missing binding or an absent dataset is not established.
+
+## 2026-11-16: remaining online services probed unauthenticated
+
+Owner-authorized read-only observation, no credential sent, no login
+attempted, no mutation.
+
+AnyShare drive (`bhpan.buaa.edu.cn`) is reachable and is a registered CAS
+service, but it redirects to the `/anyshare/` SPA base path. The OAuth path
+the module builds (`/login/oauth`) answers HTTP 404 with an empty nginx body;
+`/anyshare/login/oauth` only returns the SPA shell. The correct OAuth path for
+this deployment is not established, so the module's authorization URL stays
+unverified and no drive read or write was performed.
+
+The OS-lab jumpserver host `buaaos.studio` no longer exists: authoritative
+NXDOMAIN from the `.studio` registry, and `buaaos.buaa.edu.cn` is NXDOMAIN in
+the campus zone. The only documented alternate is the campus WebVPN gateway
+`d.buaa.edu.cn`, which itself demands a CAS sign-on. No jumpserver session was
+attempted.
+
+The electricity upstream is plaintext-HTTP-only (`http://shsd.buaa.edu.cn/PubBuaa`;
+the HTTPS handshake times out) and its directory enumerates other occupants'
+room and meter records. Both blockers stand: no TLS endpoint exists, and the
+directory is third-party private data. The module's refusal is a protocol and
+privacy fact, not over-conservatism.
+
+iClass exposes the same application on additional ports: `…:8081` serves the
+student front-end and the `/app/*.action` API over plain HTTP without SSO, and
+`…:8181` serves the app's own JS/CSS. The app resolves an account from a
+`phone` loginName through `app/user/login.action` and issues a server
+`sessionId`; that local credential store is separate from CAS. With the
+operator's CAS credential the local login answers "password incorrect", so the
+CAS account and the local iClass account are not the same secret. The
+account-bound reads still answer 200 with an empty body, and the CAS-gated
+student page renders no identity, so no account-bound check-in read could be
+established.
+
+The learning-material modules (`welearn`, `aerospace`, `departments`) contact no
+campus host: they read immutable public GitHub objects, all of which answer
+unauthenticated.
+
+## 2026-11-16: AnyShare OAuth flow observed end-to-end (callback fails)
+
+One owner-authorized CAS authentication through the deployment's own OAuth
+flow (credentials through protected stdin only, never printed or stored). The
+SPA entry `/anyshare/oauth2/login` redirects through `/oauth2/auth` and
+`/oauth2/signin` (an Ory Hydra consent UI) to the CAS sign-on. After the
+credential is accepted, the flow returns to `/anyshare/oauth2/login/callback`
+carrying `code`, `scope` and `state`, but the callback answers HTTP 400 with an
+iframe error shell and the SPA re-runs the flow in a loop.
+
+The deployment's auth config (`/api/eacp/v1/auth1/login-configs`) declares the
+CAS service as `https://bhpan.buaa.edu.cn/oauth2/signin` with
+`casValidateUrl https://sso.buaa.edu.cn/serviceValidate`. The correct OAuth
+entry is therefore `/anyshare/oauth2/login`, not the module's `/login/oauth`
+(which answers 404). The exchange does not complete for this account, so no
+authenticated drive session was established and no drive read or write was
+performed. The Hydra consent step auto-approves (302, no interactive consent page), so
+the failure is in the callback code exchange, not a missing user approval.
+Whether the callback failure is account-specific or a standing deployment
+defect is not established.
+
