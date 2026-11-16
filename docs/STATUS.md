@@ -3671,3 +3671,43 @@ authenticated session bound to a login identity was obtained, so owner
 presence, an authorized lesson, a durable idempotent commit and its
 postcondition remain unverified, and whether the empty user-bound bodies
 mean a missing binding or an absent dataset is not established.
+
+## 2026-11-16: remaining online services probed unauthenticated
+
+Owner-authorized read-only observation, no credential sent, no login
+attempted, no mutation.
+
+AnyShare drive (`bhpan.buaa.edu.cn`) is reachable and is a registered CAS
+service, but it redirects to the `/anyshare/` SPA base path. The OAuth path
+the module builds (`/login/oauth`) answers HTTP 404 with an empty nginx body;
+`/anyshare/login/oauth` only returns the SPA shell. The correct OAuth path for
+this deployment is not established, so the module's authorization URL stays
+unverified and no drive read or write was performed.
+
+The OS-lab jumpserver host `buaaos.studio` no longer exists: authoritative
+NXDOMAIN from the `.studio` registry, and `buaaos.buaa.edu.cn` is NXDOMAIN in
+the campus zone. The only documented alternate is the campus WebVPN gateway
+`d.buaa.edu.cn`, which itself demands a CAS sign-on. No jumpserver session was
+attempted.
+
+The electricity upstream is plaintext-HTTP-only (`http://shsd.buaa.edu.cn/PubBuaa`;
+the HTTPS handshake times out) and its directory enumerates other occupants'
+room and meter records. Both blockers stand: no TLS endpoint exists, and the
+directory is third-party private data. The module's refusal is a protocol and
+privacy fact, not over-conservatism.
+
+iClass exposes the same application on additional ports: `…:8081` serves the
+student front-end and the `/app/*.action` API over plain HTTP without SSO, and
+`…:8181` serves the app's own JS/CSS. The app resolves an account from a
+`phone` loginName through `app/user/login.action` and issues a server
+`sessionId`; that local credential store is separate from CAS. With the
+operator's CAS credential the local login answers "password incorrect", so the
+CAS account and the local iClass account are not the same secret. The
+account-bound reads still answer 200 with an empty body, and the CAS-gated
+student page renders no identity, so no account-bound check-in read could be
+established.
+
+The learning-material modules (`welearn`, `aerospace`, `departments`) contact no
+campus host: they read immutable public GitHub objects, all of which answer
+unauthenticated.
+

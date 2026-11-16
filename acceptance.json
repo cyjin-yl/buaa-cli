@@ -926,6 +926,11 @@
       "status": "pending",
       "acceptance": "List/tree/upload/download/move/copy/delete; byte integrity and paginated cursors; destructive writes plan/commit.",
       "evidence": {
+        "live_deployment_observation_2026_11_16": {
+          "change": "Unauthenticated probes of the AnyShare deployment (owner-authorized read observation, no credential): the host redirects to the /anyshare/ SPA base path and is a registered CAS service, but the OAuth path the module builds (/login/oauth) answers HTTP 404 with an empty nginx body, while /anyshare/login/oauth only returns the SPA shell. The deployed API base is therefore not the one the module assumes.",
+          "proof": "Native browser observation of https://bhpan.buaa.edu.cn/login/oauth?state=probe returned 404; https://bhpan.buaa.edu.cn/anyshare/login/oauth?state=probe returned the SPA shell. No OAuth authorization was attempted and no credential was sent.",
+          "scope": "The correct OAuth path for this deployment is not established; the module's authorization_url stays unverified against the live service and no drive read or write was performed."
+        },
         "source_research": "Pinned public AnyShare clients declare candidate OAuth and transfer requests but disagree on collision-policy values and do not establish the current BUAA deployment, pagination completeness or mutation postconditions.",
         "remaining": "Normalized numeric credential echoes were reproduced and withheld in synthetic admission and operator-supplied CLI cases; scoped source review found no further issue. OAuth authorization is now admitted as a private random single-consumption binding (HMAC-SHA256 over host, CSRF, challenge and nonce) with a sealed in-memory token exchange sink whose token never reaches output, argv or log; the password-encryption exchange path, directory listing (attribute/order contract), transfer integrity and mutation postconditions remain unverified."
       },
@@ -1091,6 +1096,11 @@
         "https://trickeye.github.io/can_I_Graduate/"
       ],
       "evidence": {
+        "live_host_observation_2026_11_16": {
+          "change": "Unauthenticated DNS observation (owner-authorized read observation, no credential): the pinned jumpserver host buaaos.studio returns authoritative NXDOMAIN from the .studio registry, and buaaos.buaa.edu.cn returns NXDOMAIN from the campus zone. The only documented alternate route is the campus WebVPN gateway d.buaa.edu.cn, which itself demands a CAS sign-on.",
+          "proof": "DNS-over-HTTPS queries returned Status 3 (NXDOMAIN) with the authoritative SOA for both names; https://d.buaa.edu.cn/ redirects to its own CAS-gated login. No jumpserver session was attempted.",
+          "scope": "The module's pinned host does not exist in public DNS; any live JumpServer/Koko session now requires the WebVPN path plus a CAS credential, and no authorized SSH/git workflow has been established."
+        },
         "workflow_contract_offline_2026_11_02": {
           "command": "buaa os-lab workflow --offline (stdin: host + authorization_scope)",
           "observed": "Offline explicit authorized SSH/git workflow implemented and proven: the workflow operation takes a caller-claimed authorization scope (distinct step identifiers 1..7) and returns an ordered seven-step decision table. Each step carries claimed (the caller's assertion), authorized (the claim carried through), verified (always false offline, since no invocation can verify a remote permission) and a fixed rationale. Status distinguishes no_claims / fully_claimed_unverified / partially_claimed_unverified. The seven boundary strings are shared with the plan's required_parameters so a decision table and a plan cannot drift apart. The operation is offline-pure: executed=false, network_access=false, requests_performed=0, writes_performed=0, submission_supported=false, and submission member names are refused with the stated reason before any value is read.",
