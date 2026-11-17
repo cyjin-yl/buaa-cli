@@ -13,6 +13,13 @@
         "https://www.rfc-editor.org/rfc/rfc9110#section-5.6.7"
       ],
       "evidence": {
+        "live_observation_2026_11_17": {
+          "scope": "Governor state across the 2026-11-17 live attempts recorded under evaluation, checkin and timetable-pg: evaluation CAS sign-on with relying-party HTTP 500, checkin CAS sign-on with a missing-loginName handoff, timetable native credential-echo screen refusal and the timetable camoufox launch failure.",
+          "pending": null,
+          "safety_latched": false,
+          "network_failures": 0,
+          "significance": "Every attempt settled its durable lease; no pending outcome, safety latch or network-failure count remained afterwards. The relying-party HTTP 500, the missing-loginName handoff and the credential-echo screen refusal were not classified as credential rejections, so no latch or retry gate engaged."
+        },
         "resume_and_legacy_state_2026_10_31": {
           "resume_contract": "Governor::resume_authentication is state validation only since 5148607. Both the classroom resume schema and the gateway resume-auth output had still declared result one_attempt_armed and told the operator to arm an attempt; both now report no_latch_required, and the whole `buaa schema` payload no longer contains the retired constant. Verified at runtime for both commands.",
           "legacy_state": "A state file written by the latched build can still carry safety_latched and authentication_armed as true. It is read, validated and reported verbatim as history, and no gate consults it: a new regression seeds both true, reopens the governor and asserts an interactive request is admitted. An attempted normalisation to false was reverted because it broke the documented verbatim-retention contract.",
@@ -437,6 +444,19 @@
       "status": "pending",
       "acceptance": "Owner-authored answers with preview, typed confirmation and idempotency.",
       "evidence": {
+        "live_observation_2026_11_17": {
+          "command": "buaa evaluation session --online, one deliberate operator authentication attempt",
+          "cas_sign_on": "success",
+          "relying_party_ticket_exchange": "https://spoc.buaa.edu.cn/pjxt/cas answered HTTP 500 with the application's own JSON error envelope; no evaluation application session was established",
+          "classification": "relying_party_error",
+          "credential_rejected": false,
+          "governor": {
+            "pending": null,
+            "safety_latched": false,
+            "network_failures": 0
+          },
+          "scope": "Recurrence of the server-side relying-party defect first recorded in live_relying_party_failure_2026_11_15, at the same session entry. The CAS sign-on accepted the credential before the relying party failed its ticket exchange, so this is a server-side defect, not a credential rejection. No live evaluation read, task binding, owner-authored answer, submission or postcondition was observed; status stays pending."
+        },
         "candidate_offline": "A synthetic admission test reproduced a numeric submitted-cookie echo in a task total; the repaired path passed the same test with an ordinary control and a normalized numeric course-field case.",
         "remaining": "The session-read path (tasks/questionnaires/courses with a protected-stdin session cookie) and the owner-authored answer preview/typed-confirmation/idempotency gate are implemented and offline-proven; the CAS session path drives the shared one-shot CAS chain and settles the known business outcome through the module's byte-level read admission. A trusted live session, current task binding, owner-authored mutation and authorized postcondition remain unverified against the live SPOC evaluation origin.",
         "offline_observation_2026_10_31": {
@@ -534,6 +554,27 @@
         "https://github.com/SE2020-TopUnderstanding/BUAA-Campus-Tools-Backend"
       ],
       "evidence": {
+        "live_observation_2026_11_17": {
+          "command": "buaa timetable session --online with protected JSON stdin; native transport and camoufox backend each attempted once",
+          "native": {
+            "cas_sign_on": "success",
+            "classification": "credential_echo",
+            "interpretation": "The response-safety screen withheld the GSMIS response as a credential echo; this is a screen refusal, not a credential rejection by the sign-on service, which had already succeeded. No schedule rows or live-derived ICS were admitted."
+          },
+          "camoufox": {
+            "classification": "unavailable",
+            "browser_launch": "success",
+            "failure": "Playwright juggler Keyboard.type raised NS_ERROR_NOT_INITIALIZED while typing into the CAS login frame; the browser started but the helper could not complete credential entry.",
+            "environment": "doesworkstation: playwright 1.62.0, camoufox 0.5.8, firefox 156.0.1-beta.36"
+          },
+          "cas_page_note": "captchaLabel/captchaDiv on the CAS login page are display:none hidden template noise; the visible credential controls live in the login-normal.html iframe and no active challenge was present.",
+          "governor": {
+            "pending": null,
+            "safety_latched": false,
+            "network_failures": 0
+          },
+          "scope": "Neither transport admitted a schedule read at this observation. The earlier camoufox_live_read_2026_11_08 live verification stands unchanged as historical evidence; this records a current native screen refusal and a current camoufox tooling failure, so status stays partial-live-verified."
+        },
         "camoufox_live_read_2026_11_08": {
           "command": "buaa timetable session --online on doesworkstation with protected JSON stdin and backend=camoufox",
           "result": "parsed",
@@ -589,6 +630,20 @@
       "status": "pending",
       "acceptance": "Owner-present, authorized current session only, preview and confirmed idempotent commit.",
       "evidence": {
+        "live_observation_2026_11_17": {
+          "command": "buaa checkin login, one deliberate operator authentication attempt through the iClass CAS entry registered by 6e0cb3a (8346)",
+          "cas_sign_on": "success",
+          "service_registration": "The 6e0cb3a repair pointing the iClass CAS service at the registered 8346 entry is confirmed working: the sign-on now completes for the checkin service.",
+          "handoff": "The post-sign-on redirect to the application carried no loginName query parameter, departing from the module's terminal-credential contract",
+          "classification": "handoff_contract_mismatch",
+          "attribution": "Server-side handoff contract gap, not a credential rejection; the sign-on service had already accepted the credential.",
+          "governor": {
+            "pending": null,
+            "safety_latched": false,
+            "network_failures": 0
+          },
+          "scope": "Recurrence of the gap first recorded in live_handoff_contract_mismatch_2026_11_15, now observed after the 8346 service-registration repair. No loginName-bound session, owner presence, authorized lesson, durable idempotent commit or postcondition was obtained; no check-in mutation was attempted and status stays pending."
+        },
         "candidate_offline": "Synthetic admission cases reproduced and then withheld normalized numeric session-credential echoes, including structured and fallback outputs. Separate Checkin/OS-lab admission cases passed; they do not exercise real transport or lease settlement.",
         "remaining": "One-shot CAS authentication outcome admission is implemented and offline-tested: a protected-stdin credential pair drives exactly one in-memory iClass ticket exchange under a durable Authentication lease, admits an authenticated loginName-bound session, and latches the governor on a known rejection without retry. A persistent atomic account+lesson reservation with unknown-outcome recovery is armed and consumed exactly once so a commit is verifiable after a crash, behind the exact-intent gate and owner-presence assertion; the mutation itself stays refused because presence cannot be verified remotely. No authenticated live session, owner presence, authorized lesson, durable idempotent commit or postcondition has been established; the review does not authorize attendance.",
         "offline_observation_2026_10_31": {
