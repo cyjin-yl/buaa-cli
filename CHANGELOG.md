@@ -36,6 +36,18 @@
   transmitted-header material stay refused at both steps, and the exported
   read keeps its own strict username screen; the former asymmetry made the
   native page step refuse a document the browser backend reads live.
+- timetable: native transport live-verified for term 20261 after that
+  correction — `result=parsed`, 30 schedule rows, 274 calendar events,
+  semester start 2026-09-07, matching the 2026-11-08 Camoufox read; one
+  deliberate attempt, no retry, governor settled with no pending outcome.
+- camoufox: enter the credential through `Page.insertText` (`locator.fill`)
+  instead of a synthesized key sequence. Camoufox's autoShift patch wraps a
+  Shift-requiring character with a synthetic Shift keydown, an await and a
+  cleanup keyup whose failure (`NS_ERROR_NOT_INITIALIZED`) masks the original
+  keydown error; `insertText` emits no key events, so the pointer click, the
+  exact readback and the real Enter submit are unchanged. Live verification
+  is pending an owner-authorized attempt once the sign-on service stops
+  deferring.
 - timetable: admit only the term shape the terminal GSMIS parser accepts
   (four ASCII digits followed by 1, 2 or 3) so an unparsable term is refused
   before any credential or transport work; the native session and the

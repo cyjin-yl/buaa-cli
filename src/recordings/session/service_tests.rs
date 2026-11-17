@@ -1662,6 +1662,44 @@ fn iclass_flow_without_login_name_is_a_handoff_contract_mismatch() {
     assert_eq!(error.code, "handoff_contract_mismatch");
 }
 
+#[test]
+fn iclass_login_name_on_another_application_port_is_refused_before_any_fetch() {
+    // A loginName-shaped handoff outside the reviewed 8346 sink is still a
+    // terminal credential: it must be refused rather than fetched as an
+    // ordinary hop. The sign-on service hands the callback to the API port.
+    let sink = "https://iclass.buaa.edu.cn:8347/?loginName=synthetic-student";
+    let harness = CasHarness::with_iclass_responders(
+        sso_responder(CasService::Iclass, sink, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("200 OK", &[("Content-Type", "text/html")], "<html><body>api</body></html>"),
+    );
+    let (_guard, governor) = service_test_governor("iclass-other-port");
+    let mut lease = governor
+        .try_acquire(RequestKind::Authentication)
+        .expect("authentication lease");
+    let credentials =
+        SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD).expect("synthetic credentials");
+    let result = authenticate_service(
+        &mut lease,
+        &harness.client,
+        CasService::Iclass,
+        credentials,
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("a loginName handoff outside 8346 must not authenticate"),
+    };
+    finish_lease(lease, Some(&error));
+    assert_eq!(error.code, "handoff_contract_mismatch");
+    assert!(
+        harness.iclass.observed().is_empty(),
+        "a credential-bearing URL must never be fetched"
+    );
+}
+
 /// The scoped session cookie the shuttle relying party issues for the one
 /// ticket-page read that follows the CAS handoff.
 const SHUTTLE_APP_COOKIE: &str = "shuttle_session=synthetic-shuttle-session";

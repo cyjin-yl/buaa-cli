@@ -577,6 +577,20 @@
           },
           "scope": "Neither transport admitted a schedule read at this observation. The earlier camoufox_live_read_2026_11_08 live verification stands unchanged as historical evidence; this records a current native screen refusal and a current camoufox tooling failure, so status stays partial-live-verified."
         },
+        "native_live_read_2026_11_17": {
+          "command": "buaa timetable session --online with protected JSON stdin, backend=native, read.operation=xskb, xnxqdm=20261",
+          "result": "parsed",
+          "backend": "native",
+          "service": "gsmis",
+          "network_performed": true,
+          "term": "20261",
+          "schedule_row_count": 30,
+          "calendar_event_count": 274,
+          "semester_start": "2026-09-07",
+          "weeks": 30,
+          "scope": "One deliberate attempt after the internal-only context-document identity screen was corrected (both the wdkbapp document and initXsxx are never exported, so their expected XH/username identity is not an output echo; password, cookie, retired-cookie and transmitted-header material stay refused, and the exported read keeps its own strict username screen). The same row and event counts as the 2026-11-08 camoufox read were obtained; representative rows are the term's real courses and rooms. Governor settled with pending=null, safety_latched=false, network_failures=0. No cookie, init body or credential value was exported and no mutation occurred.",
+          "correction": "The earlier live_observation_2026_11_17 native credential_echo was a screen-contract defect, not a relying-party rejection: the native page step refused a document the live-verified browser backend reads. The Camoufox backend remains unverified at this observation (its juggler Keyboard.type failure is a separate tooling defect under analysis)."
+        },
         "camoufox_live_read_2026_11_08": {
           "command": "buaa timetable session --online on doesworkstation with protected JSON stdin and backend=camoufox",
           "result": "parsed",
@@ -624,7 +638,7 @@
           "scope": "Deployment identity only. No credential was submitted, no session established, no timetable read performed; the redirect was read, not followed with a ticket."
         }
       },
-      "blocker": "The explicit Camofox backend is live-verified for the current term and live-derived ICS. Historical native HTTP 401/403 failures remain evidence for that transport, not a claim that it is accepted. Other terms, services and mutations remain outside this proof; status is partial-live-verified."
+      "blocker": "Both transports now admit the current term: the explicit Camoufox backend (2026-11-08) and, after the internal-only context-document identity screen was corrected, the native transport (2026-11-17, 30 rows / 274 events, term 20261). Historical native HTTP 401/403 and credential_echo results remain evidence for those observations, not current claims. Other terms, services and mutations remain outside this proof; the kfdxnxqcx.do term list has no online operation, so term codes are operator-supplied. Status stays partial-live-verified."
     },
     {
       "id": "checkin",
@@ -1332,6 +1346,7 @@
           "observed": "Exit 0: attribution Micraow/WE-Learn-Answers, branch master, complete=true (terminal_single_object), rights-reviewed learning materials read over the governed lease. Extends the 2026-11-01 selected_read to the current binary; no campus login, platform completion or graded auto-answer was performed.",
           "governor": "Clean: pending=null, authentication_armed=false, safety_latched=false, network_failures=0."
         },
+        "pinning_asymmetry_2026_11_17": "Audit finding, not yet repaired: the aerospace module pins a commit plus its tree (REVISION, with_pinned_tree_response), but welearn resolves the branch at every --online call, so an upstream push silently changes the inventory even though the module schema states the source, branch and license are pinned. Bytes remain bounded by the operator-supplied tree_sha, so no unverified content is published; the gap is reproducibility, not admission. Repair direction: resolve once against a pinned revision for both modules and report commit_tree_unresolved rather than following a moved branch. Upstream objects were re-verified byte-identical on 2026-11-17 (HangGai root tree 4eb358ae…, 646 entries; WE-Learn-Answers root dc0a5574…, 3 blobs).",
         "candidate_offline": "Five synthetic transport/cache cases and a separate native consumer passed before independent review found two additional cache regressions. Both were reproduced; after atomic no-replace publication and distinct rejected-evidence naming, the two focused synthetic cases passed.",
         "selected_read_2026_11_01": {
           "scope": "Actual public materials --online, inventory-bound documentation fetch, cache-only byte replay and caller-supplied local cloze practice; no campus login, platform completion or graded auto-answer.",
