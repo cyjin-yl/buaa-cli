@@ -52,7 +52,11 @@ const IHOME_CAS_CALLBACK_PATH: &str = "/api/authLogin";
 /// The iClass relying-party entry. Its application ticket sink is the login
 /// action endpoint; the one bounded redirect sink admitted after the ticket
 /// exchange is handled by the checkin module.
-const ICLASS_CAS_SERVICE: &str = "https://iclass.buaa.edu.cn:8347/app/login.action";
+// The CAS-registered iClass service is the student web app on 8346. The
+// 8347/app/login.action sink is not registered with CAS ("Application Not
+// Authorized to Use CAS"), so the sign-on must name the 8346 entry; the
+// ticket exchange then redirects to the 8346 loginName sink.
+const ICLASS_CAS_SERVICE: &str = "https://iclass.buaa.edu.cn:8346/";
 const ICLASS_HOST: &str = "iclass.buaa.edu.cn";
 /// The iHome terminal token is bound from a fragment on the reviewed web
 /// prefix, never from the query and never from another path.
@@ -6824,13 +6828,14 @@ pub(crate) fn authenticate_service(
         }
         CasService::Iclass => {
             // The iClass handoff proves itself by the one bounded redirect
-            // sink: the ticket exchange lands on the login.action sink and
-            // its single redirect carries the loginName, which is consumed in
-            // memory and never fetched as a new URL.
-            if landed.url.host_str() != Some(ICLASS_HOST)
-                || landed.url.port() != Some(8347)
-                || jar.terminal_credential.is_none()
-            {
+            // sink: the ticket exchange redirects to the 8346 student app
+            // carrying the loginName, which is consumed in memory and never
+            // fetched as a new URL. The sink URL is validated by
+            // iclass_terminal_credential before the credential is admitted,
+            // and the hop is returned without following the redirect, so the
+            // landed hop URL is still the sign-on route; the admitted
+            // terminal credential is the proof of the handoff.
+            if jar.terminal_credential.is_none() {
                 return Err(admission_failed(
                     "The iClass handoff did not confirm its loginName sink; no retry was performed.",
                 ));
