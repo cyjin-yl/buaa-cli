@@ -1183,7 +1183,7 @@ pub fn schema() -> Value {
             {"type":"object","required":["kind","application_bound","reason","origin"],"properties":{"kind":{"const":"https_candidate"},"application_bound":{"type":"boolean"},"reason":{"type":"string"},"origin":{"type":"string"}}},
             {"type":"object","required":["kind","token","courses"],"properties":{"kind":{"const":"course_list"},"token":{"type":"string"},"courses":{"type":"array","items":{"type":"object","required":["rwh","text"],"properties":{"rwh":{"type":"string"},"text":{"type":"string"}}}}}},
             yjsxk["output"].clone()
-        ]},"command_output":{"type":"object","required":["result"],"properties":{"result":{"enum":["blocked","unsupported","preview","parsed","completed","commit_admitted"]},"reason":{"type":"string"},"data":{"type":"object"},"preview":{"type":"object"},"online_verified":{"type":"boolean"},"commit_receipt":{"type":"object"}}}})
+        ]},"command_output":{"type":"object","required":["result"],"properties":{"result":{"enum":["blocked","unsupported","preview","parsed","completed","enrol_commit_admitted"]},"reason":{"type":"string"},"data":{"type":"object"},"preview":{"type":"object"},"online_verified":{"type":"boolean"},"commit_receipt":{"type":"object"}}}})
 }
 
 #[cfg(test)]
@@ -2176,7 +2176,7 @@ mod tests {
         let schema = schema();
         assert!(schema["operations"].as_array().unwrap().iter().any(|o| o == "commit"));
         assert_eq!(schema["input"]["properties"]["previous_ledger"]["type"], "array");
-        assert!(schema["command_output"]["properties"]["result"]["enum"].as_array().unwrap().iter().any(|r| r == "commit_admitted"));
+        assert!(schema["command_output"]["properties"]["result"]["enum"].as_array().unwrap().iter().any(|r| r == "enrol_commit_admitted"));
         let _ = base;
     }
 }

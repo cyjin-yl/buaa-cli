@@ -27,6 +27,25 @@
 
 ## Unreleased
 
+- timetable: admit the expected identity echo in both internal-only GSMIS
+  context documents. The application document is checked for
+  status/MIME/non-emptiness and dropped, and `initXsxx` is consumed only by
+  the student-context check, so neither is ever exported and both normally
+  embed the authenticated student's XH — the same identity the live-verified
+  Camoufox backend already exempts. Password, cookie, retired-cookie and
+  transmitted-header material stay refused at both steps, and the exported
+  read keeps its own strict username screen; the former asymmetry made the
+  native page step refuse a document the browser backend reads live.
+- timetable: admit only the term shape the terminal GSMIS parser accepts
+  (four ASCII digits followed by 1, 2 or 3) so an unparsable term is refused
+  before any credential or transport work; the native session and the
+  Camoufox helper share the rule and the session schema publishes it.
+- timetable-pg: point the offline parser's schema at the governed live
+  session that emits its types, and record that the term-list endpoint is not
+  yet reachable online.
+- enrol: correct the `command_output.result` enum to the receipt the commit
+  operation actually emits (`enrol_commit_admitted`), which the schema
+  previously misspelled.
 - session: classify a relying party's own HTTP 500 at the ticket exchange as
   `relying_party_error` (settled as the observed status, never a credential
   rejection), and an iClass redirect to the application port without the

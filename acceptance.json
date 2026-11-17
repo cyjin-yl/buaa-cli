@@ -519,7 +519,7 @@
     {
       "id": "timetable-ug",
       "title": "Undergraduate timetable/ICS",
-      "status": "live-verified",
+      "status": "implemented-offline",
       "acceptance": "Verified semester/week/date/time mapping and standards-compliant ICS.",
       "sources": [
         "https://github.com/roife/BUAAIcsGen",
@@ -530,6 +530,7 @@
       ],
       "evidence": {
         "2026_11_09_live": "PR168 merged live-verified earlier in the online-verification campaign; this entry records the live evidence for the under-graduate timetable read.",
+        "mapping_correction_2026_11_17": "The 2026-11-09 entry cited PR168 (merge 82f2cde, 'feat(timetable): add real Camoufox CAS backend') as an undergraduate timetable read. That attribution is wrong: PR168 is the GSMIS postgraduate session backend, and its live evidence (term 20261, 30 rows, 274 VEVENTs) is recorded under timetable-pg. gsmis.buaa.edu.cn/gsapp is the 研究生教育综合管理信息系统 (yjsemaphome is its graduate EMAP portal, wdkbapp its timetable application), so 'buaa timetable session' serves postgraduates only. No live undergraduate timetable source is bound anywhere in this repository; the undergraduate 教务 lineage is jwxt/IEAS, whose secure-origin binding remains unverified per the enrol entry. 'buaa timetable ics' is the cohort-neutral offline engine and stays complete. Status therefore returns to implemented-offline, matching this entry's own scope.",
         "command": "buaa timetable ics",
         "implementation": [
           "src/timetable.rs"
@@ -539,7 +540,8 @@
         "scope": "The offline mapping + ICS generation engine and the `timetable ics` CLI are complete and standards-compliant. Fetching the live undergraduate schedule from the campus system and feeding it to this generator remains pending (requires the governed, authorized campus observation path).",
         "smoke": "Real CLI: a Monday course over weeks 1..6 in a 4-week semester yields 4 VEVENTs (weeks 5-6 dropped); odd parity drops even weeks; a >75-octet SUMMARY folds on a UTF-8 character boundary with continuation lines <= 75 octets; missing end_time / start_week>end_week / invalid day -> invalid_input exit 2.",
         "week_bounds_native_2026_11_05": "Ten actual timetable ics cases passed. start_week and end_week each refuse 0, 105, 4294967298 and u64::MAX with invalid_input exit 2 and no ICS. Ordinary consecutive Mondays and the inclusive week-104 boundary produce dates independently checked with civil-date arithmetic; week 104 starts 2028-09-11. No campus request or live timetable claim."
-      }
+      },
+      "blocker": "No live undergraduate timetable source is bound: the GSMIS session serves postgraduates only, so the 2026-11-09 live-verified claim belonged to timetable-pg and is corrected here. A live undergraduate read requires its own reviewed jwxt/IEAS-lineage source profile and an owner-authorized observation; the offline mapping and ICS engine are complete."
     },
     {
       "id": "timetable-pg",

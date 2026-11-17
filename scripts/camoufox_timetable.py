@@ -170,7 +170,13 @@ def parse_input(raw):
     if read["operation"] != "xskb" or read["enabled"] is not True:
         raise _error("invalid_input")
     term = read["xnxqdm"]
-    if not _strict_string(term) or len(term) != 5 or not term.isascii() or not term.isdigit():
+    if (
+        not _strict_string(term)
+        or len(term) != 5
+        or not term.isascii()
+        or not term[:4].isdigit()
+        or term[4] not in "123"
+    ):
         raise _error("invalid_input")
     if document["backend"] != "camoufox":
         raise _error("invalid_input")

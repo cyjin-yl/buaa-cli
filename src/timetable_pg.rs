@@ -816,7 +816,8 @@ pub fn schema() -> Value {
             "timetable_url": TIMETABLE_URL,
             "timetable_method": "POST form ZC=&XNXQDM={term}&XH=&XQDM=; success code is 1",
             "online_implemented": false,
-            "online_boundary": "A future online adapter must use a reviewed GSMIS source profile, the process-shared governor and an explicit GSMIS session reference. This module does not create a parallel HTTP or authentication path."
+            "online_boundary": "This module does not create a parallel HTTP or authentication path. The governed live GSMIS reads run through 'buaa timetable session [--online]' (src/timetable.rs), which emits timetable_pg types under the shared governor; the kfdxnxqcx.do term list is not yet reachable online.",
+            "online_session": "buaa timetable session [--online] (xskb read; native or camoufox backend)"
         },
         "input": {
             "type": "object",

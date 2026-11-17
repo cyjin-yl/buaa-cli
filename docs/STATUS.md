@@ -139,9 +139,15 @@ same-session browser comparison succeeded with and without `_yhz`; a fixed
 no-role document GET followed by initialization also succeeded. The Rust
 client now performs that document step, applies reviewed in-memory cookie
 refreshes, rejects an empty student context and keeps explicit term selection.
-The initialization body stays internal: its expected XH/username identity is
-not an output echo, while password and cookie material remain refused.
-Thirty-three focused cases pass.
+Both context bodies stay internal: the application document is checked for
+status/MIME/non-emptiness and dropped, and initialization is consumed only by
+the student-context check, so their expected XH/username identity is not an
+output echo — the same allowance the live-verified Camoufox backend already
+applies to those documents. password, cookie, retired-cookie and
+transmitted-header material remain refused at both steps, and the exported
+read keeps its own strict username screen. The former asymmetry (the native
+page step refusing a document the browser backend reads live) is corrected;
+thirty-three focused cases plus the identity-echo regressions pass.
 
 The owner-authorized browser observed the current term `20261` and a
 successful current-term response. The first two post-repair native attempts
