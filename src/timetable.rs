@@ -626,11 +626,15 @@ impl<'de> Deserialize<'de> for SessionRead {
     }
 }
 
-/// The requested term filter is the exact five-digit XNXQDM code, matching the
-/// shared yjsxk session contract.
+/// The requested term filter is the exact XNXQDM code the terminal GSMIS
+/// parser admits: four ASCII digits followed by 1, 2 or 3. A term outside
+/// this set can never parse, so it is refused before any credential or
+/// transport work instead of spending an authenticated read.
 fn valid_term_code(term: &str) -> bool {
     let bytes = term.as_bytes();
-    bytes.len() == 5 && bytes.iter().all(u8::is_ascii_digit)
+    bytes.len() == 5
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && matches!(bytes[4], b'1' | b'2' | b'3')
 }
 
 fn xskb_request(
@@ -769,7 +773,6 @@ fn screen_context_response(
     response: &ContextResponse,
     input: &SessionInput,
     session: &cas::ServiceSession,
-    expected_identity_echo: bool,
 ) -> Result<(), Error> {
     let assessment =
         crate::html::assess_challenge_body(&response.body, response.content_type.as_deref(), true);
@@ -779,13 +782,14 @@ fn screen_context_response(
             "timetable context requires review",
         ));
     }
-    // initXsxx returns the authenticated student's XH, normally the CAS
-    // username. Its body is consumed only by student_context_present and is
-    // never exported, so that expected identity is not an output echo. The
-    // application document has no such exception; password and cookie
-    // material remain refused at both steps.
-    if (!expected_identity_echo && net::carries_secret(&response.body, &input.username))
-        || net::carries_secret(&response.body, &input.password)
+    // Both context bodies are internal-only: the application document is
+    // checked for status/MIME/non-emptiness and dropped, and initXsxx is
+    // consumed only by student_context_present. Neither is ever exported,
+    // and both normally embed the authenticated student's identity (XH,
+    // the CAS username), so that expected identity is not an output echo.
+    // Password and cookie material remain refused at both steps; the
+    // exported read keeps its own strict username screen.
+    if net::carries_secret(&response.body, &input.password)
         || session.contains_secret_bytes(&response.body)
     {
         return Err(error(
@@ -794,8 +798,7 @@ fn screen_context_response(
         ));
     }
     match decoded_body_screening(&response.body, &|candidate: &[u8]| {
-        (!expected_identity_echo && net::carries_secret(candidate, &input.username))
-            || net::carries_secret(candidate, &input.password)
+        net::carries_secret(candidate, &input.password)
             || session.contains_secret_bytes(candidate)
     }) {
         BodyScreening::Clear => {}
@@ -2357,7 +2360,7 @@ pub(crate) fn session_with_network(
                 &page_url,
                 &mut initialization_observed,
             )?;
-            screen_context_response(&page, &input, &session, false)?;
+            screen_context_response(&page, &input, &session)?;
             if page.status == 429 || page.retry_after.is_some() {
                 return Err(error(
                     "cooldown",
@@ -2421,7 +2424,7 @@ pub(crate) fn session_with_network(
                 &init_url,
                 &mut initialization_observed,
             )?;
-            screen_context_response(&init, &input, &session, true)?;
+            screen_context_response(&init, &input, &session)?;
             if init.status == 429 || init.retry_after.is_some() {
                 return Err(error("cooldown", "timetable initialization was deferred"));
             }
@@ -2696,7 +2699,7 @@ pub fn schema() -> Value {
                     "properties": {
                         "operation": {"const": "xskb"},
                         "enabled": {"type": "boolean"},
-                        "xnxqdm": {"type": "string", "pattern": "^[0-9]{5}$"}
+                        "xnxqdm": {"type": "string", "pattern": "^[0-9]{4}[123]$"}
                     }
                 }
             }
@@ -2706,7 +2709,7 @@ pub fn schema() -> Value {
         "context_read_url": TIMETABLE_INIT_URL,
         "read_method": "POST form ZC=&XNXQDM={term}&XH=&XQDM=",
         "output": "timetable_pg parsed shape, or result degraded/fallback with raw_response_base64+raw_response_sha256+content_type+fallback_reason+http_status for a non-2xx, non-UTF-8 or unparsable body that clears the safety screens, or sensitive_response_withheld when credential/challenge/cookie material or an unreviewed body is detected, or result session_expired (evidence withheld) when the body is a recognized login denial and no rows are emitted; plus service, source, network_performed, write_operations_performed",
-        "validation": "object root only; disabled read performs no I/O; enabled read requires authorized=true, exact intent, five-ASCII-digit xnxqdm and --online before transport or admission"
+        "validation": "object root only; disabled read performs no I/O; enabled read requires authorized=true, exact intent, xnxqdm of four ASCII digits followed by 1, 2 or 3 (the terminal parser's term rule) and --online before transport or admission"
     });
     schema["session"]["camoufox"] = json!({
         "selection": "Explicit backend=camoufox; native remains the default",
@@ -3069,14 +3072,8 @@ mod session_tests {
                 .to_string()
                 .replace(input.password.as_str(), &escaped_secret);
         assert_eq!(
-            screen_context_response(&context, &input, &session, true),
+            screen_context_response(&context, &input, &session),
             Ok(())
-        );
-        assert_eq!(
-            screen_context_response(&context, &input, &session, false)
-                .unwrap_err()
-                .code,
-            "credential_echo"
         );
         for body in [
             json!({"data":[{"XH":input.username.as_str()}],"echo":input.password.as_str()})
@@ -3087,11 +3084,84 @@ mod session_tests {
             escaped_secret_body,
         ] {
             assert_eq!(
-                screen_context_response(&response(body), &input, &session, true)
+                screen_context_response(&response(body), &input, &session)
                     .unwrap_err()
                     .code,
                 "credential_echo"
             );
+        }
+    }
+
+    /// The wdkbapp application document is internal-only (checked for
+    /// status/MIME/non-emptiness, then dropped) and normally embeds the
+    /// authenticated student's identity in boot JavaScript and welcome
+    /// markup. That expected identity echo must admit, exactly as the
+    /// live-verified Camoufox backend screens the same document; password
+    /// and cookie material carried alongside the identity stay refused.
+    #[test]
+    fn application_document_allows_the_expected_identity_echo() {
+        let input: SessionInput =
+            serde_json::from_str(&session_input().to_string()).expect("synthetic session input");
+        let mut session = cas::ServiceSession::test_session_with_cookies(
+            CasService::Gsmis,
+            TIMETABLE_PAGE_URL,
+            &["GS_SESSIONID=synthetic-cookie; Path=/gsapp/"],
+        );
+        let page_url = url::Url::parse(TIMETABLE_PAGE_URL).unwrap();
+        session
+            .cookie_header_for_transmission(&page_url)
+            .expect("the complete context header is retained");
+        let mut rotation = reqwest::header::HeaderMap::new();
+        rotation.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static(
+                "GS_SESSIONID=synthetic-rotated; Path=/gsapp/",
+            ),
+        );
+        session
+            .absorb_gsmis_headers(&page_url, &rotation)
+            .expect("the rotated cookie is admitted");
+        let page = |body: String| ContextResponse {
+            status: 200,
+            retry_after: None,
+            challenge: false,
+            content_type: Some("text/html; charset=utf-8".into()),
+            body: Zeroizing::new(body.into_bytes()),
+        };
+        let u = input.username.as_str();
+        // EMAP-style boot document: identity in inline JS and visible markup.
+        let boot = format!(
+            "<!DOCTYPE html><html><head><script>var userInfo = \
+             {{\"userId\":\"{u}\",\"userName\":\"Synthetic\"}};</script></head>\
+             <body><span>欢迎，{u}</span><div id=\"xskcb\"></div></body></html>"
+        );
+        assert_eq!(screen_context_response(&page(boot), &input, &session), Ok(()));
+        // A \uXXXX-escaped identity inside a script literal clears the decoded
+        // pass too.
+        let first = u.chars().next().unwrap();
+        let escaped_identity = format!("\\u{:04x}{}", first as u32, &u[first.len_utf8()..]);
+        let escaped_boot = format!(
+            "<html><head><script>var userId = \"{escaped_identity}\";</script></head><body></body></html>"
+        );
+        assert_eq!(
+            screen_context_response(&page(escaped_boot), &input, &session),
+            Ok(())
+        );
+        // Password and cookie material alongside the identity stay refused.
+        let p = input.password.as_str();
+        for body in [
+            format!("<html><body><span>{u}</span><script>var stale=\"{p}\";</script></body></html>"),
+            format!("<html><body><span>{u}</span><script>var sid=\"synthetic-cookie\";</script></body></html>"),
+            format!("<html><body><span>{u}</span><script>var sid=\"synthetic-rotated\";</script></body></html>"),
+            format!(
+                "<html><body><span>{u}</span><script>var t=\"{}\";</script></body></html>",
+                STANDARD.encode("GS_SESSIONID=synthetic-cookie")
+            ),
+        ] {
+            match screen_context_response(&page(body.clone()), &input, &session) {
+                Err(e) => assert_eq!(e.code, "credential_echo", "carrier: {body}"),
+                Ok(()) => panic!("carrier not refused: {body}"),
+            }
         }
     }
 
@@ -3926,16 +3996,16 @@ mod session_tests {
     }
 
     #[test]
-    fn five_digit_term_accepted_while_other_lengths_are_refused() {
-        for term in ["20261", "20253", "00000"] {
+    fn parser_admitted_terms_accepted_while_other_shapes_are_refused() {
+        for term in ["20261", "20253", "00001"] {
             assert!(valid_term_code(term), "{term}");
         }
-        for term in ["2026", "202612", "202611", "2026x", "20261 ", "", "2026１"] {
+        for term in ["2026", "202612", "202611", "2026x", "20261 ", "", "2026１", "00000", "20260", "20264"] {
             assert!(!valid_term_code(term), "{term}");
         }
-        // Only the five-digit shape reaches the online gate; four- and
-        // six-digit terms are refused before any credential or transport work.
-        for term in ["2026", "202612"] {
+        // Only the parser-admitted shape reaches the online gate; other
+        // shapes are refused before any credential or transport work.
+        for term in ["2026", "202612", "00000", "20260"] {
             let failure = session_with_network(&term_request(term), true, || {
                 panic!("refused term {term} opened network resources")
             })

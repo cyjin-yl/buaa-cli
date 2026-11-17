@@ -4010,6 +4010,19 @@ fn terminal_service_credential(
 /// the contract, so that case is reported as a handoff contract mismatch and
 /// never as a caller input error.
 fn iclass_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
+    // The reviewed loginName sink is the 8346 application port. A
+    // loginName-shaped handoff on any other application port is a terminal
+    // credential too: following it would fetch a credential URL, so it is
+    // refused here instead of being admitted as an ordinary hop.
+    if url.host_str() == Some(ICLASS_HOST)
+        && url.port().is_some_and(|port| port != 8346)
+        && url.query_pairs().any(|(name, _)| name == "loginName")
+    {
+        return Err(Error::new(
+            "handoff_contract_mismatch",
+            "The iClass relying party supplied its loginName handoff outside the reviewed 8346 sink; no retry was performed.",
+        ));
+    }
     if url.host_str() != Some(ICLASS_HOST) || url.port() != Some(8346) {
         return Ok(None);
     }

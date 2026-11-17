@@ -170,7 +170,13 @@ def parse_input(raw):
     if read["operation"] != "xskb" or read["enabled"] is not True:
         raise _error("invalid_input")
     term = read["xnxqdm"]
-    if not _strict_string(term) or len(term) != 5 or not term.isascii() or not term.isdigit():
+    if (
+        not _strict_string(term)
+        or len(term) != 5
+        or not term.isascii()
+        or not term[:4].isdigit()
+        or term[4] not in "123"
+    ):
         raise _error("invalid_input")
     if document["backend"] != "camoufox":
         raise _error("invalid_input")
@@ -1085,7 +1091,19 @@ def _type_exactly(page, locator, value):
     if not box:
         raise _error("authentication_unconfirmed")
     page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-    page.keyboard.type(value, delay=45)
+    # Enter the exact value through the browser's editing pipeline
+    # (`Page.insertText`) instead of a synthesized key sequence. Camoufox's
+    # autoShift patch wraps a Shift-requiring character with a synthetic
+    # Shift keydown, an await, and a cleanup keyup; when the real character
+    # keydown fails, that cleanup keyup raises NS_ERROR_NOT_INITIALIZED from
+    # nsITextInputProcessor and masks the original failure. insertText emits
+    # no key events at all, so the value still reaches the same input, the
+    # pointer click and the exact readback below are unchanged, and the form
+    # is submitted by a real Enter keypress in `perform_login`.
+    try:
+        locator.fill(value, timeout=WAIT_TIMEOUT_MS)
+    except Exception:
+        raise _error("authentication_unconfirmed")
     try:
         observed = locator.input_value(timeout=WAIT_TIMEOUT_MS)
     except Exception:
