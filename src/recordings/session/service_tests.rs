@@ -1265,6 +1265,7 @@ struct CasHarness {
     booking: CasEndpoint,
     ihome: CasEndpoint,
     shuttle: CasEndpoint,
+    iclass: CasEndpoint,
 }
 
 impl CasHarness {
@@ -1333,13 +1334,33 @@ impl CasHarness {
         ihome: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
         shuttle: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
     ) -> Self {
+        Self::with_iclass_responders(sso, app, booking, ihome, shuttle, |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        })
+    }
+
+    /// The full six-host stand-in including the iClass student app, so an
+    /// iClass flow can serve its loginName redirect sink.
+    fn with_iclass_responders(
+        sso: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        app: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        ihome: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        shuttle: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        iclass: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
         let pki = test_pki();
         let acceptor = tls_acceptor(&pki);
         let sso = CasEndpoint::start(Arc::clone(&acceptor), sso);
         let app = CasEndpoint::start(Arc::clone(&acceptor), app);
         let booking = CasEndpoint::start(Arc::clone(&acceptor), booking);
         let ihome = CasEndpoint::start(Arc::clone(&acceptor), ihome);
-        let shuttle = CasEndpoint::start(acceptor, shuttle);
+        let shuttle = CasEndpoint::start(Arc::clone(&acceptor), shuttle);
+        let iclass = CasEndpoint::start(acceptor, iclass);
         let client = strict_client(
             &pki,
             &[
@@ -1348,6 +1369,7 @@ impl CasHarness {
                 ("booking.lib.buaa.edu.cn", booking.address),
                 ("i.buaa.edu.cn", ihome.address),
                 ("zhihuixiaoche.buaa.edu.cn", shuttle.address),
+                ("iclass.buaa.edu.cn", iclass.address),
             ],
         );
         Self {
@@ -1357,6 +1379,7 @@ impl CasHarness {
             booking,
             ihome,
             shuttle,
+            iclass,
         }
     }
 }
@@ -1560,6 +1583,83 @@ fn library_flow_consumes_terminal_fragment_cas_without_requesting_it() {
         .cookie_header(&url("https://booking.lib.buaa.edu.cn/"))
         .expect("library scoped view");
     assert!(cookie.is_none());
+}
+
+#[test]
+fn iclass_flow_consumes_the_8346_login_name_sink_without_requesting_it() {
+    // The CAS-registered iClass service is the 8346 student app. The ticket
+    // exchange redirects to the 8346 loginName sink, which is consumed in
+    // memory and never fetched as a new URL.
+    let sink = "https://iclass.buaa.edu.cn:8346/?loginName=synthetic-student";
+    let harness = CasHarness::with_iclass_responders(
+        sso_responder(CasService::Iclass, sink, &[]),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+    );
+    let (_guard, governor) = service_test_governor("iclass-flow");
+    let mut lease = governor
+        .try_acquire(RequestKind::Authentication)
+        .expect("authentication lease");
+    let credentials =
+        SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD).expect("synthetic credentials");
+    let result = authenticate_service(
+        &mut lease,
+        &harness.client,
+        CasService::Iclass,
+        credentials,
+    );
+    finish_lease(lease, result.as_ref().err());
+    let mut session = result.expect("iClass CAS flow");
+
+    assert_one_credential_post(&harness, CasService::Iclass);
+
+    // The loginName sink is a terminal in-memory handoff: it is never fetched.
+    assert!(
+        harness.iclass.observed().is_empty(),
+        "the loginName sink URL must never be requested"
+    );
+    assert!(harness.app.observed().is_empty());
+    assert!(harness.booking.observed().is_empty());
+
+    let login_name = session.take_service_credential().expect("terminal loginName");
+    assert_eq!(login_name.as_str(), SESSION_USERNAME);
+    assert!(session.take_service_credential().is_err());
+}
+
+#[test]
+fn iclass_flow_without_login_name_is_a_handoff_contract_mismatch() {
+    // A redirect to the 8346 app without the reviewed loginName is the
+    // relying party departing from the contract, not a caller input error.
+    let sink = "https://iclass.buaa.edu.cn:8346/";
+    let harness = CasHarness::with_iclass_responders(
+        sso_responder(CasService::Iclass, sink, &[]),
+        |_| http_response("200 OK", &[("Content-Type", "text/html")], "<html><body>app</body></html>"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("404 Not Found", &[("Content-Type", "text/plain")], "unexpected"),
+        |_| http_response("200 OK", &[("Content-Type", "text/html")], "<html><body>app</body></html>"),
+    );
+    let (_guard, governor) = service_test_governor("iclass-mismatch");
+    let mut lease = governor
+        .try_acquire(RequestKind::Authentication)
+        .expect("authentication lease");
+    let credentials =
+        SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD).expect("synthetic credentials");
+    let result = authenticate_service(
+        &mut lease,
+        &harness.client,
+        CasService::Iclass,
+        credentials,
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("a missing loginName must not authenticate"),
+    };
+    finish_lease(lease, Some(&error));
+    assert_eq!(error.code, "handoff_contract_mismatch");
 }
 
 /// The scoped session cookie the shuttle relying party issues for the one

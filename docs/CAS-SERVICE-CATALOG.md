@@ -62,7 +62,7 @@ same account in the same session.
 | classroom | `https://yjapi.msa.buaa.edu.cn/casapi/index.php?forward=…&r=auth/login&tenant_code=21` | classroom session |
 | running (`ygdk`, 阳光打卡) | *not a direct CAS service*: the SPA authenticates through `https://app.buaa.edu.cn/uc/api/oauth/index?redirect=…&appid=200230221144501510`, then calls `POST https://ygdk.buaa.edu.cn/api/Front/Clockin/User/campusAppLogin` for its own `uid`+`token` |  |
 | coursegrading (`judge`) | serves its own login page (`/indexcs/simple.jsp`), no CAS redirect observed |  |
-| checkin (`iclass:8347`) | answers; the CAS sink `…:8347/app/login.action` redirects to `…:8346/` (2026-11-15: without the reviewed `loginName` parameter). The `/app/*.action` API answers some reads anonymously (`course/get_base_school_year.action`, `common/get_timestamp.action`); `app/user/login.action` resolves an account from a `phone` loginName and is a separate local credential store |  |
+| checkin (`iclass:8346`) | the CAS-registered service is `https://iclass.buaa.edu.cn:8346/`; `…:8347/app/login.action` is **not** registered with CAS ("Application Not Authorized to Use CAS"). The ticket exchange redirects to the 8346 `loginName` sink. The `/app/*.action` API answers some reads anonymously (`course/get_base_school_year.action`, `common/get_timestamp.action`); `app/user/login.action` resolves an account from a `phone` loginName and is a separate local credential store |  |
 
 ## 4. Relaying-party API observations
 
