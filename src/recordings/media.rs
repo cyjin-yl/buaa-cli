@@ -74,6 +74,22 @@ fn source_layout() -> Error {
     )
 }
 
+/// The selected lesson exists and its identity bound, but the platform has
+/// not yet published a replay for it: `get-sub-detail` returned a `code:0`
+/// payload whose `content` carries no `playback` declaration. The classroom
+/// lifecycle still reports the lesson as recording (`sub_status < 6`), so
+/// this is a transient "replay not yet published" state, not an input-shape
+/// or layout-contract failure. It is deliberately classified apart from
+/// `invalid_input` so callers can retry later instead of treating it as a
+/// permanent contract gap.
+fn recording_unpublished(sub_status: Option<u64>) -> Error {
+    let _ = sub_status;
+    Error::new(
+        "recording_unpublished",
+        "Classroom replay is not published yet; the lesson is still being processed by the platform.",
+    )
+}
+
 fn source_binding() -> Error {
     Error::new(
         "source_binding",
@@ -401,7 +417,15 @@ struct MediaDeclaration {
     scheme_upgraded: bool,
 }
 
-fn playback_facts(value: &Value, selection: &Selection<'_>) -> Result<MediaDeclaration, Error> {
+/// `lesson_sub_status` is the lifecycle state already bound from
+/// `get-sub-info`: values below 6 mean the lesson is still being recorded or
+/// transcoded, so a missing `playback` declaration is the platform's
+/// not-yet-published state, not a layout drift.
+fn playback_facts(
+    value: &Value,
+    selection: &Selection<'_>,
+    lesson_sub_status: Option<u64>,
+) -> Result<MediaDeclaration, Error> {
     let data = value
         .get("data")
         .and_then(Value::as_object)
@@ -431,6 +455,11 @@ fn playback_facts(value: &Value, selection: &Selection<'_>) -> Result<MediaDecla
         .get("content")
         .and_then(Value::as_object)
         .ok_or_else(source_layout)?;
+    // A lesson that has not finished publishing has no `playback` object at
+    // all. Classify it before treating the missing field as a layout error.
+    if content.get("playback").is_none() && lesson_sub_status.is_some_and(|status| status < 6) {
+        return Err(recording_unpublished(lesson_sub_status));
+    }
     let declared_url = content
         .get("playback")
         .and_then(Value::as_object)
@@ -1368,7 +1397,7 @@ pub fn online(input: &str) -> Result<Value, Error> {
             source_objects_fetched |= access.1;
             detail_retrieval = source_retrieval(response);
             process_source(response, detail_url.as_str(), |value| {
-                playback_facts(value, selection)
+                playback_facts(value, selection, positive_value(lesson.get("sub_status")))
             })
         })
     })??;
@@ -1962,5 +1991,47 @@ mod tests {
         )
         .expect("path remains an admitted URL");
         assert_eq!(path_date(&invalid), None);
+    }
+
+    #[test]
+    fn missing_playback_on_a_pending_lesson_is_unpublished_not_layout() {
+        // The classroom platform returns `code:0` with a `content` object that
+        // carries no `playback` declaration while a lesson is still recording
+        // or transcoding (`sub_status` below 6). That is the platform's
+        // not-yet-published state and must be distinguished from a genuine
+        // layout drift.
+        let detail = json!({
+            "code": 0,
+            "data": {
+                "course_id": "145110",
+                "sub_id": "5910846",
+                "content": {
+                    "id": 1862,
+                    "start_at": 1711005932,
+                    "end_at": 1868772332,
+                    "room_id": 1666
+                }
+            }
+        });
+        let selection = Selection {
+            course_id: Cow::Borrowed("145110"),
+            sub_id: Cow::Borrowed("5910846"),
+            tenant_code: None,
+        };
+        match playback_facts(&detail, &selection, Some(3)) {
+            Err(error) => assert_eq!(error.code, "recording_unpublished"),
+            Ok(_) => panic!("a pending lesson must be recording_unpublished"),
+        }
+        // Once the platform publishes (sub_status 6), the same missing field
+        // is a real layout problem again.
+        match playback_facts(&detail, &selection, Some(6)) {
+            Err(error) => assert_eq!(error.code, "invalid_input"),
+            Ok(_) => panic!("a missing playback must not admit a declaration"),
+        }
+        // Without a bound lesson status, the missing field stays a layout error.
+        match playback_facts(&detail, &selection, None) {
+            Err(error) => assert_eq!(error.code, "invalid_input"),
+            Ok(_) => panic!("a missing playback must not admit a declaration"),
+        }
     }
 }

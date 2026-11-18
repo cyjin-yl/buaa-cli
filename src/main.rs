@@ -66,6 +66,9 @@ fn service_error(error: buaa_cli::net::Error) -> CliError {
         "authorization_required" => ("authorization_required", 4),
         "permission" | "robots_denied" | "egress_denied" => ("permission", 5),
         "rate_limited" | "cooldown" | "request_gap" => ("rate_limited", 8),
+        // The selected lesson exists and bound, but the platform has not
+        // finished publishing its replay; retryable, not an input error.
+        "recording_unpublished" => ("recording_unpublished", 7),
         "unknown_outcome" => ("unknown_outcome", 9),
         "conflict" | "immutable_conflict" => ("conflict", 9),
         _ => ("unavailable", 7),
