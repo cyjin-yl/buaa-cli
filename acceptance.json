@@ -678,6 +678,13 @@
           "classification": "handoff_contract_mismatch after a successfully followed ticket callback",
           "discrimination": "The hypothesis that the application issues loginName after it validates a returned ticket is refuted on this deployment: following the ticket callback once produces no loginName. The relying party does not perform the loginName handoff the module's terminal-credential contract requires.",
           "scope": "No loginName-bound session, owner presence, authorized lesson, durable idempotent commit or postcondition was obtained; no check-in mutation was attempted; status stays pending. A second 8346 redirect without loginName, an external redirect, or a redirect without a ticket remains refused without further requests, and the durable lease settles without latching or retrying."
+        },
+        "live_session_binding_probe_2026_11_19": {
+          "command": "owner-authorized camoufox observation on the same deployment; deliberate CAS sign-on through the real SSO iframe, JSESSIONID read back from the browser jar",
+          "observed": "A deliberate CAS sign-on against https://iclass.buaa.edu.cn:8346/ completed and minted a 32-byte host-only JSESSIONID. The anonymous directory endpoint course/get_base_school_year.action returned 200 with 22 semesters as before, but every account-bound read shape on 8347 returned 200 with a 2-byte empty body: get_stu_course_sched and get_myall_course under id=<username>, under userId=<username>, with sessionId=<live JSESSIONID>, with no parameter, and my/get_my_course_sign_detail with a live sessionId. Parameter errors surface as {\"STATUS\":\"1\",\"ERRCODE\":\"100\"}, not as this empty success, so the empty bodies are the application's bound-read answer.",
+          "classification": "session_unbound",
+          "discrimination": "The CAS ticket exchange mints a session that the relying party does not bind to an account: no admitted loginName handoff, no parameter name or sessionId form produces bound data, and user-bound reads answer with an empty success instead of an authentication rejection. This is a server-side state of the deployment; no client credential, identifier or follow-up request can make the session account-bound.",
+          "scope": "The iClass read and mutation paths stay closed on this deployment because there is no account-bound session to read or sign under; a manual loginName input would carry only the student number the client already knows and cannot supply the server-side binding. checkin remains pending."
         }
       },
       "sources": [
