@@ -3514,6 +3514,7 @@ fn receipt_route(url: &Url) -> &'static str {
         (Some("sso.buaa.edu.cn"), "/login") => "/login",
         (Some("yjapi.msa.buaa.edu.cn"), "/casapi/index.php") => "/casapi/index.php",
         (Some(CLASSROOM_HOST), "/") => "/",
+        (Some(ICLASS_HOST), "/") => "/",
         (Some(CLASSROOM_HOST), "/courseapi/v3/portal-home-setting/get-sub-info") => {
             "/courseapi/v3/portal-home-setting/get-sub-info"
         }
@@ -3599,6 +3600,11 @@ fn send(
     let mut form = form;
     let mut first = initial;
     let mut had_redirect = false;
+    // The iClass relying party's registered service is the 8346 application
+    // root, so the sign-on service answers the credential POST with a 302 to
+    // that root carrying the service ticket. That hop is the ticket callback,
+    // not the application's own session handoff: it is followed exactly once.
+    let mut iclass_callback_followed = false;
     for _ in 0..=MAX_REDIRECTS {
         // Snapshot scope/expiry and retain the zeroizing header before pacing
         // or request-start admission. Guard exhaustion sends no request.
@@ -3856,7 +3862,14 @@ fn send(
                     "A method-preserving redirect answered the credential form; the attempt was refused without re-sending the credential.",
                 ));
             }
+            let iclass_ticket_callback = jar.service == CasService::Iclass
+                && !iclass_callback_followed
+                && iclass_service_ticket_callback(&next);
+            if iclass_ticket_callback {
+                iclass_callback_followed = true;
+            }
             if jar.service != CasService::Ihome
+                && !iclass_ticket_callback
                 && let Some(credential) = terminal_service_credential(jar.service, &next)?
             {
                 jar.terminal_credential = Some(credential);
@@ -4009,6 +4022,27 @@ fn terminal_service_credential(
 /// party that redirects without the reviewed handoff failed its own side of
 /// the contract, so that case is reported as a handoff contract mismatch and
 /// never as a caller input error.
+/// The sign-on service's own ticket callback for the iClass relying party:
+/// exactly the registered service origin and root with a single service ticket
+/// pair and no other shaping. The ticket is the bearer the sign-on service
+/// minted for this relying party, so one follow is admissible. Its value is
+/// never read, retained or compared beyond being non-empty, and the return
+/// value carries no credential.
+fn iclass_service_ticket_callback(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some(ICLASS_HOST)
+        && url.port() == Some(8346)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.fragment().is_none()
+        && url.path() == "/"
+        && {
+            let mut pairs = url.query_pairs();
+            matches!(pairs.next(), Some((name, value)) if name == "ticket" && !value.is_empty())
+                && pairs.next().is_none()
+        }
+}
+
 fn iclass_terminal_credential(url: &Url) -> Result<Option<Zeroizing<String>>, Error> {
     // The reviewed loginName sink is the 8346 application port. A
     // loginName-shaped handoff on any other application port is a terminal
@@ -6848,6 +6882,19 @@ pub(crate) fn authenticate_service(
             // and the hop is returned without following the redirect, so the
             // landed hop URL is still the sign-on route; the admitted
             // terminal credential is the proof of the handoff.
+            // A ticket callback that the application answered without a
+            // loginName redirect is the relying party departing from the
+            // reviewed handoff, not an unconfirmed transport step.
+            if jar.terminal_credential.is_none()
+                && landed.status == 200
+                && landed.url.host_str() == Some(ICLASS_HOST)
+                && landed.url.port() == Some(8346)
+            {
+                return Err(Error::new(
+                    "handoff_contract_mismatch",
+                    "The iClass relying party answered the ticket callback without the reviewed single loginName handoff.",
+                ));
+            }
             if jar.terminal_credential.is_none() {
                 return Err(admission_failed(
                     "The iClass handoff did not confirm its loginName sink; no retry was performed.",
