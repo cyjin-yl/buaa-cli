@@ -982,6 +982,7 @@ fn test_pki() -> TestPki {
         .dns("booking.lib.buaa.edu.cn")
         .dns("i.buaa.edu.cn")
         .dns("zhihuixiaoche.buaa.edu.cn")
+        .dns("iclass.buaa.edu.cn")
         .build(&leaf.x509v3_context(Some(&ca), None))
         .expect("san");
     leaf.append_extension(san).expect("leaf san");
@@ -1099,7 +1100,19 @@ impl CasEndpoint {
         acceptor: Arc<SslAcceptor>,
         responder: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
     ) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        Self::start_at(acceptor, "127.0.0.1:0", responder)
+    }
+
+    /// Bind the stand-in on a fixed loopback address. A redirect whose URL
+    /// carries an explicit port (the iClass 8346 ticket callback) reaches the
+    /// resolved socket on that port, not the port chosen by `start`; only
+    /// the ticket-callback flow binds the real application port.
+    fn start_at(
+        acceptor: Arc<SslAcceptor>,
+        bind: &str,
+        responder: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
+        let listener = TcpListener::bind(bind).expect("loopback listener");
         listener
             .set_nonblocking(true)
             .expect("nonblocking listener");
@@ -1361,6 +1374,48 @@ impl CasHarness {
         let ihome = CasEndpoint::start(Arc::clone(&acceptor), ihome);
         let shuttle = CasEndpoint::start(Arc::clone(&acceptor), shuttle);
         let iclass = CasEndpoint::start(acceptor, iclass);
+        let client = strict_client(
+            &pki,
+            &[
+                ("sso.buaa.edu.cn", sso.address),
+                ("app.buaa.edu.cn", app.address),
+                ("booking.lib.buaa.edu.cn", booking.address),
+                ("i.buaa.edu.cn", ihome.address),
+                ("zhihuixiaoche.buaa.edu.cn", shuttle.address),
+                ("iclass.buaa.edu.cn", iclass.address),
+            ],
+        );
+        Self {
+            client,
+            sso,
+            app,
+            booking,
+            ihome,
+            shuttle,
+            iclass,
+        }
+    }
+
+    /// Same six-host stand-in, but the iClass student app binds the real
+    /// application port: the ticket callback URL carries an explicit 8346
+    /// port, which reqwest connects to regardless of the resolved address.
+    /// The flow that follows that callback can then be observed end to end.
+    fn with_iclass_port_responders(
+        sso: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        app: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        ihome: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        shuttle: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        iclass: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
+        let pki = test_pki();
+        let acceptor = tls_acceptor(&pki);
+        let sso = CasEndpoint::start(Arc::clone(&acceptor), sso);
+        let app = CasEndpoint::start(Arc::clone(&acceptor), app);
+        let booking = CasEndpoint::start(Arc::clone(&acceptor), booking);
+        let ihome = CasEndpoint::start(Arc::clone(&acceptor), ihome);
+        let shuttle = CasEndpoint::start(Arc::clone(&acceptor), shuttle);
+        let iclass = CasEndpoint::start_at(acceptor, "127.0.0.1:8346", iclass);
         let client = strict_client(
             &pki,
             &[
@@ -1698,6 +1753,221 @@ fn iclass_login_name_on_another_application_port_is_refused_before_any_fetch() {
         harness.iclass.observed().is_empty(),
         "a credential-bearing URL must never be fetched"
     );
+}
+
+#[test]
+fn iclass_ticket_callback_predicate_is_exact() {
+    let parse = |text: &str| Url::parse(text).expect("test URL");
+    assert!(iclass_service_ticket_callback(&parse(
+        "https://iclass.buaa.edu.cn:8346/?ticket=ST-synthetic"
+    )));
+    for rejected in [
+        "https://iclass.buaa.edu.cn:8346/index.html?ticket=ST-x",
+        "https://iclass.buaa.edu.cn:8346/?ticket=",
+        "https://iclass.buaa.edu.cn:8346/?ticket=a&b=c",
+        "https://iclass.buaa.edu.cn:8346/?loginName=x&ticket=y",
+        "https://iclass.buaa.edu.cn:8346/?ticket=a&ticket=b",
+        "https://iclass.buaa.edu.cn:8347/?ticket=ST-x",
+        "http://iclass.buaa.edu.cn:8346/?ticket=ST-x",
+        "https://user@iclass.buaa.edu.cn:8346/?ticket=ST-x",
+        "https://iclass.buaa.edu.cn:8346/?ticket=ST-x#frag",
+        "https://iclass.buaa.edu.cn:8346/?other=ST-x",
+        "https://iclass.buaa.edu.cn:8346/",
+    ] {
+        assert!(
+            !iclass_service_ticket_callback(&parse(rejected)),
+            "{rejected} must not be a ticket callback"
+        );
+    }
+}
+
+#[test]
+fn iclass_ticket_callback_follow_sequences() {
+    // Every scenario that follows the ticket callback needs the iClass
+    // endpoint on the real 8346 application port; sequential scenarios in one
+    // test keep the fixed-port listener from racing parallel tests.
+    fn no_app(_: &ObservedRequest) -> Vec<u8> {
+        http_response(
+            "404 Not Found",
+            &[("Content-Type", "text/plain")],
+            "unexpected",
+        )
+    }
+
+    // Scenario T3: the ticket callback is followed once; the application's
+    // loginName redirect sink is then consumed in memory, never fetched.
+    let callback = "https://iclass.buaa.edu.cn:8346/?ticket=ST-synthetic";
+    let harness = CasHarness::with_iclass_port_responders(
+        sso_responder(CasService::Iclass, callback, &[]),
+        no_app,
+        no_app,
+        no_app,
+        no_app,
+        |_| {
+            http_response(
+                "302 Found",
+                &[(
+                    "Location",
+                    "https://iclass.buaa.edu.cn:8346/index.html?loginName=synthetic-student",
+                )],
+                "",
+            )
+        },
+    );
+    {
+        let (_guard, governor) = service_test_governor("iclass-follow");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+            .expect("synthetic credentials");
+        let result = authenticate_service(&mut lease, &harness.client, CasService::Iclass, credentials);
+        finish_lease(lease, result.as_ref().err());
+        let mut session = match result {
+            Ok(session) => session,
+            Err(error) => panic!(
+                "the followed callback must authenticate: {error:?}; sso={} iclass={}",
+                harness.sso.observed().len(),
+                harness.iclass.observed().len()
+            ),
+        };
+
+        assert_one_credential_post(&harness, CasService::Iclass);
+        let observed = harness.iclass.observed();
+        assert_eq!(observed.len(), 1, "the ticket callback is followed once");
+        let request_url = observed_url("iclass.buaa.edu.cn", &observed[0]);
+        assert_eq!(request_url.path(), "/");
+        assert_eq!(
+            query_map(&request_url).keys().collect::<Vec<_>>(),
+            vec!["ticket"],
+            "only the service ticket is delivered to its relying party"
+        );
+        assert!(
+            observed[0].header("cookie").is_none(),
+            "the host-only sign-on cookie must never reach the app port"
+        );
+        assert_eq!(
+            session.take_service_credential().expect("terminal loginName").as_str(),
+            SESSION_USERNAME
+        );
+        assert!(session.take_service_credential().is_err());
+    }
+    drop(harness);
+
+    // Scenario T4: the callback answered with a benign 200 instead of a
+    // loginName redirect is a handoff contract mismatch, not an unconfirmed
+    // transport step.
+    let harness = CasHarness::with_iclass_port_responders(
+        sso_responder(CasService::Iclass, callback, &[]),
+        no_app,
+        no_app,
+        no_app,
+        no_app,
+        |_| {
+            http_response(
+                "200 OK",
+                &[("Content-Type", "text/html")],
+                "<html><body>app</body></html>",
+            )
+        },
+    );
+    {
+        let (_guard, governor) = service_test_governor("iclass-answered");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+            .expect("synthetic credentials");
+        let result = authenticate_service(&mut lease, &harness.client, CasService::Iclass, credentials);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a 200 callback without loginName must not authenticate"),
+        };
+        finish_lease(lease, Some(&error));
+        assert_eq!(error.code, "handoff_contract_mismatch");
+        assert_eq!(harness.iclass.observed().len(), 1);
+    }
+    drop(harness);
+
+    // Scenario T5: a second 8346 hop that is not the reviewed handoff is
+    // refused; the callback is still followed exactly once.
+    let harness = CasHarness::with_iclass_port_responders(
+        sso_responder(CasService::Iclass, callback, &[]),
+        no_app,
+        no_app,
+        no_app,
+        no_app,
+        |_| {
+            http_response(
+                "302 Found",
+                &[("Location", "https://iclass.buaa.edu.cn:8346/")],
+                "",
+            )
+        },
+    );
+    {
+        let (_guard, governor) = service_test_governor("iclass-second");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+            .expect("synthetic credentials");
+        let result = authenticate_service(&mut lease, &harness.client, CasService::Iclass, credentials);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a second bare 8346 hop must not authenticate"),
+        };
+        finish_lease(lease, Some(&error));
+        assert_eq!(error.code, "handoff_contract_mismatch");
+        assert_eq!(
+            harness.iclass.observed().len(),
+            1,
+            "a second 8346 hop is never followed"
+        );
+    }
+    drop(harness);
+
+    // Scenario T7: the application must never steer the flow off its
+    // registered service family, even with a credential-shaped redirect.
+    let harness = CasHarness::with_iclass_port_responders(
+        sso_responder(CasService::Iclass, callback, &[]),
+        no_app,
+        no_app,
+        no_app,
+        no_app,
+        |_| {
+            http_response(
+                "302 Found",
+                &[("Location", "https://example.invalid/?loginName=x")],
+                "",
+            )
+        },
+    );
+    {
+        let (_guard, governor) = service_test_governor("iclass-foreign");
+        let mut lease = governor
+            .try_acquire(RequestKind::Authentication)
+            .expect("authentication lease");
+        let credentials = SsoCredentials::new(SESSION_USERNAME, SESSION_PASSWORD)
+            .expect("synthetic credentials");
+        let result = authenticate_service(&mut lease, &harness.client, CasService::Iclass, credentials);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a foreign redirect must not authenticate"),
+        };
+        finish_lease(lease, Some(&error));
+        assert_eq!(error.code, "invalid_input");
+        assert_eq!(harness.iclass.observed().len(), 1);
+    }
+}
+
+#[test]
+fn iclass_callback_route_label_carries_no_credential() {
+    let callback = Url::parse("https://iclass.buaa.edu.cn:8346/?ticket=ST-synthetic").unwrap();
+    assert_eq!(receipt_route(&callback), "/");
+    let sink = Url::parse("https://iclass.buaa.edu.cn:8346/index.html?loginName=x").unwrap();
+    let label = receipt_route(&sink);
+    assert!(!label.contains("loginName") && !label.contains("ticket"));
 }
 
 /// The scoped session cookie the shuttle relying party issues for the one
