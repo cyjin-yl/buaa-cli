@@ -1,5 +1,5 @@
-//! Separate IEAS preview and yjsxk existing-session selected-read contracts.
-//! No login, retry, polling, mutation, or HTTP fallback is implemented.
+//! Separate IEAS preview and yjsxk selected-read contracts.
+//! Yjsxk accepts an existing session or one explicit HTTPS CAS sign-on.
 //! Calls are deliberately staged: a governor denial never sleeps or retries.
 //! Mutation is blocked until authenticated account and postcondition contracts exist.
 use crate::governor::{FollowupError, Governor, Outcome, RequestKind};
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::SystemTime;
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -840,6 +841,10 @@ struct Command {
     // The yjsxk reader or an IEAS integrator may consume this stdin material;
     // it is never a session reference, preview field, or ordinary JSON Value.
     session_cookie: Option<Zeroizing<String>>,
+    // Protected-stdin CAS material for the yjsxk authenticated-session
+    // alternative; mutually exclusive with session_cookie and consumed by
+    // exactly one in-memory sign-on, never persisted or replayed.
+    cas: Option<CasCredentials>,
     token: Option<String>,
     confirmation: Option<String>,
     reconfirmation: Option<String>,
@@ -866,6 +871,8 @@ impl<'de> Deserialize<'de> for Command {
             session_ref: Option<String>,
             #[serde(default, deserialize_with = "optional_session_cookie")]
             session_cookie: Option<Zeroizing<String>>,
+            #[serde(default)]
+            cas: Option<CasCredentials>,
             token: Option<String>,
             confirmation: Option<String>,
             reconfirmation: Option<String>,
@@ -886,6 +893,7 @@ impl<'de> Deserialize<'de> for Command {
             base: raw.base,
             session_ref: raw.session_ref,
             session_cookie: raw.session_cookie,
+            cas: raw.cas,
             token: raw.token,
             confirmation: raw.confirmation,
             reconfirmation: raw.reconfirmation,
@@ -896,6 +904,41 @@ impl<'de> Deserialize<'de> for Command {
             previous_ledger: raw.previous_ledger,
         })
     }
+}
+
+/// Protected-stdin CAS credentials for one in-memory yjsxk sign-on. They
+/// deserialize into zeroizing storage only, never through a generic Value.
+struct CasCredentials {
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
+    intent: Zeroizing<String>,
+}
+
+impl<'de> Deserialize<'de> for CasCredentials {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(deserialize_with = "secret_string")]
+            username: Zeroizing<String>,
+            #[serde(deserialize_with = "secret_string")]
+            password: Zeroizing<String>,
+            #[serde(deserialize_with = "secret_string")]
+            intent: Zeroizing<String>,
+        }
+        let raw: Raw = deserialize_object(deserializer)?;
+        Ok(Self {
+            username: raw.username,
+            password: raw.password,
+            intent: raw.intent,
+        })
+    }
+}
+
+fn secret_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Zeroizing<String>, D::Error> {
+    String::deserialize(deserializer).map(Zeroizing::new)
 }
 
 fn optional_session_cookie<'de, D: serde::Deserializer<'de>>(
@@ -972,35 +1015,33 @@ where
         Ok(c) => c,
         Err(e) => return Ok(blocked(&e)),
     };
-    Ok(dispatch(c, online, selected))
+    dispatch(c, online, selected)
 }
 
-fn dispatch<F>(c: Command, online: bool, selected: F) -> Value
+fn dispatch<F>(c: Command, online: bool, selected: F) -> Result<Value, crate::net::Error>
 where
     F: FnOnce(Zeroizing<String>, &str) -> Value,
 {
     match c.application {
         Application::Yjsxk => dispatch_yjsxk(c, online, selected),
-        Application::Ieas => {
-            if c.authorized.is_some() || c.xnxqdm.is_some() {
-                blocked(
-                    "authorized/xnxqdm are yjsxk-only; mixed provider fields rejected before I/O",
-                )
-            } else {
-                dispatch_ieas(c, online)
-            }
-        }
+        Application::Ieas => Ok(if c.authorized.is_some() || c.xnxqdm.is_some() || c.cas.is_some() {
+            blocked(
+                "authorized/xnxqdm/cas are yjsxk-only; mixed provider fields rejected before I/O",
+            )
+        } else {
+            dispatch_ieas(c, online)
+        }),
     }
 }
 
-fn dispatch_yjsxk<F>(mut c: Command, online: bool, selected: F) -> Value
+fn dispatch_yjsxk<F>(mut c: Command, online: bool, selected: F) -> Result<Value, crate::net::Error>
 where
     F: FnOnce(Zeroizing<String>, &str) -> Value,
 {
     if c.operation != "selected" {
-        return blocked(
+        return Ok(blocked(
             "yjsxk admits only operation=selected; login, IEAS list, preview, export and every mutation remain blocked",
-        );
+        ));
     }
     if c.intent.is_some()
         || c.base.is_some()
@@ -1013,31 +1054,134 @@ where
         || c.html_base64.is_some()
         || c.content_type.is_some()
     {
-        return blocked(
+        return Ok(blocked(
             "mixed IEAS intent/session/fixture fields are forbidden for yjsxk; request rejected before I/O",
-        );
+        ));
     }
     if c.authorized != Some(true) {
-        return blocked("yjsxk selected read requires explicit authorized:true");
+        return Ok(blocked("yjsxk selected read requires explicit authorized:true"));
     }
     let term = match c.xnxqdm.as_deref() {
         Some(term) if term.len() == 5 && term.bytes().all(|byte| byte.is_ascii_digit()) => term,
-        _ => return blocked("yjsxk selected read requires exact five-digit xnxqdm"),
+        _ => return Ok(blocked("yjsxk selected read requires exact five-digit xnxqdm")),
     };
-    let cookie = match c.session_cookie.take() {
-        Some(cookie) if crate::net::valid_session_cookie(&cookie) => cookie,
+    if c.session_cookie.is_some() && c.cas.is_some() {
+        return Ok(blocked(
+            "session_cookie and cas are mutually exclusive session materials; request rejected before I/O",
+        ));
+    }
+    if !online {
+        return Ok(blocked(
+            "online access disabled; yjsxk selected has no offline fixture or fixture-only online substitute",
+        ));
+    }
+    let cookie = match (c.session_cookie.take(), c.cas.take()) {
+        (Some(cookie), None) => match crate::net::valid_session_cookie(&cookie) {
+            true => cookie,
+            false => {
+                return Ok(blocked(
+                    "yjsxk selected read requires strict protected-stdin session_cookie syntax",
+                ))
+            }
+        },
+        (None, Some(cas)) => {
+            let (session, cookie, expiry) = yjsxk_cas_session(&cas)?;
+            return Ok(yjsxk::selected_after_cas(cookie, term, expiry, &|bytes| {
+                crate::net::carries_secret(bytes, &cas.username)
+                    || crate::net::carries_secret(bytes, &cas.password)
+                    || session.contains_secret_bytes(bytes)
+            }));
+        }
         _ => {
-            return blocked(
-                "yjsxk selected read requires strict protected-stdin session_cookie syntax",
-            );
+            return Ok(blocked(
+                "yjsxk selected read requires protected-stdin session_cookie or cas credentials",
+            ))
         }
     };
-    if !online {
-        return blocked(
-            "online access disabled; yjsxk selected has no offline fixture or fixture-only online substitute",
-        );
+    Ok(selected(cookie, term))
+}
+
+/// One in-memory CAS sign-on against the reviewed yjsxk relying party, then
+/// the scoped session cookie for exactly one selected-course read. The
+/// credential never persists, refreshes or leaves this invocation; a failed
+/// or downgraded handoff refuses before any cookie transmission.
+fn yjsxk_cas_session(
+    cas: &CasCredentials,
+) -> Result<
+    (crate::recordings::session::ServiceSession, Zeroizing<String>, Option<SystemTime>),
+    crate::net::Error,
+> {
+    use crate::recordings::session::{self as auth, CasService, SsoCredentials};
+    let invalid = || {
+        crate::net::Error::new(
+            "invalid_input",
+            "yjsxk cas input does not match the protected credential contract",
+        )
+    };
+    let credentials = SsoCredentials::new(&cas.username, &cas.password)?;
+    if *cas.intent != format!("LOGIN {} enrol yjsxk", &*cas.username) {
+        return Err(invalid());
     }
-    selected(cookie, term)
+    let client = auth::http_client()?;
+    let governor = crate::governor::Governor::open().map_err(|_| {
+        crate::net::Error::new("governor_error", "shared request admission unavailable")
+    })?;
+    let mut lease =
+        crate::net::acquire_kind(&governor, crate::governor::RequestKind::Authentication)?;
+    let session = match auth::authenticate_service(&mut lease, &client, CasService::Yjsxk, credentials)
+    {
+        Ok(session) => session,
+        Err(failure) => {
+            use crate::governor::Outcome;
+            if matches!(
+                failure.code,
+                "governor_error" | "governor_denied" | "governor_unavailable"
+            ) {
+                // Persistence failure after a send is not a local refusal:
+                // drop without finishing and retain the pending outcome.
+                return Err(failure);
+            }
+            let settled = match failure.code {
+                "auth_latched" => lease.finish(Outcome::CredentialRejected),
+                "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+                "relying_party_error" => lease.finish(Outcome::Http {
+                    status: 500,
+                    retry_after: None,
+                    challenge: false,
+                    network_failure: false,
+                }),
+                "handoff_contract_mismatch" => lease.finish_without_request(),
+                "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+                _ => lease.finish_without_request(),
+            };
+            settled.map_err(|_| {
+                crate::net::Error::new(
+                    "governor_error",
+                    "cannot settle the yjsxk authentication attempt",
+                )
+            })?;
+            return Err(failure);
+        }
+    };
+    // The selected read runs under its own separate lease, so this
+    // authentication lease closes here without a further request.
+    lease.finish_without_request().map_err(|_| {
+        crate::net::Error::new(
+            "governor_error",
+            "cannot settle the yjsxk authentication attempt",
+        )
+    })?;
+    let url = url::Url::parse(yjsxk::SELECTED_URL).map_err(|_| invalid())?;
+    let (cookie, expiry) = session.cookie_header(&url)?;
+    let cookie = cookie
+        .filter(|_| expiry.is_none_or(|expiry| SystemTime::now() < expiry))
+        .ok_or_else(|| {
+            crate::net::Error::new(
+                "scoped_cookie_unusable",
+                "the yjsxk session cookie is missing or expired; no read was sent",
+            )
+        })?;
+    Ok((session, cookie, expiry))
 }
 
 fn dispatch_ieas(c: Command, online: bool) -> Value {
@@ -1106,11 +1250,11 @@ pub fn run_with_enrol<S: Session>(
         Err(e) => return Ok(blocked(&e)),
     };
     if c.application == Application::Yjsxk {
-        return Ok(dispatch_yjsxk(c, online, yjsxk::selected));
+        return dispatch_yjsxk(c, online, yjsxk::selected);
     }
-    if c.authorized.is_some() || c.xnxqdm.is_some() {
+    if c.authorized.is_some() || c.xnxqdm.is_some() || c.cas.is_some() {
         return Ok(blocked(
-            "authorized/xnxqdm are yjsxk-only; mixed provider fields rejected before I/O",
+            "authorized/xnxqdm/cas are yjsxk-only; mixed provider fields rejected before I/O",
         ));
     }
     if matches!(c.operation.as_str(), "preview" | "drop_preview" | "export")
@@ -1171,8 +1315,12 @@ pub fn schema() -> Value {
             "token":{"type":["string","null"]},"confirmation":{"type":["string","null"]},"reconfirmation":{"type":["string","null"]},
             "page_xnxq":{"type":["string","null"]},"category":{"enum":["professional","core_general","general","sports",null]},
             "html_base64":{"type":["string","null"]},"content_type":{"type":["string","null"]},
-            "previous_ledger":{"type":"array","items":{"type":"string"}}},
-            "x-runtime-invariants":["application defaults to ieas; authorized/xnxqdm are rejected for ieas","yjsxk requires operation=selected, authorized=true, exact five-digit xnxqdm and protected-stdin session_cookie","yjsxk rejects IEAS intent/base/session_ref/token/confirmation/reconfirmation/page_xnxq/category/html_base64/content_type before I/O","object root only; duplicate/unknown fields and trailing documents rejected"]},
+            "previous_ledger":{"type":"array","items":{"type":"string"}},
+            "cas":{"type":["object","null"],"additionalProperties":false,"required":["username","password","intent"],"properties":{
+                "username":{"type":"string","writeOnly":true},
+                "password":{"type":"string","writeOnly":true},
+                "intent":{"type":"string","description":"exactly 'LOGIN <username> enrol yjsxk'"}}}},
+            "x-runtime-invariants":["application defaults to ieas; authorized/xnxqdm are rejected for ieas","yjsxk requires operation=selected, authorized=true, exact five-digit xnxqdm and exactly one of protected-stdin session_cookie or cas credentials","yjsxk cas performs one in-memory CAS sign-on whose http->https-upgraded /yjsxkapp/ landing never transmits credentials in plaintext","yjsxk rejects IEAS intent/base/session_ref/token/confirmation/reconfirmation/page_xnxq/category/html_base64/content_type before I/O","object root only; duplicate/unknown fields and trailing documents rejected"]},
         "intent":intent,
         "ieas_term_identity":{"local_preview_page_xnxq_example":"20261","historical_source_pageXnxq_example":"2026-20271","deployment_verified":false,"semantic_change_applied":false},
         "ieas_mutations_and_verification":"submit/drop/verify remain blocked before requests pending authenticated account, exact term, authoritative complete selected-state scope and durable idempotency",
@@ -1225,7 +1373,7 @@ mod tests {
             })
         }
     }
-    fn governor_fixture() -> (std::path::PathBuf, Governor) {
+    pub(super) fn governor_fixture() -> (std::path::PathBuf, Governor) {
         let path = std::env::temp_dir().join(format!(
             "buaa-enrol-safety-{}-{}",
             std::process::id(),
@@ -2178,5 +2326,55 @@ mod tests {
         assert_eq!(schema["input"]["properties"]["previous_ledger"]["type"], "array");
         assert!(schema["command_output"]["properties"]["result"]["enum"].as_array().unwrap().iter().any(|r| r == "enrol_commit_admitted"));
         let _ = base;
+    }
+
+    #[test]
+    fn yjsxk_cas_and_session_cookie_are_mutually_exclusive() {
+        // One selected read may carry exactly one session material; both at
+        // once refuses before any transport or credential use.
+        let input = r#"{"operation":"selected","application":"yjsxk","xnxqdm":"20261","authorized":true,"session_cookie":"sid=synthetic-cookie","cas":{"username":"u","password":"p","intent":"LOGIN u enrol yjsxk"}}"#;
+        let mut calls = 0;
+        let output = run_using(input, true, |_, _| {
+            calls += 1;
+            json!({"result":"completed"})
+        })
+        .unwrap();
+        assert_eq!(output["result"], "blocked");
+        assert_eq!(calls, 0);
+        assert!(!output.to_string().contains("synthetic-cookie"));
+    }
+
+    #[test]
+    fn yjsxk_cas_wrong_intent_refuses_before_any_transport() {
+        // The intent binds username and module before any network is built.
+        let input = r#"{"operation":"selected","application":"yjsxk","xnxqdm":"20261","authorized":true,"cas":{"username":"u","password":"p","intent":"LOGIN u marks"}}"#;
+        let mut calls = 0;
+        let error = run_using(input, true, |_, _| {
+            calls += 1;
+            json!({"result":"completed"})
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_input");
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn yjsxk_rejects_ieas_or_unknown_fields_before_transport() {
+        let mut calls = 0;
+        for input in [
+            r#"{"operation":"selected","application":"yjsxk","xnxqdm":"20261","authorized":true,"cas":{"username":"u","password":"p","intent":"LOGIN u enrol yjsxk","extra":1}}"#,
+            r#"{"operation":"selected","application":"yjsxk","xnxqdm":"20261","authorized":true,"cas":{"username":"u","password":"p"}}"#,
+            r#"{"operation":"selected","application":"ieas","authorized":true,"cas":{"username":"u","password":"p","intent":"LOGIN u enrol yjsxk"}}"#,
+        ] {
+            let output = run_using(input, true, |_, _| {
+                calls += 1;
+                json!({"result":"completed"})
+            });
+            match output {
+                Ok(value) => assert_eq!(value["result"], "blocked", "{input}"),
+                Err(error) => assert_eq!(error.code, "invalid_input", "{input}"),
+            }
+        }
+        assert_eq!(calls, 0);
     }
 }

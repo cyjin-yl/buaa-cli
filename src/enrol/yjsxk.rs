@@ -41,12 +41,26 @@ fn blocked(reason: &'static str) -> Value {
 
 /// The protected command owns this string for the whole invocation. Screening
 /// borrows every spelling; it never copies a cookie into an ordinary Value.
-struct CookieGuard<'a>(&'a str);
+struct CookieGuard<'a> {
+    cookie: &'a str,
+    screen: Option<&'a dyn Fn(&[u8]) -> bool>,
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+fn CookieGuard(cookie: &str) -> CookieGuard<'_> {
+    CookieGuard {
+        cookie,
+        screen: None,
+    }
+}
+
 impl CookieGuard<'_> {
     fn contains(&self, bytes: &[u8]) -> bool {
-        crate::net::carries_secret(bytes, self.0)
+        self.screen.is_some_and(|screen| screen(bytes))
+            || crate::net::carries_secret(bytes, self.cookie)
             || self
-                .0
+                .cookie
                 .split(';')
                 .map(str::trim)
                 .filter(|part| !part.is_empty())
@@ -909,13 +923,24 @@ impl Client {
         })
     }
 
-    fn selected(&self, requested_term: &str) -> Value {
+    fn selected(
+        &self,
+        requested_term: &str,
+        cas: Option<(Option<std::time::SystemTime>, &dyn Fn(&[u8]) -> bool)>,
+    ) -> Value {
         let mut cookie = match reqwest::header::HeaderValue::from_str(&self.cookie) {
             Ok(cookie) => cookie,
             Err(_) => return blocked("invalid yjsxk session Cookie header; request not sent"),
         };
         cookie.set_sensitive(true);
-        let mut lease = match self.governor.try_acquire(RequestKind::Interactive) {
+        let admission = if cas.is_some() {
+            // CAS settlement leaves a durable gap. The shared helper waits at
+            // most once and still refuses cooldown or competing ownership.
+            crate::net::acquire(&self.governor).map_err(|_| ())
+        } else {
+            self.governor.try_acquire(RequestKind::Interactive).map_err(|_| ())
+        };
+        let mut lease = match admission {
             Ok(lease) => lease,
             Err(_) => {
                 return blocked("shared governor denied yjsxk request admission; request not sent");
@@ -928,9 +953,22 @@ impl Client {
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .header(reqwest::header::COOKIE, cookie)
             .timeout(DEADLINE);
-        let mut response = match lease.start_request(|| request.send()) {
-            Ok(Ok(response)) => response,
-            Ok(Err(_)) => {
+        let mut response = match lease.start_request(|| {
+            let expiry = cas.and_then(|(expiry, _)| expiry);
+            if expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+                None
+            } else {
+                Some(request.send())
+            }
+        }) {
+            Ok(Some(Ok(response))) => response,
+            Ok(None) => {
+                if lease.finish_without_request().is_err() {
+                    return blocked("cannot settle yjsxk read admission; request not sent");
+                }
+                return blocked("yjsxk session cookie expired before transmission; request not sent");
+            }
+            Ok(Some(Err(_))) => {
                 if lease.finish(Outcome::NetworkFailure).is_err() {
                     return blocked(
                         "yjsxk network failed and shared governor settlement failed; no retry performed",
@@ -957,7 +995,10 @@ impl Client {
             .contains_key(reqwest::header::RETRY_AFTER);
         let redirect = (300..400).contains(&status)
             || response.headers().contains_key(reqwest::header::LOCATION);
-        let guard = CookieGuard(&self.cookie);
+        let guard = CookieGuard {
+            cookie: &self.cookie,
+            screen: cas.map(|(_, screen)| screen),
+        };
         let header_echo = response.headers().iter().any(|(name, value)| {
             guard.contains(name.as_str().as_bytes()) || guard.contains(value.as_bytes())
         });
@@ -1051,7 +1092,19 @@ impl Client {
 
 pub(super) fn selected(cookie: Zeroizing<String>, requested_term: &str) -> Value {
     match Client::new(cookie) {
-        Ok(client) => client.selected(requested_term),
+        Ok(client) => client.selected(requested_term, None),
+        Err(output) => output,
+    }
+}
+
+pub(super) fn selected_after_cas(
+    cookie: Zeroizing<String>,
+    requested_term: &str,
+    expiry: Option<std::time::SystemTime>,
+    screen: &dyn Fn(&[u8]) -> bool,
+) -> Value {
+    match Client::new(cookie) {
+        Ok(client) => client.selected(requested_term, Some((expiry, screen))),
         Err(output) => output,
     }
 }
@@ -1065,19 +1118,25 @@ pub(super) fn schema() -> Value {
         "maximum_requests_per_invocation":1,
         "redirects":false,
         "retries":false,
-        "login":false,
+        "login":"optional explicit CAS sign-on before the selected GET; existing sessions do not authenticate",
         "proxy":false,
         "tls":"strict_https_only",
         "overall_deadline_seconds":30,
         "body_limit":super::LIMIT,
         "session_cookie":"protected stdin only; zeroizing typed storage; full header and every value screened; never logged, persisted, cached or projected",
         "set_cookie":"refused without adoption",
-        "input":{"type":"object","additionalProperties":false,"required":["operation","application","xnxqdm","authorized","session_cookie"],"properties":{
+        "input":{"type":"object","additionalProperties":false,"required":["operation","application","xnxqdm","authorized"],
+            "oneOf":[{"required":["session_cookie"],"properties":{"session_cookie":{"type":"string"},"cas":{"type":"null"}}},{"required":["cas"],"properties":{"cas":{"type":"object"},"session_cookie":{"type":"null"}}}],"properties":{
             "operation":{"const":"selected"},
             "application":{"const":"yjsxk"},
             "xnxqdm":{"type":"string","pattern":"^[0-9]{5}$"},
             "authorized":{"const":true},
-            "session_cookie":{"type":"string","writeOnly":true}
+            "session_cookie":{"type":["string","null"],"writeOnly":true},
+            "cas":{"type":["object","null"],"additionalProperties":false,"required":["username","password","intent"],"properties":{
+                "username":{"type":"string","writeOnly":true},
+                "password":{"type":"string","writeOnly":true},
+                "intent":{"type":"string","writeOnly":true,"description":"exactly 'LOGIN <username> enrol yjsxk'"}
+            }}
         }},
         "output":{"type":"object","additionalProperties":false,"required":[
             "kind","application","operation","requested_xnxqdm","scope","source_collection","source_record_count",
@@ -1605,6 +1664,51 @@ mod tests {
         );
         assert_eq!(unknown_message.output["result"], "parsed");
         assert_eq!(unknown_message.output["data"]["body_withheld"], true);
+    }
+
+    #[test]
+    fn post_cas_read_honors_reserved_gap_and_refuses_expired_cookie() {
+        let (path, governor) = super::super::tests::governor_fixture();
+        governor
+            .try_acquire(RequestKind::Interactive)
+            .unwrap()
+            .finish_without_request()
+            .unwrap();
+        let client = Client {
+            http: reqwest::blocking::Client::builder()
+                .no_proxy()
+                .resolve("yjsxk.buaa.edu.cn", ([127, 0, 0, 1], 1).into())
+                .build()
+                .unwrap(),
+            governor,
+            cookie: Zeroizing::new("sid=fixture".to_owned()),
+        };
+        let output = client.selected("20261", Some((Some(std::time::UNIX_EPOCH), &|_| false)));
+        let followup = crate::net::acquire(&client.governor);
+        let released = followup.is_ok_and(|lease| lease.finish_without_request().is_ok());
+        drop(client);
+        std::fs::remove_dir_all(path).unwrap();
+        assert_eq!(output["result"], "blocked");
+        assert_eq!(
+            output["reason"],
+            "yjsxk session cookie expired before transmission; request not sent"
+        );
+        assert!(
+            released,
+            "the governor must admit a later request after expiry refusal"
+        );
+    }
+
+    #[test]
+    fn selected_response_screens_secrets_outside_the_sent_cookie() {
+        let body = br#"{"msg":"synthetic-sign-on-carry","xkjgList":[]}"#;
+        let guard = CookieGuard {
+            cookie: "sid=synthetic-service-cookie",
+            screen: Some(&|bytes| crate::net::carries_secret(bytes, "synthetic-sign-on-carry")),
+        };
+        let admission = admit(observation(body), "20261", &guard);
+        assert_eq!(admission.output["result"], "blocked");
+        assert!(!admission.output.to_string().contains("synthetic-sign-on-carry"));
     }
 
     #[test]

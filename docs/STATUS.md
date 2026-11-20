@@ -1,3 +1,25 @@
+## Graduate marks and selected-course reads
+
+The candidate adds `buaa marks session --online`. It signs in to graduate
+GSMIS, enters `wdcjapp`, then requests the first 200 rows from `xscjcx.do`.
+It reports whether the returned page accounts for the declared total and
+supports a local term filter. An authorized browser session observed the
+source sequence with an empty result. Native live validation is pending.
+
+The existing `buaa enrol --online` yjsxk selected-course read accepts a session
+cookie through protected stdin. The candidate also accepts explicit CAS input.
+An authorized browser observation found that the application redirected the
+HTTPS landing to HTTP after consuming the CAS ticket. An HTTPS selected-course
+request without an application session returned 401. The candidate keeps all
+requests on HTTPS. Selection and withdrawal remain offline previews.
+
+The release offline gate passed with 1,556 library tests passing, zero
+failures, and three ignored. All integration suites passed. The release CLI
+returned `disabled` with `network_performed: false` for a disabled marks read
+and refused yjsxk CAS input without `--online`. A local regression covered the
+post-CAS request gap and cookie expiry before transmission. Independent
+source review confirmed the pacing fix.
+
 ## 2026-11-06: CAS fix unlocks three services; PRs merged
 
 ### Live-verified with owner credentials

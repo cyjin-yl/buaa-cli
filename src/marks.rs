@@ -34,6 +34,9 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
+mod session;
+pub use session::session;
+
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 const MAX_PATH: usize = 4096;
 // Half of f64::MAX/10,000, so round4 scaling remains finite with margin.
@@ -863,7 +866,25 @@ pub fn schema() -> Value {
         "error_codes": "ownership or permissions validation failures report permission (exit 5); malformed input reports invalid_input (exit 2)",
         "save": {"stdin":"same as gpa input","result":"saved|unchanged (idempotent, atomic, local-only)","file_mode":"0600","max_bytes":MAX_BASELINE_BYTES},
         "show": {"stdout":"the stored gpa_baseline document","requires_file_mode":"0600"}
-    }
+    },
+    "session": {
+        "command": "buaa marks session [--online]",
+        "description": "One explicit in-memory CAS login to GSMIS followed by the wdcjapp application document and exactly one xscjcx.do read. No persistence, refresh, retry, write or pagination; stdin-only credentials; graduate accounts only.",
+        "input": {"type":"object","additionalProperties":false,"required":["authorized","username","password","intent","read"],"properties":{
+            "authorized":{"const":true},
+            "username":{"type":"string","writeOnly":true},
+            "password":{"type":"string","writeOnly":true},
+            "intent":{"type":"string","description":"exactly 'LOGIN <username> marks'"},
+            "read":{"type":"object","additionalProperties":false,"required":["operation","enabled"],"properties":{
+                "operation":{"const":"xscjcx"},
+                "enabled":{"type":"boolean"},
+                "xnxqdm":{"type":["string","null"],"pattern":"^[0-9]{4}[123]$","description":"optional requested term; non-matching rows are counted, never projected"}}}}},
+        "output": {"type":"object","required":["result"],"properties":{
+            "result":{"enum":["disabled","parsed","business_error","degraded","fallback","sensitive_response_withheld","session_expired"]},
+            "type":{"const":"marks_gsmis"},
+            "records":{"type":"array","description":"datas.xscjcx.rows projected verbatim, requested-xnxqdm filtered"}},
+            "completeness":{"type":"object"}
+        }}
     })
 }
 
