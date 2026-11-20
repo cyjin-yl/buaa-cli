@@ -515,7 +515,7 @@ fn check_inner(input: &str, source_ids: Option<&[&str]>) -> Value {
 // application and read responses are absorbed into the same invocation-only
 // jar and screened like every other credential, never exported or persisted.
 
-const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
+pub(crate) const SESSION_BODY_LIMIT: u64 = 8 * 1024 * 1024;
 const SESSION_MAX_INPUT: usize = 65536;
 const TIMETABLE_PAGE_URL: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/*default/index.do";
 const TIMETABLE_PORTAL_URL: &str =
@@ -535,7 +535,7 @@ fn session_invalid() -> Error {
     )
 }
 
-fn deserialize_secret<'de, D: serde::Deserializer<'de>>(
+pub(crate) fn deserialize_secret<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Zeroizing<String>, D::Error> {
     String::deserialize(deserializer).map(Zeroizing::new)
@@ -543,7 +543,7 @@ fn deserialize_secret<'de, D: serde::Deserializer<'de>>(
 
 // Serde's struct derives also accept positional sequences. This boundary
 // admits JSON objects only, without a credential-bearing Value tree.
-fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
@@ -630,7 +630,7 @@ impl<'de> Deserialize<'de> for SessionRead {
 /// parser admits: four ASCII digits followed by 1, 2 or 3. A term outside
 /// this set can never parse, so it is refused before any credential or
 /// transport work instead of spending an authenticated read.
-fn valid_term_code(term: &str) -> bool {
+pub(crate) fn valid_term_code(term: &str) -> bool {
     let bytes = term.as_bytes();
     bytes.len() == 5
         && bytes[..4].iter().all(u8::is_ascii_digit)
@@ -642,7 +642,7 @@ fn xskb_request(
     cookie: reqwest::header::HeaderValue,
     term: &str,
 ) -> reqwest::blocking::RequestBuilder {
-    session_request(client, TIMETABLE_URL, cookie).form(&[
+    session_request(client, TIMETABLE_URL, cookie, TIMETABLE_REFERER).form(&[
         ("ZC", ""),
         ("XNXQDM", term),
         ("XH", ""),
@@ -655,63 +655,64 @@ fn xskb_request(
 fn student_context_present(bytes: &[u8]) -> Result<bool, Error> {
     let mut de = serde_json::Deserializer::from_slice(bytes);
     let value = PrivateValue::deserialize(&mut de)
-        .map_err(|_| error("upstream_parse", "timetable context is not strict JSON"))?;
+        .map_err(|_| error("upstream_parse", "session context is not strict JSON"))?;
     de.end()
-        .map_err(|_| error("upstream_parse", "timetable context has trailing content"))?;
+        .map_err(|_| error("upstream_parse", "session context has trailing content"))?;
     let Some(rows) = value.0.get("data").and_then(Value::as_array) else {
         return Err(error(
             "upstream_parse",
-            "timetable context has no data array",
+            "session context has no data array",
         ));
     };
     for row in rows {
         let Some(row) = row.as_object() else {
             return Err(error(
                 "upstream_parse",
-                "timetable context row is not an object",
+                "session context row is not an object",
             ));
         };
         let Some(id) = row.get("XH").and_then(Value::as_str) else {
             return Err(error(
                 "upstream_parse",
-                "timetable context has no student identity field",
+                "session context has no student identity field",
             ));
         };
         if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
             return Err(error(
                 "upstream_parse",
-                "timetable context identity is not admissible",
+                "session context identity is not admissible",
             ));
         }
     }
     Ok(!rows.is_empty())
 }
 
-fn session_request(
+pub(crate) fn session_request(
     client: &Client,
     url: &str,
     cookie: reqwest::header::HeaderValue,
+    referer: &str,
 ) -> reqwest::blocking::RequestBuilder {
     client
         .post(url)
         .header("Cookie", cookie)
         .header("Accept", "application/json, text/javascript, */*; q=0.01")
         .header("X-Requested-With", "XMLHttpRequest")
-        .header("Referer", TIMETABLE_REFERER)
+        .header("Referer", referer)
 }
 
-struct ContextResponse {
-    status: u16,
-    retry_after: Option<String>,
-    challenge: bool,
-    content_type: Option<String>,
-    body: Zeroizing<Vec<u8>>,
+pub(crate) struct ContextResponse {
+    pub(crate) status: u16,
+    pub(crate) retry_after: Option<String>,
+    pub(crate) challenge: bool,
+    pub(crate) content_type: Option<String>,
+    pub(crate) body: Zeroizing<Vec<u8>>,
 }
 
 /// Persist response safety facts before any cookie or body processing can
 /// fail, then absorb the reviewed same-origin cookie declarations and retain
 /// a bounded body for the caller's challenge and credential-echo screens.
-fn receive_context_response(
+pub(crate) fn receive_context_response(
     response: Response,
     lease: &mut RequestLease<'_>,
     session: &mut cas::ServiceSession,
@@ -753,7 +754,7 @@ fn receive_context_response(
     response
         .take(SESSION_BODY_LIMIT + 1)
         .read_to_end(&mut body)
-        .map_err(|_| error("network_error", "timetable context body read failed"))?;
+        .map_err(|_| error("network_error", "session context body read failed"))?;
     if body.len() as u64 > SESSION_BODY_LIMIT {
         return Err(error(
             "body_limit",
@@ -769,9 +770,9 @@ fn receive_context_response(
     })
 }
 
-fn screen_context_response(
+pub(crate) fn screen_context_response(
     response: &ContextResponse,
-    input: &SessionInput,
+    password: &str,
     session: &cas::ServiceSession,
 ) -> Result<(), Error> {
     let assessment =
@@ -779,7 +780,7 @@ fn screen_context_response(
     if response.challenge || assessment == crate::html::ChallengeAssessment::Detected {
         return Err(error(
             "challenge_requires_human",
-            "timetable context requires review",
+            "session context requires review",
         ));
     }
     // Both context bodies are internal-only: the application document is
@@ -789,29 +790,28 @@ fn screen_context_response(
     // the CAS username), so that expected identity is not an output echo.
     // Password and cookie material remain refused at both steps; the
     // exported read keeps its own strict username screen.
-    if net::carries_secret(&response.body, &input.password)
+    if net::carries_secret(&response.body, password)
         || session.contains_secret_bytes(&response.body)
     {
         return Err(error(
             "credential_echo",
-            "timetable context contains credential material",
+            "session context contains credential material",
         ));
     }
     match decoded_body_screening(&response.body, &|candidate: &[u8]| {
-        net::carries_secret(candidate, &input.password)
-            || session.contains_secret_bytes(candidate)
+        net::carries_secret(candidate, password) || session.contains_secret_bytes(candidate)
     }) {
         BodyScreening::Clear => {}
         BodyScreening::Echo => {
             return Err(error(
                 "credential_echo",
-                "timetable context contains decoded credential material",
+                "session context contains decoded credential material",
             ));
         }
         BodyScreening::Unreviewable => {
             return Err(error(
                 "response_safety_unreviewed",
-                "timetable context cannot be screened completely",
+                "session context cannot be screened completely",
             ));
         }
     }
@@ -821,14 +821,14 @@ fn screen_context_response(
 /// Book the follow-up read slot under the shared governor. A cooldown is a
 /// durable refusal; pacing sleeps before transmission, never during a CAS
 /// redirect chain (handled inside the authentication itself).
-fn admit_session_read(lease: &mut RequestLease<'_>) -> Result<(), Error> {
+pub(crate) fn admit_session_read(lease: &mut RequestLease<'_>) -> Result<(), Error> {
     let reservation = lease
         .reserve_followup()
-        .map_err(|_| error("governor_error", "cannot admit timetable follow-up"))?;
+        .map_err(|_| error("governor_error", "cannot admit session follow-up"))?;
     if !reservation.cooldown_wait.is_zero() {
         return Err(error(
             "cooldown",
-            "timetable authentication was deferred; no read or retry was sent",
+            "session authentication was deferred; no read or retry was sent",
         ));
     }
     if !reservation.request_wait.is_zero() {
@@ -837,7 +837,7 @@ fn admit_session_read(lease: &mut RequestLease<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-fn with_provenance(mut output: Value, network: bool) -> Value {
+pub(crate) fn with_provenance(mut output: Value, network: bool) -> Value {
     output["service"] = json!("gsmis");
     output["source"] = json!(if network { "network" } else { "disabled" });
     output["network_performed"] = json!(network);
@@ -848,10 +848,16 @@ fn with_provenance(mut output: Value, network: bool) -> Value {
 /// A degraded read result carries the unmodified body as private caller-owned
 /// evidence. It is only emitted after the credential echo and challenge
 /// screens have cleared the body.
-fn degraded(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'static str) -> Value {
+pub(crate) fn degraded(
+    output_type: &'static str,
+    status: u16,
+    content_type: Option<&str>,
+    bytes: &[u8],
+    reason: &'static str,
+) -> Value {
     json!({
         "schema_version": 1,
-        "type": "timetable_pg",
+        "type": output_type,
         "result": "degraded",
         "fallback_reason": reason,
         "http_status": status,
@@ -864,7 +870,13 @@ fn degraded(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'sta
 
 /// A withheld read result retains only safe metadata: no body bytes and only a
 /// reviewed MIME essence, never the full Content-Type parameters.
-fn withheld(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'static str) -> Value {
+pub(crate) fn withheld(
+    output_type: &'static str,
+    status: u16,
+    content_type: Option<&str>,
+    bytes: &[u8],
+    reason: &'static str,
+) -> Value {
     let essence = content_type
         .and_then(|value| value.split(';').next())
         .map(str::trim)
@@ -876,7 +888,7 @@ fn withheld(status: u16, content_type: Option<&str>, bytes: &[u8], reason: &'sta
         });
     json!({
         "schema_version": 1,
-        "type": "timetable_pg",
+        "type": output_type,
         "result": "sensitive_response_withheld",
         "fallback_reason": reason,
         "http_status": status,
@@ -900,16 +912,16 @@ const MAX_ISSUED_COOKIES: usize = 64;
 /// from the value alone, so screening only values would miss an encoded
 /// full-pair echo (e.g. base64("sid=abc") is not base64("abc")).
 #[derive(Default)]
-struct IssuedCookies {
-    entries: Vec<IssuedCookie>,
-    complete: bool,
+pub(crate) struct IssuedCookies {
+    pub(crate) entries: Vec<IssuedCookie>,
+    pub(crate) complete: bool,
 }
 
 /// One absorbed cookie: the complete first `name=value` pair exactly as
 /// issued, plus the unquoted composite spelling when the value was quoted.
 /// The bare value is derived from the pair at screen time, not stored
 /// separately.
-struct IssuedCookie {
+pub(crate) struct IssuedCookie {
     /// Complete, trimmed first `name=value` pair exactly as issued.
     pair: Zeroizing<String>,
     /// A quoted cookie also has an unquoted composite spelling. Its base64
@@ -928,7 +940,7 @@ impl IssuedCookies {
     /// so it also leaves the jar incomplete. An empty value (bare `=` or
     /// `=""`) deletes the cookie: it is not a secret and is not retained,
     /// so it can never false-positive against an arbitrary empty JSON field.
-    fn absorb(headers: &reqwest::header::HeaderMap) -> Self {
+    pub(crate) fn absorb(headers: &reqwest::header::HeaderMap) -> Self {
         let mut jar = IssuedCookies {
             entries: Vec::new(),
             complete: true,
@@ -983,7 +995,7 @@ impl IssuedCookies {
 
     /// Whether the candidate bytes echo any issued cookie value, the
     /// complete `name=value` pair, or either in its unquoted spelling.
-    fn contains_secret_bytes(&self, bytes: &[u8]) -> bool {
+    pub(crate) fn contains_secret_bytes(&self, bytes: &[u8]) -> bool {
         self.entries.iter().any(|entry| {
             let value = entry
                 .pair
@@ -1009,7 +1021,7 @@ impl IssuedCookies {
 /// either occurrence can be dropped, and no positional spelling is silently
 /// retyped. Drop wipes every retained string so decoded material never
 /// outlives the screen.
-struct PrivateValue(Value);
+pub(crate) struct PrivateValue(pub(crate) Value);
 impl<'de> Deserialize<'de> for PrivateValue {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Visitor;
@@ -1122,7 +1134,7 @@ fn value_contains_secret(value: &Value, contains: &dyn Fn(&[u8]) -> bool) -> boo
 /// strict decoder rejects — so neither a definite echo nor safety was
 /// established. `Clear` means every check ran to completion without a match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BodyScreening {
+pub(crate) enum BodyScreening {
     Clear,
     Echo,
     Unreviewable,
@@ -1135,7 +1147,10 @@ enum BodyScreening {
 /// individually so an echo hidden behind a duplicate or an escape cannot
 /// pass, while an escaped literal that cannot be decoded is unreviewable
 /// rather than presumed safe.
-fn decoded_body_screening(bytes: &[u8], contains: &dyn Fn(&[u8]) -> bool) -> BodyScreening {
+pub(crate) fn decoded_body_screening(
+    bytes: &[u8],
+    contains: &dyn Fn(&[u8]) -> bool,
+) -> BodyScreening {
     match serde_json::from_slice::<PrivateValue>(bytes) {
         Ok(value) => {
             if value_contains_secret(&value, contains) {
@@ -1234,30 +1249,30 @@ fn session_denied(bytes: &[u8]) -> bool {
 /// The caller derives them from the response headers, the transmitted cookie
 /// and the issued session jar; they never carry secret material themselves.
 #[derive(Default)]
-struct ReadScreening {
+pub(crate) struct ReadScreening {
     /// A challenge signal was present in the response headers.
-    header_challenge: bool,
+    pub(crate) header_challenge: bool,
     /// The declared Content-Type itself echoes credential material.
-    metadata_echo: bool,
+    pub(crate) metadata_echo: bool,
     /// The body, raw or JSON-decoded, echoes credential material.
-    echo: bool,
+    pub(crate) echo: bool,
     /// Part of the body could not be screened at all: an escaped JSON
     /// literal the decoder rejects, so neither echo nor safety was
     /// established.
-    body_unreviewed: bool,
+    pub(crate) body_unreviewed: bool,
     /// The response's `Set-Cookie` declarations could not all be reviewed
     /// (over the bound, invalid UTF-8, missing `=`, or an invalid
     /// name/value). Unscreened cookie material may appear anywhere in the
     /// response metadata, so the declared Content-Type is withheld even
     /// when it echoes no known secret.
-    metadata_unreviewed: bool,
+    pub(crate) metadata_unreviewed: bool,
 }
 
 /// The value one read body is admitted as, plus the denial signal the governor
 /// records for it.
-struct ReadAdmission {
-    output: Value,
-    denied: bool,
+pub(crate) struct ReadAdmission {
+    pub(crate) output: Value,
+    pub(crate) denied: bool,
 }
 
 /// Screen one completely read, in-limit response body. This is pure: it
@@ -1268,13 +1283,14 @@ struct ReadAdmission {
 /// (base64, sha256, Content-Type, reason and status) instead of an empty
 /// schedule. A body whose decoded spellings cannot all be screened is
 /// withheld rather than exported.
-fn admit_read_body(
+pub(crate) fn admit_read_body(
+    output_type: &'static str,
     status: u16,
     content_type: Option<&str>,
     bytes: &[u8],
-    term: &str,
     assessment: crate::html::ChallengeAssessment,
     screening: ReadScreening,
+    parse: impl Fn(&str) -> Value,
 ) -> ReadAdmission {
     let header_challenge = screening.header_challenge;
     let challenge = header_challenge || assessment == crate::html::ChallengeAssessment::Detected;
@@ -1285,9 +1301,16 @@ fn admit_read_body(
     };
     let denied = !screening.echo && session_denied(bytes);
     let output = if screening.echo {
-        withheld(status, safe_content_type, bytes, "credential_echo")
+        withheld(
+            output_type,
+            status,
+            safe_content_type,
+            bytes,
+            "credential_echo",
+        )
     } else if screening.body_unreviewed {
         withheld(
+            output_type,
             status,
             safe_content_type,
             bytes,
@@ -1295,21 +1318,35 @@ fn admit_read_body(
         )
     } else if assessment == crate::html::ChallengeAssessment::Unreviewed && !challenge {
         withheld(
+            output_type,
             status,
             safe_content_type,
             bytes,
             "response_safety_unreviewed",
         )
     } else if challenge {
-        let mut output = withheld(status, safe_content_type, bytes, "challenge_requires_human");
+        let mut output = withheld(
+            output_type,
+            status,
+            safe_content_type,
+            bytes,
+            "challenge_requires_human",
+        );
         output["challenge_required"] = json!(true);
         output
     } else if denied {
-        let mut output = withheld(status, safe_content_type, bytes, "session_expired");
+        let mut output = withheld(
+            output_type,
+            status,
+            safe_content_type,
+            bytes,
+            "session_expired",
+        );
         output["result"] = json!("session_expired");
         output
     } else if !(200..300).contains(&status) {
         degraded(
+            output_type,
             status,
             safe_content_type,
             bytes,
@@ -1317,12 +1354,23 @@ fn admit_read_body(
         )
     } else {
         match std::str::from_utf8(bytes) {
-            Err(_) => degraded(status, safe_content_type, bytes, "utf8_decode_failed"),
+            Err(_) => degraded(
+                output_type,
+                status,
+                safe_content_type,
+                bytes,
+                "utf8_decode_failed",
+            ),
             Ok(body) => {
-                let mut output = crate::timetable_pg::parse_timetable(body, term);
+                let mut output = parse(body);
                 if output.get("result").and_then(Value::as_str) == Some("fallback") {
                     output["content_type"] = json!(safe_content_type);
                     output["http_status"] = json!(status);
+                    if output.get("raw_response_base64").is_none() {
+                        output["raw_response_base64"] = json!(STANDARD.encode(bytes));
+                        output["raw_response_sha256"] = json!(format!("{:x}", Sha256::digest(bytes)));
+                        output["body_byte_length"] = json!(bytes.len());
+                    }
                 }
                 output
             }
@@ -2054,6 +2102,7 @@ fn camoufox_read(
     let mut denied = read.denied;
     let mut output = if denied {
         let mut output = withheld(
+            "timetable_pg",
             status,
             if metadata_echo {
                 None
@@ -2067,10 +2116,10 @@ fn camoufox_read(
         output
     } else {
         let admission = admit_read_body(
+            "timetable_pg",
             status,
             read.content_type.as_deref(),
             &body,
-            &input.read.xnxqdm,
             assessment,
             ReadScreening {
                 header_challenge: read.header_challenge,
@@ -2082,6 +2131,7 @@ fn camoufox_read(
                     || body_screening == BodyScreening::Unreviewable,
                 metadata_unreviewed: false,
             },
+            |body| crate::timetable_pg::parse_timetable(body, &input.read.xnxqdm),
         );
         denied |= admission.denied;
         admission.output
@@ -2360,7 +2410,7 @@ pub(crate) fn session_with_network(
                 &page_url,
                 &mut initialization_observed,
             )?;
-            screen_context_response(&page, &input, &session)?;
+            screen_context_response(&page, &input.password, &session)?;
             if page.status == 429 || page.retry_after.is_some() {
                 return Err(error(
                     "cooldown",
@@ -2401,7 +2451,7 @@ pub(crate) fn session_with_network(
                     "the timetable cookie expired before initialization; no initialization was sent",
                 ));
             }
-            let init = session_request(&client, TIMETABLE_INIT_URL, cookie)
+            let init = session_request(&client, TIMETABLE_INIT_URL, cookie, TIMETABLE_REFERER)
                 .form(&[("XH", "")])
                 .timeout(std::time::Duration::from_secs(45))
                 .header("Accept-Encoding", "identity")
@@ -2424,7 +2474,7 @@ pub(crate) fn session_with_network(
                 &init_url,
                 &mut initialization_observed,
             )?;
-            screen_context_response(&init, &input, &session)?;
+            screen_context_response(&init, &input.password, &session)?;
             if init.status == 429 || init.retry_after.is_some() {
                 return Err(error("cooldown", "timetable initialization was deferred"));
             }
@@ -2615,10 +2665,10 @@ pub(crate) fn session_with_network(
         ))
     } else {
         let admission = admit_read_body(
+            "timetable_pg",
             status,
             content_type.as_deref(),
             &bytes,
-            &input.read.xnxqdm,
             assessment,
             ReadScreening {
                 header_challenge,
@@ -2629,6 +2679,7 @@ pub(crate) fn session_with_network(
                     || issued_screening == BodyScreening::Unreviewable
                     || !issued.complete,
             },
+            |body| crate::timetable_pg::parse_timetable(body, &input.read.xnxqdm),
         );
         denied = admission.denied;
         Ok(admission.output)
@@ -3072,7 +3123,7 @@ mod session_tests {
                 .to_string()
                 .replace(input.password.as_str(), &escaped_secret);
         assert_eq!(
-            screen_context_response(&context, &input, &session),
+            screen_context_response(&context, &input.password, &session),
             Ok(())
         );
         for body in [
@@ -3084,7 +3135,7 @@ mod session_tests {
             escaped_secret_body,
         ] {
             assert_eq!(
-                screen_context_response(&response(body), &input, &session)
+                screen_context_response(&response(body), &input.password, &session)
                     .unwrap_err()
                     .code,
                 "credential_echo"
@@ -3135,7 +3186,10 @@ mod session_tests {
              {{\"userId\":\"{u}\",\"userName\":\"Synthetic\"}};</script></head>\
              <body><span>欢迎，{u}</span><div id=\"xskcb\"></div></body></html>"
         );
-        assert_eq!(screen_context_response(&page(boot), &input, &session), Ok(()));
+        assert_eq!(
+            screen_context_response(&page(boot), &input.password, &session),
+            Ok(())
+        );
         // A \uXXXX-escaped identity inside a script literal clears the decoded
         // pass too.
         let first = u.chars().next().unwrap();
@@ -3144,7 +3198,7 @@ mod session_tests {
             "<html><head><script>var userId = \"{escaped_identity}\";</script></head><body></body></html>"
         );
         assert_eq!(
-            screen_context_response(&page(escaped_boot), &input, &session),
+            screen_context_response(&page(escaped_boot), &input.password, &session),
             Ok(())
         );
         // Password and cookie material alongside the identity stay refused.
@@ -3158,7 +3212,7 @@ mod session_tests {
                 STANDARD.encode("GS_SESSIONID=synthetic-cookie")
             ),
         ] {
-            match screen_context_response(&page(body.clone()), &input, &session) {
+            match screen_context_response(&page(body.clone()), &input.password, &session) {
                 Err(e) => assert_eq!(e.code, "credential_echo", "carrier: {body}"),
                 Ok(()) => panic!("carrier not refused: {body}"),
             }
@@ -3417,12 +3471,13 @@ mod session_tests {
             crate::html::ChallengeAssessment::Clear
         );
         let admission = admit_read_body(
+            "timetable_pg",
             200,
             content_type,
             body,
-            "20261",
             complete_assessment(content_type, body),
             ReadScreening::default(),
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         assert!(!admission.denied);
         let output = &admission.output;
@@ -3447,12 +3502,13 @@ mod session_tests {
             crate::html::ChallengeAssessment::Clear
         );
         let admission = admit_read_body(
+            "timetable_pg",
             200,
             content_type,
             body,
-            "20261",
             complete_assessment(content_type, body),
             ReadScreening::default(),
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         let output = &admission.output;
         assert_eq!(output["result"], "degraded");
@@ -3475,12 +3531,13 @@ mod session_tests {
             crate::html::ChallengeAssessment::Clear
         );
         let admission = admit_read_body(
+            "timetable_pg",
             500,
             content_type,
             body,
-            "20261",
             complete_assessment(content_type, body),
             ReadScreening::default(),
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         let output = &admission.output;
         assert_eq!(output["result"], "degraded");
@@ -3500,12 +3557,13 @@ mod session_tests {
             "parsed"
         );
         let unsafe_payload = admit_read_body(
+            "timetable_pg",
             503,
             content_type,
             payload.as_bytes(),
-            "20261",
             complete_assessment(content_type, payload.as_bytes()),
             ReadScreening::default(),
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         assert_eq!(unsafe_payload.output["result"], "degraded");
         assert_eq!(
@@ -3530,12 +3588,13 @@ mod session_tests {
         assert!(session_denied(body.as_bytes()));
         let content_type = Some("application/json");
         let admission = admit_read_body(
+            "timetable_pg",
             200,
             content_type,
             body.as_bytes(),
-            "20261",
             complete_assessment(content_type, body.as_bytes()),
             ReadScreening::default(),
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         assert!(admission.denied);
         let output = &admission.output;
@@ -3556,15 +3615,16 @@ mod session_tests {
         // A denial that also echoes credential material is withheld instead,
         // and still never reaches the parser.
         let echoing = admit_read_body(
+            "timetable_pg",
             200,
             content_type,
             body.as_bytes(),
-            "20261",
             complete_assessment(content_type, body.as_bytes()),
             ReadScreening {
                 echo: true,
                 ..ReadScreening::default()
             },
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         assert!(!echoing.denied);
         assert_eq!(echoing.output["result"], "sensitive_response_withheld");
@@ -3582,16 +3642,17 @@ mod session_tests {
         let screening = decoded_body_screening(body, &contains);
         let assessment = complete_assessment(content_type, body);
         admit_read_body(
+            "timetable_pg",
             status,
             content_type,
             body,
-            "20261",
             assessment,
             ReadScreening {
                 echo: contains(body) || screening == BodyScreening::Echo,
                 body_unreviewed: screening == BodyScreening::Unreviewable,
                 ..ReadScreening::default()
             },
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         )
     }
 
@@ -3688,12 +3749,13 @@ mod session_tests {
         let body = timetable_body().to_string();
         let content_type = Some("application/json");
         let admission = admit_read_body(
+            "timetable_pg",
             200,
             content_type,
             body.as_bytes(),
-            "20261",
             complete_assessment(content_type, body.as_bytes()),
             ReadScreening::default(),
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         assert!(!admission.denied);
         assert_eq!(admission.output["result"], "parsed");
@@ -3746,15 +3808,16 @@ mod session_tests {
         let body = timetable_body().to_string();
         let content_type = Some("application/json");
         let admission = admit_read_body(
+            "timetable_pg",
             200,
             content_type,
             body.as_bytes(),
-            "20261",
             complete_assessment(content_type, body.as_bytes()),
             ReadScreening {
                 body_unreviewed: !jar.complete,
                 ..ReadScreening::default()
             },
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         );
         assert_eq!(admission.output["result"], "sensitive_response_withheld");
         assert_eq!(
@@ -3792,10 +3855,10 @@ mod session_tests {
         };
         let assessment = complete_assessment(content_type, body);
         admit_read_body(
+            "timetable_pg",
             200,
             content_type,
             body,
-            "20261",
             assessment,
             ReadScreening {
                 echo: jar.contains_secret_bytes(body) || issued_screening == BodyScreening::Echo,
@@ -3803,6 +3866,7 @@ mod session_tests {
                 body_unreviewed: issued_screening == BodyScreening::Unreviewable || !jar.complete,
                 ..ReadScreening::default()
             },
+            |body| crate::timetable_pg::parse_timetable(body, "20261"),
         )
     }
 
