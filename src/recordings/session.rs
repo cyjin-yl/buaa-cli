@@ -68,6 +68,13 @@ const SHUTTLE_CAS_SERVICE: &str = "http://zhihuixiaoche.buaa.edu.cn/wechat/CASLo
 const SHUTTLE_HOST: &str = "zhihuixiaoche.buaa.edu.cn";
 const SHUTTLE_CAS_CALLBACK_PATH: &str = "/wechat/CASLogin";
 const EVALUATION_HOST: &str = "spoc.buaa.edu.cn";
+/// The yjsxk course-selection service consumes the CAS ticket over HTTPS,
+/// then declares its session landing on plaintext HTTP; the exact
+/// `/yjsxkapp/` upgrade in `upgraded_service_callback` keeps every request
+/// encrypted while preserving the issued path.
+const YJSXK_CAS_SERVICE: &str =
+    "https://yjsxk.buaa.edu.cn/yjsxkapp/sys/xsxkappbuaa/index.do";
+const YJSXK_HOST: &str = "yjsxk.buaa.edu.cn";
 const EVALUATION_CAS_SERVICE: &str = "https://spoc.buaa.edu.cn/pjxt/cas";
 const MAX_TERMINAL_CREDENTIAL_BYTES: usize = 4096;
 
@@ -85,6 +92,7 @@ pub(crate) enum CasService {
     Shuttle,
     Evaluation,
     Iclass,
+    Yjsxk,
 }
 
 impl CasService {
@@ -100,6 +108,7 @@ impl CasService {
             Self::Shuttle => SHUTTLE_CAS_SERVICE,
             Self::Evaluation => EVALUATION_CAS_SERVICE,
             Self::Iclass => ICLASS_CAS_SERVICE,
+            Self::Yjsxk => YJSXK_CAS_SERVICE,
         }
     }
 }
@@ -3479,6 +3488,7 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::Shuttle => matches!(host, "sso.buaa.edu.cn" | SHUTTLE_HOST),
             CasService::Evaluation => matches!(host, "sso.buaa.edu.cn" | EVALUATION_HOST),
             CasService::Iclass => matches!(host, "sso.buaa.edu.cn" | ICLASS_HOST),
+            CasService::Yjsxk => matches!(host, "sso.buaa.edu.cn" | YJSXK_HOST),
         })
 }
 
@@ -4003,7 +4013,8 @@ fn terminal_service_credential(
         | CasService::Gsmis
         | CasService::Boya
         | CasService::Shuttle
-        | CasService::Evaluation => {
+        | CasService::Evaluation
+        | CasService::Yjsxk => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
             }
@@ -4125,6 +4136,7 @@ fn upgraded_service_callback(service: CasService, url: &Url) -> Option<Url> {
     let host = match service {
         CasService::Ihome => IHOME_HOST,
         CasService::Shuttle => SHUTTLE_HOST,
+        CasService::Yjsxk => YJSXK_HOST,
         _ => return None,
     };
     if url.scheme() != "http"
@@ -4139,10 +4151,18 @@ fn upgraded_service_callback(service: CasService, url: &Url) -> Option<Url> {
     let expected_path = match service {
         CasService::Ihome => IHOME_CAS_CALLBACK_PATH,
         CasService::Shuttle => SHUTTLE_CAS_CALLBACK_PATH,
+        // The application mounts every route below /yjsxkapp/; any exact
+        // landing inside that mount upgrades, keeping the issued path and
+        // query while refusing a sibling mount or host.
+        CasService::Yjsxk => "/yjsxkapp/",
         _ => return None,
     };
     let path = url.path();
-    if path != expected_path
+    if service == CasService::Yjsxk {
+        if !path.starts_with(expected_path) {
+            return None;
+        }
+    } else if path != expected_path
         && !(service == CasService::Shuttle
             && path.starts_with(expected_path)
             && shuttle_callback_cgi(&path[expected_path.len()..]))
@@ -6464,6 +6484,7 @@ impl ServiceSession {
             CasService::Shuttle => SHUTTLE_HOST,
 CasService::Evaluation => EVALUATION_HOST,
             CasService::Iclass => ICLASS_HOST,
+            CasService::Yjsxk => YJSXK_HOST,
             CasService::Classroom | CasService::Ihome | CasService::Boya => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
@@ -6841,6 +6862,31 @@ pub(crate) fn authenticate_service(
             if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
                 return Err(admission_failed(
                     "The SPOC evaluation handoff supplied no usable scoped cookie; no retry was performed.",
+                ));
+            }
+        }
+        CasService::Yjsxk => {
+            // The yjsxk handoff proves itself by a reviewed HTML landing on
+            // the relying-party host plus one usable scoped cookie for the
+            // fixed selected-course read that follows. The declared
+            // plaintext landing was upgraded to HTTPS before any request,
+            // so no downgrade is observable here.
+            if landed.status != 200
+                || landed.url.host_str() != Some(YJSXK_HOST)
+                || landed.body.trim().is_empty()
+                || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
+            {
+                return Err(admission_failed(
+                    "The yjsxk handoff could not be confirmed; no retry was performed.",
+                ));
+            }
+            let probe = Url::parse(
+                "https://yjsxk.buaa.edu.cn/yjsxkapp/sys/xsxkappbuaa/xsxkCourse/loadKbxx.do",
+            )
+            .map_err(|_| invalid())?;
+            if !matches!(jar.select_cookies(&probe, true), ScopedCookies::Ready(_, _)) {
+                return Err(admission_failed(
+                    "The yjsxk handoff supplied no usable scoped cookie; no retry was performed.",
                 ));
             }
         }
