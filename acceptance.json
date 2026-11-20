@@ -688,6 +688,26 @@
       ]
     },
     {
+      "id": "venue",
+      "title": "Seminar-room reservations",
+      "status": "partial-live-verified",
+      "summary": "Seminar-room venue/sites/slots/orders (cgyy)",
+      "acceptance": "Read venues and sites, personal order pages, daily slot availability and code tables over governed HTTPS with a caller-supplied session.",
+      "evidence": {
+        "live_protocol_2026_11_20": "The native CLI returned venue, order and code-table data. After admitting date-keyed room arrays and removing the issued day token, the native day read returned seven time slots and twelve room rows with the token absent from output."
+      }
+    },
+    {
+      "id": "libbook",
+      "title": "Library seat availability and bookings",
+      "status": "partial-live-verified",
+      "summary": "Library seat browse/bookings (booking.lib)",
+      "acceptance": "Read library and floor availability, areas, area booking times, seats and personal bookings over governed HTTPS with a caller-supplied token.",
+      "evidence": {
+        "live_protocol_2026_11_20": "The operator account completed the external login and token exchange. The native CLI returned library availability and an empty personal booking list. Offline coverage includes all five read operations."
+      }
+    },
+    {
       "id": "boya",
       "title": "Boya browse/enrol/drop/check/status",
       "status": "partial-live-verified",
@@ -5036,6 +5056,26 @@
       "capabilities": [
         "checkin",
         "boya"
+      ]
+    },
+    {
+      "section": "研讨室",
+      "references": [
+        "https://github.com/Yiki21/iclass_buaa_tui"
+      ],
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "venue"
+      ]
+    },
+    {
+      "section": "图书馆座位",
+      "references": [
+        "https://github.com/Yiki21/iclass_buaa_tui"
+      ],
+      "policy": "reference-only-not-executed",
+      "capabilities": [
+        "libbook"
       ]
     },
     {
