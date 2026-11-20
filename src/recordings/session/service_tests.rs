@@ -983,6 +983,7 @@ fn test_pki() -> TestPki {
         .dns("i.buaa.edu.cn")
         .dns("zhihuixiaoche.buaa.edu.cn")
         .dns("iclass.buaa.edu.cn")
+        .dns("byxt.buaa.edu.cn")
         .build(&leaf.x509v3_context(Some(&ca), None))
         .expect("san");
     leaf.append_extension(san).expect("leaf san");
@@ -1279,6 +1280,7 @@ struct CasHarness {
     ihome: CasEndpoint,
     shuttle: CasEndpoint,
     iclass: CasEndpoint,
+    byxt: CasEndpoint,
 }
 
 impl CasHarness {
@@ -1366,6 +1368,26 @@ impl CasHarness {
         shuttle: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
         iclass: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
     ) -> Self {
+        Self::with_byxt_responders(sso, app, booking, ihome, shuttle, iclass, |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        })
+    }
+
+    /// The full seven-host stand-in including the Byxt undergraduate system,
+    /// so an exams flow can serve its relying-party landing and one read.
+    fn with_byxt_responders(
+        sso: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        app: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        booking: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        ihome: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        shuttle: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        iclass: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+        byxt: impl Fn(&ObservedRequest) -> Vec<u8> + Send + 'static,
+    ) -> Self {
         let pki = test_pki();
         let acceptor = tls_acceptor(&pki);
         let sso = CasEndpoint::start(Arc::clone(&acceptor), sso);
@@ -1374,6 +1396,7 @@ impl CasHarness {
         let ihome = CasEndpoint::start(Arc::clone(&acceptor), ihome);
         let shuttle = CasEndpoint::start(Arc::clone(&acceptor), shuttle);
         let iclass = CasEndpoint::start(acceptor, iclass);
+        let byxt = CasEndpoint::start(tls_acceptor(&pki), byxt);
         let client = strict_client(
             &pki,
             &[
@@ -1383,6 +1406,7 @@ impl CasHarness {
                 ("i.buaa.edu.cn", ihome.address),
                 ("zhihuixiaoche.buaa.edu.cn", shuttle.address),
                 ("iclass.buaa.edu.cn", iclass.address),
+                ("byxt.buaa.edu.cn", byxt.address),
             ],
         );
         Self {
@@ -1393,6 +1417,7 @@ impl CasHarness {
             ihome,
             shuttle,
             iclass,
+            byxt,
         }
     }
 
@@ -1416,6 +1441,13 @@ impl CasHarness {
         let ihome = CasEndpoint::start(Arc::clone(&acceptor), ihome);
         let shuttle = CasEndpoint::start(Arc::clone(&acceptor), shuttle);
         let iclass = CasEndpoint::start_at(acceptor, "127.0.0.1:8346", iclass);
+        let byxt = CasEndpoint::start(tls_acceptor(&pki), |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        });
         let client = strict_client(
             &pki,
             &[
@@ -1425,6 +1457,7 @@ impl CasHarness {
                 ("i.buaa.edu.cn", ihome.address),
                 ("zhihuixiaoche.buaa.edu.cn", shuttle.address),
                 ("iclass.buaa.edu.cn", iclass.address),
+                ("byxt.buaa.edu.cn", byxt.address),
             ],
         );
         Self {
@@ -1435,6 +1468,7 @@ impl CasHarness {
             ihome,
             shuttle,
             iclass,
+            byxt,
         }
     }
 }
@@ -2592,6 +2626,253 @@ fn smart_session_classrooms_logs_in_once_and_projects_the_real_search_result() {
     assert!(harness.booking.observed().is_empty());
 }
 
+/// The exams session uses the observed Byxt relying party: one credential
+/// POST, one HTML landing that issues the application session cookie, then
+/// exactly one exams.do read whose Cookie never carries the sign-on ticket.
+#[test]
+fn smart_session_exams_logs_in_once_and_projects_the_real_exam_rows() {
+    let exams = r#"{"datas":[{"KSSJ":"2031-04-13 09:00","KCM":"Synthetic Course","JASMC":"Room A-101","KSRW":"closed-book"}],"code":"0","msg":null}"#;
+    let harness = CasHarness::with_byxt_responders(
+        sso_responder(
+            CasService::Byxt,
+            "https://byxt.buaa.edu.cn/jwapp/sys/byrhmhsy/index.do?ticket=ST-terminal-synthetic",
+            &[],
+        ),
+        |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        },
+        |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        },
+        |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        },
+        |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        },
+        |_| {
+            http_response(
+                "404 Not Found",
+                &[("Content-Type", "text/plain")],
+                "unexpected",
+            )
+        },
+        move |request| {
+            let path = request.target.split('?').next().unwrap_or("");
+            match path {
+                "/jwapp/sys/byrhmhsy/index.do" => http_response(
+                    "200 OK",
+                    &[
+                        ("Content-Type", "text/html"),
+                        (
+                            "Set-Cookie",
+                            "byxt_sid=synthetic-byxt-session; Domain=byxt.buaa.edu.cn; Path=/; Secure; HttpOnly",
+                        ),
+                    ],
+                    "<html><body>relying party landing</body></html>",
+                ),
+                "/jwapp/sys/homeapp/api/home/student/exams.do" => http_response(
+                    "200 OK",
+                    &[("Content-Type", "application/json")],
+                    exams,
+                ),
+                _ => http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                ),
+            }
+        },
+    );
+    let (result, factory_used) = run_session(
+        &harness,
+        &session_input(
+            "exams",
+            json!({"service": "exams", "enabled": true, "term_code": "2026-2027-1"}),
+        ),
+        "session-exams",
+    );
+    assert!(
+        factory_used,
+        "an online session consults the network factory"
+    );
+    let output = result.expect("smart session result");
+    assert_eq!(output["service"], "exams");
+    assert_eq!(output["result"], "ok");
+    assert_eq!(output["source"], "network");
+    assert_eq!(output["network_performed"], true);
+    assert_eq!(output["write_operations_performed"], false);
+    let rows = output["data"].as_array().expect("projected exam rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["KCM"], "Synthetic Course");
+    let projected = output.to_string();
+    for secret in [
+        SESSION_USERNAME,
+        SESSION_PASSWORD,
+        "CASTGC",
+        "host-only-credential",
+        "synthetic-byxt-session",
+    ] {
+        assert!(
+            !projected.contains(secret),
+            "{secret} leaked into the Smart projection"
+        );
+    }
+
+    assert_one_credential_post(&harness, CasService::Byxt);
+    let byxt_requests = harness.byxt.observed();
+    assert_eq!(byxt_requests.len(), 2, "one landing and one business read");
+    let landing = &byxt_requests[0];
+    assert_eq!(landing.method, "GET");
+    assert_eq!(
+        observed_url("byxt.buaa.edu.cn", landing).path(),
+        "/jwapp/sys/byrhmhsy/index.do"
+    );
+    assert!(
+        landing.header("cookie").is_none(),
+        "the host-only sign-on cookie never leaves its host"
+    );
+    let read = &byxt_requests[1];
+    assert_eq!(read.method, "GET");
+    let target = observed_url("byxt.buaa.edu.cn", read);
+    assert_eq!(
+        target.path(),
+        "/jwapp/sys/homeapp/api/home/student/exams.do"
+    );
+    let query = query_map(&target);
+    assert_eq!(query.get("termCode").map(String::as_str), Some("2026-2027-1"));
+    assert_eq!(query.len(), 1, "only the reviewed query field");
+    let cookie = read.header("cookie").unwrap_or("");
+    assert!(cookie.contains("byxt_sid=synthetic-byxt-session"), "{cookie}");
+    assert!(!cookie.contains("CASTGC"), "{cookie}");
+    assert_eq!(
+        read.header("referer"),
+        Some("https://byxt.buaa.edu.cn/jwapp/sys/homeapp/index.html")
+    );
+    assert_eq!(read.header("x-requested-with"), Some("XMLHttpRequest"));
+    // An exams session never touches the library or app origins.
+    assert!(harness.booking.observed().is_empty());
+    assert!(harness.app.observed().is_empty());
+}
+
+/// The operator username is authentication material too: an exams response
+/// that echoes it anywhere (plain or JSON-escaped) is withheld, not projected.
+#[test]
+fn smart_session_exams_withholds_a_response_that_echoes_the_operator_username() {
+    for body in [
+        format!(
+            r#"{{"datas":[{{"KCM":"{SESSION_USERNAME} placement exam"}}],"code":"0","msg":null}}"#
+        ),
+        // The same credential spelled inside a JSON \u escape: decoded by the
+        // screen, so the literal spelling must not appear anywhere.
+        format!(
+            r#"{{"datas":[],"code":"0","msg":null,"rows":[{{"note":"{} has no placement"}}]}}"#,
+            SESSION_USERNAME.replace('t', "\\u0074")
+        ),
+    ] {
+        let exams = body.to_string();
+        let harness = CasHarness::with_byxt_responders(
+            sso_responder(
+                CasService::Byxt,
+                "https://byxt.buaa.edu.cn/jwapp/sys/byrhmhsy/index.do?ticket=ST-terminal-synthetic",
+                &[],
+            ),
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            move |request| {
+                let path = request.target.split('?').next().unwrap_or("");
+                match path {
+                    "/jwapp/sys/byrhmhsy/index.do" => http_response(
+                        "200 OK",
+                        &[
+                            ("Content-Type", "text/html"),
+                            (
+                                "Set-Cookie",
+                                "byxt_sid=synthetic-byxt-session; Domain=byxt.buaa.edu.cn; Path=/; Secure; HttpOnly",
+                            ),
+                        ],
+                        "<html><body>relying party landing</body></html>",
+                    ),
+                    "/jwapp/sys/homeapp/api/home/student/exams.do" => http_response(
+                        "200 OK",
+                        &[("Content-Type", "application/json")],
+                        &exams,
+                    ),
+                    _ => http_response(
+                        "404 Not Found",
+                        &[("Content-Type", "text/plain")],
+                        "unexpected",
+                    ),
+                }
+            },
+        );
+        let (result, _) = run_session(
+            &harness,
+            &session_input(
+                "exams",
+                json!({"service": "exams", "enabled": true, "term_code": "2026-2027-1"}),
+            ),
+            "session-exams-username-echo",
+        );
+        let output = result.expect("the business read still settles");
+        assert_eq!(output["result"], "sensitive_response_withheld");
+        assert_eq!(output["fallback_reason"], "credential_echo");
+        assert!(
+            !output.to_string().contains(SESSION_USERNAME),
+            "the echoed operator username was released"
+        );
+    }
+}
+
 #[test]
 fn smart_session_library_exchanges_the_cas_once_and_reads_with_the_issued_token() {
     let harness = CasHarness::with_responders(
@@ -3502,7 +3783,7 @@ fn smart_session_local_refusals_never_consult_the_network_factory() {
         "query": {"operation": "login", "cas": "synthetic-caller-cas"}});
     let mut unsupported = base.clone();
     unsupported["read"] =
-        json!({"service": "exams", "enabled": true, "cookie": "synthetic-caller-cookie=9f4e"});
+        json!({"service": "cgyy", "enabled": true, "cookie": "synthetic-caller-cookie=9f4e"});
 
     // A refusal never reproduces the supplied credentials.
     for (name, payload) in [
@@ -3522,10 +3803,16 @@ fn smart_session_local_refusals_never_consult_the_network_factory() {
         assert!(!error.message.contains(SESSION_USERNAME), "{name}");
     }
     // Input-schema violations report the input contract itself.
+    let mut exams_caller_cookie = base.clone();
+    exams_caller_cookie["read"] =
+        json!({"service": "exams", "enabled": true,
+            "term_code": "2026-2027-1", "cookie": "synthetic-caller-cookie=9f4e"});
     for (name, payload) in [
         ("unknown-field", extra_field.to_string()),
         ("caller-token", caller_token.to_string()),
         ("malformed-bytes", "not json at all".to_string()),
+        // exams is a session service now, but never admits a caller cookie.
+        ("exams-caller-cookie", exams_caller_cookie.to_string()),
     ] {
         let (result, factory_used) = run_offline_session(&payload, true);
         let error = result.expect_err(name);

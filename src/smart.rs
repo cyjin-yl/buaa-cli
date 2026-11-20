@@ -1,7 +1,8 @@
 //! Independent, read-only Smart BUAA services. Secrets are stdin-only inputs;
 //! they are never persisted. Returned raw evidence is private caller-owned data.
 //! Explicit CAS sessions are in-memory, one-attempt flows, never automatic refresh.
-//! `exams`, `cgyy` and `running` are not CAS relying parties: their reads use a
+//! `exams` also admits a one-shot CAS session through the observed Byxt relying
+//! party; `cgyy` and `running` are not CAS relying parties: their reads use a
 //! credential the operator already holds, through the separate `token` path.
 use crate::recordings::session::{self as cas, CasService, ServiceSession, SsoCredentials};
 use crate::{
@@ -22,8 +23,15 @@ const PREFIX: &str = "c640ca392cd45fb3a55b00a63a86c618";
 const MOBILE: &str = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Mobile Safari/537.36";
 
 // Deliberately neither Debug, Clone nor Serialize: credentials must not enter
-// generic Value trees, diagnostics or accidental ordinary String copies.
+// generic Value trees or diagnostics. Clone is required only so the session
+// path can carry the same operator credential in both the login input and the
+// response-echo screen; each copy stays zeroizing and is never serialized.
 struct Secret(Zeroizing<String>);
+impl Clone for Secret {
+    fn clone(&self) -> Self {
+        Self(Zeroizing::new(self.0.as_str().to_owned()))
+    }
+}
 impl<'de> Deserialize<'de> for Secret {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer).map(|s| Self(Zeroizing::new(s)))
@@ -57,6 +65,8 @@ enum Request {
         cookie: Secret,
         term_code: String,
         #[serde(skip)]
+        authentication_username: Option<Secret>,
+        #[serde(skip)]
         authentication_password: Option<Secret>,
         #[serde(skip)]
         authentication_session: Option<ServiceSession>,
@@ -66,6 +76,8 @@ enum Request {
         cookie: Secret,
         campus_id: i64,
         date: String,
+        #[serde(skip)]
+        authentication_username: Option<Secret>,
         #[serde(skip)]
         authentication_password: Option<Secret>,
         #[serde(skip)]
@@ -77,6 +89,8 @@ enum Request {
         query: LibraryQuery,
         #[serde(skip)]
         authentication_cookie: Option<Secret>,
+        #[serde(skip)]
+        authentication_username: Option<Secret>,
         #[serde(skip)]
         authentication_password: Option<Secret>,
         #[serde(skip)]
@@ -136,6 +150,7 @@ impl Request {
         match self {
             Self::Exams {
                 cookie,
+                authentication_username,
                 authentication_password,
                 authentication_session,
                 ..
@@ -146,9 +161,13 @@ impl Request {
                 ) || authentication_password
                     .as_ref()
                     .is_some_and(|password| contains(bytes, password))
+                    || authentication_username
+                        .as_ref()
+                        .is_some_and(|username| contains(bytes, username))
             }
             Self::Classrooms {
                 cookie,
+                authentication_username,
                 authentication_password,
                 authentication_session,
                 ..
@@ -159,10 +178,14 @@ impl Request {
                 ) || authentication_password
                     .as_ref()
                     .is_some_and(|password| contains(bytes, password))
+                    || authentication_username
+                        .as_ref()
+                        .is_some_and(|username| contains(bytes, username))
             }
             Self::Library {
                 token,
                 authentication_cookie,
+                authentication_username,
                 authentication_session,
                 authentication_password,
                 authentication_cas,
@@ -172,6 +195,9 @@ impl Request {
                     || authentication_cookie
                         .as_ref()
                         .is_some_and(|cookie| contains(bytes, cookie))
+                    || authentication_username
+                        .as_ref()
+                        .is_some_and(|username| contains(bytes, username))
                     || authentication_session
                         .as_ref()
                         .is_some_and(|session| session.contains_secret_bytes(bytes))
@@ -391,6 +417,10 @@ struct SessionInput {
 #[derive(Deserialize)]
 #[serde(tag = "service", rename_all = "snake_case", deny_unknown_fields)]
 enum SessionRead {
+    Exams {
+        enabled: bool,
+        term_code: String,
+    },
     Classrooms {
         enabled: bool,
         campus_id: i64,
@@ -424,9 +454,9 @@ where
 }
 
 /// Caller-token read envelope. `exams`, `cgyy` and `running` are not CAS
-/// relying parties, so their only admission is a credential the operator
-/// already holds. Nothing in this contract can name a CAS profile, a starting
-/// login, a refresh, a stored session or a write.
+/// session reads under this path, so their only admission is a credential the
+/// operator already holds. Nothing in this contract can name a CAS profile, a
+/// starting login, a refresh, a stored session or a write.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TokenInput {
@@ -505,6 +535,7 @@ impl TokenRead {
                 enabled,
                 cookie,
                 term_code,
+                authentication_username: None,
                 authentication_password: None,
                 authentication_session: None,
             },
@@ -897,6 +928,7 @@ pub(crate) fn session_with_network(
     let input: SessionInput = deserialize_object(&mut deserializer).map_err(|_| invalid())?;
     deserializer.end().map_err(|_| invalid())?;
     let (enabled, service, profile) = match &input.read {
+        SessionRead::Exams { enabled, .. } => (*enabled, Service::Exams, CasService::Byxt),
         SessionRead::Classrooms { enabled, .. } => {
             (*enabled, Service::Classrooms, CasService::SmartClassrooms)
         }
@@ -919,6 +951,10 @@ pub(crate) fn session_with_network(
         return Err(invalid());
     }
     let prepared_library = match &input.read {
+        SessionRead::Exams { term_code, .. } => {
+            secret(term_code)?;
+            None
+        }
         SessionRead::Classrooms { date: day, .. } => {
             date(day)?;
             None
@@ -936,6 +972,33 @@ pub(crate) fn session_with_network(
     let authenticated = cas::authenticate_service(&mut lease, &client, profile, credentials);
     let prepared = authenticated.and_then(|mut session| {
         let (request, kind, builder, expiry) = match input.read {
+            SessionRead::Exams { enabled, term_code } => {
+                let url = url::Url::parse(
+                    "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do",
+                )
+                .map_err(|_| invalid())?;
+                let (cookie, expiry) = session.cookie_header(&url)?;
+                let cookie = Secret(cookie.ok_or_else(|| {
+                    error(
+                        "auth_latched",
+                        "the exams session cookie is missing; no read was sent",
+                    )
+                })?);
+                let builder = exams_request(&client, &cookie, &term_code);
+                (
+                    Request::Exams {
+                        enabled,
+                        cookie,
+                        term_code,
+                        authentication_username: Some(input.username.clone()),
+                        authentication_password: Some(input.password),
+                        authentication_session: Some(session),
+                    },
+                    "exams",
+                    builder,
+                    expiry,
+                )
+            }
             SessionRead::Classrooms {
                 enabled,
                 campus_id,
@@ -958,6 +1021,7 @@ pub(crate) fn session_with_network(
                         cookie,
                         campus_id,
                         date,
+                        authentication_username: Some(input.username.clone()),
                         authentication_password: Some(input.password),
                         authentication_session: Some(session),
                     },
@@ -981,6 +1045,7 @@ pub(crate) fn session_with_network(
                         token,
                         query,
                         authentication_cookie: cookie,
+                        authentication_username: Some(input.username.clone()),
                         authentication_password: Some(input.password),
                         authentication_cas: Some(credential),
                         authentication_session: Some(session),
@@ -1673,8 +1738,8 @@ pub fn read(input: &str, online: bool) -> Result<Value, Error> {
     execute(request, online)
 }
 
-/// One caller-token read for a service that is not a CAS relying party. The
-/// operator-supplied credential is used for exactly one request under the
+/// One caller-token read for a service without a CAS session profile here.
+/// The operator-supplied credential is used for exactly one request under the
 /// existing Interactive lease and is never persisted, refreshed, retried or
 /// adopted from the response. No CAS profile, authentication exchange or write
 /// is representable in this contract, so none of them can be reached here.
@@ -2389,6 +2454,7 @@ pub fn schema() -> Value {
         op("manage_login", vec![("cookie", string())]),
     ]);
     let session_read = json!({"oneOf":[
+        service("exams",vec![("term_code",string())]),
         service("classrooms",vec![("campus_id",json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),("date",string())]),
         service("library",vec![("query",library.clone())])]});
     let token_read = json!({"oneOf":[
@@ -2410,7 +2476,7 @@ pub fn schema() -> Value {
             {"properties":{"source":{"const":"disabled"},"network_performed":{"const":false}}}],
             "properties":{"result":{"enum":["ok","disabled","unsupported","unstructured","business_error","session_expired","sensitive_response_withheld"]},"source":{"enum":["network","operator_supplied","disabled"]},"network_performed":{"type":"boolean"},"service":{"enum":["exams","classrooms","library","cgyy","running"]},"data":{},"raw_evidence_withheld":{"const":true},"raw_evidence":{"type":"object","required":["encoding","data","content_type","byte_length","sha256"],"properties":{"encoding":{"const":"base64"},"data":{"type":"string"},"content_type":{"type":["string","null"]},"byte_length":{"type":"integer"},"sha256":{"type":"string"}}}}},
         "provenance":"network means an actual request completed in this invocation; reread always operator_supplied, including caller-supplied HTTP status and MIME; no cache implementation or cache provenance is claimed",
-        "authentication":"default read uses stdin-only established cookie/token. token uses one operator-supplied credential for exams, cgyy or running: those services are not CAS relying parties and have no session profile. session accepts one explicit authorized CAS login for classrooms or library and exactly one selected read, under one Authentication lease, without persistence, refresh or retry. Caller-supplied library CAS and CGYY exchanges are not supported",
+        "authentication":"default read uses stdin-only established cookie/token. token uses one operator-supplied credential for exams, cgyy or running: cgyy and running are not CAS relying parties and have no session profile. session accepts one explicit authorized CAS login for exams, classrooms or library and exactly one selected read, under one Authentication lease, without persistence, refresh or retry. Caller-supplied library CAS and CGYY exchanges are not supported",
         "writes":"unsupported; never uploads or fabricates attendance photographs",
         "cgyy_app_key":"8fceb735082b5a529312040b58ea780b",
         "unknown":["campus id enumeration"],
@@ -2418,7 +2484,7 @@ pub fn schema() -> Value {
     schema["session"] = json!({
         "input":object(vec![("authorized",json!({"type":"boolean"})),("username",string()),("password",string()),("intent",string()),("read",session_read)]),
         "output":schema["output"].clone(),
-        "intent":"LOGIN <username> smart <service>; service is classrooms or library; exams, cgyy and running are caller-token reads, not CAS profiles; JSON must arrive through protected stdin",
+        "intent":"LOGIN <username> smart <service>; service is exams, classrooms or library; cgyy and running are caller-token reads, not CAS profiles; JSON must arrive through protected stdin",
         "validation":"disabled read performs no I/O; enabled read requires authorized=true, exact intent, locally valid query and --online before opening transport or admission; no authentication material may be supplied inside read"
     });
     schema["token"] = json!({

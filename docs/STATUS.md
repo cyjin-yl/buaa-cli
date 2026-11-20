@@ -3767,3 +3767,24 @@ the failure is in the callback code exchange, not a missing user approval.
 Whether the callback failure is account-specific or a standing deployment
 defect is not established.
 
+## 2026-11-21: smart session restores the exams profile (live-verified)
+
+`buaa smart session --online` now accepts `service: exams` again. The Byxt
+relying party was registered in `CasService` but had no session consumer since
+the hardening round folded exams into the caller-token path; the observed CAS
+catalog (docs/CAS-SERVICE-CATALOG.md) shows the Byxt sign-on lands on its own
+HTML page and issues the application cookie used by `exams.do`.
+
+Live with owner credentials (two separate authorized invocations):
+
+- exams `term_code=2026-2027-1` → `result=ok`, `network_performed=true`,
+  upstream `code:"0"`, `datas` empty for this account/term.
+- classrooms `campus_id=1`, `date=2026-11-24` → `result=ok`, 158 room rows
+  across 三号楼/主楼/新主楼. The same-day Saturday query returned the endpoint's
+  HTML UI page, withheld as `unrecognized_data_shape` — deployment behavior
+  also seen on 2026-11-04, not a parser defect.
+
+Offline: seven-host strict-TLS harness adds a `byxt` endpoint; the flow test
+asserts one credential POST, scoped-cookie host isolation and the `datas`
+projection. 54 smart lib tests, 14 smart-session CLI tests.
+
