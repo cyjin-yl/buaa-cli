@@ -23,8 +23,15 @@ const PREFIX: &str = "c640ca392cd45fb3a55b00a63a86c618";
 const MOBILE: &str = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Mobile Safari/537.36";
 
 // Deliberately neither Debug, Clone nor Serialize: credentials must not enter
-// generic Value trees, diagnostics or accidental ordinary String copies.
+// generic Value trees or diagnostics. Clone is required only so the session
+// path can carry the same operator credential in both the login input and the
+// response-echo screen; each copy stays zeroizing and is never serialized.
 struct Secret(Zeroizing<String>);
+impl Clone for Secret {
+    fn clone(&self) -> Self {
+        Self(Zeroizing::new(self.0.as_str().to_owned()))
+    }
+}
 impl<'de> Deserialize<'de> for Secret {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer).map(|s| Self(Zeroizing::new(s)))
@@ -58,6 +65,8 @@ enum Request {
         cookie: Secret,
         term_code: String,
         #[serde(skip)]
+        authentication_username: Option<Secret>,
+        #[serde(skip)]
         authentication_password: Option<Secret>,
         #[serde(skip)]
         authentication_session: Option<ServiceSession>,
@@ -67,6 +76,8 @@ enum Request {
         cookie: Secret,
         campus_id: i64,
         date: String,
+        #[serde(skip)]
+        authentication_username: Option<Secret>,
         #[serde(skip)]
         authentication_password: Option<Secret>,
         #[serde(skip)]
@@ -78,6 +89,8 @@ enum Request {
         query: LibraryQuery,
         #[serde(skip)]
         authentication_cookie: Option<Secret>,
+        #[serde(skip)]
+        authentication_username: Option<Secret>,
         #[serde(skip)]
         authentication_password: Option<Secret>,
         #[serde(skip)]
@@ -137,6 +150,7 @@ impl Request {
         match self {
             Self::Exams {
                 cookie,
+                authentication_username,
                 authentication_password,
                 authentication_session,
                 ..
@@ -147,9 +161,13 @@ impl Request {
                 ) || authentication_password
                     .as_ref()
                     .is_some_and(|password| contains(bytes, password))
+                    || authentication_username
+                        .as_ref()
+                        .is_some_and(|username| contains(bytes, username))
             }
             Self::Classrooms {
                 cookie,
+                authentication_username,
                 authentication_password,
                 authentication_session,
                 ..
@@ -160,10 +178,14 @@ impl Request {
                 ) || authentication_password
                     .as_ref()
                     .is_some_and(|password| contains(bytes, password))
+                    || authentication_username
+                        .as_ref()
+                        .is_some_and(|username| contains(bytes, username))
             }
             Self::Library {
                 token,
                 authentication_cookie,
+                authentication_username,
                 authentication_session,
                 authentication_password,
                 authentication_cas,
@@ -173,6 +195,9 @@ impl Request {
                     || authentication_cookie
                         .as_ref()
                         .is_some_and(|cookie| contains(bytes, cookie))
+                    || authentication_username
+                        .as_ref()
+                        .is_some_and(|username| contains(bytes, username))
                     || authentication_session
                         .as_ref()
                         .is_some_and(|session| session.contains_secret_bytes(bytes))
@@ -510,6 +535,7 @@ impl TokenRead {
                 enabled,
                 cookie,
                 term_code,
+                authentication_username: None,
                 authentication_password: None,
                 authentication_session: None,
             },
@@ -964,6 +990,7 @@ pub(crate) fn session_with_network(
                         enabled,
                         cookie,
                         term_code,
+                        authentication_username: Some(input.username.clone()),
                         authentication_password: Some(input.password),
                         authentication_session: Some(session),
                     },
@@ -994,6 +1021,7 @@ pub(crate) fn session_with_network(
                         cookie,
                         campus_id,
                         date,
+                        authentication_username: Some(input.username.clone()),
                         authentication_password: Some(input.password),
                         authentication_session: Some(session),
                     },
@@ -1017,6 +1045,7 @@ pub(crate) fn session_with_network(
                         token,
                         query,
                         authentication_cookie: cookie,
+                        authentication_username: Some(input.username.clone()),
                         authentication_password: Some(input.password),
                         authentication_cas: Some(credential),
                         authentication_session: Some(session),

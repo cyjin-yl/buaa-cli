@@ -2771,6 +2771,108 @@ fn smart_session_exams_logs_in_once_and_projects_the_real_exam_rows() {
     assert!(harness.app.observed().is_empty());
 }
 
+/// The operator username is authentication material too: an exams response
+/// that echoes it anywhere (plain or JSON-escaped) is withheld, not projected.
+#[test]
+fn smart_session_exams_withholds_a_response_that_echoes_the_operator_username() {
+    for body in [
+        format!(
+            r#"{{"datas":[{{"KCM":"{SESSION_USERNAME} placement exam"}}],"code":"0","msg":null}}"#
+        ),
+        // The same credential spelled inside a JSON \u escape: decoded by the
+        // screen, so the literal spelling must not appear anywhere.
+        format!(
+            r#"{{"datas":[],"code":"0","msg":null,"rows":[{{"note":"{} has no placement"}}]}}"#,
+            SESSION_USERNAME.replace('t', "\\u0074")
+        ),
+    ] {
+        let exams = body.to_string();
+        let harness = CasHarness::with_byxt_responders(
+            sso_responder(
+                CasService::Byxt,
+                "https://byxt.buaa.edu.cn/jwapp/sys/byrhmhsy/index.do?ticket=ST-terminal-synthetic",
+                &[],
+            ),
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            |_| {
+                http_response(
+                    "404 Not Found",
+                    &[("Content-Type", "text/plain")],
+                    "unexpected",
+                )
+            },
+            move |request| {
+                let path = request.target.split('?').next().unwrap_or("");
+                match path {
+                    "/jwapp/sys/byrhmhsy/index.do" => http_response(
+                        "200 OK",
+                        &[
+                            ("Content-Type", "text/html"),
+                            (
+                                "Set-Cookie",
+                                "byxt_sid=synthetic-byxt-session; Domain=byxt.buaa.edu.cn; Path=/; Secure; HttpOnly",
+                            ),
+                        ],
+                        "<html><body>relying party landing</body></html>",
+                    ),
+                    "/jwapp/sys/homeapp/api/home/student/exams.do" => http_response(
+                        "200 OK",
+                        &[("Content-Type", "application/json")],
+                        &exams,
+                    ),
+                    _ => http_response(
+                        "404 Not Found",
+                        &[("Content-Type", "text/plain")],
+                        "unexpected",
+                    ),
+                }
+            },
+        );
+        let (result, _) = run_session(
+            &harness,
+            &session_input(
+                "exams",
+                json!({"service": "exams", "enabled": true, "term_code": "2026-2027-1"}),
+            ),
+            "session-exams-username-echo",
+        );
+        let output = result.expect("the business read still settles");
+        assert_eq!(output["result"], "sensitive_response_withheld");
+        assert_eq!(output["fallback_reason"], "credential_echo");
+        assert!(
+            !output.to_string().contains(SESSION_USERNAME),
+            "the echoed operator username was released"
+        );
+    }
+}
+
 #[test]
 fn smart_session_library_exchanges_the_cas_once_and_reads_with_the_issued_token() {
     let harness = CasHarness::with_responders(
