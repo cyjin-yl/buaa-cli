@@ -326,10 +326,21 @@ impl Drop for PrivateJson {
     }
 }
 
+fn credential_member(key: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "token", "accesstoken", "refreshtoken", "idtoken", "ssotoken", "cas",
+        "cookie", "setcookie", "authorization", "cgauthorization", "password",
+        "passwd", "sessionid", "ticket", "execution", "csrf", "csrftoken",
+        "secret", "credential", "apikey", "clientsecret",
+    ];
+    let normalized = key.bytes().filter(|byte| !matches!(byte, b'-' | b'_')).map(|byte| byte.to_ascii_lowercase());
+    NAMES.iter().any(|name| normalized.clone().eq(name.bytes()))
+}
+
 fn private_response(value: &Value, token: &str) -> bool {
     match value {
         Value::Object(values) => values.iter().any(|(key, value)| {
-            key.eq_ignore_ascii_case("token")
+            credential_member(key)
                 || net::sensitive_text_marker(key)
                 || net::carries_secret(key.as_bytes(), token)
                 || private_response(value, token)
@@ -812,6 +823,15 @@ mod tests {
     fn response_with_new_member_token_is_withheld() {
         let body = br#"{"code":0,"data":{"list":[],"member":{"token":"new-issued-credential"}}}"#;
         assert_eq!(parse_response(Operation::Libraries, 200, body, TOKEN).unwrap_err().code, "sensitive_response_withheld");
+    }
+
+    #[test]
+    fn response_with_nested_or_escaped_credential_alias_is_withheld() {
+        for name in ["access_token", "refreshToken", "Authorization", "cookie", "session-id", r"\u0061ccess_token"] {
+            let body = format!(r#"{{"code":0,"data":{{"list":[{{"detail":{{"{name}":"synthetic-issued-value"}}}}]}}}}"#);
+            let error = parse_response(Operation::Libraries, 200, body.as_bytes(), TOKEN).unwrap_err();
+            assert_eq!(error.code, "sensitive_response_withheld");
+        }
     }
 
     #[test]
