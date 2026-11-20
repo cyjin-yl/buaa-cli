@@ -91,7 +91,8 @@ fn disabled_session_reports_disabled_without_network_or_credentials() {
 
 #[test]
 fn enabled_session_requires_explicit_online() {
-    for read in [classrooms_read(), library_read()] {
+    let exams_read = json!({"service": "exams", "enabled": true, "term_code": "2026-2027-1"});
+    for read in [classrooms_read(), library_read(), exams_read] {
         let output = invoke(
             &["smart", "session"],
             serde_json::to_vec(&session(&read)).unwrap().as_slice(),
@@ -191,7 +192,7 @@ fn legacy_reads_reject_internal_session_fields() {
 
 #[test]
 fn unsupported_read_service_refuses() {
-    for service in ["exams", "cgyy", "running"] {
+    for service in ["cgyy", "running"] {
         let read = json!({"service": service, "enabled": true, "cookie": "synthetic-caller-cookie=9f4e"});
         let mut payload = session(&read);
         payload["intent"] = json!(format!("LOGIN {} smart {}", USERNAME, service));
@@ -201,6 +202,42 @@ fn unsupported_read_service_refuses() {
         );
         assert_refused(&output);
     }
+}
+
+/// exams is a session service, but it admits only the Byxt term_code read:
+/// caller-supplied cookies or tokens inside the read are never its contract.
+#[test]
+fn exams_session_read_rejects_caller_credentials() {
+    for (service, extra) in [
+        ("cookie", json!("synthetic-caller-cookie=9f4e")),
+        ("token", json!("synthetic-caller-token-7q2w")),
+        ("authentication_session", json!("synthetic-planted-session")),
+    ] {
+        let mut read = json!({"service": "exams", "enabled": true, "term_code": "2026-2027-1"});
+        read[service] = extra;
+        let output = invoke(
+            &["smart", "session", "--online"],
+            serde_json::to_vec(&session(&read)).unwrap().as_slice(),
+        );
+        assert_invalid(&output);
+    }
+    // The intent must name exams exactly; a classrooms intent never upgrades.
+    let mut payload = session(&json!({"service": "exams", "enabled": true, "term_code": "2026-2027-1"}));
+    payload["intent"] = json!(format!("LOGIN {} smart classrooms", USERNAME));
+    assert_refused(&invoke(
+        &["smart", "session", "--online"],
+        serde_json::to_vec(&payload).unwrap().as_slice(),
+    ));
+    // A disabled exams read performs no I/O, like every other session service.
+    let read = json!({"service": "exams", "enabled": false, "term_code": ""});
+    let output = invoke(
+        &["smart", "session"],
+        serde_json::to_vec(&session(&read)).unwrap().as_slice(),
+    );
+    assert!(output.status.success());
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["result"], "disabled");
+    assert_eq!(result["network_performed"], false);
 }
 
 #[test]
