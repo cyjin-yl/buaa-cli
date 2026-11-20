@@ -41,6 +41,35 @@ Error diagnosis: `service_attempt_failure` no longer masks real error codes.
 
 ## Development status
 
+## 2026-11-20: Library seat availability and booking reads
+
+`buaa libbook --online` reads libraries and floors, areas, booking times,
+seat availability and the caller's bookings. Supply `payload.session.token`
+through protected JSON stdin. The command sends one of five fixed HTTPS POST
+requests to `booking.lib.buaa.edu.cn` under the shared request governor. It
+bundles the GlobalSign GCC R3 DV TLS CA 2020 intermediate from
+[`Yiki21/iclass_buaa_tui`](https://github.com/Yiki21/iclass_buaa_tui).
+Offline requests return `unsupported`.
+
+Status is `partial-live-verified`. After external token acquisition, the
+native command returned library availability and the caller's empty booking
+list. Offline coverage includes all five operations. Session acquisition
+remains external to the command.
+
+## 2026-11-20: Seminar-room reservation reads
+
+`buaa venue --online` reads venues and sites, personal order pages, daily
+slot availability and code tables. It takes `payload.session.access_token`
+from protected JSON stdin and sends it as `cgAuthorization` on signed HTTPS
+GET requests to `cgyy.buaa.edu.cn` under the shared request governor. Without
+`--online`, valid requests return `unsupported` with reason `offline`.
+
+The native CLI returned venue, order and code-table data. A day read returned
+seven time slots and twelve room rows after the parser admitted date-keyed
+room arrays and removed the service-issued day token. Offline tests cover the
+room rows, credential echoes and raw fallback. Session acquisition remains
+external to the command.
+
 ## 2026-11-08: native shuttle session candidate, no session established
 
 `buaa shuttle session --online` now has a typed, object-only, zeroizing
