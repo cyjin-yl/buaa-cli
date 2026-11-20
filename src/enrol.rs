@@ -1305,7 +1305,7 @@ pub fn schema() -> Value {
         "rwh":{"type":"string"},"action":{"enum":["enrol","withdraw"]},"category":{"enum":["professional","core_general","general","sports"]}},
         "x-runtime-invariants":["adjacent academic years","page_xnxq equals term year and season","rwh equals term-course_id-serial"]});
     let yjsxk = yjsxk::schema();
-    json!({"module":"enrol","status":"ieas_online_unbound_yjsxk_selected_read","transport":"IEAS retains its explicit-session secure-origin blocker. yjsxk selected is one fixed strict-TLS existing-session GET with no proxy, redirect, retry, login, fallback or cookie adoption; unknown response privacy or structure refuses projection.",
+    json!({"module":"enrol","status":"ieas_online_unbound_yjsxk_selected_read","transport":"IEAS requires an explicit session at a secure origin. yjsxk selected sends one fixed HTTPS GET using a supplied session or an explicit CAS sign-on. Issued cookies join the response credential screen. Unknown response privacy or structure refuses projection.",
         "operations":["list","preview","submit","verify","drop_preview","drop","export","selected","commit"],
         "input":{"type":"object","additionalProperties":false,"required":["operation"],"properties":{
             "operation":{"type":"string"},"application":{"enum":["ieas","yjsxk"],"default":"ieas"},

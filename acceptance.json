@@ -357,6 +357,11 @@
       "status": "live-verified",
       "acceptance": "Typed discovery and supported service reads; exams, rooms, library seats, study rooms and sunlight check-in individually gated; no bogus attendance.",
       "evidence": {
+        "classroom_filters": {
+          "credit": "Original CLI filtering inspired by BUAASubnet/UBAA contributors, commit 3ac2ebd6c30162cd1ce1fc50964caa25ed22092f (MIT, 2026 MooreFoss), packages/ubaa_ui/lib/src/features/classroom/content.dart.",
+          "scope": "After admitting the classroom response, both smart read paths can filter by exact building, name substring, and a reported free teaching period 1 through 14. Observed and matched counts distinguish an empty filter result from an empty response. The filter adds zero upstream requests.",
+          "offline_proof": "The regression projects one of four synthetic rooms and withholds the response when an excluded room echoes a credential. The native CLI exposes the filter schema, returns disabled without I/O for a valid disabled query, and rejects period 15 with exit 2."
+        },
         "exams_session_online_2026_11_21": {
           "command": "buaa smart session --online with protected JSON stdin (exams term_code=2026-2027-1 read, classrooms campus_id=1 date=2026-11-24 read)",
           "observed": "Exams profile restored as a CAS session read through the observed Byxt relying party (docs/CAS-SERVICE-CATALOG.md row exams): one authorized in-memory CAS login to byxt.buaa.edu.cn completed the sign-on chain, the relying-party landing issued the application session cookie, and GET exams.do?termCode returned result=ok, network_performed=true, code \"0\" with an empty datas list for this account/term (an account fact, not a failure). A separate authorized classrooms login for a weekday date returned result=ok with 158 room rows across three buildings, matching the earlier verified read; a Saturday query on the same day returned the endpoint's HTML UI page which the privacy gate withheld as unrecognized_data_shape (same endpoint behavior as 2026-11-04, not a defect).",
@@ -430,7 +435,8 @@
           "not_proven": "No authenticated yjsxk deployment read, current account identity, list completeness, selection phase, withdrawal inference or authoritative postcondition. No campus login, password probe or fallback was performed."
         },
         "remaining": "The candidate adds a strict-HTTPS CAS entry for the existing yjsxk selected-course reader. An authorized browser observation found that the HTTPS application entry redirected to HTTP after CAS ticket consumption, and the HTTPS selected endpoint returned 401 without an application session. The candidate's native CAS path remains unverified. The existing protected-stdin session_cookie path stays available. Account binding, complete selected-state proof and authorized changes remain open.",
-        "session_candidate_offline": "The release offline gate passed: 1556 library tests passed, 3 ignored, and all integration suites passed. The release CLI refused CAS input without --online. An isolated governor regression exercised the post-CAS request gap and expiry refusal at the selected reader. Independent review confirmed the pacing fix.",
+        "session_candidate_offline": "The PR #181 release gate passed: 1556 library tests passed, 3 ignored, and all integration suites passed. The release CLI refused CAS input without --online. An isolated governor regression exercised the post-CAS request gap and expiry refusal at the selected reader. Independent review confirmed the pacing fix.",
+        "issued_cookie_screening": "The selected GET screens declarable response cookies alongside transmitted credentials while admitting a clean projection. Unreviewable declarations and credential echoes withhold the response. Issued cookies remain scoped to the response inspection. Fresh authenticated HTTPS deployment proof is open.",
         "commit_contract_offline_2026_11_02": {
           "command": "buaa enrol --offline (stdin: operation=commit, typed intent, confirmation digest, previous_ledger)",
           "observed": "Offline confirmed idempotent commit contract implemented and proven: 38 enrol library tests pass, including confirmed_commit_admits_a_matching_digest (re-derives the digest from the caller's own typed intent, admits the idempotency key through the caller-owned ledger, receipt reports remote_request=false, commit_success=null, enrol_postcondition_known=false), confirmed_commit_refuses_a_digest_drift, confirmed_commit_duplicate_requires_reconfirmation, and commit_command_dispatch_is_offline_and_schema_declares_it (the offline dispatch path needs no session; the schema declares the commit operation, the ledger input and the commit_admitted result). The contract re-validates the typed intent, refuses a digest drift before any ledger write, and admits a duplicate key only with explicit reconfirmation. No remote request is sent and no enrollment verdict is produced, so a local admission is never a remote enrollment.",
@@ -512,6 +518,7 @@
       ],
       "evidence": {
         "command": "buaa marks gpa; buaa marks baseline save|show <absolute-path>; candidate: buaa marks session --online",
+        "session_pagination_and_gpa": "Read at most three 200-row pages and retain up to 512 source rows. Page facts and completeness reasons distinguish bounds and inconsistent declarations. GPA and baseline save accept a complete marks_session result with caller-supplied policy, mapping KCMC/CJ/XF and preserving the requested term.",
         "session_candidate_offline": "The release offline gate passed: 1556 library tests passed, 3 ignored, and all integration suites passed. The release CLI returned disabled with network_performed=false for a disabled read. A screened parser fallback retained the exact original response bytes in the offline regression.",
         "tests": "cargo test --locked --offline: marks tests passed (weighted GPA table+formula, failure exclusion, null GPA, structured added/removed/changed diff with gpa delta, stored-baseline round-trip diff, baseline idempotency round-trip, policy provenance required, gap/overlap/duplicate/zero-credit/score-over-100/error-echo rejected, same-id policy content change rejected, finite-credit overflow bound rejected); a CLI umask regression confirms 0600 after new and changed baseline saves; clippy 0 warnings; fmt clean.",
         "scope": "Deterministic offline GPA and change-monitoring engine. The grade-point policy is caller-supplied with mandatory id/source provenance (table or formula) so no policy is guessed or embedded; credit arithmetic uses an explicit finite safety ceiling and rejects overflow before output construction; the shared governor enforces the >=15-minute background polling cadence for any future campus reads.",
@@ -522,7 +529,7 @@
           "https://github.com/cyjin-yl/buaa-cli/issues/25"
         ]
       },
-      "blocker": "An authorized browser session observed a graduate GSMIS xscjcx response after entering wdcjapp. The candidate implements that sequence and reads the first page. Native live verification, the undergraduate source contract, an official grade-point policy and automated change monitoring remain open."
+      "blocker": "The native graduate GSMIS path reached xscjcx and returned an empty complete result for the authorized account. A live multi-page result, the undergraduate source contract, an official grade-point policy and automated change monitoring remain open."
     },
     {
       "id": "timetable-ug",
