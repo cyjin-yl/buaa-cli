@@ -110,6 +110,15 @@ deferrals and unconfirmed authentication stop the flow. A complete HTTP failure
 is not presented as a password verdict. Authentication responses are never raw
 read evidence; credential echoes in the final response are withheld.
 
+Classroom reads support an optional `filter` object in `read` for `smart session`,
+or in the top-level input for `smart --online`. Supply any combination of exact
+`building`, a case-sensitive `query` substring of the building or room name,
+and a free teaching `period` from 1 through 14. For example, use
+`{"filter":{"query":"101","period":3}}` alongside the existing classroom
+query fields. The response's `filter_counts` reports observed and matched room
+counts. Availability describes course occupancy for the requested date.
+The design credits [BUAASubnet/UBAA](docs/REFERENCES.md#buaasubnetubaa).
+
 ### Source-faithful iHome reads
 
 `ihome list`, `ihome detail` and `ihome session` accept JSON only through

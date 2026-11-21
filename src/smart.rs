@@ -76,6 +76,8 @@ enum Request {
         cookie: Secret,
         campus_id: i64,
         date: String,
+        #[serde(default, deserialize_with = "classroom_filter")]
+        filter: Option<ClassroomFilter>,
         #[serde(skip)]
         authentication_username: Option<Secret>,
         #[serde(skip)]
@@ -425,12 +427,56 @@ enum SessionRead {
         enabled: bool,
         campus_id: i64,
         date: String,
+        #[serde(default, deserialize_with = "classroom_filter")]
+        filter: Option<ClassroomFilter>,
     },
     Library {
         enabled: bool,
         #[serde(deserialize_with = "deserialize_object")]
         query: LibraryQuery,
     },
+}
+
+/// Local result filters inspired by BUAASubnet/UBAA's classroom view.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClassroomFilter {
+    building: Option<String>,
+    query: Option<String>,
+    period: Option<u8>,
+}
+
+fn classroom_filter<'de, D>(deserializer: D) -> Result<Option<ClassroomFilter>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let filter: ClassroomFilter = deserialize_object(deserializer)?;
+    let invalid_text = [&filter.building, &filter.query]
+        .into_iter()
+        .flatten()
+        .any(|text| text.trim().is_empty() || text.chars().any(char::is_control));
+    if invalid_text || filter.period.is_some_and(|period| !(1..=14).contains(&period)) {
+        return Err(serde::de::Error::custom("invalid classroom filter"));
+    }
+    Ok(Some(filter))
+}
+
+impl ClassroomFilter {
+    fn matches(&self, room: &Value) -> bool {
+        let building = room["building"].as_str().unwrap_or_default();
+        self.building
+            .as_deref()
+            .is_none_or(|wanted| wanted == building)
+            && self.query.as_deref().is_none_or(|query| {
+                building.contains(query)
+                    || room["name"].as_str().is_some_and(|name| name.contains(query))
+            })
+            && self.period.is_none_or(|period| {
+                room["free_periods"].as_array().is_some_and(|periods| {
+                    periods.iter().any(|value| value.as_u64() == Some(u64::from(period)))
+                })
+            })
+    }
 }
 
 // Serde's struct/tagged-enum derives also accept positional sequences. This
@@ -1003,6 +1049,7 @@ pub(crate) fn session_with_network(
                 enabled,
                 campus_id,
                 date,
+                filter,
             } => {
                 let url =
                     url::Url::parse("https://app.buaa.edu.cn/buaafreeclass/wap/default/search1")
@@ -1021,6 +1068,7 @@ pub(crate) fn session_with_network(
                         cookie,
                         campus_id,
                         date,
+                        filter,
                         authentication_username: Some(input.username.clone()),
                         authentication_password: Some(input.password),
                         authentication_session: Some(session),
@@ -1353,7 +1401,7 @@ fn admit_checked_json(
     bytes: &[u8],
     kind: &str,
 ) -> Value {
-    let output = parse(service, status, content_type, bytes, kind);
+    let mut output = parse(service, status, content_type, bytes, kind);
     // HTTP status, byte length and other refusal metadata are generated here,
     // not echoed source fields. Preserve independent session-denial results.
     let source_value = match output.get("result").and_then(Value::as_str) {
@@ -1366,10 +1414,18 @@ fn admit_checked_json(
             request.contains_secret_bytes(bytes) || issued.carries(bytes)
         })
     }) {
-        withheld(service, status, content_type, bytes, "credential_echo")
-    } else {
-        output
+        return withheld(service, status, content_type, bytes, "credential_echo");
     }
+    if let Request::Classrooms { filter: Some(filter), .. } = request
+        && output["result"] == "ok"
+        && let Some(rooms) = output["data"].as_array_mut()
+    {
+        let before = rooms.len();
+        rooms.retain(|room| filter.matches(room));
+        let matched = rooms.len();
+        output["filter_counts"] = json!({"observed":before,"matched":matched});
+    }
+    output
 }
 
 // Inspect JSON member names before allocation into a generic Value. Decode
@@ -2453,9 +2509,25 @@ pub fn schema() -> Value {
         op("login", vec![("sso_token", string())]),
         op("manage_login", vec![("cookie", string())]),
     ]);
+    let classrooms = |mut fields: Vec<(&str, Value)>| {
+        fields.extend([
+            ("campus_id", json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),
+            ("date", string()),
+        ]);
+        let mut shape = service("classrooms", fields);
+        shape["properties"]["filter"] = json!({
+            "type":"object","additionalProperties":false,"description":"Filter the admitted rows locally; all supplied criteria must match.",
+            "properties":{
+                "building":{"type":["string","null"],"minLength":1,"description":"Exact source building name."},
+                "query":{"type":["string","null"],"minLength":1,"description":"Case-sensitive substring of the building or room name."},
+                "period":{"type":["integer","null"],"minimum":1,"maximum":14,"description":"Explicit teaching period reported free for the requested date."}
+            }
+        });
+        shape
+    };
     let session_read = json!({"oneOf":[
         service("exams",vec![("term_code",string())]),
-        service("classrooms",vec![("campus_id",json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),("date",string())]),
+        classrooms(vec![]),
         service("library",vec![("query",library.clone())])]});
     let token_read = json!({"oneOf":[
         object(vec![("service",json!({"const":"exams"})),("cookie",string()),("term_code",string())]),
@@ -2465,7 +2537,7 @@ pub fn schema() -> Value {
             ("query",running.clone())])]});
     let mut schema = json!({"input":{"oneOf":[
         service("exams",vec![("cookie",string()),("term_code",string())]),
-        service("classrooms",vec![("cookie",string()),("campus_id",json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX})),("date",string())]),
+        classrooms(vec![("cookie",string())]),
         service("library",vec![("token",string()),("query",library)]),
         service("cgyy",vec![("app_key",string()),("access_token",string()),
             ("query",json!({"oneOf":cgyy_exchanges}))]),
@@ -2480,7 +2552,11 @@ pub fn schema() -> Value {
         "writes":"unsupported; never uploads or fabricates attendance photographs",
         "cgyy_app_key":"8fceb735082b5a529312040b58ea780b",
         "unknown":["campus id enumeration"],
-        "validation":"enabled requests require nonempty control-free credentials; strict YYYY-MM-DD dates; records page >= 1 and limit 1..1000; no null fields; caller-token reads additionally require authorized=true and an allowlisted read operation"});
+        "validation":"enabled requests require nonempty control-free credentials; strict YYYY-MM-DD dates; records page >= 1 and limit 1..1000; caller-token reads additionally require authorized=true and an allowlisted read operation"});
+    schema["output"]["properties"]["filter_counts"] = json!({
+        "type":"object","additionalProperties":false,"required":["observed","matched"],
+        "properties":{"observed":{"type":"integer","minimum":0},"matched":{"type":"integer","minimum":0}}
+    });
     schema["session"] = json!({
         "input":object(vec![("authorized",json!({"type":"boolean"})),("username",string()),("password",string()),("intent",string()),("read",session_read)]),
         "output":schema["output"].clone(),
@@ -2984,6 +3060,32 @@ mod tests {
     fn classroom_periods() {
         let out = parse(Service::Classrooms,200,Some("application/json"),br#"{"e":0,"m":"","d":{"list":{"A":[{"id":1,"floorid":2,"name":"101","kxsds":"1,3, 5"}]}}}"#,"rooms");
         assert_eq!(out["data"][0]["free_periods"], json!([1, 3, 5]));
+    }
+    #[test]
+    fn classroom_filter_keeps_matching_rows_after_admission() {
+        let request: Request = serde_json::from_str(r#"{
+            "service":"classrooms","enabled":true,"cookie":"sid=1234567",
+            "campus_id":1,"date":"2026-11-23",
+            "filter":{"building":"A","query":"10","period":3}
+        }"#).unwrap();
+        let body = r#"{"e":0,"m":"ok","d":{"list":{
+            "A":[{"id":1,"name":"101","kxsds":"1,3"},
+                {"id":2,"name":"102","kxsds":"1"},
+                {"id":3,"name":"201","kxsds":"3"}],
+            "B":[{"id":4,"name":"101","kxsds":"3"}]}}}"#;
+        let admit = |body: &str| {
+            admit_checked_json(
+                &request, &IssuedCookies::default(), Service::Classrooms, 200,
+                Some("application/json"), body.as_bytes(), "rooms",
+            )
+        };
+        let filtered = admit(body);
+        assert_eq!(filtered["filter_counts"], json!({"observed":4,"matched":1}));
+        assert_eq!(filtered["data"][0]["id"], 1);
+        assert_eq!(filtered["data"][0]["free_periods"], json!([1, 3]));
+        let echoed = admit(&body.replace("\"id\":4", "\"id\":1234567"));
+        assert_eq!(echoed["fallback_reason"], "credential_echo");
+        assert!(echoed.get("data").is_none());
     }
     #[test]
     fn seat_status_is_literal_string() {

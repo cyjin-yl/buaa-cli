@@ -24,6 +24,14 @@
 //! double-weight the credits and keeping either value would drop supplied
 //! data. A score the declared policy carries no point for is refused, never
 //! scored as a guessed `0.0`.
+//!
+//! GPA and baseline-save input accept exactly one of `courses` or
+//! `marks_session`, alongside `policy`. `marks_session` is the complete parsed
+//! output of `marks session`: KCMC/CJ/XF supply name/integer score/credit.
+//! Numeric grade strings may have only zero fractional digits; qualitative,
+//! pending and fractional grades are refused without rounding or conversion.
+//! The session's requested_xnxqdm is retained in calculations and baselines.
+//! When both sides of a diff supply a term scope, those scopes must match.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -264,9 +272,109 @@ struct Course {
     credit: f64,
 }
 
-fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
-    let Some(list) = raw.get("courses").and_then(Value::as_array) else {
+const MAX_SESSION_ROWS: u64 = 512;
+const SESSION_TERM_PATTERN: &str = "^[0-9]{4}[123]$";
+
+fn session_records(session: &Value) -> Result<&[Value], Value> {
+    let records = session
+        .get("records")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    let completeness = &session["completeness"];
+    if session.get("schema_version").and_then(Value::as_u64) != Some(1)
+        || session.get("type").and_then(Value::as_str) != Some("marks_gsmis")
+        || session.get("result").and_then(Value::as_str) != Some("parsed")
+        || completeness.get("complete").and_then(Value::as_bool) != Some(true)
+        || !completeness
+            .get("reasons")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        || records.len() as u64 > MAX_SESSION_ROWS
+        || session.get("unscoped_term_row_count").and_then(Value::as_u64) != Some(0)
+        || session.get("requested_term_match_count").and_then(Value::as_u64)
+            != Some(records.len() as u64)
+    {
         return Err(invalid());
+    }
+    let term = match session.get("requested_xnxqdm") {
+        Some(Value::Null) => None,
+        Some(Value::String(term)) if crate::timetable::valid_term_code(term) => Some(term.as_str()),
+        _ => return Err(invalid()),
+    };
+    let source_count = session
+        .get("source_row_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid)?;
+    let other_count = session
+        .get("other_term_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid)?;
+    if source_count > MAX_SESSION_ROWS
+        || source_count.checked_sub(other_count) != Some(records.len() as u64)
+        || session.get("declared_total").and_then(Value::as_u64) != Some(source_count)
+        || (term.is_none() && other_count != 0)
+    {
+        return Err(invalid());
+    }
+    if let Some(term) = term {
+        for row in records {
+            if row.get("XNXQDM").and_then(Value::as_str) != Some(term) {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(records)
+}
+
+fn session_course(row: &Value) -> Result<CourseInput, Value> {
+    // Canonical GPA fields beside source fields would supply two identities
+    // for the same fact; refuse rather than choose one silently.
+    if ["name", "score", "credit"]
+        .into_iter()
+        .any(|key| row.get(key).is_some())
+    {
+        return Err(invalid());
+    }
+    let name = row
+        .get("KCMC")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(invalid)?;
+    let grade = row.get("CJ").ok_or_else(invalid)?;
+    let score = if let Some(score) = grade.as_u64() {
+        u8::try_from(score).map_err(|_| invalid())?
+    } else if let Some(text) = grade.as_str() {
+        let text = text.trim();
+        let (whole, fraction) = text.split_once('.').unwrap_or((text, "0"));
+        if whole.is_empty()
+            || !whole.bytes().all(|byte| byte.is_ascii_digit())
+            || fraction.is_empty()
+            || !fraction.bytes().all(|byte| byte == b'0')
+        {
+            return Err(invalid());
+        }
+        whole.parse::<u8>().map_err(|_| invalid())?
+    } else {
+        // Float JSON grades are not rounded or cast into integer bands.
+        return Err(invalid());
+    };
+    let credit = match row.get("XF") {
+        Some(Value::String(text)) => text.trim().parse::<f64>().map_err(|_| invalid())?,
+        Some(value) => value.as_f64().ok_or_else(invalid)?,
+        None => return Err(invalid()),
+    };
+    Ok(CourseInput {
+        name: name.to_owned(),
+        score,
+        credit,
+    })
+}
+
+fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
+    let (list, from_session) = match (raw.get("courses"), raw.get("marks_session")) {
+        (Some(Value::Array(list)), None) => (list.as_slice(), false),
+        (None, Some(session)) => (session_records(session)?, true),
+        _ => return Err(invalid()),
     };
     if list.len() > 10_000 {
         return Err(invalid());
@@ -275,9 +383,10 @@ fn parse_courses(raw: &Value) -> Result<Vec<Course>, Value> {
     let mut courses = Vec::with_capacity(list.len());
     let mut total_credit = 0.0;
     for item in list {
-        let input: CourseInput = match serde_json::from_value(item.clone()) {
-            Ok(value) => value,
-            Err(_) => return Err(invalid()),
+        let input = if from_session {
+            session_course(item)?
+        } else {
+            serde_json::from_value::<CourseInput>(item.clone()).map_err(|_| invalid())?
         };
         if input.name.is_empty()
             || input.score > 100
@@ -462,25 +571,17 @@ fn policy_provenance(context: &PolicyContext) -> Value {
 // Public operations
 // ---------------------------------------------------------------------------
 
-/// Compute GPA for `{"policy":{...},"courses":[...]}` (optionally with a
-/// `baseline` object for the structured diff).
+/// Compute GPA from a policy and either `courses` or a complete
+/// `marks_session` result, with an optional baseline for the structured diff.
 pub fn gpa(input: &str) -> Value {
     if input.len() as u64 > MAX_POLICY_BYTES {
         return invalid();
     }
-    let raw: Value = match serde_json::from_str(input) {
+    let raw: crate::timetable::PrivateValue = match serde_json::from_str(input) {
         Ok(value) => value,
         Err(_) => return invalid(),
     };
-    let context = match parse_policy(&raw) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
-    let courses = match parse_courses(&raw) {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
-    let current = match compute(&context, &courses) {
+    let (context, courses, current) = match load_current(&raw) {
         Ok(value) => value,
         Err(value) => return value,
     };
@@ -493,7 +594,18 @@ pub fn gpa(input: &str) -> Value {
         "total_credits": current.total_credits,
         "gpa": current.gpa,
     });
+    let requested_term = raw.pointer("/marks_session/requested_xnxqdm");
+    if let Some(term) = requested_term {
+        out["requested_xnxqdm"] = term.clone();
+    }
     if let Some(baseline) = raw.get("baseline") {
+        if let (Some(current_term), Some(baseline_term)) =
+            (requested_term, baseline.get("requested_xnxqdm"))
+        {
+            if current_term != baseline_term {
+                return json!({"error":"invalid_input","message":"baseline requested term scope does not match current marks session"});
+            }
+        }
         let difference = diff_value(baseline, &current, &context, &courses);
         if difference.get("error").is_some() {
             return difference;
@@ -708,10 +820,9 @@ fn save_private_baseline(directory: &File, name: &str, body: &[u8]) -> Result<()
     result
 }
 
-fn load_current(input: &str) -> Result<(PolicyContext, Vec<Course>, Calculation), Value> {
-    let raw: Value = serde_json::from_str(input).map_err(|_| invalid())?;
-    let context = parse_policy(&raw)?;
-    let courses = parse_courses(&raw)?;
+fn load_current(raw: &Value) -> Result<(PolicyContext, Vec<Course>, Calculation), Value> {
+    let context = parse_policy(raw)?;
+    let courses = parse_courses(raw)?;
     let calculation = compute(&context, &courses)?;
     Ok((context, courses, calculation))
 }
@@ -752,11 +863,18 @@ pub fn baseline_save(input: &str, path: &str) -> Value {
         Ok(value) => value,
         Err(value) => return value,
     };
-    let (context, courses, calc) = match load_current(input) {
+    let raw: crate::timetable::PrivateValue = match serde_json::from_str(input) {
+        Ok(value) => value,
+        Err(_) => return invalid(),
+    };
+    let (context, courses, calc) = match load_current(&raw) {
         Ok(value) => value,
         Err(value) => return value,
     };
-    let document = baseline_document(&context, &calc);
+    let mut document = baseline_document(&context, &calc);
+    if let Some(term) = raw.pointer("/marks_session/requested_xnxqdm") {
+        document["requested_xnxqdm"] = term.clone();
+    }
     let (directory, name) = match baseline_location(&path) {
         Ok(value) => value,
         Err(value) => return value,
@@ -832,8 +950,40 @@ pub fn baseline_show(path: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 pub fn schema() -> Value {
+    let session_term = json!({"type":["string","null"],"pattern":SESSION_TERM_PATTERN});
+    let marks_session = json!({
+        "type":"object",
+        "description":"Complete marks session output. Source and projected counts must reconcile, and a requested term must match every projected XNXQDM. Null means no term filter. KCMC, CJ and XF map to name, score and credit under the same duplicate-name and credit bounds as courses.",
+        "required":["schema_version","type","result","requested_xnxqdm","records","source_row_count","requested_term_match_count","other_term_count","unscoped_term_row_count","declared_total","completeness"],
+        "properties":{
+            "schema_version":{"const":1},
+            "type":{"const":"marks_gsmis"},
+            "result":{"const":"parsed"},
+            "requested_xnxqdm":session_term,
+            "records":{"type":"array","maxItems":MAX_SESSION_ROWS,"items":{
+                "type":"object","required":["KCMC","CJ","XF"],
+                "properties":{
+                    "KCMC":{"type":"string","minLength":1},
+                    "CJ":{"description":"Score 0 through 100 as a JSON integer token or a decimal string with only zero fractional digits. Fractional, qualitative and pending grades are invalid.","oneOf":[
+                        {"type":"integer","minimum":0,"maximum":100},
+                        {"type":"string","pattern":"^\\s*[0-9]+(\\.0+)?\\s*$"}
+                    ]},
+                    "XF":{"description":"Positive, finite credit.","type":["number","string"]}
+                }
+            }},
+            "source_row_count":{"type":"integer","minimum":0,"maximum":MAX_SESSION_ROWS},
+            "requested_term_match_count":{"type":"integer","minimum":0,"maximum":MAX_SESSION_ROWS},
+            "other_term_count":{"type":"integer","minimum":0,"maximum":MAX_SESSION_ROWS},
+            "unscoped_term_row_count":{"const":0},
+            "declared_total":{"type":"integer","minimum":0,"maximum":MAX_SESSION_ROWS},
+            "completeness":{"type":"object","required":["complete","reasons"],"properties":{
+                "complete":{"const":true},"reasons":{"type":"array","maxItems":0}
+            }}
+        }
+    });
     json!({"gpa": {
-        "input": {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["policy","courses"],
+        "input": {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["policy"],
+            "oneOf":[{"required":["courses"]},{"required":["marks_session"]}],
             "properties":{
                 "policy":{"type":"object","required":["kind","id","source"],
                     "additionalProperties":false,
@@ -852,11 +1002,13 @@ pub fn schema() -> Value {
                     "properties":{"name":{"type":"string","minLength":1},
                         "score":{"type":"integer","minimum":0,"maximum":100},
                         "credit":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL}}}},
-                "baseline":{"type":"object","description":"optional gpa_baseline document for the structured diff; must carry the same policy id and the same normalized policy content as the current input"}}},
+                "marks_session":marks_session,
+                "baseline":{"type":"object","description":"Optional gpa_baseline document for either input form. Policy ID and normalized policy content must match. If both current input and baseline supply a requested_xnxqdm scope, those scopes must match."}}},
         "output": {"type":"object","required":["schema_version","type","policy","courses","counted_credits","total_credits","gpa"],
             "properties":{"counted_credits":{"type":"number","minimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL},
                 "total_credits":{"type":"number","minimum":0,"exclusiveMaximum":MAX_SAFE_CREDIT_TOTAL},
                 "gpa":{"type":["number","null"],"minimum":0,"maximum":5},
+                "requested_xnxqdm":session_term,
                 "diff":{"type":"object","required":["added","removed","changed","gpa"]}}},
         "policy_provenance":"every result carries the published policy id/source; no policy is embedded in the repository"
     },
@@ -869,7 +1021,7 @@ pub fn schema() -> Value {
     },
     "session": {
         "command": "buaa marks session [--online]",
-        "description": "One explicit in-memory CAS login to GSMIS followed by the wdcjapp application document and exactly one xscjcx.do read. No persistence, refresh, retry, write or pagination; stdin-only credentials; graduate accounts only.",
+        "description": "One explicit in-memory CAS login to GSMIS followed by the wdcjapp application document and bounded xscjcx.do reads of at most 3 pages and 512 source rows. Graduate accounts only. Credentials are stdin-only, and the command performs zero writes, persistence, refreshes or retries.",
         "input": {"type":"object","additionalProperties":false,"required":["authorized","username","password","intent","read"],"properties":{
             "authorized":{"const":true},
             "username":{"type":"string","writeOnly":true},
@@ -878,14 +1030,32 @@ pub fn schema() -> Value {
             "read":{"type":"object","additionalProperties":false,"required":["operation","enabled"],"properties":{
                 "operation":{"const":"xscjcx"},
                 "enabled":{"type":"boolean"},
-                "xnxqdm":{"type":["string","null"],"pattern":"^[0-9]{4}[123]$","description":"optional requested term; non-matching rows are counted, never projected"}}}}},
+                "xnxqdm":{"type":["string","null"],"pattern":SESSION_TERM_PATTERN,"description":"optional requested term; non-matching rows are counted, never projected"}}}}},
         "output": {"type":"object","required":["result"],"properties":{
             "result":{"enum":["disabled","parsed","business_error","degraded","fallback","sensitive_response_withheld","session_expired"]},
             "type":{"const":"marks_gsmis"},
-            "records":{"type":"array","description":"datas.xscjcx.rows projected verbatim, requested-xnxqdm filtered"}},
-            "completeness":{"type":"object"}
+            "records":{"type":"array","maxItems":MAX_SESSION_ROWS,"description":"datas.xscjcx.rows projected verbatim in page order, with the optional xnxqdm filter applied"},
+            "requested_xnxqdm":session_term,
+            "pages_requested":{"type":"integer","minimum":1,"maximum":3},
+            "page_facts":{"type":"array","maxItems":3,"items":{"type":"object",
+                "required":["page_number","requested_page_size","source_row_count","declared_total","declared_page_size","accepted"],
+                "properties":{
+                    "page_number":{"type":"integer","minimum":1,"maximum":3},
+                    "requested_page_size":{"const":200},
+                    "source_row_count":{"type":"integer","minimum":0},
+                    "declared_total":{"type":["integer","null"],"minimum":0},
+                    "declared_page_size":{"type":["integer","null"],"minimum":0},
+                    "accepted":{"type":"boolean"}
+                }}},
+            "completeness":{"type":"object","required":["complete","reasons","max_pages","max_source_rows"],
+                "properties":{
+                    "complete":{"type":"boolean"},
+                    "reasons":{"type":"array","items":{"type":"string"}},
+                    "max_pages":{"const":3},
+                    "max_source_rows":{"const":MAX_SESSION_ROWS}
+                }}
         }}
-    })
+    }})
 }
 
 // ---------------------------------------------------------------------------
@@ -924,6 +1094,142 @@ mod tests {
     const BAND_POLICY_INPUT: &str = r#"{"policy":{"kind":"table","id":"test-band",
         "source":"https://example.invalid/band","pass_min":60,
         "bands":[{"min":60,"max":100,"point":4.0}]}}"#;
+
+    fn session_gpa_input() -> Value {
+        json!({
+            "policy": serde_json::from_str::<Value>(TABLE_POLICY).unwrap(),
+            "marks_session": {
+                "schema_version": 1,
+                "type": "marks_gsmis",
+                "result": "parsed",
+                "requested_xnxqdm": "20261",
+                "records": [
+                    {"KCMC":"A","CJ":"92.00","XF":"4.5","XNXQDM":"20261"},
+                    {"KCMC":"B","CJ":78,"XF":2,"XNXQDM":"20261"}
+                ],
+                "source_row_count": 3,
+                "requested_term_match_count": 2,
+                "other_term_count": 1,
+                "unscoped_term_row_count": 0,
+                "declared_total": 3,
+                "completeness": {"complete": true, "reasons": []}
+            }
+        })
+    }
+
+    #[test]
+    fn session_gpa_matches_explicit_courses_and_diff() {
+        let mut input = session_gpa_input();
+        let mut explicit = json!({
+            "policy": input["policy"],
+            "courses": [{"name":"A","score":92,"credit":4.5},{"name":"B","score":78,"credit":2}]
+        });
+        let mut baseline = gpa(&explicit.to_string());
+        baseline["courses"][0]["score"] = json!(70);
+        explicit["baseline"] = baseline.clone();
+        input["baseline"] = baseline;
+
+        let mut from_session = gpa(&input.to_string());
+        assert_eq!(from_session["requested_xnxqdm"], "20261");
+        from_session
+            .as_object_mut()
+            .unwrap()
+            .remove("requested_xnxqdm");
+        assert_eq!(from_session["diff"]["changed"][0]["name"], "A");
+        assert_eq!(from_session, gpa(&explicit.to_string()));
+
+        let session = &mut input["marks_session"];
+        session["requested_xnxqdm"] = Value::Null;
+        session["other_term_count"] = json!(0);
+        session["source_row_count"] = json!(2);
+        session["declared_total"] = json!(2);
+        let unfiltered = gpa(&input.to_string());
+        assert_eq!(unfiltered.get("requested_xnxqdm"), Some(&Value::Null));
+        assert_eq!(unfiltered["gpa"], from_session["gpa"]);
+    }
+
+    #[test]
+    fn session_gpa_baseline_preserves_requested_term() {
+        let dir = std::env::temp_dir().join(format!("buaa-marks-session-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        let path = dir.join("baseline.json");
+        let path = path.to_str().unwrap();
+        let mut input = session_gpa_input();
+        assert_eq!(baseline_save(&input.to_string(), path)["result"], "saved");
+        assert_eq!(
+            baseline_save(&input.to_string(), path)["result"],
+            "unchanged"
+        );
+        let baseline = baseline_show(path);
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(baseline["requested_xnxqdm"], "20261");
+        input["baseline"] = baseline;
+        assert_eq!(gpa(&input.to_string())["diff"]["gpa"]["delta"], 0.0);
+        input["baseline"]["requested_xnxqdm"] = json!("20262");
+        assert_eq!(gpa(&input.to_string())["error"], "invalid_input");
+    }
+
+    #[test]
+    fn session_gpa_refuses_conflicting_or_incomplete_selection() {
+        let mut input = session_gpa_input();
+        input["courses"] = json!([]);
+        assert_eq!(gpa(&input.to_string())["error"], "invalid_input");
+        let without_selection = json!({"policy": input["policy"]});
+        assert_eq!(gpa(&without_selection.to_string())["error"], "invalid_input");
+        for (pointer, value) in [
+            ("/completeness/complete", json!(false)),
+            ("/declared_total", json!(4)),
+            ("/other_term_count", json!(u64::MAX)),
+            ("/unscoped_term_row_count", json!(1)),
+            ("/records/0/XNXQDM", json!("20262")),
+            ("/requested_xnxqdm", Value::Null),
+        ] {
+            let mut input = session_gpa_input();
+            *input["marks_session"].pointer_mut(pointer).unwrap() = value;
+            assert_eq!(
+                gpa(&input.to_string())["error"],
+                "invalid_input",
+                "{pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_gpa_refuses_unsupported_or_ambiguous_grades() {
+        for grade in [
+            Value::Null,
+            json!("优秀"),
+            json!("待录入"),
+            json!("84.5"),
+            json!(84.5),
+            json!("84.0000000000000000000001"),
+            json!(101),
+        ] {
+            let mut input = session_gpa_input();
+            input["marks_session"]["records"][0]["CJ"] = grade;
+            assert_eq!(gpa(&input.to_string())["error"], "invalid_input");
+        }
+        for field in ["KCMC", "CJ", "XF"] {
+            let mut input = session_gpa_input();
+            input["marks_session"]["records"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert_eq!(gpa(&input.to_string())["error"], "invalid_input", "{field}");
+        }
+        let mut input = session_gpa_input();
+        input["marks_session"]["records"][0]["score"] = json!(80);
+        assert_eq!(gpa(&input.to_string())["error"], "invalid_input");
+
+        let repeated = session_gpa_input().to_string().replacen(
+            r#""CJ":"92.00""#,
+            r#""CJ":80,"CJ":"92.00""#,
+            1,
+        );
+        assert_eq!(gpa(&repeated)["error"], "invalid_input");
+    }
 
     #[test]
     fn table_policy_computes_weighted_gpa_and_excludes_failures() {

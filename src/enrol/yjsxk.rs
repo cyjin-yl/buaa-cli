@@ -8,6 +8,7 @@
 use super::{deserialize_object, safe_content_type_of, withheld_evidence_parts};
 use crate::governor::{FollowupError, Governor, Outcome, RequestKind};
 use crate::html::{ChallengeAssessment, assess_challenge_body};
+use crate::timetable::IssuedCookies;
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
@@ -44,6 +45,10 @@ fn blocked(reason: &'static str) -> Value {
 struct CookieGuard<'a> {
     cookie: &'a str,
     screen: Option<&'a dyn Fn(&[u8]) -> bool>,
+    /// Session cookies issued by this invocation's read response. Their
+    /// values and composite pairs join the credential screen only; they are
+    /// never persisted, replayed or projected.
+    issued: Option<&'a IssuedCookies>,
 }
 
 #[cfg(test)]
@@ -52,12 +57,16 @@ fn CookieGuard(cookie: &str) -> CookieGuard<'_> {
     CookieGuard {
         cookie,
         screen: None,
+        issued: None,
     }
 }
 
 impl CookieGuard<'_> {
     fn contains(&self, bytes: &[u8]) -> bool {
         self.screen.is_some_and(|screen| screen(bytes))
+            || self
+                .issued
+                .is_some_and(|issued| issued.contains_secret_bytes(bytes))
             || crate::net::carries_secret(bytes, self.cookie)
             || self
                 .cookie
@@ -742,7 +751,9 @@ struct Observation<'a> {
     content_type: Option<&'a str>,
     retry_present: bool,
     redirect: bool,
-    issued_cookie: bool,
+    /// At least one Set-Cookie declaration could not be reviewed into the
+    /// issued jar; the body is withheld rather than exported unscreened.
+    issued_unscreened: bool,
     header_challenge: bool,
     header_echo: bool,
     read_failed: bool,
@@ -760,7 +771,7 @@ fn admit(
         content_type,
         retry_present,
         redirect,
-        issued_cookie,
+        issued_unscreened,
         header_challenge,
         header_echo,
         read_failed,
@@ -774,9 +785,10 @@ fn admit(
     let raw_echo = header_echo
         || cookie.contains(body)
         || content_type.is_some_and(|value| cookie.contains(value.as_bytes()));
-    // Even an allowlisted MIME essence is unnecessary when Set-Cookie or a
-    // metadata echo already makes response privacy admission fail closed.
-    let safe_mime = (!issued_cookie && !raw_echo)
+    // Even an allowlisted MIME essence is unnecessary when an unreviewed
+    // Set-Cookie declaration or a metadata echo already makes response
+    // privacy admission fail closed.
+    let safe_mime = (!issued_unscreened && !raw_echo)
         .then(|| safe_content_type_of(content_type))
         .flatten();
     let evidence = |reason: &'static str| withheld_evidence_parts(status, safe_mime, body, reason);
@@ -803,9 +815,9 @@ fn admit(
             "yjsxk response challenge assessment is unreviewed; admission refused without a confirmed challenge",
         );
     }
-    if issued_cookie {
+    if issued_unscreened {
         return refuse(
-            "yjsxk response issued Set-Cookie; this fixed-cookie reader has no reviewed cookie adoption and withheld the response",
+            "yjsxk response issued an unreviewed Set-Cookie declaration; body withheld rather than exported unscreened",
         );
     }
     if redirect {
@@ -989,19 +1001,33 @@ impl Client {
             .headers()
             .iter()
             .any(|(name, value)| crate::net::challenge_header(name.as_str(), value.as_bytes()));
-        let issued_cookie = crate::net::issues_session_cookie(response.headers());
         let retry_present = response
             .headers()
             .contains_key(reqwest::header::RETRY_AFTER);
         let redirect = (300..400).contains(&status)
             || response.headers().contains_key(reqwest::header::LOCATION);
+        // yjsxk re-issues its session cookie on the read. Absorb the
+        // declarations into the invocation-only jar so their values and
+        // composite pairs join the credential screen; the read remains
+        // terminal and nothing is persisted or replayed. A declaration the
+        // review cannot absorb leaves the jar incomplete and the body is
+        // withheld rather than exported unscreened.
+        let issued = IssuedCookies::absorb(response.headers());
         let guard = CookieGuard {
             cookie: &self.cookie,
             screen: cas.map(|(_, screen)| screen),
+            issued: Some(&issued),
         };
-        let header_echo = response.headers().iter().any(|(name, value)| {
-            guard.contains(name.as_str().as_bytes()) || guard.contains(value.as_bytes())
-        });
+        // The Set-Cookie declarations themselves are the jar source, so they
+        // cannot be a header echo; every other header is still screened
+        // against the transmitted cookie, the CAS secrets and the issued jar.
+        let header_echo = response
+            .headers()
+            .iter()
+            .filter(|(name, _)| *name != reqwest::header::SET_COOKIE)
+            .any(|(name, value)| {
+                guard.contains(name.as_str().as_bytes()) || guard.contains(value.as_bytes())
+            });
         if lease
             .observe_http_many(
                 status,
@@ -1056,7 +1082,7 @@ impl Client {
                 content_type: content_type.as_deref().map(String::as_str),
                 retry_present,
                 redirect,
-                issued_cookie,
+                issued_unscreened: !issued.complete,
                 header_challenge,
                 header_echo,
                 read_failed,
@@ -1124,7 +1150,7 @@ pub(super) fn schema() -> Value {
         "overall_deadline_seconds":30,
         "body_limit":super::LIMIT,
         "session_cookie":"protected stdin only; zeroizing typed storage; full header and every value screened; never logged, persisted, cached or projected",
-        "set_cookie":"refused without adoption",
+        "set_cookie":"absorbed into the invocation-only credential screen; issued values and composite pairs are withheld on echo, unreviewed declarations withhold the body, and nothing is persisted or replayed",
         "input":{"type":"object","additionalProperties":false,"required":["operation","application","xnxqdm","authorized"],
             "oneOf":[{"required":["session_cookie"],"properties":{"session_cookie":{"type":"string"},"cas":{"type":"null"}}},{"required":["cas"],"properties":{"cas":{"type":"object"},"session_cookie":{"type":"null"}}}],"properties":{
             "operation":{"const":"selected"},
@@ -1227,7 +1253,7 @@ mod tests {
             content_type: Some("application/json; charset=utf-8"),
             retry_present: false,
             redirect: false,
-            issued_cookie: false,
+            issued_unscreened: false,
             header_challenge: false,
             header_echo: false,
             read_failed: false,
@@ -1591,7 +1617,7 @@ mod tests {
             r#"{"message":"session expired","xkjgList":"unreviewed shape"}"#,
         ] {
             let mut observed = observation(body.as_bytes());
-            observed.issued_cookie = true;
+            observed.issued_unscreened = true;
             let admission = admit(observed, "20261", &CookieGuard("sid=synthetic"));
             assert_eq!(admission.output["result"], "blocked");
             assert!(admission.credential_rejected);
@@ -1604,14 +1630,32 @@ mod tests {
             assert!(admission.credential_rejected);
         }
         let mut observed = observation(br#"{"msg":"ordinary","xkjgList":[]}"#);
-        observed.issued_cookie = true;
+        observed.issued_unscreened = true;
         let admission = admit(observed, "20261", &CookieGuard("sid=synthetic"));
         assert_eq!(admission.output["result"], "blocked");
         assert!(!admission.credential_rejected);
     }
 
     #[test]
-    fn redirects_challenges_cookie_issuance_and_authentication_never_become_lists() {
+    fn issued_cookie_is_screened_without_blocking_safe_lists() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("sid=issued-example-937; HttpOnly"),
+        );
+        let issued = IssuedCookies::absorb(&headers);
+        let guard = CookieGuard {
+            issued: Some(&issued),
+            ..CookieGuard("sid=submitted-example-162")
+        };
+        let clean = observation(br#"{"xkjgList":[{"XNXQDM":"20261","BJDM":"course-a"}]}"#);
+        assert_eq!(admit(clean, "20261", &guard).output["result"], "completed");
+        let echo = observation(br#"{"xkjgList":[{"XNXQDM":"20261","BJDM":"issued-example-\u003937"}]}"#);
+        assert_eq!(admit(echo, "20261", &guard).output["result"], "blocked");
+    }
+
+    #[test]
+    fn redirects_challenges_unreviewed_cookies_and_authentication_never_become_lists() {
         let body = br#"{"xkjgList":[]}"#;
         let mut observed = observation(b"<p>redirect</p>");
         observed.status = 302;
@@ -1628,7 +1672,7 @@ mod tests {
         assert!(!redirect.credential_rejected);
         let mut observed = observation(body);
         observed.content_type = Some("application/json; session=new-secret");
-        observed.issued_cookie = true;
+        observed.issued_unscreened = true;
         let issued = admit(observed, "20261", &CookieGuard("sid=synthetic"));
         assert_eq!(issued.output["result"], "blocked");
         assert_eq!(issued.output["evidence"]["content_type"], Value::Null);
@@ -1703,6 +1747,7 @@ mod tests {
     fn selected_response_screens_secrets_outside_the_sent_cookie() {
         let body = br#"{"msg":"synthetic-sign-on-carry","xkjgList":[]}"#;
         let guard = CookieGuard {
+            issued: None,
             cookie: "sid=synthetic-service-cookie",
             screen: Some(&|bytes| crate::net::carries_secret(bytes, "synthetic-sign-on-carry")),
         };
@@ -1717,7 +1762,7 @@ mod tests {
         observed.status = 429;
         observed.retry_present = true;
         observed.header_challenge = true;
-        observed.issued_cookie = true;
+        observed.issued_unscreened = true;
         observed.read_failed = true;
         let admission = admit(observed, "20261", &CookieGuard("sid=synthetic-cookie"));
         assert_eq!(admission.output["result"], "blocked");
