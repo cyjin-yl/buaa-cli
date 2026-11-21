@@ -38,6 +38,15 @@ Read README, `docs/tech/server-routes.md` and `server/src/main/kotlin/cn/edu/uba
 
 Useful contract ideas are explicit DTO/error boundaries and separating shared contracts from service adapters. Do not infer that client-side pacing of one proxy request constrains all upstream campus calls made by a server. Any adopted worker or proxy must share the same account-wide governor throughout its actual upstream requests. The reference does not authorize sending owner credentials to a third-party deployment or enabling refresh/attendance automation.
 
+Thanks to the **BUAASubnet/UBAA contributors** for the classroom filtering design. BUAA CLI implements its own local filters for exact building, a building or room name substring, and an explicit free teaching period. The source reference is UBAA's [classroom view](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/packages/ubaa_ui/lib/src/features/classroom/content.dart) and [feature guide](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/classroom.md) at `3ac2ebd6c30162cd1ce1fc50964caa25ed22092f` ([MIT, © 2026 MooreFoss](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/LICENSE)).
+
+| UBAA feature | BUAA CLI coverage |
+| --- | --- |
+| [空教室](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/classroom.md) | `smart` already reads by campus and date. The local filters now cover building, name, and a caller-selected period. |
+| [希冀作业](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/judge.md) | `coursegrading` provides submission preview and status parsing. Course assignment inventory, deadlines, and per-problem results are open. |
+| [财务查询](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/finance.md) | Personal income records and year totals have no CLI command. |
+| [日程与待办](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/agenda.md) | Timetable ICS export is available. A unified agenda, recurring personal tasks, and agenda sync are open. |
+
 ## Other Rust references and license boundaries
 
 - [BUAASubnet/srun](https://github.com/BUAASubnet/srun): GPL-3.0 metadata and README reviewed. Its multi-dial/retry/TLS-skip options are not acceptable means to increase throughput or bypass safety. No implementation was copied into this MIT project.
