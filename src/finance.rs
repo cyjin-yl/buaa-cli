@@ -12,7 +12,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::Read;
-use zeroize::Zeroize;
 
 use crate::civil_time::parse_date;
 use crate::{
@@ -31,6 +30,7 @@ const FINANCE_LOGIN_PATH: &str = "/gxzhcxzhb/login";
 const FINANCE_PAGE_SIZE: u64 = 100;
 const FINANCE_MAX_PAGES: u32 = 20;
 const FINANCE_BODY_LIMIT: u64 = 512 * 1024;
+const FINANCE_CREDENTIAL_LIMIT: usize = 4096;
 
 const CREDIT: &str =
     "BUAASubnet/UBAA@3ac2ebd6c30162cd1ce1fc50964caa25ed22092f (MIT, © 2026 MooreFoss)";
@@ -331,7 +331,7 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
             }
         };
     let mut requests = 0usize;
-    let read = match read_income(&client, &mut lease, &mut service, &mut requests) {
+    let (read, secrets) = match read_income(&client, &mut lease, &mut service, &mut requests) {
         Ok(read) => read,
         Err(failure) => {
             settle(lease, &failure)?;
@@ -378,6 +378,9 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
     let rendered = output.to_string();
     if service.contains_secret_bytes(rendered.as_bytes())
         || net::carries_secret(rendered.as_bytes(), &input.password)
+        || secrets
+            .iter()
+            .any(|secret| net::carries_secret(rendered.as_bytes(), secret.as_str()))
     {
         return Err(session_error(
             "credential_echo",
@@ -393,7 +396,7 @@ fn read_income(
     lease: &mut RequestLease<'_>,
     service: &mut cas::ServiceSession,
     requests: &mut usize,
-) -> Result<Value, Error> {
+) -> Result<(Value, Vec<zeroize::Zeroizing<String>>), Error> {
     let jump_url = url::Url::parse(FINANCE_JUMP_URL)
         .map_err(|_| session_error("invalid_input", "finance session input is invalid"))?;
     let (cookie, expiry) = service.cookie_header_for_transmission(&jump_url)?;
@@ -468,7 +471,8 @@ fn read_income(
             "finance portal jump was refused",
         ));
     }
-    let location = response
+    let location = zeroize::Zeroizing::new(
+        response
         .headers()
         .get("location")
         .and_then(|value| value.to_str().ok())
@@ -478,8 +482,16 @@ fn read_income(
                 "authentication_unconfirmed",
                 "finance portal jump carried no query-service target",
             )
-        })?;
-    let target = url::Url::parse(&location)
+        })?,
+    );
+    // The jump target carries credential material in its query. Split it
+    // first so no credential-bearing URL object is ever built, and only the
+    // zeroized buffer holds the raw value.
+    let (base, query) = match location.split_once('?') {
+        Some((base, query)) => (base, query),
+        None => (location.as_str(), ""),
+    };
+    let target = url::Url::parse(base)
         .map_err(|_| session_error("upstream_parse", "finance jump target is not a URL"))?;
     if target.scheme() != "https"
         || target.host_str() != Some(FINANCE_QUERY_HOST)
@@ -488,26 +500,29 @@ fn read_income(
         // The deployment answers with another origin. Report the observed
         // host and path only: the target's query carries credential material
         // and is never exported.
-        return Ok(json!({
-            "state": "service_unavailable",
-            "observed_target": {
-                "host": target.host_str().unwrap_or(""),
-                "path": target.path()
-            },
-            "http_status": status
-        }));
+        return Ok((
+            json!({
+                "state": "service_unavailable",
+                "observed_target": {
+                    "host": target.host_str().unwrap_or(""),
+                    "path": target.path()
+                },
+                "http_status": status
+            }),
+            Vec::new(),
+        ));
     }
     let mut user = None;
     let mut secret = None;
     let mut stamp = None;
-    for (name, value) in target.query_pairs() {
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
         let slot = match name.as_ref() {
             "Userid" => &mut user,
             "Cypt" => &mut secret,
             "Stamp" => &mut stamp,
             _ => continue,
         };
-        if slot.is_some() || value.is_empty() {
+        if slot.is_some() || value.is_empty() || value.len() > FINANCE_CREDENTIAL_LIMIT {
             return Err(session_error(
                 "upstream_parse",
                 "finance jump target carried an unusable credential parameter",
@@ -521,9 +536,10 @@ fn read_income(
             "finance jump target carried an incomplete credential set",
         ));
     };
-    let mut secret = zeroize::Zeroizing::new(secret);
-    let mut stamp = zeroize::Zeroizing::new(stamp);
-    let referer = zeroize::Zeroizing::new(location);
+    let user = zeroize::Zeroizing::new(user);
+    let secret = zeroize::Zeroizing::new(secret);
+    let stamp = zeroize::Zeroizing::new(stamp);
+    let referer = location.as_str();
     if let Err(failure) = admit_session_read(lease) {
         return Err(failure);
     }
@@ -535,7 +551,7 @@ fn read_income(
             ("yzm", "yzm"),
             ("stamp", stamp.as_str()),
         ])
-        .header("Referer", referer.as_str())
+        .header("Referer", referer)
         .header("Accept", "application/json")
         .timeout(std::time::Duration::from_secs(45))
         .header("Accept-Encoding", "identity")
@@ -562,7 +578,7 @@ fn read_income(
     *requests += 1;
     let body = read_json_body(client_response_body(response)?)?;
     let token = envelope_token(&body)?;
-    let mut token = zeroize::Zeroizing::new(token);
+    let token = zeroize::Zeroizing::new(token);
     let mut records = Vec::new();
     let mut pages = 0u32;
     let mut expected_total: Option<usize> = None;
@@ -578,7 +594,7 @@ fn read_income(
             .timeout(std::time::Duration::from_secs(45))
             .header("Accept-Encoding", "identity")
             .body(
-                json!({"userId": user, "currentPage": page, "limit": FINANCE_PAGE_SIZE})
+                json!({"userId": user.as_str(), "currentPage": page, "limit": FINANCE_PAGE_SIZE})
                     .to_string(),
             )
             .build()
@@ -632,10 +648,10 @@ fn read_income(
             "finance income pagination is incomplete",
         ));
     }
-    secret.zeroize();
-    stamp.zeroize();
-    token.zeroize();
-    Ok(json!({"state": "records", "records": records, "pages": pages}))
+    // The values stay alive, and zeroized on drop, so the caller can screen
+    // the exported projection against them.
+    let secrets = vec![user, secret, stamp, token];
+    Ok((json!({"state": "records", "records": records, "pages": pages}), secrets))
 }
 
 fn client_response_body(response: reqwest::blocking::Response) -> Result<Vec<u8>, Error> {
