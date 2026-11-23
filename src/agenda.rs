@@ -1611,7 +1611,10 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
             ));
         }
     };
-    admit_session_read(&mut lease)?;
+    if let Err(failure) = admit_session_read(&mut lease) {
+        settle_read(lease, &failure)?;
+        return Err(failure);
+    }
     if expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
         lease
             .finish_without_request()

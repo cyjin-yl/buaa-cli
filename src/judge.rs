@@ -713,7 +713,7 @@ fn collect(
     service: &mut cas::ServiceSession,
     password: &str,
     requests: &mut usize,
-) -> Result<Vec<Value>, Error> {
+) -> Result<(Vec<Value>, Value), Error> {
     let course_html = get_page(
         client,
         lease,
@@ -722,6 +722,7 @@ fn collect(
         password,
     )?;
     *requests += 1;
+    let course_links = courses(&course_html).len();
     let mut collected = Vec::new();
     let mut details_requested = 0usize;
     for (course_id, course_name) in courses(&course_html).into_iter().take(LIVE_COURSES) {
@@ -761,7 +762,12 @@ fn collect(
             }));
         }
     }
-    Ok(collected)
+    let counts = json!({
+        "course_count": course_links,
+        "assignment_count": collected.len(),
+        "read_completed": true
+    });
+    Ok((collected, counts))
 }
 
 /// One explicit in-memory judge sign-on followed by the course list, one
@@ -812,7 +818,7 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
             }
         };
     let mut requests = 0usize;
-    let collected = match collect(
+    let (collected, live_counts) = match collect(
         &client,
         &mut lease,
         &mut service,
@@ -861,11 +867,15 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
     output["network_performed"] = json!(true);
     output["submission_performed"] = json!(false);
     output["requests_performed"] = json!(requests);
+    output["live_read"] = live_counts;
     output["credit"] = json!(CREDIT);
-    if service.contains_secret_bytes(output.to_string().as_bytes()) {
+    let rendered = output.to_string();
+    if service.contains_secret_bytes(rendered.as_bytes())
+        || net::carries_secret(rendered.as_bytes(), &input.password)
+    {
         return Err(session_error(
             "credential_echo",
-            "the judge projection would echo the session cookie",
+            "the judge projection would echo credential material",
         ));
     }
     Ok(output)
