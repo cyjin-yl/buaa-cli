@@ -1421,6 +1421,29 @@ fn settle_auth(lease: RequestLease<'_>, failure: &Error) -> Result<(), Error> {
     })
 }
 
+/// Settle one read that already started inside the authentication attempt.
+/// Every early return after the sign-on must reach this, so the governor
+/// never keeps a pending attempt that only a crash could clear.
+fn settle_read(lease: RequestLease<'_>, failure: &Error) -> Result<(), Error> {
+    let settled = match failure.code {
+        "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+        "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+        "credential_echo" => lease.finish(Outcome::Http {
+            status: 200,
+            retry_after: None,
+            challenge: false,
+            network_failure: false,
+        }),
+        _ => lease.finish_without_request(),
+    };
+    settled.map_err(|_| {
+        session_error(
+            "governor_error",
+            "cannot settle agenda authentication attempt",
+        )
+    })
+}
+
 /// One GSMIS sign-on and one `queryRcap.do` read. Update and delete endpoints
 /// are never requested.
 pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
@@ -1518,8 +1541,19 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
             ));
         }
     };
-    let portal_body =
-        receive_context_response(response, &mut lease, &mut service, &portal, &mut observed)?;
+    let portal_body = match receive_context_response(
+        response,
+        &mut lease,
+        &mut service,
+        &portal,
+        &mut observed,
+    ) {
+        Ok(body) => body,
+        Err(failure) => {
+            settle_read(lease, &failure)?;
+            return Err(failure);
+        }
+    };
     if let Err(failure) = screen_context_response(&portal_body, &input.password, &service) {
         finish_http(
             lease,
@@ -1552,9 +1586,21 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
             "credit": CREDIT
         }));
     }
-    let query_url = url::Url::parse(AGENDA_QUERY_URL)
-        .map_err(|_| session_error("invalid_input", "agenda session input is invalid"))?;
-    let (cookie, expiry) = service.cookie_header_for_transmission(&query_url)?;
+    let query_url = match url::Url::parse(AGENDA_QUERY_URL) {
+        Ok(url) => url,
+        Err(_) => {
+            let failure = session_error("invalid_input", "agenda session input is invalid");
+            settle_read(lease, &failure)?;
+            return Err(failure);
+        }
+    };
+    let (cookie, expiry) = match service.cookie_header_for_transmission(&query_url) {
+        Ok(cookie) => cookie,
+        Err(failure) => {
+            settle_read(lease, &failure)?;
+            return Err(failure);
+        }
+    };
     let cookie = match cookie {
         Some(cookie) => cookie,
         None => {
@@ -1577,12 +1623,19 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
     }
     let compact = day.replace('-', "");
     let mut query =
-        timetable::session_request(&client, AGENDA_QUERY_URL, cookie, AGENDA_PORTAL_URL)
+        match timetable::session_request(&client, AGENDA_QUERY_URL, cookie, AGENDA_PORTAL_URL)
             .form(&[("day", compact.as_str())])
             .timeout(std::time::Duration::from_secs(45))
             .header("Accept-Encoding", "identity")
             .build()
-            .map_err(|_| session_error("invalid_input", "agenda session input is invalid"))?;
+        {
+            Ok(query) => query,
+            Err(_) => {
+                let failure = session_error("invalid_input", "agenda session input is invalid");
+                settle_read(lease, &failure)?;
+                return Err(failure);
+            }
+        };
     if let Some(value) = query.headers_mut().get_mut("cookie") {
         value.set_sensitive(true);
     }
@@ -1604,13 +1657,19 @@ pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
             ));
         }
     };
-    let body = receive_context_response(
+    let body = match receive_context_response(
         response,
         &mut lease,
         &mut service,
         &query_url,
         &mut observed,
-    )?;
+    ) {
+        Ok(body) => body,
+        Err(failure) => {
+            settle_read(lease, &failure)?;
+            return Err(failure);
+        }
+    };
     if let Err(failure) = screen_context_response(&body, &input.password, &service) {
         finish_http(
             lease,
