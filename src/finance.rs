@@ -11,8 +11,26 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::io::Read;
 
 use crate::civil_time::parse_date;
+use crate::{
+    governor::{FollowupError, Governor, Outcome, RequestKind, RequestLease},
+    net::{self, Error},
+    recordings::session::{self as cas, CasService, SsoCredentials},
+    timetable::admit_session_read,
+};
+
+const FINANCE_PORTAL_URL: &str = "https://icw.buaa.edu.cn/Newindex.aspx";
+const FINANCE_JUMP_URL: &str = "https://icw.buaa.edu.cn/jump.aspx?sysid=wscx";
+const FINANCE_QUERY_HOST: &str = "chaxun.icw.buaa.edu.cn";
+const FINANCE_LOGIN_URL: &str = "https://chaxun.icw.buaa.edu.cn/api-zhcx/login";
+const FINANCE_INCOME_URL: &str = "https://chaxun.icw.buaa.edu.cn/api-zhcx/getStudentSRCX";
+const FINANCE_LOGIN_PATH: &str = "/gxzhcxzhb/login";
+const FINANCE_PAGE_SIZE: u64 = 100;
+const FINANCE_MAX_PAGES: u32 = 20;
+const FINANCE_BODY_LIMIT: u64 = 512 * 1024;
+const FINANCE_CREDENTIAL_LIMIT: usize = 4096;
 
 const CREDIT: &str =
     "BUAASubnet/UBAA@3ac2ebd6c30162cd1ce1fc50964caa25ed22092f (MIT, © 2026 MooreFoss)";
@@ -233,6 +251,614 @@ fn invalid(message: &str) -> Value {
     json!({"error": "invalid_input", "message": message})
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionInput {
+    authorized: bool,
+    username: String,
+    password: String,
+    intent: String,
+}
+
+fn session_error(code: &'static str, message: &'static str) -> Error {
+    Error::new(code, message)
+}
+
+/// Settle one attempt that already started. Every early return after the
+/// sign-on reaches this, so the governor never keeps a pending attempt.
+fn settle(lease: RequestLease<'_>, failure: &Error) -> Result<(), Error> {
+    if matches!(
+        failure.code,
+        "governor_error" | "governor_denied" | "governor_unavailable"
+    ) {
+        drop(lease);
+        return Ok(());
+    }
+    let settled = match failure.code {
+        "network_error" | "body_limit" => lease.finish(Outcome::NetworkFailure),
+        "challenge_requires_human" => lease.finish(Outcome::CaptchaRequired),
+        "credential_echo" => lease.finish(Outcome::Http {
+            status: 200,
+            retry_after: None,
+            challenge: false,
+            network_failure: false,
+        }),
+        _ => lease.finish_without_request(),
+    };
+    settled.map_err(|_| session_error("governor_error", "cannot settle finance attempt"))
+}
+
+/// One explicit CAS sign-on to the finance portal, one portal jump and, only
+/// when the deployment serves the query service, the query-service login and
+/// the bounded income pages. The jump target is consumed in memory and never
+/// fetched, and no response body is exported.
+pub fn session(input_text: &str, online: bool) -> Result<Value, Error> {
+    if input_text.len() > 32 * 1024 {
+        return Err(session_error("invalid_input", "finance session input is invalid"));
+    }
+    let mut deserializer = serde_json::Deserializer::from_str(input_text);
+    let input: SessionInput = serde::Deserialize::deserialize(&mut deserializer)
+        .map_err(|_| session_error("invalid_input", "finance session input is invalid"))?;
+    deserializer
+        .end()
+        .map_err(|_| session_error("invalid_input", "finance session input is invalid"))?;
+    if !input.authorized {
+        return Err(session_error(
+            "permission",
+            "explicit authorization for one finance authentication attempt is required",
+        ));
+    }
+    let credentials = SsoCredentials::new(&input.username, &input.password)?;
+    if input.intent != format!("LOGIN {} finance", input.username) {
+        return Err(session_error("invalid_input", "finance session input is invalid"));
+    }
+    if !online {
+        return Err(session_error(
+            "online_required",
+            "finance sessions require explicit online permission; no authentication was attempted",
+        ));
+    }
+    let client = cas::http_client()?;
+    let governor = Governor::open()
+        .map_err(|_| session_error("governor_error", "shared request admission unavailable"))?;
+    let mut lease = net::acquire_kind(&governor, RequestKind::Authentication)?;
+    let mut service =
+        match cas::authenticate_service(&mut lease, &client, CasService::Finance, credentials) {
+            Ok(service) => service,
+            Err(failure) => {
+                settle(lease, &failure)?;
+                return Err(failure);
+            }
+        };
+    let mut requests = 0usize;
+    let (read, secrets) = match read_income(&client, &mut lease, &mut service, &mut requests) {
+        Ok(read) => read,
+        Err(failure) => {
+            settle(lease, &failure)?;
+            return Err(failure);
+        }
+    };
+    lease
+        .finish(Outcome::Http {
+            status: 200,
+            retry_after: None,
+            challenge: false,
+            network_failure: false,
+        })
+        .map_err(|_| session_error("governor_error", "cannot settle finance session"))?;
+    if read["state"] == "service_unavailable" {
+        let mut output = read.clone();
+        output["service"] = json!("icw");
+        output["source"] = json!("network");
+        output["network_performed"] = json!(true);
+        output["requests_performed"] = json!(requests);
+        output["read_completed"] = json!(false);
+        output["record_state"] = json!("no_records_read");
+        output["bank_settlement_known"] = json!(false);
+        output["credit"] = json!(CREDIT);
+        return Ok(output);
+    }
+    let records = read["records"].clone();
+    let pages = read["pages"].clone();
+    let projected = query(&json!({ "records": records }).to_string());
+    if projected.get("error").is_some() {
+        return Err(session_error(
+            "upstream_parse",
+            "the finance records do not satisfy the local projection contract",
+        ));
+    }
+    let mut output = projected;
+    output["service"] = json!("icw");
+    output["source"] = json!("network");
+    output["network_performed"] = json!(true);
+    output["requests_performed"] = json!(requests);
+    output["pages_read"] = json!(pages);
+    output["bank_settlement_known"] = json!(false);
+    output["credit"] = json!(CREDIT);
+    let rendered = output.to_string();
+    if service.contains_secret_bytes(rendered.as_bytes())
+        || net::carries_secret(rendered.as_bytes(), &input.password)
+        || secrets
+            .iter()
+            .any(|secret| net::carries_secret(rendered.as_bytes(), secret.as_str()))
+    {
+        return Err(session_error(
+            "credential_echo",
+            "the finance projection would echo credential material",
+        ));
+    }
+    Ok(output)
+}
+
+/// The portal jump, the query-service login and the income pages.
+fn read_income(
+    client: &reqwest::blocking::Client,
+    lease: &mut RequestLease<'_>,
+    service: &mut cas::ServiceSession,
+    requests: &mut usize,
+) -> Result<(Value, Vec<zeroize::Zeroizing<String>>), Error> {
+    let jump_url = url::Url::parse(FINANCE_JUMP_URL)
+        .map_err(|_| session_error("invalid_input", "finance session input is invalid"))?;
+    let (cookie, expiry) = service.cookie_header_for_transmission(&jump_url)?;
+    if let Err(failure) = admit_session_read(lease) {
+        return Err(failure);
+    }
+    if expiry.is_some_and(|expiry| std::time::SystemTime::now() >= expiry) {
+        return Err(session_error(
+            "scoped_cookie_unusable",
+            "the finance cookie expired before the jump; no request was sent",
+        ));
+    }
+    let mut builder = client
+        .get(FINANCE_JUMP_URL)
+        .header("Accept", "text/html")
+        .header("Referer", FINANCE_PORTAL_URL)
+        .timeout(std::time::Duration::from_secs(45))
+        .header("Accept-Encoding", "identity");
+    if let Some(cookie) = cookie {
+        builder = builder.header("Cookie", cookie);
+    }
+    let mut request = builder
+        .build()
+        .map_err(|_| session_error("invalid_input", "finance request is not admissible"))?;
+    if let Some(value) = request.headers_mut().get_mut("cookie") {
+        value.set_sensitive(true);
+    }
+    let response = match lease.start_request(|| Some(client.execute(request))) {
+        Ok(Some(Ok(response))) => response,
+        Ok(Some(Err(_))) | Ok(None) => {
+            return Err(session_error(
+                "network_error",
+                "finance portal jump failed; no automatic retry",
+            ));
+        }
+        Err(FollowupError::Governor(_)) => {
+            return Err(session_error(
+                "governor_error",
+                "request safety admission failed; pending outcome retained",
+            ));
+        }
+    };
+    *requests += 1;
+    let status = response.status().as_u16();
+    let challenge = response
+        .headers()
+        .iter()
+        .any(|(name, value)| net::challenge_header(name.as_str(), value.as_bytes()));
+    if lease
+        .observe_http_many(
+            status,
+            response
+                .headers()
+                .get_all("retry-after")
+                .iter()
+                .map(|value| value.to_str().ok()),
+            challenge,
+        )
+        .is_err()
+    {
+        return Err(session_error(
+            "governor_error",
+            "cannot persist finance response",
+        ));
+    }
+    if challenge {
+        return Err(session_error("challenge_requires_human", "finance jump requires review"));
+    }
+    if status != 302 {
+        return Err(session_error(
+            "authentication_unconfirmed",
+            "finance portal jump was refused",
+        ));
+    }
+    let location = zeroize::Zeroizing::new(
+        response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            session_error(
+                "authentication_unconfirmed",
+                "finance portal jump carried no query-service target",
+            )
+        })?,
+    );
+    // The jump target carries credential material in its query. Split it
+    // first so no credential-bearing URL object is ever built, and only the
+    // zeroized buffer holds the raw value.
+    let (base, query) = match location.split_once('?') {
+        Some((base, query)) => (base, query),
+        None => (location.as_str(), ""),
+    };
+    let target = url::Url::parse(base)
+        .map_err(|_| session_error("upstream_parse", "finance jump target is not a URL"))?;
+    if target.scheme() != "https"
+        || target.host_str() != Some(FINANCE_QUERY_HOST)
+        || target.path() != FINANCE_LOGIN_PATH
+    {
+        // The deployment answers with another origin. Report the observed
+        // host and path only: the target's query carries credential material
+        // and is never exported.
+        return Ok((
+            json!({
+                "state": "service_unavailable",
+                "observed_target": {
+                    "host": target.host_str().unwrap_or(""),
+                    "path": target.path()
+                },
+                "http_status": status
+            }),
+            Vec::new(),
+        ));
+    }
+    let mut user: Option<zeroize::Zeroizing<String>> = None;
+    let mut secret: Option<zeroize::Zeroizing<String>> = None;
+    let mut stamp: Option<zeroize::Zeroizing<String>> = None;
+    for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        let slot = match name.as_ref() {
+            "Userid" => &mut user,
+            "Cypt" => &mut secret,
+            "Stamp" => &mut stamp,
+            _ => continue,
+        };
+        if slot.is_some() || value.is_empty() || value.len() > FINANCE_CREDENTIAL_LIMIT {
+            return Err(session_error(
+                "upstream_parse",
+                "finance jump target carried an unusable credential parameter",
+            ));
+        }
+        *slot = Some(zeroize::Zeroizing::new(value.into_owned()));
+    }
+    let (Some(user), Some(secret), Some(stamp)) = (user, secret, stamp) else {
+        return Err(session_error(
+            "upstream_parse",
+            "finance jump target carried an incomplete credential set",
+        ));
+    };
+    let referer = location.as_str();
+    if let Err(failure) = admit_session_read(lease) {
+        return Err(failure);
+    }
+    let mut login = client
+        .post(FINANCE_LOGIN_URL)
+        .form(&[
+            ("username", user.as_str()),
+            ("password", secret.as_str()),
+            ("yzm", "yzm"),
+            ("stamp", stamp.as_str()),
+        ])
+        .header("Referer", referer)
+        .header("Accept", "application/json")
+        .timeout(std::time::Duration::from_secs(45))
+        .header("Accept-Encoding", "identity")
+        .build()
+        .map_err(|_| session_error("invalid_input", "finance request is not admissible"))?;
+    if let Some(value) = login.headers_mut().get_mut("referer") {
+        value.set_sensitive(true);
+    }
+    let response = match lease.start_request(|| Some(client.execute(login))) {
+        Ok(Some(Ok(response))) => response,
+        Ok(Some(Err(_))) | Ok(None) => {
+            return Err(session_error(
+                "network_error",
+                "finance query-service login failed; no automatic retry",
+            ));
+        }
+        Err(FollowupError::Governor(_)) => {
+            return Err(session_error(
+                "governor_error",
+                "request safety admission failed; pending outcome retained",
+            ));
+        }
+    };
+    *requests += 1;
+    let body = read_json_body(client_response_body(response)?)?;
+    let token = envelope_token(&body)?;
+    let token = zeroize::Zeroizing::new(token);
+    let mut records = Vec::new();
+    let mut pages = 0u32;
+    let mut expected_total: Option<usize> = None;
+    for page in 1..=FINANCE_MAX_PAGES {
+        if let Err(failure) = admit_session_read(lease) {
+            return Err(failure);
+        }
+        let mut income = client
+            .post(FINANCE_INCOME_URL)
+            .header("Authorization", format!("Bearer {}", token.as_str()))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .timeout(std::time::Duration::from_secs(45))
+            .header("Accept-Encoding", "identity")
+            .body(
+                json!({"userId": user.as_str(), "currentPage": page, "limit": FINANCE_PAGE_SIZE})
+                    .to_string(),
+            )
+            .build()
+            .map_err(|_| session_error("invalid_input", "finance request is not admissible"))?;
+        if let Some(value) = income.headers_mut().get_mut("authorization") {
+            value.set_sensitive(true);
+        }
+        let response = match lease.start_request(|| Some(client.execute(income))) {
+            Ok(Some(Ok(response))) => response,
+            Ok(Some(Err(_))) | Ok(None) => {
+                return Err(session_error(
+                    "network_error",
+                    "finance income read failed; no automatic retry",
+                ));
+            }
+            Err(FollowupError::Governor(_)) => {
+                return Err(session_error(
+                    "governor_error",
+                    "request safety admission failed; pending outcome retained",
+                ));
+            }
+        };
+        *requests += 1;
+        let body = read_json_body(client_response_body(response)?)?;
+        let (rows, total) = income_page(&body)?;
+        if expected_total.is_some_and(|previous| previous != total) {
+            return Err(session_error(
+                "upstream_parse",
+                "finance income pagination changed between pages",
+            ));
+        }
+        expected_total = Some(total);
+        pages += 1;
+        let empty = rows.is_empty();
+        for row in rows {
+            records.push(income_record(&row)?);
+        }
+        if records.len() == total {
+            break;
+        }
+        if empty || records.len() > total {
+            return Err(session_error(
+                "upstream_parse",
+                "finance income pagination is incomplete",
+            ));
+        }
+    }
+    if expected_total.is_some_and(|total| records.len() != total) {
+        return Err(session_error(
+            "upstream_parse",
+            "finance income pagination is incomplete",
+        ));
+    }
+    // The values stay alive, and zeroized on drop, so the caller can screen
+    // the exported projection against them.
+    let mut secrets = vec![secret, stamp, token];
+    // The account identifier is short and numeric, so screening the whole
+    // projection for it would refuse a legitimate amount that merely contains
+    // those digits. Only a long identifier is treated as a secret.
+    if user.len() >= 8 {
+        secrets.push(user);
+    }
+    Ok((json!({"state": "records", "records": records, "pages": pages}), secrets))
+}
+
+fn client_response_body(response: reqwest::blocking::Response) -> Result<Vec<u8>, Error> {
+    let mut body = Vec::new();
+    response
+        .take(FINANCE_BODY_LIMIT)
+        .read_to_end(&mut body)
+        .map_err(|_| session_error("network_error", "finance body read failed"))?;
+    Ok(body)
+}
+
+fn read_json_body(body: Vec<u8>) -> Result<Value, Error> {
+    serde_json::from_slice(&body).map_err(|_| {
+        session_error(
+            "upstream_parse",
+            "finance response was not the reviewed JSON",
+        )
+    })
+}
+
+fn envelope_token(body: &Value) -> Result<String, Error> {
+    match body.get("code").and_then(Value::as_i64) {
+        Some(200) => {}
+        Some(401) => {
+            return Err(session_error(
+                "auth_latched",
+                "the finance query service rejected the session",
+            ));
+        }
+        _ => {
+            return Err(session_error(
+                "upstream_parse",
+                "finance response did not report success",
+            ));
+        }
+    }
+    let data = body
+        .get("data")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance response carried no data object")
+        })?;
+    data.get("token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance response carried no session token")
+        })
+}
+
+fn income_page(body: &Value) -> Result<(Vec<Value>, usize), Error> {
+    if body.get("code").and_then(Value::as_i64) != Some(200) {
+        return Err(session_error(
+            "upstream_parse",
+            "finance income response did not report success",
+        ));
+    }
+    let data = body
+        .get("data")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income response carried no data object")
+        })?;
+    let (rows_key, total_key) = if data.get("mx").is_some() || data.get("total").is_some() {
+        ("mx", "total")
+    } else {
+        ("data", "count")
+    };
+    let rows = data
+        .get(rows_key)
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income response carried no rows")
+        })?;
+    let total = data
+        .get(total_key)
+        .and_then(Value::as_u64)
+        .and_then(|total| usize::try_from(total).ok())
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income response carried no total")
+        })?;
+    if rows.len() > total {
+        return Err(session_error(
+            "upstream_parse",
+            "finance income response carried more rows than its total",
+        ));
+    }
+    Ok((rows, total))
+}
+
+fn amount_cents(value: &Value) -> Result<Option<i64>, Error> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let number = value
+        .as_number()
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income amount was not a number")
+        })?
+        .to_string();
+    let (negative, text) = number
+        .strip_prefix('-')
+        .map_or((false, number.as_str()), |value| (true, value));
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    if fraction.len() > 2
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(session_error(
+            "upstream_parse",
+            "finance income amount was not a decimal amount",
+        ));
+    }
+    let whole = whole.parse::<i64>().map_err(|_| {
+        session_error("upstream_parse", "finance income amount was out of range")
+    })?;
+    let fraction = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<i64>().map_err(|_| {
+            session_error("upstream_parse", "finance income amount was not a decimal amount")
+        })? * 10,
+        _ => fraction.parse::<i64>().map_err(|_| {
+            session_error("upstream_parse", "finance income amount was not a decimal amount")
+        })?,
+    };
+    let cents = whole
+        .checked_mul(100)
+        .and_then(|value| value.checked_add(fraction))
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income amount was out of range")
+        })?;
+    Ok(Some(if negative { -cents } else { cents }))
+}
+
+fn income_record(row: &Value) -> Result<Value, Error> {
+    let serial = row
+        .get("lsh")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income row carried no serial")
+        })?
+        .to_owned();
+    let project = row
+        .get("ffxmmc")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未提供项目")
+        .to_owned();
+    let summary = row
+        .get("zy")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未提供摘要")
+        .to_owned();
+    let tax_rate = row
+        .get("slbfb")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let recorded_on = row
+        .get("lrrq")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income row carried no recorded date")
+        })?
+        .to_owned();
+    let year = row
+        .get("nian")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        })
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income row carried no year")
+        })?;
+    let month = row
+        .get("yue")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        })
+        .ok_or_else(|| {
+            session_error("upstream_parse", "finance income row carried no month")
+        })?;
+    Ok(json!({
+        "serial": serial,
+        "project": project,
+        "summary": summary,
+        "gross_cents": amount_cents(&row["je"])?,
+        "tax_cents": amount_cents(&row["se"])?,
+        "net_cents": amount_cents(&row["sfje"])?,
+        "tax_rate": tax_rate,
+        "year": year,
+        "month": month,
+        "recorded_on": recorded_on
+    }))
+}
+
 pub fn schema() -> Value {
     json!({
         "stdin": "one JSON object of operator-supplied income records in integer cents; no bank account, identity, or network request is accepted",
@@ -245,7 +871,7 @@ pub fn schema() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::query;
+    use super::{query, session};
     use serde_json::{Value, json};
 
     fn record(
@@ -348,5 +974,15 @@ mod tests {
             query(&json!({"records":[rate]}).to_string())["error"],
             "invalid_input"
         );
+    }
+
+    #[test]
+    fn session_without_online_does_not_authenticate() {
+        let error = session(
+            r#"{"authorized":true,"username":"student","password":"secret","intent":"LOGIN student finance"}"#,
+            false,
+        )
+        .expect_err("offline session must refuse");
+        assert_eq!(error.code, "online_required");
     }
 }

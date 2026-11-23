@@ -44,6 +44,14 @@ const GSMIS_CAS_SERVICE: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome
 const GSMIS_HOST: &str = "gsmis.buaa.edu.cn";
 const JUDGE_CAS_SERVICE: &str = "https://judge.buaa.edu.cn/";
 const JUDGE_HOST: &str = "judge.buaa.edu.cn";
+/// The finance relying party declares a plaintext CAS service and answers the
+/// ticket on the same path over HTTPS.
+const FINANCE_CAS_SERVICE: &str = "http://icw.buaa.edu.cn/checkbuaa.aspx";
+const FINANCE_HOST: &str = "icw.buaa.edu.cn";
+/// The finance deployment answers its ticket through the department site.
+const FINANCE_DEPARTMENT_HOST: &str = "cwc.buaa.edu.cn";
+const FINANCE_DEPARTMENT_ALIAS_HOST: &str = "jcb.buaa.edu.cn";
+const FINANCE_CAS_CALLBACK_PATH: &str = "/checkbuaa.aspx";
 const BYKC_CAS_SERVICE: &str = "https://bykc.buaa.edu.cn/sscv/cas/login";
 const BYKC_HOST: &str = "bykc.buaa.edu.cn";
 /// The reviewed source declares the iHome CAS callback as a plaintext HTTP
@@ -96,6 +104,7 @@ pub(crate) enum CasService {
     Iclass,
     Yjsxk,
     Judge,
+    Finance,
 }
 
 impl CasService {
@@ -113,6 +122,7 @@ impl CasService {
             Self::Iclass => ICLASS_CAS_SERVICE,
             Self::Yjsxk => YJSXK_CAS_SERVICE,
             Self::Judge => JUDGE_CAS_SERVICE,
+            Self::Finance => FINANCE_CAS_SERVICE,
         }
     }
 }
@@ -3494,6 +3504,13 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::Iclass => matches!(host, "sso.buaa.edu.cn" | ICLASS_HOST),
             CasService::Yjsxk => matches!(host, "sso.buaa.edu.cn" | YJSXK_HOST),
             CasService::Judge => matches!(host, "sso.buaa.edu.cn" | JUDGE_HOST),
+            CasService::Finance => matches!(
+                host,
+                "sso.buaa.edu.cn"
+                    | FINANCE_HOST
+                    | FINANCE_DEPARTMENT_HOST
+                    | FINANCE_DEPARTMENT_ALIAS_HOST
+            ),
         })
 }
 
@@ -4020,7 +4037,8 @@ fn terminal_service_credential(
         | CasService::Shuttle
         | CasService::Evaluation
         | CasService::Yjsxk
-        | CasService::Judge => {
+        | CasService::Judge
+        | CasService::Finance => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
             }
@@ -4143,6 +4161,7 @@ fn upgraded_service_callback(service: CasService, url: &Url) -> Option<Url> {
         CasService::Ihome => IHOME_HOST,
         CasService::Shuttle => SHUTTLE_HOST,
         CasService::Yjsxk => YJSXK_HOST,
+        CasService::Finance => FINANCE_HOST,
         _ => return None,
     };
     if url.scheme() != "http"
@@ -4161,6 +4180,8 @@ fn upgraded_service_callback(service: CasService, url: &Url) -> Option<Url> {
         // landing inside that mount upgrades, keeping the issued path and
         // query while refusing a sibling mount or host.
         CasService::Yjsxk => "/yjsxkapp/",
+        // The finance relying party answers its ticket on one exact path.
+        CasService::Finance => FINANCE_CAS_CALLBACK_PATH,
         _ => return None,
     };
     let path = url.path();
@@ -6492,6 +6513,7 @@ CasService::Evaluation => EVALUATION_HOST,
             CasService::Iclass => ICLASS_HOST,
             CasService::Yjsxk => YJSXK_HOST,
             CasService::Judge => JUDGE_HOST,
+            CasService::Finance => FINANCE_HOST,
             CasService::Classroom | CasService::Ihome | CasService::Boya => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
@@ -6840,6 +6862,41 @@ pub(crate) fn authenticate_service(
                 return Err(admission_failed(
                     "The relying-party handoff supplied no usable scoped cookie; no retry was performed.",
                 ));
+            }
+        }
+        CasService::Finance => {
+            // The finance deployment answers the ticket with the department
+            // site, so the handoff is the reviewed HTML landing on one of
+            // the finance origins. No application cookie is required here:
+            // the student-income application is not served by this
+            // deployment, and the business read reports what it observed.
+            if landed.status != 200
+                || !matches!(
+                    landed.url.host_str(),
+                    Some(FINANCE_HOST)
+                        | Some(FINANCE_DEPARTMENT_HOST)
+                        | Some(FINANCE_DEPARTMENT_ALIAS_HOST)
+                )
+                || landed.body.trim().is_empty()
+                || login_content_type_label(landed.content_type.as_deref()) != Some("text/html")
+            {
+                // This deployment answers the ticket with its own 404 page on
+                // the department site. That answer is a confirmed handoff:
+                // the business read then reports what the deployment serves.
+                let answered_by_the_deployment = landed.status == 404
+                    && matches!(
+                        landed.url.host_str(),
+                        Some(FINANCE_HOST)
+                            | Some(FINANCE_DEPARTMENT_HOST)
+                            | Some(FINANCE_DEPARTMENT_ALIAS_HOST)
+                    )
+                    && !landed.body.trim().is_empty()
+                    && login_content_type_label(landed.content_type.as_deref()) == Some("text/html");
+                if !answered_by_the_deployment {
+                    return Err(admission_failed(
+                        "The finance handoff could not be confirmed; no retry was performed.",
+                    ));
+                }
             }
         }
         CasService::Shuttle => {

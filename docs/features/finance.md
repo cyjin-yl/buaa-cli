@@ -85,10 +85,11 @@ JSON
 - `serial` 为 1–64 字符，`project` 和 `summary` 为 1–200 字符且非空。
 - 字段名严格：未知字段会被拒绝，错误信息不回显输入内容。
 - 输出恒带 `bank_settlement_known: false` 与 `coverage: supplied_records_only`：这些合计是本地汇总，不是银行到账证明。
-- 已知限制：审阅过的财务入口（CAS 服务 `icw.buaa.edu.cn` → `jump.aspx?sysid=wscx` → `chaxun.icw.buaa.edu.cn/api-zhcx`，解析到 `202.112.137.133`）在本网络于 TLS ClientHello 阶段被重置，而同一主机从北京云端 IP 可以应答，因此没有任何在线收入读取；本命令只有离线形态。
+- 在线只读入口：`buaa finance session --online` 用审阅过的明文 CAS 服务 `http://icw.buaa.edu.cn/checkbuaa.aspx` 登录，再读取 `jump.aspx?sysid=wscx`，命中查询服务时才会登录 `chaxun.icw.buaa.edu.cn/api-zhcx` 并分页读取 `getStudentSRCX`。当前部署把跳转指向 `https://cwc.buaa.edu.cn/xwfw/`（财务处站点），学生收入查询应用不再提供，因此实测输出为 `state: service_unavailable`、`read_completed: false` 和观测到的目标主机与路径，不会伪造任何收入行。
+- 已知限制：财务来源 `202.112.137.133` 在本网络于 TLS ClientHello 阶段被重置，而同一主机从北京云端 IP 可以应答，因此在线读取只能经 SSH 隧道到境内出口完成。
 
 ## 隐私与离线
 
-- 命令恒为离线：`network_performed: false`，不读取银行账号、身份信息或校园会话。
+- `buaa finance` 恒为离线（`network_performed: false`）；`buaa finance session --online` 只读取收入记录，不读取银行账号，不写任何数据。
 - 收入项目名、说明和流水号属于私人数据；不要提交到公开 issue、日志或测试夹具。
 - 上游许可：MIT（© 2026 MooreFoss），见 [REFERENCES](../REFERENCES.md#buaasubnetubaa)。
