@@ -512,9 +512,9 @@ fn read_income(
             Vec::new(),
         ));
     }
-    let mut user = None;
-    let mut secret = None;
-    let mut stamp = None;
+    let mut user: Option<zeroize::Zeroizing<String>> = None;
+    let mut secret: Option<zeroize::Zeroizing<String>> = None;
+    let mut stamp: Option<zeroize::Zeroizing<String>> = None;
     for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
         let slot = match name.as_ref() {
             "Userid" => &mut user,
@@ -528,7 +528,7 @@ fn read_income(
                 "finance jump target carried an unusable credential parameter",
             ));
         }
-        *slot = Some(value.into_owned());
+        *slot = Some(zeroize::Zeroizing::new(value.into_owned()));
     }
     let (Some(user), Some(secret), Some(stamp)) = (user, secret, stamp) else {
         return Err(session_error(
@@ -536,9 +536,6 @@ fn read_income(
             "finance jump target carried an incomplete credential set",
         ));
     };
-    let user = zeroize::Zeroizing::new(user);
-    let secret = zeroize::Zeroizing::new(secret);
-    let stamp = zeroize::Zeroizing::new(stamp);
     let referer = location.as_str();
     if let Err(failure) = admit_session_read(lease) {
         return Err(failure);
@@ -650,7 +647,13 @@ fn read_income(
     }
     // The values stay alive, and zeroized on drop, so the caller can screen
     // the exported projection against them.
-    let secrets = vec![user, secret, stamp, token];
+    let mut secrets = vec![secret, stamp, token];
+    // The account identifier is short and numeric, so screening the whole
+    // projection for it would refuse a legitimate amount that merely contains
+    // those digits. Only a long identifier is treated as a secret.
+    if user.len() >= 8 {
+        secrets.push(user);
+    }
     Ok((json!({"state": "records", "records": records, "pages": pages}), secrets))
 }
 
