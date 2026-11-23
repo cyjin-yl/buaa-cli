@@ -36,6 +36,28 @@ They filter locally after credential screening and report observed and matched
 room counts. Thanks to the BUAASubnet/UBAA contributors for the feature design.
 [Pinned source and license](REFERENCES.md#buaasubnetubaa)
 
+### UBAA judge, finance, and agenda
+
+`buaa judge`, `buaa finance`, and `buaa agenda` implement the corresponding
+local behavior from BUAASubnet/UBAA `3ac2ebd6c30162cd1ce1fc50964caa25ed22092f`
+(MIT, © 2026 MooreFoss). Judge inventory, income totals, and agenda recurrence
+are projections of caller-supplied records. They do not submit work, settle a
+bank payment, refresh a campus session, or upload an agenda snapshot.
+
+Two bounded read-only online entry points exist. `buaa judge session --online`
+signs on to `https://judge.buaa.edu.cn/` and reads the course list plus at most
+six courses and twenty assignment details; it never submits or downloads.
+`buaa agenda session --online` signs on to GSMIS once and reads one
+`portal/queryRcap.do` day; it never calls the update or delete endpoints.
+Neither exports a response body. A live judge read with the authorizing account
+returned an empty course grid, and a live agenda read parsed 第11周 with zero
+events, so assignment and event-row parsing still rest on synthetic fixtures.
+`buaa finance` remains offline: the reviewed finance origin
+`chaxun.icw.buaa.edu.cn` (202.112.137.133) resets TLS at ClientHello from every
+fleet host and from the router uplink, while answering from a Beijing cloud IP,
+so no live income read was possible.
+[Pinned source and license](REFERENCES.md#buaasubnetubaa)
+
 The PR #181 release gate passed with 1,556 library tests passing, zero
 failures, and three ignored. All integration suites passed. That release CLI
 returned `disabled` with `network_performed: false` for a disabled marks read
