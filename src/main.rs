@@ -1039,6 +1039,9 @@ fn run() -> CliResult {
             run_json_module(&args[2..], buaa_cli::judge::session)
         }
         "judge" => run_local_json(&args[1..], buaa_cli::judge::query),
+        "finance" if args.get(1).map(String::as_str) == Some("session") => {
+            run_json_module(&args[2..], buaa_cli::finance::session)
+        }
         "finance" => run_local_json(&args[1..], buaa_cli::finance::query),
         "agenda" if args.get(1).map(String::as_str) == Some("session") => {
             run_json_module(&args[2..], buaa_cli::agenda::session)

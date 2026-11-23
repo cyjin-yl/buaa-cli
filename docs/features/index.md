@@ -15,7 +15,7 @@ description: buaa-cli 的校园功能指南索引：希冀作业、财务查询�
 | 功能 | 命令 | 状态 |
 | --- | --- | --- |
 | [希冀作业](judge.md) | `buaa judge`、`buaa judge session --online` | 本地投影已实现；在线只读已验证到「授权账号课程列表为空」这一步，逐课程解析只有离线样例证明 |
-| [财务查询](finance.md) | `buaa finance` | 仅本地汇总；财务站点在本网络下 TLS 握手被重置，没有在线读取 |
+| [财务查询](finance.md) | `buaa finance`、`buaa finance session --online` | 本地汇总已实现；在线登录与跳转已实测，当前部署不再提供学生收入查询应用，读到的是停用事实而非收入行 |
 | [日程与待办](agenda.md) | `buaa agenda`、`buaa agenda session --online` | 本地投影已实现；在线只读已验证到「解析出第11周、当天 0 条」这一步 |
 
 配套材料：

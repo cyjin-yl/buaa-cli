@@ -44,7 +44,7 @@ local behavior from BUAASubnet/UBAA `3ac2ebd6c30162cd1ce1fc50964caa25ed22092f`
 are projections of caller-supplied records. They do not submit work, settle a
 bank payment, refresh a campus session, or upload an agenda snapshot.
 
-Two bounded read-only online entry points exist. `buaa judge session --online`
+Three bounded read-only online entry points exist. `buaa judge session --online`
 signs on to `https://judge.buaa.edu.cn/` and reads the course list plus at most
 six courses and twenty assignment details; it never submits or downloads.
 `buaa agenda session --online` signs on to GSMIS once and reads one
@@ -52,10 +52,17 @@ six courses and twenty assignment details; it never submits or downloads.
 Neither exports a response body. A live judge read with the authorizing account
 returned an empty course grid, and a live agenda read parsed 第11周 with zero
 events, so assignment and event-row parsing still rest on synthetic fixtures.
-`buaa finance` remains offline: the reviewed finance origin
-`chaxun.icw.buaa.edu.cn` (202.112.137.133) resets TLS at ClientHello from every
-fleet host and from the router uplink, while answering from a Beijing cloud IP,
-so no live income read was possible.
+`buaa finance session --online` signs on to the finance relying party with the
+reviewed plaintext CAS service `http://icw.buaa.edu.cn/checkbuaa.aspx`, whose
+ticket the campus accepts, and then reads `jump.aspx?sysid=wscx`. The current
+deployment answers that jump with HTTP 302 to `https://cwc.buaa.edu.cn/xwfw/`,
+the department site, so the student-income query login
+`chaxun.icw.buaa.edu.cn/gxzhcxzhb/login` is not served and no income row was
+read: the command reports `state: service_unavailable`, `read_completed: false`
+and the observed target host and path. The finance origin
+`202.112.137.133` also resets TLS at ClientHello from every fleet host and from
+the router uplink, while answering from a Beijing cloud IP, so the online read
+was only reachable through an SSH tunnel to a China-hosted exit.
 [Pinned source and license](REFERENCES.md#buaasubnetubaa)
 
 The PR #181 release gate passed with 1,556 library tests passing, zero

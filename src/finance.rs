@@ -11,8 +11,26 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::io::Read;
+use zeroize::Zeroize;
 
 use crate::civil_time::parse_date;
+use crate::{
+    governor::{FollowupError, Governor, Outcome, RequestKind, RequestLease},
+    net::{self, Error},
+    recordings::session::{self as cas, CasService, SsoCredentials},
+    timetable::admit_session_read,
+};
+
+const FINANCE_PORTAL_URL: &str = "https://icw.buaa.edu.cn/Newindex.aspx";
+const FINANCE_JUMP_URL: &str = "https://icw.buaa.edu.cn/jump.aspx?sysid=wscx";
+const FINANCE_QUERY_HOST: &str = "chaxun.icw.buaa.edu.cn";
+const FINANCE_LOGIN_URL: &str = "https://chaxun.icw.buaa.edu.cn/api-zhcx/login";
+const FINANCE_INCOME_URL: &str = "https://chaxun.icw.buaa.edu.cn/api-zhcx/getStudentSRCX";
+const FINANCE_LOGIN_PATH: &str = "/gxzhcxzhb/login";
+const FINANCE_PAGE_SIZE: u64 = 100;
+const FINANCE_MAX_PAGES: u32 = 20;
+const FINANCE_BODY_LIMIT: u64 = 512 * 1024;
 
 const CREDIT: &str =
     "BUAASubnet/UBAA@3ac2ebd6c30162cd1ce1fc50964caa25ed22092f (MIT, © 2026 MooreFoss)";
@@ -245,7 +263,7 @@ pub fn schema() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::query;
+    use super::{query, session};
     use serde_json::{Value, json};
 
     fn record(
@@ -348,5 +366,15 @@ mod tests {
             query(&json!({"records":[rate]}).to_string())["error"],
             "invalid_input"
         );
+    }
+
+    #[test]
+    fn session_without_online_does_not_authenticate() {
+        let error = session(
+            r#"{"authorized":true,"username":"student","password":"secret","intent":"LOGIN student finance"}"#,
+            false,
+        )
+        .expect_err("offline session must refuse");
+        assert_eq!(error.code, "online_required");
     }
 }
