@@ -42,6 +42,8 @@ const BYXT_CAS_SERVICE: &str = "https://byxt.buaa.edu.cn/jwapp/sys/byrhmhsy/inde
 const BYXT_HOST: &str = "byxt.buaa.edu.cn";
 const GSMIS_CAS_SERVICE: &str = "https://gsmis.buaa.edu.cn/gsapp/sys/yjsemaphome/portal/index.do";
 const GSMIS_HOST: &str = "gsmis.buaa.edu.cn";
+const JUDGE_CAS_SERVICE: &str = "https://judge.buaa.edu.cn/";
+const JUDGE_HOST: &str = "judge.buaa.edu.cn";
 const BYKC_CAS_SERVICE: &str = "https://bykc.buaa.edu.cn/sscv/cas/login";
 const BYKC_HOST: &str = "bykc.buaa.edu.cn";
 /// The reviewed source declares the iHome CAS callback as a plaintext HTTP
@@ -93,6 +95,7 @@ pub(crate) enum CasService {
     Evaluation,
     Iclass,
     Yjsxk,
+    Judge,
 }
 
 impl CasService {
@@ -109,6 +112,7 @@ impl CasService {
             Self::Evaluation => EVALUATION_CAS_SERVICE,
             Self::Iclass => ICLASS_CAS_SERVICE,
             Self::Yjsxk => YJSXK_CAS_SERVICE,
+            Self::Judge => JUDGE_CAS_SERVICE,
         }
     }
 }
@@ -3489,6 +3493,7 @@ fn allowed_origin(url: &Url, service: CasService) -> bool {
             CasService::Evaluation => matches!(host, "sso.buaa.edu.cn" | EVALUATION_HOST),
             CasService::Iclass => matches!(host, "sso.buaa.edu.cn" | ICLASS_HOST),
             CasService::Yjsxk => matches!(host, "sso.buaa.edu.cn" | YJSXK_HOST),
+            CasService::Judge => matches!(host, "sso.buaa.edu.cn" | JUDGE_HOST),
         })
 }
 
@@ -4014,7 +4019,8 @@ fn terminal_service_credential(
         | CasService::Boya
         | CasService::Shuttle
         | CasService::Evaluation
-        | CasService::Yjsxk => {
+        | CasService::Yjsxk
+        | CasService::Judge => {
             if !allowed_origin(url, service) {
                 return Err(invalid());
             }
@@ -6485,6 +6491,7 @@ impl ServiceSession {
 CasService::Evaluation => EVALUATION_HOST,
             CasService::Iclass => ICLASS_HOST,
             CasService::Yjsxk => YJSXK_HOST,
+            CasService::Judge => JUDGE_HOST,
             CasService::Classroom | CasService::Ihome | CasService::Boya => return Err(invalid()),
         };
         if !allowed(url, self.jar.service) || url.host_str() != Some(expected_host) {
@@ -6540,6 +6547,22 @@ CasService::Evaluation => EVALUATION_HOST,
         if self.jar.service != CasService::Gsmis
             || !allowed(url, self.jar.service)
             || url.host_str() != Some(GSMIS_HOST)
+        {
+            return Err(invalid());
+        }
+        self.jar.absorb(url, headers)
+    }
+
+    /// Apply one reviewed same-origin judge response's cookie declarations to
+    /// the in-memory session before the following read. Nothing is persisted.
+    pub(crate) fn absorb_judge_headers(
+        &mut self,
+        url: &Url,
+        headers: &HeaderMap,
+    ) -> Result<(), Error> {
+        if self.jar.service != CasService::Judge
+            || !allowed(url, self.jar.service)
+            || url.host_str() != Some(JUDGE_HOST)
         {
             return Err(invalid());
         }
@@ -6785,20 +6808,23 @@ pub(crate) fn authenticate_service(
                 ));
             }
         }
-        CasService::Byxt | CasService::Gsmis => {
+        CasService::Byxt | CasService::Gsmis | CasService::Judge => {
             // The cookie-session relying parties prove the handoff by a
             // reviewed HTML landing on their own origin plus one usable
             // session cookie for the read that follows.
-            let (host, probe) = if service == CasService::Byxt {
-                (
+            let (host, probe) = match service {
+                CasService::Byxt => (
                     BYXT_HOST,
                     "https://byxt.buaa.edu.cn/jwapp/sys/homeapp/api/home/student/exams.do",
-                )
-            } else {
-                (
+                ),
+                CasService::Gsmis => (
                     GSMIS_HOST,
                     "https://gsmis.buaa.edu.cn/gsapp/sys/wdkbapp/bykb/loadXskbData.do",
-                )
+                ),
+                _ => (
+                    JUDGE_HOST,
+                    "https://judge.buaa.edu.cn/courselist.jsp?courseID=0",
+                ),
             };
             if landed.status != 200
                 || landed.url.host_str() != Some(host)

@@ -43,9 +43,9 @@ Thanks to the **BUAASubnet/UBAA contributors** for the classroom filtering desig
 | UBAA feature | BUAA CLI coverage |
 | --- | --- |
 | [空教室](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/classroom.md) | `smart` already reads by campus and date. The local filters now cover building, name, and a caller-selected period. |
-| [希冀作业](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/judge.md) | `coursegrading` provides submission preview and status parsing. Course assignment inventory, deadlines, and per-problem results are open. |
-| [财务查询](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/finance.md) | Personal income records and year totals have no CLI command. |
-| [日程与待办](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/agenda.md) | Timetable ICS export is available. A unified agenda, recurring personal tasks, and agenda sync are open. |
+| [希冀作业](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/judge.md) | `judge` projects supplied records into course groups, default unfinished/unexpired filters, sort, search, and per-problem detail. A read failure is not an empty list. `coursegrading` remains the separate submission preview. No live inventory is bound. |
+| [财务查询](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/finance.md) | `finance` totals and groups supplied income records by year, month, and search. Amounts stay integer cents. A failed refresh retains records. This is not a bank settlement or a live finance session. |
+| [日程与待办](https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/agenda.md) | `agenda` combines supplied school items with personal events and todos, Beijing recurrence, local notes, conflict warnings, and an ICS snapshot. Cloud sync is refused. Timetable ICS export remains separate. |
 
 ## Other Rust references and license boundaries
 

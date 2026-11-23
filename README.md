@@ -10,6 +10,24 @@ implementation includes local calculators and bounded, cache-first read slices;
 network observations are deliberately opt-in and remain subject to the shared
 governor.
 
+## Campus features
+
+The three UBAA-inspired campus workflows have dedicated guides under
+[`docs/features/index.md`](docs/features/index.md). Each defaults to a local
+projection of operator-supplied data; only the two explicit `--online` entry
+points below read campus state. Behavior follows
+[BUAASubnet/UBAA](https://github.com/BUAASubnet/UBAA/tree/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f)
+(MIT, © 2026 MooreFoss); the implementation is original.
+
+- [`docs/features/judge.md`](docs/features/judge.md) — `buaa judge` projects operator-supplied 希冀 assignment records offline into course groups with the default unfinished/unexpired view, sort, search and per-problem detail; `buaa judge session --online` is one bounded, read-only walk of the course list plus at most six courses and twenty assignment details, it never submits or downloads, and its live run with the authorizing account returned an empty course grid.
+- [`docs/features/finance.md`](docs/features/finance.md) — `buaa finance` totals and month-groups operator-supplied income records offline in integer cents and is not a bank settlement; no live income read exists because the reviewed finance origin resets TLS at ClientHello from this network.
+- [`docs/features/agenda.md`](docs/features/agenda.md) — `buaa agenda` combines operator-supplied school items with personal events and todos offline, including Beijing recurrence, notes, conflict warnings and ICS export; `buaa agenda session --online` adds exactly one GSMIS `portal/queryRcap.do` day read, and its live run parsed 第11周 with zero events.
+
+The `sync` operation of `buaa agenda` stays unverified: it returns
+`cloud_sync_unverified` with `network_performed: false`. These guides describe
+local contracts and bounds only; they do not widen the status boundary below or
+substitute for an implemented command.
+
 ## Repository and publication boundary
 
 Development uses the private [Gitea primary](https://doesvm.icefish-exponential.ts.net:8444/ezra/buaa-cli).
@@ -73,6 +91,7 @@ cargo build --locked --offline
 | Template | `fengrubei info\|fetch`; `fengrubei fetch --online` | One pinned upstream archive; it is not an official/current-format guarantee. See [`docs/FENGRUBEI.md`](docs/FENGRUBEI.md). |
 | Marks and credits | `marks gpa`; `marks baseline save\|show <absolute-path>`; `credits calculate\|school6` | Offline, operator-supplied policies and course facts; no grades are fetched and graduation is not certified. |
 | Local data tools | `recordings search`; `drift check`; `timetable ics`; `physics type-a\|fit\|pendulum` | Read-only local/catalog or stdin-driven processing. Recording results do not verify media rights or fetch objects. |
+| UBAA-inspired local reads | `judge`; `finance`; `agenda` | Offline by default: operator-supplied 希冀 inventory, income totals, and local agenda/ICS. `buaa judge session --online` and `buaa agenda session --online` perform only the one bounded read described above, and the finance origin is unreachable from this network. Thanks to BUAASubnet/UBAA at `3ac2ebd6c30162cd1ce1fc50964caa25ed22092f` (MIT, © 2026 MooreFoss). No submission, bank settlement, or cloud sync. |
 | Local replay | `recordings replay` | Explicitly authorized local media through installed mpv/VLC, with initial seek, optional SRT/VTT and bounded stop. Normal A/V output is default; headless mode is explicit. Remote/live playback is not implemented. See [`docs/RECORDINGS.md`](docs/RECORDINGS.md#bounded-local-replay). |
 | Directory | `organizations list [--online\|--refresh]` | Reads one fixed official teaching/research directory; it does not crawl linked colleges. See [`docs/ORGANIZATIONS.md`](docs/ORGANIZATIONS.md). |
 | Announcements | `announcements list\|article\|document\|history`; `announcements college-source <college> [root\|notices\|public-notices]` | Selected source-bound pages and documents only; broader adapters, attachments, and history remain partial. |

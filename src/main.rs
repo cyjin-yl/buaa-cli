@@ -384,6 +384,30 @@ fn run_json_module(
     emit(&output)
 }
 
+fn run_local_json(args: &[String], entry: fn(&str) -> serde_json::Value) -> CliResult {
+    if !args.is_empty() {
+        return Err((
+            "invalid_input",
+            2,
+            "this command reads one JSON object from stdin and does not accept arguments".into(),
+        ));
+    }
+    let input = read_input()?;
+    let output = entry(&input);
+    if output.get("error").is_some() {
+        return Err((
+            "invalid_input",
+            2,
+            output
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("invalid input")
+                .to_string(),
+        ));
+    }
+    emit(&output)
+}
+
 fn run_announcements(args: &[String]) -> CliResult {
     use buaa_cli::net::CacheMode;
     let mode = |args: &[String]| -> Result<CacheMode, CliError> {
@@ -794,6 +818,9 @@ fn command_schemas() -> Value {
         ("shuttle", buaa_cli::shuttle::schema()),
         ("os-lab", buaa_cli::os_lab::schema()),
         ("coursegrading", buaa_cli::coursegrading::schema()),
+        ("judge", buaa_cli::judge::schema()),
+        ("finance", buaa_cli::finance::schema()),
+        ("agenda", buaa_cli::agenda::schema()),
         ("physics", buaa_cli::physics::schema()),
         ("physics-experiment", buaa_cli::physics_experiment::schema()),
         ("physics-reference", buaa_cli::physics_reference::schema()),
@@ -827,7 +854,8 @@ fn run() -> CliResult {
     match command {
         "help" | "--help" if args.len() <= 1 => emit(&json!({
             "schema_version": 1,
-            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "departments inventory|retrieve [--online]", "contribution scan|plan", "governor boot-review|review-outcome-plan|review-outcome-commit", "timetable ics", "timetable session [--online]", "timetable-pg parse", "smart [--online]", "smart session [--online]", "smart token [--online]", "ihome list|detail [--online]", "ihome session [--online]", "welearn materials|search|fetch|practice [--online]", "aerospace materials|search|fetch|practice [--online]", "marks session [--online]", "enrol [--online]", "evaluation [--online]", "checkin [--online]", "venue [--online]", "libbook [--online]", "boya [--online]", "boya session [--online]", "drive [--online]", "shuttle [--online]", "shuttle session [--online]", "electricity [--online]", "os-lab read|plan [--online]", "coursegrading unsupported|probe-https|preview|status [--online]", "physics-experiment [--online]", "physics-reference catalog|retrieve [--online]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "commands": ["capabilities", "schema", "timed-input [--raw] [--dry-run]", "archive lookup|capture [--online|--refresh]", "organizations list [--online|--refresh]", "departments inventory|retrieve [--online]", "contribution scan|plan", "governor boot-review|review-outcome-plan|review-outcome-commit", "timetable ics", "timetable session [--online]", "timetable-pg parse", "smart [--online]", "smart session [--online]", "smart token [--online]", "ihome list|detail [--online]", "ihome session [--online]", "welearn materials|search|fetch|practice [--online]", "aerospace materials|search|fetch|practice [--online]", "marks session [--online]", "enrol [--online]", "evaluation [--online]", "checkin [--online]", "venue [--online]", "libbook [--online]", "boya [--online]", "boya session [--online]", "drive [--online]", "shuttle [--online]", "shuttle session [--online]", "electricity [--online]", "os-lab read|plan [--online]", "coursegrading unsupported|probe-https|preview|status [--online]", "judge", "finance", "agenda", "physics-experiment [--online]", "physics-reference catalog|retrieve [--online]", "announcements list [--online|--refresh]", "announcements article [--online|--refresh]", "announcements history", "announcements document [--online|--refresh]", "announcements college-source scse|ic|beijing|shenyuan|h3i|iai|hss|bme|ygy|cst|dept3|ee|zfai|iiif|mse|sepe|math|soft|transportation|physics|sce|sse|sem|fld|me|wrj|yqgdxy|ase [root|notices] [--online|--refresh]", "announcements college-source aviation [root|notices|public-notices] [--online|--refresh]", "announcements college-source rse|sa [root] [--online|--refresh]", "marks gpa", "marks baseline save|show <absolute-path>", "fengrubei info|fetch [--online]", "gateway usage [--online|--refresh]", "gateway resume-auth", "gateway login --online", "gateway logout-plan", "gateway logout-commit --online", "gateway logout-recovery-plan", "gateway logout-recovery-commit --offline", "recordings search", "recordings replay", "recordings session --offline|--online", "recordings session inspect --online", "recordings session diagnose --online", "recordings media --online", "recordings subtitles [--online|--refresh]", "recordings subtitles export", "report", "credits calculate|school6", "spoc surface [root|entry] [--online|--refresh]", "spoc script [--online|--refresh]", "drift check", "timetable ics", "physics pendulum|fit|type-a"],
+            "online_sessions": ["judge session --online", "agenda session --online"],
             "network_policy": {"default":"offline", "opt_in":NETWORK_OPT_IN, "campus_account_enabled":true, "automatic_authentication_retry":false,"public_official_directory_enabled":true},
             "help": "recordings subtitles export reads authorized caller-supplied normalized segments, srt/vtt format and absolute new output path from JSON stdin; it is offline and does not verify source, rights or native track association. timed-input reads [seconds]text lines from stdin; default output NDJSON; --raw explicitly opts into pipe-compatible text; --dry-run validates without waiting. 'recordings session --offline' with intent 'RESUME CLASSROOM AUTH' validates durable governor state without sending a request; 'recordings session diagnose --online' submits no credential. Authentication attempts are always admitted — no latch requires clearing; challenges and HTTP 401/403 are reported per request."
         })),
@@ -1007,6 +1035,15 @@ fn run() -> CliResult {
         "aerospace" => run_aerospace(&args[1..]),
         "os-lab" => run_os_lab(&args[1..]),
         "coursegrading" => run_coursegrading(&args[1..]),
+        "judge" if args.get(1).map(String::as_str) == Some("session") => {
+            run_json_module(&args[2..], buaa_cli::judge::session)
+        }
+        "judge" => run_local_json(&args[1..], buaa_cli::judge::query),
+        "finance" => run_local_json(&args[1..], buaa_cli::finance::query),
+        "agenda" if args.get(1).map(String::as_str) == Some("session") => {
+            run_json_module(&args[2..], buaa_cli::agenda::session)
+        }
+        "agenda" => run_local_json(&args[1..], buaa_cli::agenda::run),
         "enrol" => run_json_module(&args[1..], buaa_cli::enrol::run),
         "evaluation" if args.get(1).map(String::as_str) == Some("session") => {
             let online = online_flag(&args[2..])?;

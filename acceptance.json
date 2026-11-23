@@ -1264,6 +1264,56 @@
       "remaining": "The confirmed idempotent submission contract is now implemented and offline-proven: the submit operation re-reads the on-disk source through the same strict file policy as preview, refuses the read when its digest no longer matches the caller-confirmed preview digest, builds the confirmed multipart payload from a second validated read, and admits it through the caller-owned idempotency ledger with explicit reconfirmation for duplicates. No remote request is sent and no submission verdict is produced: remote_request stays false, submission_success stays null, and the accepted-submission postcondition stays unknown, so a local admission is never a remote acceptance. The remaining live gap is a current TLS-validated authenticated session path, the assignment/problem identity contract, the secure submission method/fields and an authoritative accepted-submission postcondition distinct from HTTP 200."
     },
     {
+      "id": "judge-assignments",
+      "title": "希冀 assignment inventory",
+      "status": "partial-live-verified",
+      "acceptance": "Project operator-supplied assignment records by course, with the default unfinished and unexpired view, sort, search, and per-problem detail, or read them from one authorized 希冀 session. A read failure is not an empty inventory. No submission.",
+      "sources": [
+        "https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/judge.md",
+        "https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/LICENSE"
+      ],
+      "evidence": {
+        "credit": "Behavior follows BUAASubnet/UBAA judge.md at 3ac2ebd6c30162cd1ce1fc50964caa25ed22092f, MIT © 2026 MooreFoss. Original projection; no UBAA implementation was copied.",
+        "command": "buaa judge | buaa judge session --online",
+        "network_requests": 0,
+        "live_smoke": "buaa judge session --online with an owner-authorized account completed the CAS sign-on to https://judge.buaa.edu.cn/ and read courselist.jsp?courseID=0 (HTTP 200, 3,216 bytes). That account's course grid was empty ('选择课程'), so no assignment row or detail page was produced; the empty result is the account's inventory, not a read failure.",
+        "live_blocker": "Only an empty course list was observed for the authorizing account, so per-course assignment and detail parsing has synthetic proof only. coursegrading remains the separate submission contract."
+      }
+    },
+    {
+      "id": "finance-income",
+      "title": "Personal income records",
+      "status": "implemented-offline",
+      "acceptance": "Filter operator-supplied income records by year and text, then report count, gross, tax, net, and month groups in integer cents. A failed refresh retains records and is not an empty income history. No bank or campus request.",
+      "sources": [
+        "https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/finance.md",
+        "https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/LICENSE"
+      ],
+      "evidence": {
+        "credit": "Behavior follows BUAASubnet/UBAA finance.md at 3ac2ebd6c30162cd1ce1fc50964caa25ed22092f, MIT © 2026 MooreFoss. Original projection; no UBAA implementation was copied.",
+        "command": "buaa finance",
+        "network_requests": 0,
+        "live_blocker": "The reviewed finance service (sso service http://icw.buaa.edu.cn/checkbuaa.aspx, then icw jump.aspx?sysid=wscx and chaxun.icw.buaa.edu.cn/api-zhcx) resolves to 202.112.137.133, which resets TLS at ClientHello from every fleet host (doesvm, doesworkstation, doescontainer, doescompute) and from the router's uplink; the same host answers from a Beijing cloud IP, so the block is source-network, not a missing credential. No live income read was possible. Totals are not a bank settlement."
+      }
+    },
+    {
+      "id": "agenda",
+      "title": "Local agenda and todos",
+      "status": "partial-live-verified",
+      "acceptance": "Combine supplied school items with personal events and todos, including Beijing recurrence, local notes, conflict warnings, and an ICS snapshot, or read one day of school items from one authorized GSMIS session. Cloud sync is explicitly blocked and performs no network request.",
+      "sources": [
+        "https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/docs/site/features/agenda.md",
+        "https://github.com/BUAASubnet/UBAA/blob/3ac2ebd6c30162cd1ce1fc50964caa25ed22092f/LICENSE"
+      ],
+      "evidence": {
+        "credit": "Behavior follows BUAASubnet/UBAA agenda.md at 3ac2ebd6c30162cd1ce1fc50964caa25ed22092f, MIT © 2026 MooreFoss. Original implementation; no UBAA source was copied.",
+        "command": "buaa agenda | buaa agenda session --online",
+        "network_requests": 0,
+        "live_smoke": "buaa agenda session --online authenticated once to GSMIS, entered the graduate portal, and read portal/queryRcap.do: 2026-11-22 parsed as 第11周 with zero events. A 2026-11-16 read returned two source rows, but both carried a null WID and were dropped by that build; the local-id fallback that keeps them is proven by a synthetic fixture, not by a second live read. No update or delete endpoint was called and no response body was exported.",
+        "live_blocker": "School items must be supplied by the caller. UBAA cloud snapshots under UBAA/agenda_snapshots are not a verified CLI drive contract."
+      }
+    },
+    {
       "id": "timed-input",
       "title": "Timed-input utility",
       "status": "implemented-offline",
