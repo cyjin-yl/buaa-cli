@@ -63,6 +63,19 @@ and the observed target host and path. The finance origin
 `202.112.137.133` also resets TLS at ClientHello from every fleet host and from
 the router uplink, while answering from a Beijing cloud IP, so the online read
 was only reachable through an SSH tunnel to a China-hosted exit.
+
+A second search for another income entrance found none. The graduate
+platform's own application list (45 applications for this account) holds no
+financial module, and the finance department's site publishes only policy
+documents, a tuition payment platform (`pay.buaa.edu.cn`, run by CC-Pay) and
+the retired `icw` manual. Hostname sweeps for payment, income, salary, grant
+and query-service names resolved only `pay.buaa.edu.cn` (the payment gateway),
+`xsgz.buaa.edu.cn` (student affairs), `jjhglxt.buaa.edu.cn` (donations) and
+`hr.buaa.edu.cn` (staff notices); the student-income paths on the finance origin
+answer with the department-site redirect or 404. The campus WebVPN at
+`https://vpn.buaa.edu.cn/` needs its own desktop client and does not open
+internal resources for unified-auth accounts in a browser. No endpoint outside
+the reviewed flow is therefore bound, and no income row is fabricated.
 [Pinned source and license](REFERENCES.md#buaasubnetubaa)
 
 The PR #181 release gate passed with 1,556 library tests passing, zero
