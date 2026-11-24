@@ -821,6 +821,7 @@ fn command_schemas() -> Value {
         ("judge", buaa_cli::judge::schema()),
         ("finance", buaa_cli::finance::schema()),
         ("agenda", buaa_cli::agenda::schema()),
+        ("search", buaa_cli::search::schema()),
         ("physics", buaa_cli::physics::schema()),
         ("physics-experiment", buaa_cli::physics_experiment::schema()),
         ("physics-reference", buaa_cli::physics_reference::schema()),
@@ -1047,6 +1048,7 @@ fn run() -> CliResult {
             run_json_module(&args[2..], buaa_cli::agenda::session)
         }
         "agenda" => run_local_json(&args[1..], buaa_cli::agenda::run),
+        "search" => run_local_json(&args[1..], buaa_cli::search::search),
         "enrol" => run_json_module(&args[1..], buaa_cli::enrol::run),
         "evaluation" if args.get(1).map(String::as_str) == Some("session") => {
             let online = online_flag(&args[2..])?;

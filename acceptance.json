@@ -1294,7 +1294,7 @@
         "command": "buaa finance | buaa finance session --online",
         "network_requests": 0,
         "live_smoke": "buaa finance session --online completed the CAS sign-on with the reviewed plaintext service http://icw.buaa.edu.cn/checkbuaa.aspx (the campus issued and accepted a service ticket) and read jump.aspx?sysid=wscx. The deployment answered HTTP 302 to https://cwc.buaa.edu.cn/xwfw/, the department site, so the student-income query login chaxun.icw.buaa.edu.cn/gxzhcxzhb/login is not served. The command reported state service_unavailable, read_completed false and the observed target host and path; no income row was read and none was invented.",
-        "live_blocker": "The student-income application is not served by the current deployment (icw, cwc and chaxun all answer with the department-site redirect; Newindex.aspx, jump.aspx and api-zhcx paths are 404). The finance origin 202.112.137.133 also resets TLS at ClientHello from every fleet host and from the router uplink, so the online read was only reachable through an SSH tunnel to a China-hosted exit. Totals are not a bank settlement."
+        "live_blocker": "The student-income application is not served by the current deployment (icw, cwc and chaxun all answer with the department-site redirect; Newindex.aspx, jump.aspx and api-zhcx paths are 404). The finance origin 202.112.137.133 also resets TLS at ClientHello from every fleet host and from the router uplink, so the online read was only reachable through an SSH tunnel to a China-hosted exit. A second search found no other entrance: the graduate platform's 45-app list for this account holds no financial module, hostname sweeps for payment, income, salary and grant systems resolve only the tuition payment gateway, student affairs, donations and staff notices, and the campus WebVPN needs its own desktop client. Totals are not a bank settlement."
       }
     },
     {
@@ -1312,6 +1312,23 @@
         "network_requests": 0,
         "live_smoke": "buaa agenda session --online authenticated once to GSMIS, entered the graduate portal, and read portal/queryRcap.do: 2026-11-22 parsed as 第11周 with zero events. A 2026-11-16 read returned two source rows, but both carried a null WID and were dropped by that build; the local-id fallback that keeps them is proven by a synthetic fixture, not by a second live read. No update or delete endpoint was called and no response body was exported.",
         "live_blocker": "School items must be supplied by the caller. UBAA cloud snapshots under UBAA/agenda_snapshots are not a verified CLI drive contract."
+      }
+    },
+    {
+      "id": "search-index",
+      "title": "Built-in offline index search",
+      "status": "implemented-offline",
+      "acceptance": "Search the acceptance capabilities with their evidence and blockers, every shipped documentation page, the status evidence sections and the graduation credit catalog in one offline query, with optional kind, status, limit and cursor filters.",
+      "sources": [
+        "acceptance.json",
+        "docs/STATUS.md",
+        "docs/features/index.md"
+      ],
+      "evidence": {
+        "command": "buaa search",
+        "network_requests": 0,
+        "tests": "cargo test --offline --locked --lib search::tests:: covers kind filtering, status filtering, refusal of an unknown kind or cursor, cursor pagination over one result set, refusal of every non-object root, the indexed document count, the top-level blocker and the object-valued evidence elements.",
+        "boundary": "The index is embedded in the binary: it opens no socket, reads no operator state and never reaches a service. One JSON object is the only accepted root; an unknown kind, an empty query or an unknown cursor is invalid_input."
       }
     },
     {

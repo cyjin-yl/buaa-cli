@@ -7,6 +7,7 @@ pub mod announcements;
 pub mod archive;
 pub mod aerospace;
 pub mod agenda;
+pub mod search;
 pub mod boya;
 pub mod venue;
 pub mod checkin;
