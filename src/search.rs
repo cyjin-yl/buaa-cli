@@ -265,21 +265,34 @@ fn first_paragraph(text: &str) -> String {
 fn status_sections(text: &str) -> Vec<(String, String)> {
     let mut sections = Vec::new();
     let mut current: Option<(String, String)> = None;
+    let mut preamble = String::new();
     for line in text.lines() {
-        if let Some(title) = line.strip_prefix("### ") {
+        let heading = line
+            .strip_prefix("## ")
+            .or_else(|| line.strip_prefix("### "));
+        if let Some(title) = heading {
             if let Some(section) = current.take() {
                 sections.push(section);
             }
             current = Some((title.trim().to_owned(), String::new()));
             continue;
         }
-        if let Some((_, body)) = current.as_mut() {
-            body.push_str(line);
-            body.push('\n');
+        match current.as_mut() {
+            Some((_, body)) => {
+                body.push_str(line);
+                body.push('\n');
+            }
+            None => {
+                preamble.push_str(line);
+                preamble.push('\n');
+            }
         }
     }
     if let Some(section) = current {
         sections.push(section);
+    }
+    if !preamble.trim().is_empty() {
+        sections.insert(0, ("overview".to_owned(), preamble));
     }
     sections
 }
@@ -478,6 +491,15 @@ mod tests {
     use super::search;
     use serde_json::json;
 
+    fn kind_counts() -> std::collections::BTreeMap<&'static str, usize> {
+        super::INDEX
+            .iter()
+            .fold(std::collections::BTreeMap::new(), |mut counts, entry| {
+                *counts.entry(entry.kind).or_insert(0) += 1;
+                counts
+            })
+    }
+
     #[test]
     fn every_kind_is_indexed_and_filtered() {
         let all = search(&json!({"query": "buaa"}).to_string());
@@ -533,5 +555,24 @@ mod tests {
         let second = search(&json!({"query": "buaa", "limit": 2, "cursor": cursor}).to_string());
         assert_eq!(second["total"], first["total"]);
         assert_ne!(second["results"], first["results"]);
+    }
+
+    #[test]
+    fn the_index_covers_every_document_and_status_section() {
+        let counts = kind_counts();
+        assert_eq!(counts.get("doc"), Some(&14));
+        assert!(counts.get("status_section").copied().unwrap_or(0) >= 140);
+        assert!(counts.get("capability").copied().unwrap_or(0) >= 50);
+        assert!(counts.get("credit_course").copied().unwrap_or(0) >= 100);
+        let docs = search(&json!({"query": "CAS-LOGIN-PROTOCOL"}).to_string());
+        assert!(
+            docs["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|result| result["id"] == "docs/CAS-LOGIN-PROTOCOL.md")
+        );
+        let all = search(&json!({"query": "buaa", "kinds": ["doc"], "limit": 100}).to_string());
+        assert_eq!(all["total"], 14);
     }
 }
