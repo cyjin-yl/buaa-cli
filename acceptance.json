@@ -1315,6 +1315,23 @@
       }
     },
     {
+      "id": "search-index",
+      "title": "Built-in offline index search",
+      "status": "implemented-offline",
+      "acceptance": "Search the acceptance capabilities with their evidence and blockers, every shipped documentation page, the status evidence sections and the graduation credit catalog in one offline query, with optional kind, status, limit and cursor filters.",
+      "sources": [
+        "acceptance.json",
+        "docs/STATUS.md",
+        "docs/features/index.md"
+      ],
+      "evidence": {
+        "command": "buaa search",
+        "network_requests": 0,
+        "tests": "cargo test --offline --locked --lib search::tests:: covers kind filtering, status filtering, refusal of an unknown kind or cursor, and cursor pagination over one result set.",
+        "boundary": "The index is embedded in the binary: it opens no socket, reads no operator state and never reaches a service. An unknown kind, an empty query or an unknown cursor is invalid_input."
+      }
+    },
+    {
       "id": "timed-input",
       "title": "Timed-input utility",
       "status": "implemented-offline",

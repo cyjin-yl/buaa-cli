@@ -76,6 +76,13 @@ answer with the department-site redirect or 404. The campus WebVPN at
 `https://vpn.buaa.edu.cn/` needs its own desktop client and does not open
 internal resources for unified-auth accounts in a browser. No endpoint outside
 the reviewed flow is therefore bound, and no income row is fabricated.
+
+`buaa search` is the built-in offline index over everything this binary knows:
+the acceptance capabilities with their evidence and blockers, every shipped
+documentation page, the evidence sections of this file, and the graduation
+credit catalog. It takes one JSON object with a required `query` and optional
+`kinds` (`capability`, `credit_course`, `doc`, `status_section`), `status`,
+`limit` and `cursor` filters. It opens no socket and reads no operator state.
 [Pinned source and license](REFERENCES.md#buaasubnetubaa)
 
 The PR #181 release gate passed with 1,556 library tests passing, zero
