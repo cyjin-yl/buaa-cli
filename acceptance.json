@@ -1327,8 +1327,8 @@
       "evidence": {
         "command": "buaa search",
         "network_requests": 0,
-        "tests": "cargo test --offline --locked --lib search::tests:: covers kind filtering, status filtering, refusal of an unknown kind or cursor, and cursor pagination over one result set.",
-        "boundary": "The index is embedded in the binary: it opens no socket, reads no operator state and never reaches a service. An unknown kind, an empty query or an unknown cursor is invalid_input."
+        "tests": "cargo test --offline --locked --lib search::tests:: covers kind filtering, status filtering, refusal of an unknown kind or cursor, cursor pagination over one result set, refusal of every non-object root, the indexed document count, the top-level blocker and the object-valued evidence elements.",
+        "boundary": "The index is embedded in the binary: it opens no socket, reads no operator state and never reaches a service. One JSON object is the only accepted root; an unknown kind, an empty query or an unknown cursor is invalid_input."
       }
     },
     {

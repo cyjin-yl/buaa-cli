@@ -6,6 +6,8 @@
 //! command is offline and deterministic: it opens no socket, reads no
 //! operator state, and never reaches a service.
 
+use serde::de::value::MapAccessDeserializer;
+use serde::de::{DeserializeSeed, Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -15,7 +17,7 @@ const ACCEPTANCE: &str = include_str!("../acceptance.json");
 const CREDITS: &str = include_str!("credits_catalog.json");
 const STATUS: &str = include_str!("../docs/STATUS.md");
 
-const DOCS: [(&str, &str); 14] = [
+const DOCS: [(&str, &str); 16] = [
     ("docs/ARCHIVE.md", include_str!("../docs/ARCHIVE.md")),
     (
         "docs/CAS-LOGIN-PROTOCOL.md",
@@ -51,6 +53,11 @@ const DOCS: [(&str, &str); 14] = [
         "docs/features/agenda.md",
         include_str!("../docs/features/agenda.md"),
     ),
+    (
+        "docs/design/graceful-degradation.md",
+        include_str!("../docs/design/graceful-degradation.md"),
+    ),
+    ("docs/index.html", include_str!("../docs/index.html")),
 ];
 
 const KINDS: [&str; 4] = ["capability", "credit_course", "doc", "status_section"];
@@ -88,6 +95,56 @@ fn invalid(message: &str) -> Value {
     json!({"error": "invalid_input", "message": message})
 }
 
+/// A map-only admission for the typed input. The visitor never accepts a
+/// positional sequence, so a JSON array root is refused before any field is
+/// read, and the typed fields still refuse duplicate and unknown members.
+struct ObjectOnly;
+
+impl<'de> DeserializeSeed<'de> for ObjectOnly {
+    type Value = Input;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Input, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(ObjectOnlyVisitor)
+    }
+}
+
+struct ObjectOnlyVisitor;
+
+impl<'de> Visitor<'de> for ObjectOnlyVisitor {
+    type Value = Input;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("one search JSON object")
+    }
+
+    fn visit_map<M>(self, map: M) -> Result<Input, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        Input::deserialize(MapAccessDeserializer::new(map))
+    }
+}
+
+/// Render one JSON value as searchable text. Strings stay verbatim, arrays
+/// become one line per element, and objects keep every field as compact
+/// JSON so no evidence element is dropped.
+fn value_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(value_text)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Null => String::new(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
 static INDEX: LazyLock<Vec<Entry>> = LazyLock::new(build_index);
 
 fn build_index() -> Vec<Entry> {
@@ -111,6 +168,8 @@ fn build_index() -> Vec<Entry> {
                 let mut body = String::new();
                 if let Some(status) = status.as_deref() {
                     fields.push(("status".to_owned(), status.to_owned()));
+                    body.push_str(status);
+                    body.push('\n');
                 }
                 if let Some(Value::Array(sources)) = capability.get("sources") {
                     for source in sources {
@@ -123,27 +182,32 @@ fn build_index() -> Vec<Entry> {
                 }
                 if let Some(Value::Object(evidence)) = capability.get("evidence") {
                     for (key, value) in evidence {
-                        let text = match value {
-                            Value::String(text) => text.clone(),
-                            Value::Array(items) => items
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<_>>()
-                                .join("\n"),
-                            other => other.to_string(),
-                        };
+                        let text = value_text(value);
+                        if text.is_empty() {
+                            continue;
+                        }
                         fields.push((key.clone(), text.clone()));
                         body.push_str(&text);
                         body.push('\n');
                     }
                 }
-                if let Some(acceptance) = capability.get("acceptance").and_then(Value::as_str) {
-                    body.push_str(acceptance);
-                    body.push('\n');
-                }
-                if let Some(remaining) = capability.get("remaining").and_then(Value::as_str) {
-                    body.push_str(remaining);
-                    body.push('\n');
+                // Every remaining top-level field of the capability is indexed
+                // as it is written: the blocker, the acceptance criterion, the
+                // remaining work, the linked issue, and any dated observation.
+                if let Value::Object(fields_map) = capability {
+                    for (key, value) in fields_map {
+                        match key.as_str() {
+                            "id" | "title" | "status" | "sources" | "evidence" => continue,
+                            _ => {}
+                        }
+                        let text = value_text(value);
+                        if text.is_empty() {
+                            continue;
+                        }
+                        fields.push((key.clone(), text.clone()));
+                        body.push_str(&text);
+                        body.push('\n');
+                    }
                 }
                 let summary = capability
                     .get("acceptance")
@@ -205,12 +269,17 @@ fn build_index() -> Vec<Entry> {
         }
     }
     for (path, text) in DOCS {
+        let (title, text) = if path.ends_with(".html") {
+            (html_title(text), html_text(text))
+        } else {
+            (document_title(text), text.to_owned())
+        };
         entries.push(Entry {
             kind: "doc",
             id: path.to_owned(),
-            title: document_title(text).unwrap_or_else(|| path.to_owned()),
-            summary: first_paragraph(text),
-            body: text.to_owned(),
+            title: title.unwrap_or_else(|| path.to_owned()),
+            summary: first_paragraph(&text),
+            body: text,
             source: path.to_owned(),
             fields: vec![("path".to_owned(), path.to_owned())],
             status: None,
@@ -239,6 +308,126 @@ fn document_title(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Read the `<title>` of one HTML page.
+fn html_title(markup: &str) -> Option<String> {
+    let start = markup.to_ascii_lowercase().find("<title>")? + "<title>".len();
+    let end = markup[start..].to_ascii_lowercase().find("</title>")? + start;
+    let title = markup[start..end].trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(decode_entities(title))
+    }
+}
+
+/// Extract the readable text of one HTML page. Script and style content is
+/// dropped, block elements become separate lines, and the common entities
+/// are decoded, so the page is searchable and its snippets stay readable.
+fn html_text(markup: &str) -> String {
+    let mut out = String::with_capacity(markup.len() / 2);
+    let mut index = 0usize;
+    while index < markup.len() {
+        let Some(relative) = markup[index..].find('<') else {
+            out.push_str(&markup[index..]);
+            break;
+        };
+        let tag_start = index + relative;
+        out.push_str(&markup[index..tag_start]);
+        let Some(relative_end) = markup[tag_start..].find('>') else {
+            break;
+        };
+        let tag_end = tag_start + relative_end;
+        let tag = &markup[tag_start + 1..tag_end];
+        let closing = tag.starts_with('/');
+        let name = tag
+            .trim_start_matches('/')
+            .split(|character: char| character.is_whitespace() || character == '/')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        index = tag_end + 1;
+        if matches!(name.as_str(), "script" | "style") && !closing {
+            let close = format!("</{name}");
+            match markup[index..].to_ascii_lowercase().find(&close) {
+                Some(found) => index += found,
+                None => break,
+            }
+            continue;
+        }
+        if !closing
+            && matches!(
+                name.as_str(),
+                "p" | "div"
+                    | "section"
+                    | "article"
+                    | "li"
+                    | "h1"
+                    | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "br"
+                    | "tr"
+                    | "td"
+                    | "title"
+            )
+        {
+            out.push('\n');
+        }
+    }
+    collapse_whitespace(&decode_entities(&out))
+}
+
+fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0usize;
+    while let Some(relative) = text[index..].find('&') {
+        let start = index + relative;
+        out.push_str(&text[index..start]);
+        let tail = &text[start..];
+        let decoded = tail
+            .find(';')
+            .filter(|end| *end <= 10)
+            .and_then(|end| match &tail[1..end] {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" | "#39" => Some('\''),
+                "nbsp" => Some(' '),
+                "mdash" => Some('\u{2014}'),
+                "ndash" => Some('\u{2013}'),
+                "hellip" => Some('\u{2026}'),
+                "middot" => Some('\u{00b7}'),
+                _ => None,
+            });
+        match decoded {
+            Some(character) => {
+                out.push(character);
+                index = start + tail.find(';').unwrap_or(0) + 1;
+            }
+            None => {
+                out.push('&');
+                index = start + 1;
+            }
+        }
+    }
+    out.push_str(&text[index..]);
+    out
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+    lines.join("\n")
 }
 
 fn first_paragraph(text: &str) -> String {
@@ -368,10 +557,17 @@ fn snippet_around(body: &str, term: &str) -> String {
 /// required `query`, optional `kinds` and `status` filters, and optional
 /// `limit` and `cursor`.
 pub fn search(input: &str) -> Value {
-    let parsed: Input = match serde_json::from_str(input) {
+    // One JSON object is the only accepted root: a positional array or any
+    // other value is refused before the typed fields are read, and a
+    // duplicate member stays a duplicate member.
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let parsed: Input = match ObjectOnly.deserialize(&mut deserializer) {
         Ok(parsed) => parsed,
         Err(_) => return invalid("input must be one search JSON object"),
     };
+    if deserializer.end().is_err() {
+        return invalid("input must be one search JSON object");
+    }
     let query = parsed.query.trim();
     if query.is_empty() || query.chars().count() > MAX_QUERY {
         return invalid("query must be 1 to 200 characters");
@@ -529,6 +725,15 @@ mod tests {
         for result in live["results"].as_array().unwrap() {
             assert_eq!(result["fields"]["status"], json!("partial-live-verified"));
         }
+        let by_status = search(&json!({"query": "partial-live-verified"}).to_string());
+        assert!(
+            by_status["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|result| result["kind"] == "capability"),
+            "the acceptance status is not searchable"
+        );
     }
 
     #[test]
@@ -560,7 +765,7 @@ mod tests {
     #[test]
     fn the_index_covers_every_document_and_status_section() {
         let counts = kind_counts();
-        assert_eq!(counts.get("doc"), Some(&14));
+        assert_eq!(counts.get("doc"), Some(&16));
         assert!(counts.get("status_section").copied().unwrap_or(0) >= 140);
         assert!(counts.get("capability").copied().unwrap_or(0) >= 50);
         assert!(counts.get("credit_course").copied().unwrap_or(0) >= 100);
@@ -573,6 +778,82 @@ mod tests {
                 .any(|result| result["id"] == "docs/CAS-LOGIN-PROTOCOL.md")
         );
         let all = search(&json!({"query": "buaa", "kinds": ["doc"], "limit": 100}).to_string());
-        assert_eq!(all["total"], 14);
+        assert_eq!(all["total"], 16);
+        for page in ["docs/index.html", "docs/design/graceful-degradation.md"] {
+            assert!(
+                all["results"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|result| result["id"] == page),
+                "missing page {page}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_one_json_object_is_accepted() {
+        for root in [
+            r#"["buaa",[],null,1,null]"#,
+            "[]",
+            "\"buaa\"",
+            "null",
+            "42",
+            "{\"query\":\"buaa\"} trailing",
+            "{\"query\":\"buaa\"} {\"query\":\"buaa\"}",
+        ] {
+            assert_eq!(
+                search(root)["error"],
+                "invalid_input",
+                "accepted {root}"
+            );
+        }
+        // A duplicate member stays a duplicate member: the last one never
+        // silently replaces the first one.
+        for root in [
+            "{\"query\":\"\",\"query\":\"buaa\"}",
+            "{\"query\":\"buaa\",\"query\":\"buaa\"}",
+            "{\"query\":\"buaa\",\"limit\":1,\"limit\":2}",
+        ] {
+            assert_eq!(
+                search(root)["error"],
+                "invalid_input",
+                "accepted {root}"
+            );
+        }
+    }
+
+    #[test]
+    fn capability_blockers_and_object_evidence_are_searchable() {
+        let blocker = search(&json!({"query": "Real service allocation"}).to_string());
+        let crater = blocker["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|result| result["id"] == "crater")
+            .expect("crater capability");
+        assert!(
+            crater["fields"]["blocker"]
+                .as_str()
+                .unwrap()
+                .contains("Real service allocation"),
+            "top-level blocker is not indexed"
+        );
+        let evidence = search(
+            &json!({"query": "announcements college-source aviation root --refresh"}).to_string(),
+        );
+        let announcements = evidence["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|result| result["id"] == "announcements")
+            .expect("announcements capability");
+        assert!(
+            announcements["fields"]["live_verification"]
+                .as_str()
+                .unwrap()
+                .contains("college-source aviation root"),
+            "object evidence elements are dropped"
+        );
     }
 }
